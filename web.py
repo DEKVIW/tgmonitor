@@ -72,59 +72,40 @@ if selected_netdisks:
 
 # 显示消息列表
 for msg in messages:
-    with st.expander(f"{msg.title} - {msg.timestamp.strftime('%Y-%m-%d %H:%M:%S')}"):
-        # 紧凑展示描述、链接、标签
+    # 标题行保留网盘标签，用特殊符号区分
+    if msg.links:
+        netdisk_tags = " ".join([f"🔵[{name}]" for name in msg.links.keys()])
+    else:
+        netdisk_tags = ""
+    expander_title = f"{msg.title} - 🕒{msg.timestamp.strftime('%Y-%m-%d %H:%M:%S')}  {netdisk_tags}"
+    with st.expander(expander_title):
         if msg.description:
             st.markdown(msg.description)
         if msg.links:
-            link_str = "　".join([f"[{name}]({link})" for name, link in msg.links.items()])
-            st.markdown(link_str)
-        # 紧凑标签区（纯HTML+CSS，无重复无大间距）
+            link_str = "　".join([
+                f"<a href='{link}' target='_blank'><span class='netdisk-tag'>{name}</span></a>"
+                for name, link in msg.links.items()
+            ])
+            st.markdown(link_str, unsafe_allow_html=True)
+        # 紧凑标签区（点击筛选）
         if msg.tags:
-            btn_style = """
-                <style>
-                .tag-btn {
-                    display: inline-block;
-                    padding: 4px 16px;
-                    margin: 2px 6px 2px 0;
-                    border-radius: 16px;
-                    border: 1px solid #409eff;
-                    background: #fff;
-                    color: #409eff;
-                    font-size: 15px;
-                    cursor: pointer;
-                    transition: background 0.2s, color 0.2s;
-                    outline: none;
-                }
-                .tag-btn.selected {
-                    background: #409eff;
-                    color: #fff;
-                    font-weight: bold;
-                }
-                .tag-btn:hover {
-                    background: #e6f0fa;
-                }
-                </style>
-            """
-            st.markdown(btn_style, unsafe_allow_html=True)
             tag_html = ""
             for tag in msg.tags:
-                selected = "selected" if tag in st.session_state['selected_tags'] else ""
                 tag_html += f"""
                 <form method='post' style='display:inline;'>
-                    <button class='tag-btn {selected}' name='tag_click' value='{tag}'>#{tag}</button>
+                    <button class='tag-btn' name='tag_click' value='{tag}'>#{tag}</button>
                 </form>
                 """
             st.markdown(tag_html, unsafe_allow_html=True)
 
-            # 处理点击
-            if 'tag_click' in st.session_state and st.session_state['tag_click']:
-                tag = st.session_state['tag_click']
-                if tag not in st.session_state['selected_tags']:
-                    st.session_state['selected_tags'].append(tag)
-                    st.session_state['tag_click'] = None
-                    st.rerun()
-                st.session_state['tag_click'] = None
+# 处理点击条目标签筛选
+if 'tag_click' in st.session_state and st.session_state['tag_click']:
+    tag = st.session_state['tag_click']
+    if tag not in st.session_state['selected_tags']:
+        st.session_state['selected_tags'].append(tag)
+        st.session_state['tag_click'] = None
+        st.rerun()
+    st.session_state['tag_click'] = None
 
 # 添加自动刷新
 st.empty()
@@ -142,6 +123,15 @@ st.markdown("""
     }
     [data-testid="stExpander"] * {
         gap: 0.2rem !important;
+    }
+    .netdisk-tag {
+        display: inline-block;
+        background: #e6f0fa;
+        color: #409eff;
+        border-radius: 12px;
+        padding: 2px 10px;
+        margin: 2px 4px 2px 0;
+        font-size: 13px;
     }
     </style>
 """, unsafe_allow_html=True) 

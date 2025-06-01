@@ -39,7 +39,7 @@ def parse_message(text):
         (['115.com', '115网盘', '115pan'], '115网盘'),
         (['cloud.189', '天翼', '189.cn'], '天翼云盘'),
         (['123pan', '123.yun'], '123云盘'),
-        (['ucdisk', 'uc网盘', 'ucloud'], 'UC网盘'),
+        (['ucdisk', 'uc网盘', 'ucloud', 'drive.uc.cn'], 'UC网盘'),
         (['xunlei', 'thunder', '迅雷'], '迅雷'),
     ]
 
@@ -65,6 +65,8 @@ def parse_message(text):
         elif line.startswith('链接：'):
             current_section = 'links'
             url = line.replace('链接：', '').strip()
+            if not url:
+                continue  # 跳过空链接
             # 智能识别网盘名
             found = False
             for keys, name in netdisk_map:
@@ -125,6 +127,10 @@ def parse_message(text):
         desc_text = tag_pattern.sub('', desc_text)
     # 去重
     tags = list(set(tags))
+    # 移除所有网盘名关键词
+    netdisk_names = ['夸克', '迅雷', '百度', 'UC', '阿里', '天翼', '115', '123云盘']
+    netdisk_name_pattern = re.compile(r'(' + '|'.join(netdisk_names) + r')')
+    desc_text = netdisk_name_pattern.sub('', desc_text)
     # 6. 最终description，去除无意义符号行
     desc_lines_final = [line for line in desc_text.strip().split('\n') if line.strip() and not re.fullmatch(r'[.。·、,，-]+', line.strip())]
     description = '\n'.join(desc_lines_final)
