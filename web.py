@@ -45,6 +45,10 @@ with Session(engine) as session:
     # 同步session_state
     st.session_state['selected_tags'] = selected_tags
 
+# 网盘类型筛选
+netdisk_types = ['夸克网盘', '阿里云盘', '百度网盘', '115网盘', '天翼云盘', '123云盘', 'UC网盘', '迅雷']
+selected_netdisks = st.sidebar.multiselect("网盘类型", netdisk_types)
+
 # 构建查询
 with Session(engine) as session:
     query = session.query(Message)
@@ -62,6 +66,10 @@ with Session(engine) as session:
     # 按时间倒序排序
     messages = query.order_by(Message.timestamp.desc()).all()
 
+# 显示消息列表前，按网盘类型过滤
+if selected_netdisks:
+    messages = [msg for msg in messages if any(nd in (msg.links or {}) for nd in selected_netdisks)]
+
 # 显示消息列表
 for msg in messages:
     with st.expander(f"{msg.title} - {msg.timestamp.strftime('%Y-%m-%d %H:%M:%S')}"):
@@ -69,8 +77,8 @@ for msg in messages:
         if msg.description:
             st.markdown(msg.description)
         if msg.links:
-            for name, link in msg.links.items():
-                st.markdown(f"- [{name}]({link})")
+            link_str = "　".join([f"[{name}]({link})" for name, link in msg.links.items()])
+            st.markdown(link_str)
         # 紧凑标签区（纯HTML+CSS，无重复无大间距）
         if msg.tags:
             btn_style = """

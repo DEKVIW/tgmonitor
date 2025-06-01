@@ -1,6 +1,6 @@
 from telethon import TelegramClient, events
 from sqlalchemy.orm import Session
-from models import Message, engine
+from models import Message, engine, Channel
 import datetime
 import json
 import re
@@ -13,11 +13,12 @@ api_hash = '4ede7e37438fe5d3e7af69ea84dcb62b'
 # session 文件名
 client = TelegramClient('newquark_session', api_id, api_hash)
 
-# 要监听的频道用户名（不加 @）
-channel_username = 'NewQuark'
+# 读取所有频道用户名
+with Session(engine) as session:
+    channel_usernames = [c.username for c in session.query(Channel).all()]
 
 def parse_message(text):
-    """解析消息内容，提取标题、描述、链接等信息（更健壮，支持一行多网盘名链接提取）"""
+    """解析消息内容，提取标题、描述、链接等信息（更健壮，支持一行多网盘名链接提取和全局标签提取）"""
     lines = text.split('\n')
     title = ''
     description = ''
@@ -54,6 +55,10 @@ def parse_message(text):
         line = line.strip()
         if not line:
             continue
+        # 兼容多种标签前缀
+        if line.startswith('🏷 标签：') or line.startswith('标签：'):
+            tags.extend([tag.strip('#') for tag in line.replace('🏷 标签：', '').replace('标签：', '').split() if tag.strip('#')])
+            continue
         if line.startswith('描述：'):
             current_section = 'description'
             desc_lines.append(line.replace('描述：', '').strip())
@@ -69,8 +74,6 @@ def parse_message(text):
                     break
             if not found:
                 links['其他'] = url
-        elif line.startswith('🏷 标签：'):
-            tags = [tag.strip('#') for tag in line.replace('🏷 标签：', '').split()]
         elif line.startswith('🎉 来自：'):
             source = line.replace('🎉 来自：', '').strip()
         elif line.startswith('📢 频道：'):
@@ -114,8 +117,17 @@ def parse_message(text):
             links['其他'] = url
     # 从描述中移除裸链接
     desc_text = url_pattern.sub('', desc_text)
-    # 5. 最终description
-    description = desc_text.strip()
+    # 5. 全局正则提取所有#标签，并从描述中移除
+    tag_pattern = re.compile(r'#([\u4e00-\u9fa5A-Za-z0-9_]+)')
+    found_tags = tag_pattern.findall(desc_text)
+    if found_tags:
+        tags.extend(found_tags)
+        desc_text = tag_pattern.sub('', desc_text)
+    # 去重
+    tags = list(set(tags))
+    # 6. 最终description，去除无意义符号行
+    desc_lines_final = [line for line in desc_text.strip().split('\n') if line.strip() and not re.fullmatch(r'[.。·、,，-]+', line.strip())]
+    description = '\n'.join(desc_lines_final)
 
     return {
         'title': title,
@@ -128,7 +140,7 @@ def parse_message(text):
         'bot': bot
     }
 
-@client.on(events.NewMessage(chats=channel_username))
+@client.on(events.NewMessage(chats=channel_usernames))
 async def handler(event):
     message = event.raw_text
     timestamp = datetime.datetime.now()
@@ -148,7 +160,7 @@ async def handler(event):
     
     print(f"[{timestamp}] 新消息已保存到数据库")
 
-print(f"✅ 正在监听 Telegram 频道：{channel_username} ...")
+print(f"✅ 正在监听 Telegram 频道：{channel_usernames} ...")
 
 if __name__ == "__main__":
     if "--fix-tags" in sys.argv:
@@ -171,6 +183,28 @@ if __name__ == "__main__":
                         print(f"ID={msg.id} tags修复失败: {e}")
             session.commit()
             print(f"已修复tags字段脏数据条数: {fixed}")
+    elif "--dedup-links" in sys.argv:
+        # 定期去重：只保留每个网盘链接最新的消息
+        from sqlalchemy.orm import Session
+        from sqlalchemy import delete
+        with Session(engine) as session:
+            all_msgs = session.query(Message).order_by(Message.timestamp.desc()).all()
+            link_to_id = {}  # {url: 最新消息id}
+            id_to_delete = set()
+            for msg in all_msgs:
+                if not msg.links:
+                    continue
+                for url in msg.links.values():
+                    if url in link_to_id:
+                        id_to_delete.add(msg.id)
+                    else:
+                        link_to_id[url] = msg.id
+            if id_to_delete:
+                session.execute(delete(Message).where(Message.id.in_(id_to_delete)))
+                session.commit()
+                print(f"已删除重复网盘链接的旧消息条目: {len(id_to_delete)}")
+            else:
+                print("没有需要删除的重复网盘链接消息。")
     else:
         client.start()
         client.run_until_disconnected() 

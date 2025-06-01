@@ -19,6 +19,17 @@ class Message(Base):
     bot = Column(String)  # 机器人
     created_at = Column(DateTime, default=datetime.utcnow)
 
+class Credential(Base):
+    __tablename__ = "credentials"
+    id = Column(Integer, primary_key=True, index=True)
+    api_id = Column(String, nullable=False)
+    api_hash = Column(String, nullable=False)
+
+class Channel(Base):
+    __tablename__ = "channels"
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String, nullable=False)
+
 # 数据库连接配置
 DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/tg_monitor"
 
