@@ -87,15 +87,11 @@ for msg in messages:
                 for name, link in msg.links.items()
             ])
             st.markdown(link_str, unsafe_allow_html=True)
-        # 紧凑标签区（点击筛选）
+        # 条目标签区（仅展示，不可点击，保留样式）
         if msg.tags:
             tag_html = ""
             for tag in msg.tags:
-                tag_html += f"""
-                <form method='post' style='display:inline;'>
-                    <button class='tag-btn' name='tag_click' value='{tag}'>#{tag}</button>
-                </form>
-                """
+                tag_html += f"<span class='tag-btn'>#{tag}</span>"
             st.markdown(tag_html, unsafe_allow_html=True)
 
 # 处理点击条目标签筛选
@@ -132,6 +128,22 @@ st.markdown("""
         padding: 2px 10px;
         margin: 2px 4px 2px 0;
         font-size: 13px;
+    }
+    .tag-btn {
+        border:1px solid #222;
+        border-radius:8px;
+        padding:4px 16px;
+        margin:2px 6px 2px 0;
+        font-size:15px;
+        background:#fff;
+        color:#222;
+        display:inline-block;
+        transition: background 0.2s, color 0.2s;
+        cursor: default;
+    }
+    .tag-btn:hover {
+        background: #fff;
+        color: #222;
     }
     </style>
 """, unsafe_allow_html=True) 
