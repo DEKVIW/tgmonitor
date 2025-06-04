@@ -1,6 +1,7 @@
 from sqlalchemy import Column, Integer, String, DateTime, JSON, ARRAY, create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from datetime import datetime
+from config import settings
 
 Base = declarative_base()
 
@@ -31,7 +32,7 @@ class Channel(Base):
     username = Column(String, nullable=False)
 
 # 数据库连接配置
-DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/tg_monitor"
+DATABASE_URL = settings.DATABASE_URL
 
 # 创建数据库引擎
 engine = create_engine(DATABASE_URL)

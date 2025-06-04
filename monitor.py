@@ -1,21 +1,54 @@
 from telethon import TelegramClient, events
 from sqlalchemy.orm import Session
-from models import Message, engine, Channel
+from models import Message, engine, Channel, Credential
 import datetime
 import json
 import re
 import sys
+from config import settings
 
-# 你的 API 凭据
-api_id = 29994333
-api_hash = '4ede7e37438fe5d3e7af69ea84dcb62b'
+def get_api_credentials():
+    """获取 API 凭据，优先使用数据库中的凭据"""
+    with Session(engine) as session:
+        # 尝试从数据库获取凭据
+        cred = session.query(Credential).first()
+        if cred:
+            return int(cred.api_id), cred.api_hash
+    # 如果数据库中没有凭据，使用 .env 中的配置
+    return settings.TELEGRAM_API_ID, settings.TELEGRAM_API_HASH
+
+def get_channels():
+    """获取频道列表，合并数据库和 .env 中的频道"""
+    channels = set()
+    
+    # 从数据库获取频道
+    with Session(engine) as session:
+        db_channels = [c.username for c in session.query(Channel).all()]
+        channels.update(db_channels)
+    
+    # 从 .env 获取默认频道
+    if hasattr(settings, 'DEFAULT_CHANNELS'):
+        env_channels = [c.strip() for c in settings.DEFAULT_CHANNELS.split(',') if c.strip()]
+        channels.update(env_channels)
+        
+        # 将 .env 中的频道添加到数据库
+        with Session(engine) as session:
+            for username in env_channels:
+                if username not in db_channels:
+                    channel = Channel(username=username)
+                    session.add(channel)
+            session.commit()
+    
+    return list(channels)
+
+# 获取 API 凭据
+api_id, api_hash = get_api_credentials()
 
 # session 文件名
 client = TelegramClient('newquark_session', api_id, api_hash)
 
-# 读取所有频道用户名
-with Session(engine) as session:
-    channel_usernames = [c.username for c in session.query(Channel).all()]
+# 获取频道列表
+channel_usernames = get_channels()
 
 def parse_message(text):
     """解析消息内容，提取标题、描述、链接等信息（更健壮，支持一行多网盘名链接提取和全局标签提取）"""
@@ -154,63 +187,21 @@ async def handler(event):
     # 解析消息
     parsed_data = parse_message(message)
     
-    # 创建数据库会话
-    with Session(engine) as session:
-        # 创建新消息记录
-        new_message = Message(
-            timestamp=timestamp,
-            **parsed_data
-        )
-        session.add(new_message)
-        session.commit()
-    
-    print(f"[{timestamp}] 新消息已保存到数据库")
+    # 只保存包含网盘链接的消息
+    if parsed_data['links']:
+        with Session(engine) as session:
+            new_message = Message(
+                timestamp=timestamp,
+                **parsed_data
+            )
+            session.add(new_message)
+            session.commit()
+        print(f"[{timestamp}] 新消息已保存到数据库")
+    else:
+        print(f"[{timestamp}] 过滤掉无网盘链接的消息")
 
 print(f"✅ 正在监听 Telegram 频道：{channel_usernames} ...")
 
 if __name__ == "__main__":
-    if "--fix-tags" in sys.argv:
-        # 检查并修复tags字段脏数据
-        from sqlalchemy import update
-        from sqlalchemy.orm import Session
-        with Session(engine) as session:
-            msgs = session.query(Message).all()
-            fixed = 0
-            for msg in msgs:
-                # 如果tags不是list类型，尝试修正
-                if msg.tags is not None and not isinstance(msg.tags, list):
-                    try:
-                        import ast
-                        tags_fixed = ast.literal_eval(msg.tags)
-                        if isinstance(tags_fixed, list):
-                            session.execute(update(Message).where(Message.id==msg.id).values(tags=tags_fixed))
-                            fixed += 1
-                    except Exception as e:
-                        print(f"ID={msg.id} tags修复失败: {e}")
-            session.commit()
-            print(f"已修复tags字段脏数据条数: {fixed}")
-    elif "--dedup-links" in sys.argv:
-        # 定期去重：只保留每个网盘链接最新的消息
-        from sqlalchemy.orm import Session
-        from sqlalchemy import delete
-        with Session(engine) as session:
-            all_msgs = session.query(Message).order_by(Message.timestamp.desc()).all()
-            link_to_id = {}  # {url: 最新消息id}
-            id_to_delete = set()
-            for msg in all_msgs:
-                if not msg.links:
-                    continue
-                for url in msg.links.values():
-                    if url in link_to_id:
-                        id_to_delete.add(msg.id)
-                    else:
-                        link_to_id[url] = msg.id
-            if id_to_delete:
-                session.execute(delete(Message).where(Message.id.in_(id_to_delete)))
-                session.commit()
-                print(f"已删除重复网盘链接的旧消息条目: {len(id_to_delete)}")
-            else:
-                print("没有需要删除的重复网盘链接消息。")
-    else:
-        client.start()
-        client.run_until_disconnected() 
+    client.start()
+    client.run_until_disconnected() 

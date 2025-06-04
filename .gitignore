@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.session
+*.pyc
+
+# Environment
+.env
+.env.local
+.venv
+env/
+venv/
+ENV/
+
+# Telegram sessions
+telegram_sessions/
+*.session
+*.session-journal
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+*.log
+
+# Telegram session files
+newquark_session.session 

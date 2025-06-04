@@ -49,6 +49,11 @@ with Session(engine) as session:
 netdisk_types = ['夸克网盘', '阿里云盘', '百度网盘', '115网盘', '天翼云盘', '123云盘', 'UC网盘', '迅雷']
 selected_netdisks = st.sidebar.multiselect("网盘类型", netdisk_types)
 
+# 分页参数
+PAGE_SIZE = 100
+if 'page_num' not in st.session_state:
+    st.session_state['page_num'] = 1
+
 # 构建查询
 with Session(engine) as session:
     query = session.query(Message)
@@ -70,8 +75,15 @@ with Session(engine) as session:
 if selected_netdisks:
     messages = [msg for msg in messages if any(nd in (msg.links or {}) for nd in selected_netdisks)]
 
-# 显示消息列表
-for msg in messages:
+# 计算分页
+max_page = (len(messages) + PAGE_SIZE - 1) // PAGE_SIZE
+page_num = st.session_state['page_num']
+start_idx = (page_num - 1) * PAGE_SIZE
+end_idx = start_idx + PAGE_SIZE
+messages_page = messages[start_idx:end_idx]
+
+# 显示消息列表（分页后）
+for msg in messages_page:
     # 标题行保留网盘标签，用特殊符号区分
     if msg.links:
         netdisk_tags = " ".join([f"🔵[{name}]" for name in msg.links.keys()])
@@ -93,6 +105,20 @@ for msg in messages:
             for tag in msg.tags:
                 tag_html += f"<span class='tag-btn'>#{tag}</span>"
             st.markdown(tag_html, unsafe_allow_html=True)
+
+# 显示分页信息和跳转控件（按钮和页码信息同一行居中）
+if max_page > 1:
+    col1, col2, col3 = st.columns([1,2,1])
+    with col1:
+        if st.button('上一页', disabled=page_num==1, key='prev_page'):
+            st.session_state['page_num'] = max(1, page_num-1)
+            st.rerun()
+    with col2:
+        st.markdown(f"<div style='text-align:center;line-height:38px;'>共 {len(messages)} 条，当前第 {page_num} / {max_page} 页</div>", unsafe_allow_html=True)
+    with col3:
+        if st.button('下一页', disabled=page_num==max_page, key='next_page'):
+            st.session_state['page_num'] = min(max_page, page_num+1)
+            st.rerun()
 
 # 处理点击条目标签筛选
 if 'tag_click' in st.session_state and st.session_state['tag_click']:
