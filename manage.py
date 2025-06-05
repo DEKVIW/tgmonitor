@@ -58,79 +58,6 @@ def fix_tags():
         session.commit()
         print(f"已修复tags字段脏数据条数: {fixed}")
 
-def dedup_links():
-    """改进的去重逻辑，保留最新消息，添加详细日志"""
-    with Session(engine) as session:
-        # 1. 记录去重前的统计信息
-        total_before = session.query(Message).count()
-        print(f"\n去重前总消息数: {total_before}")
-        
-        # 2. 按时间正序获取所有消息
-        all_msgs = session.query(Message).order_by(Message.timestamp.asc()).all()
-        print(f"开始处理 {len(all_msgs)} 条消息...")
-        
-        link_to_id = {}  # 存储链接到消息ID的映射
-        id_to_delete = set()  # 存储需要删除的消息ID
-        preserved_messages = set()  # 存储保留的消息ID
-        
-        # 3. 遍历消息并记录详细日志
-        for msg in all_msgs:
-            if not msg.links:
-                continue
-                
-            # 4. 遍历消息中的所有链接
-            for url in msg.links.values():
-                if url in link_to_id:
-                    # 如果链接已存在，删除旧消息
-                    old_id = link_to_id[url]
-                    if old_id not in preserved_messages:
-                        id_to_delete.add(old_id)
-                    # 更新为新消息
-                    link_to_id[url] = msg.id
-                    preserved_messages.add(msg.id)
-                else:
-                    # 如果链接不存在，记录链接和消息ID的映射
-                    link_to_id[url] = msg.id
-                    preserved_messages.add(msg.id)
-        
-        # 5. 执行删除操作
-        if id_to_delete:
-            deleted_count = len(id_to_delete)
-            print(f"\n发现 {deleted_count} 条重复消息需要删除")
-            
-            # 记录要删除的消息详情
-            for msg_id in id_to_delete:
-                msg = session.query(Message).get(msg_id)
-                if msg:
-                    print(f"将删除消息 ID: {msg_id}")
-                    print(f"时间: {msg.timestamp}")
-                    print(f"标题: {msg.title}")
-                    print(f"链接: {msg.links}")
-                    print("---")
-            
-            session.execute(delete(Message).where(Message.id.in_(id_to_delete)))
-            session.commit()
-            
-            # 6. 记录去重后的统计信息
-            total_after = session.query(Message).count()
-            print(f"\n去重后总消息数: {total_after}")
-            print(f"已删除 {deleted_count} 条重复消息")
-            
-            # 7. 记录详细日志
-            log_entry = {
-                "timestamp": datetime.now(),
-                "before_count": total_before,
-                "after_count": total_after,
-                "deleted_count": deleted_count,
-                "operation": "dedup"
-            }
-            
-            # 保存到日志文件
-            with open("data/dedup.log", "a") as f:
-                f.write(json.dumps(log_entry) + "\n")
-        else:
-            print("\n没有需要删除的重复消息")
-
 def print_help():
     print("""用法:
   python manage.py --list-channels
@@ -163,8 +90,49 @@ if __name__ == "__main__":
         else:
             print("请提供旧频道名和新频道名")
     elif "--fix-tags" in sys.argv:
-        fix_tags()
+        # 检查并修复tags字段脏数据
+        with Session(engine) as session:
+            msgs = session.query(Message).all()
+            fixed = 0
+            for msg in msgs:
+                # 如果tags不是list类型，尝试修正
+                if msg.tags is not None and not isinstance(msg.tags, list):
+                    try:
+                        tags_fixed = ast.literal_eval(msg.tags)
+                        if isinstance(tags_fixed, list):
+                            session.execute(update(Message).where(Message.id==msg.id).values(tags=tags_fixed))
+                            fixed += 1
+                    except Exception as e:
+                        print(f"ID={msg.id} tags修复失败: {e}")
+            session.commit()
+            print(f"已修复tags字段脏数据条数: {fixed}")
     elif "--dedup-links" in sys.argv:
-        dedup_links()
+        # 定期去重：只保留每个网盘链接最新的消息
+        with Session(engine) as session:
+            all_msgs = session.query(Message).order_by(Message.timestamp.desc()).all()
+            link_to_id = {}  # {url: 最新消息id}
+            id_to_delete = set()
+            for msg in all_msgs:
+                links = msg.links
+                if isinstance(links, str):
+                    try:
+                        links = json.loads(links)
+                    except Exception as e:
+                        print(f"ID={msg.id} links解析失败: {e}")
+                        continue
+                if not links:
+                    continue
+                for url in links.values():
+                    url = url.strip().lower()
+                    if url in link_to_id:
+                        id_to_delete.add(msg.id)
+                    else:
+                        link_to_id[url] = msg.id
+            if id_to_delete:
+                session.execute(delete(Message).where(Message.id.in_(id_to_delete)))
+                session.commit()
+                print(f"已删除重复网盘链接的旧消息条目: {len(id_to_delete)}")
+            else:
+                print("没有需要删除的重复网盘链接消息。")
     else:
         print_help() 
