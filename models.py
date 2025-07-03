@@ -19,6 +19,7 @@ class Message(Base):
     group_name = Column(String)  # 群组
     bot = Column(String)  # 机器人
     created_at = Column(DateTime, default=datetime.utcnow)
+    netdisk_types = Column(JSON, default=list)  # 存储网盘类型数组，兼容SQLite和其他数据库
 
 class Credential(Base):
     __tablename__ = "credentials"

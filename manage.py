@@ -107,7 +107,7 @@ if __name__ == "__main__":
             session.commit()
             print(f"已修复tags字段脏数据条数: {fixed}")
     elif "--dedup-links" in sys.argv:
-        # 升级去重逻辑：相同链接且时间间隔1分钟内，优先保留网盘链接多的，否则保留最新的
+        # 升级去重逻辑：相同链接且时间间隔5分钟内，优先保留网盘链接多的，否则保留最新的
         with Session(engine) as session:
             all_msgs = session.query(Message).order_by(Message.timestamp.desc()).all()
             link_to_id = {}  # {url: 最新消息id}
@@ -129,8 +129,8 @@ if __name__ == "__main__":
                         old_id = link_to_id[url]
                         old_msg = id_to_msg[old_id]
                         time_diff = abs((msg.timestamp - old_msg.timestamp).total_seconds())
-                        if time_diff < 60:
-                            # 1分钟内，优先保留links多的
+                        if time_diff < 300: # 修改为5分钟 (300秒)
+                            # 5分钟内，优先保留links多的
                             if len(links) > len(old_msg.links):
                                 id_to_delete.add(old_id)
                                 link_to_id[url] = msg.id
@@ -138,7 +138,7 @@ if __name__ == "__main__":
                             else:
                                 id_to_delete.add(msg.id)
                         else:
-                            # 超过1分钟，保留最新的
+                            # 超过5分钟，保留最新的
                             id_to_delete.add(msg.id)
                     else:
                         link_to_id[url] = msg.id

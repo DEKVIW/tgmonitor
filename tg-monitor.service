@@ -1,0 +1,26 @@
+[Unit]
+Description=TG Monitor Service
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/root/data/python/tg-monitor
+Environment="PATH=/root/data/python/tg-monitor/venv/bin"
+Environment="PYTHONPATH=/root/data/python/tg-monitor"
+Environment="PYTHONUNBUFFERED=1"
+ExecStart=/root/data/python/tg-monitor/venv/bin/python monitor.py
+Restart=always
+RestartSec=10
+StartLimitInterval=60
+StartLimitBurst=3
+
+# 确保服务在SSH断开后继续运行
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target 
