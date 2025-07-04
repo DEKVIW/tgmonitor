@@ -1,31 +1,49 @@
 # Python
 __pycache__/
 *.py[cod]
-*$py.class
-*.session
-*.pyc
-
-# Environment
-.env
-.env.local
-.venv
-env/
-venv/
-ENV/
-
-# Telegram sessions
-telegram_sessions/
-*.session
-*.session-journal
-
-# IDE
-.idea/
-.vscode/
-*.swp
-*.swo
-
-# Logs
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
 *.log
 
-# Telegram session files
-newquark_session.session 
+# Streamlit
+.streamlit/config.toml
+.streamlit/secrets.toml
+
+# 环境变量
+.env
+.env.*
+*.env
+
+# 数据库/数据文件
+*.db
+*.sqlite3
+*.sqlite
+*.pkl
+*.json
+tokens.json
+users.json
+
+# Jupyter
+.ipynb_checkpoints
+
+# VSCode/IDE
+.vscode/
+.idea/
+*.swp
+
+# 虚拟环境
+venv/
+env/
+.venv/
+ENV/
+env.bak/ 
+# Telegram/Telethon session files
+*.session
+*.session-journal
+telegram_sessions/ 

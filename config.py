@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     # Docker 环境标识
     DOCKER_ENV: str = "false"
 
+    # 新增密钥
+    SECRET_SALT: str
+
     class Config:
         env_file = ".env"  # 指定 .env 文件
         env_file_encoding = "utf-8"
