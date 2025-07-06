@@ -81,7 +81,7 @@ def handle_logout(authenticator):
 def main():
     try:
         auth_users = load_auth_users()
-    authenticator = stauth.Authenticate(
+        authenticator = stauth.Authenticate(
             auth_users,
             "tg_cookie",
             settings.SECRET_SALT,
@@ -236,42 +236,17 @@ def main_app(username, authenticator, auth_users):
         margin: 0 !important;
         overflow: hidden !important;
     }
+    div[data-testid="stElementContainer"]:has(.stMarkdown:only-child:empty) {
+        display: none !important;
+        height: 0 !important;
+        min-height: 0 !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
     </style>
     """, unsafe_allow_html=True)
-    st.markdown("""
-<style>
-div[data-testid="stElementContainer"]:has(iframe[src*="CookieManager"]),
-div[data-testid="stElementContainer"]:has(iframe[src*="autorefresh"]) {
-    display: none !important;
-    height: 0 !important;
-    min-height: 0 !important;
-    padding: 0 !important;
-    margin: 0 !important;
-    overflow: hidden !important;
-}
-</style>
-""", unsafe_allow_html=True)
-    st.markdown("""
-<style>
-.stMarkdown p {
-    margin-bottom: 10px !important;
-}
-</style>
-""", unsafe_allow_html=True)
-    st.markdown("""
-<style>
-label[data-testid="stWidgetLabel"]:empty,
-label[data-testid="stWidgetLabel"] > div:empty {
-    display: none !important;
-    height: 0 !important;
-    min-height: 0 !important;
-    margin: 0 !important;
-    padding: 0 !important;
-}
-</style>
-""", unsafe_allow_html=True)
     try:
-    from streamlit_autorefresh import st_autorefresh
+        from streamlit_autorefresh import st_autorefresh
         refresh_interval = st.sidebar.slider("🔄 自动刷新间隔(秒)", 30, 300, 60, 30)
         st_autorefresh(interval=refresh_interval * 1000, key="auto_refresh")
     except Exception:
@@ -283,7 +258,7 @@ label[data-testid="stWidgetLabel"] > div:empty {
         SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
         return SessionLocal
     SessionLocal = get_sessionmaker()
-        st.title("📱 TG频道监控")
+    st.title("📱 TG频道监控")
     render_sidebar(username, authenticator, auth_users, SessionLocal)
     render_main_content(SessionLocal)
 
@@ -352,13 +327,13 @@ def render_tag_selector(SessionLocal):
     def get_tag_stats():
         with SessionLocal() as session:
             result = session.execute(text("""
-            SELECT unnest(tags) as tag, COUNT(*) as count 
-            FROM messages 
+                SELECT unnest(tags) as tag, COUNT(*) as count 
+                FROM messages 
                 WHERE tags IS NOT NULL AND array_length(tags, 1) > 0
-            GROUP BY tag 
-            ORDER BY count DESC
+                GROUP BY tag 
+                ORDER BY count DESC
                 LIMIT 50
-        """)).all()
+            """)).all()
             return [(tag, count) for tag, count in result]
     try:
         tag_items = get_tag_stats()
@@ -484,14 +459,14 @@ def render_main_content(SessionLocal):
             if search_query:
                 search_terms = [term.strip() for term in search_query.split() if term.strip()]
                 if search_terms:
-                search_filters = []
-                for term in search_terms:
+                    search_filters = []
+                    for term in search_terms:
                         search_filters.extend([
                             Message.title.ilike(f'%{term}%'),
                             Message.description.ilike(f'%{term}%'),
                             Message.tags.any(term)  # 添加标签搜索
                         ])
-                query = query.filter(or_(*search_filters))
+                    query = query.filter(or_(*search_filters))
             time_deltas = {
                 "最近1小时": timedelta(hours=1),
                 "最近24小时": timedelta(days=1),
@@ -589,7 +564,7 @@ def render_messages(messages):
             time_str = f"📋{msg_time.strftime('%Y-%m-%d %H:%M')}"
         
         # 生成网盘标签字符串（用于expander标题）
-            netdisk_tags = ""
+        netdisk_tags = ""
         if msg.links:
             # 网盘品牌emoji映射
             netdisk_icons = {
@@ -689,4 +664,4 @@ def render_pagination(total_count, max_page, PAGE_SIZE):
     )
 
 if __name__ == "__main__":
-    main() 
+    main()
