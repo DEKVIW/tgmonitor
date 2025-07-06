@@ -26,4 +26,4 @@ def add_user(username, password, name, email):
     print(f"用户 {username} 添加成功！")
 
 # 使用示例
-add_user("aabbcc", "#zIBINSGZoh#E^oyhc7G", "管理员", "admin@example.com")
+add_user("aabbcc", "password", "管理员", "admin@example.com")
