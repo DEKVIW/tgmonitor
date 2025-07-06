@@ -6,7 +6,7 @@ DATE=$(date +%Y%m%d_%H%M%S)
 BACKUP_FILE="$BACKUP_DIR/tg_monitor_$DATE.sql.gz"
 
 # 设置数据库密码环境变量
-export PGPASSWORD='1y&PpV%#usGpZS0!Yjx%'
+export PGPASSWORD='password'
 
 # 创建备份目录
 mkdir -p $BACKUP_DIR

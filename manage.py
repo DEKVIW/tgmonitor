@@ -68,13 +68,30 @@ def print_help():
   python manage.py --dedup-links
 """)
 
+def extract_urls(links):
+    urls = []
+    if isinstance(links, str):
+        # 兼容老数据
+        urls.append(links)
+    elif isinstance(links, dict):
+        for v in links.values():
+            urls.extend(extract_urls(v))
+    elif isinstance(links, list):
+        for item in links:
+            if isinstance(item, dict) and 'url' in item:
+                urls.append(item['url'])
+            else:
+                urls.extend(extract_urls(item))
+    return urls
+
 if __name__ == "__main__":
     if "--list-channels" in sys.argv:
         list_channels()
     elif "--add-channel" in sys.argv:
         idx = sys.argv.index("--add-channel")
         if len(sys.argv) > idx + 1:
-            add_channel(sys.argv[idx + 1])
+            for name in sys.argv[idx + 1:]:
+                add_channel(name.strip())
         else:
             print("请提供要添加的频道名")
     elif "--del-channel" in sys.argv:
@@ -123,7 +140,7 @@ if __name__ == "__main__":
                         continue
                 if not links:
                     continue
-                for url in links.values():
+                for url in extract_urls(links):
                     url = url.strip().lower()
                     if url in link_to_id:
                         old_id = link_to_id[url]
@@ -131,7 +148,7 @@ if __name__ == "__main__":
                         time_diff = abs((msg.timestamp - old_msg.timestamp).total_seconds())
                         if time_diff < 300: # 修改为5分钟 (300秒)
                             # 5分钟内，优先保留links多的
-                            if len(links) > len(old_msg.links):
+                            if len(extract_urls(links)) > len(extract_urls(old_msg.links)):
                                 id_to_delete.add(old_id)
                                 link_to_id[url] = msg.id
                                 id_to_msg[msg.id] = msg

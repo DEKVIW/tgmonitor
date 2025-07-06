@@ -5,11 +5,15 @@ import os
 from datetime import datetime, timedelta
 from config import settings
 import logging
+import re
 
 # 工具函数：去除重复前缀
 def clean_prefix(text: str) -> str:
-    """去除重复的前缀，如“描述：描述：描述内容”、“描述描述内容”都只保留一个"""
-    prefixes = ["描述：", "描述", "名称：", "名称", "资源描述：", "资源描述"]
+    """去除重复的前缀，如"描述：描述：描述内容"、"描述描述内容"都只保留一个"""
+    prefixes = [
+        "描述：", "描述", "名称：", "名称", "资源描述：", "资源描述",
+        "简介：", "简介", "剧情简介：", "剧情简介", "内容简介：", "内容简介"
+    ]
     text = text.strip()
     for prefix in prefixes:
         while text.startswith(prefix):
@@ -77,7 +81,7 @@ def handle_logout(authenticator):
 def main():
     try:
         auth_users = load_auth_users()
-        authenticator = stauth.Authenticate(
+    authenticator = stauth.Authenticate(
             auth_users,
             "tg_cookie",
             settings.SECRET_SALT,
@@ -267,7 +271,7 @@ label[data-testid="stWidgetLabel"] > div:empty {
 </style>
 """, unsafe_allow_html=True)
     try:
-        from streamlit_autorefresh import st_autorefresh
+    from streamlit_autorefresh import st_autorefresh
         refresh_interval = st.sidebar.slider("🔄 自动刷新间隔(秒)", 30, 300, 60, 30)
         st_autorefresh(interval=refresh_interval * 1000, key="auto_refresh")
     except Exception:
@@ -279,7 +283,7 @@ label[data-testid="stWidgetLabel"] > div:empty {
         SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
         return SessionLocal
     SessionLocal = get_sessionmaker()
-    st.title("📱 TG频道监控")
+        st.title("📱 TG频道监控")
     render_sidebar(username, authenticator, auth_users, SessionLocal)
     render_main_content(SessionLocal)
 
@@ -348,13 +352,13 @@ def render_tag_selector(SessionLocal):
     def get_tag_stats():
         with SessionLocal() as session:
             result = session.execute(text("""
-                SELECT unnest(tags) as tag, COUNT(*) as count 
-                FROM messages 
+            SELECT unnest(tags) as tag, COUNT(*) as count 
+            FROM messages 
                 WHERE tags IS NOT NULL AND array_length(tags, 1) > 0
-                GROUP BY tag 
-                ORDER BY count DESC
+            GROUP BY tag 
+            ORDER BY count DESC
                 LIMIT 50
-            """)).all()
+        """)).all()
             return [(tag, count) for tag, count in result]
     try:
         tag_items = get_tag_stats()
@@ -403,31 +407,16 @@ def show_statistics(SessionLocal):
                 link_counts.append(sum(len(m.links) for m in msgs if isinstance(m.links, dict)))
             return total, today, total_links, days, day_counts, link_counts
     def metric_card(title, value, icon="📄", color="#409eff"):
+        st.markdown(f"#### {icon} {title}")
         st.markdown(f"""
-        <div style="
-            background: #fff;
-            border-radius: 16px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.07);
-            padding: 18px 0 10px 0;
-            margin-bottom: 18px;
-            text-align: center;
-            border: 1px solid #f0f0f0;
-            width: 100%;
-        ">
-            <div style="font-size:18px;color:#888;margin-bottom:6px;">
-                <span style="font-size:1.3em;vertical-align:middle;">{icon}</span>
-                <span style="margin-left:4px;">{title}</span>
-            </div>
-            <div style="font-size:2.3rem;font-weight:bold;color:{color};letter-spacing:1px;">{value:,}</div>
-        </div>
+        <div style="font-size:2.3rem;font-weight:bold;color:{color};letter-spacing:1px;margin-bottom:14px;margin-left:2px;">{value:,}</div>
         """, unsafe_allow_html=True)
     try:
         total, today, total_links, days, day_counts, link_counts = get_stats()
-        st.markdown("### 📊 统计信息")
-        metric_card("总消息数", total, "📄", "#409eff")
+        st.header("📊 统计信息")
         metric_card("今日消息", today, "📅", "#52c41a")
+        metric_card("总消息数", total, "📄", "#409eff")
         metric_card("总链接数", total_links, "🔗", "#faad14")
-        st.markdown("<br>", unsafe_allow_html=True)
         st.markdown("#### 📈 最近10天消息与链接趋势")
         df = pd.DataFrame({
             "日期": [d.strftime("%m-%d") for d in days],
@@ -440,31 +429,46 @@ def show_statistics(SessionLocal):
         df["数量"] = df["数量"].replace([np.inf, -np.inf], 0)
         df["数量"] = df["数量"].fillna(0)
         chart = alt.Chart(df).mark_line(point=True, strokeWidth=3).encode(
-            x=alt.X("日期:N", axis=alt.Axis(labelAngle=-45)),
-            y=alt.Y("数量:Q", title="数量"),
+            x=alt.X("日期:N", axis=alt.Axis(labelAngle=-45, title="")),
+            y=alt.Y("数量:Q", title="", axis=alt.Axis(
+                labelFontSize=12,
+                labelExpr="datum.value / 100"
+            )),
             color=alt.Color(
                 "类型:N",
                 legend=alt.Legend(title=None, orient="bottom", direction="horizontal"),
                 scale=alt.Scale(domain=["消息数", "链接数"], range=["#409eff", "#faad14"])
             ),
             tooltip=["日期", "类型", "数量"]
-        ).properties(
-            width=340, height=320
-        ).configure_axis(
-            labelFontSize=13,
-            titleFontSize=15,
-            labelColor="#222",
-            titleColor="#222",
-            gridColor="#bbb",
-            domain=True,
-            domainColor="#888",
-            domainWidth=1.5,
-            tickColor="#888"
-        ).configure_legend(
-            labelFontSize=13,
-            titleFontSize=15
+        ).properties(width=340, height=320)
+
+        text = alt.Chart(df).mark_text(
+            align='center', baseline='bottom', fontSize=12, dy=-8
+        ).encode(
+            x="日期:N",
+            y="数量:Q",
+            color=alt.Color("类型:N", scale=alt.Scale(domain=["消息数", "链接数"], range=["#409eff", "#faad14"])),
+            text=alt.Text('数量:Q', format='.0f')
         )
-        st.altair_chart(chart, use_container_width=True)
+
+        layer = (chart + text).properties(width=340, height=320)\
+            .configure_axis(
+                labelFontSize=13,
+                titleFontSize=15,
+                labelColor="#222",
+                titleColor="#222",
+                gridColor="#bbb",
+                domain=True,
+                domainColor="#888",
+                domainWidth=1.5,
+                tickColor="#888"
+            ).configure_legend(
+                labelFontSize=13,
+                titleFontSize=15
+            )
+
+        st.altair_chart(layer, use_container_width=True)
+        st.markdown("<div style='text-align:center;color:#888;font-size:13px;margin-top:-10px;'>单位：百</div>", unsafe_allow_html=True)
     except Exception as e:
         st.error(f"统计信息获取失败: {e}")
 
@@ -480,13 +484,14 @@ def render_main_content(SessionLocal):
             if search_query:
                 search_terms = [term.strip() for term in search_query.split() if term.strip()]
                 if search_terms:
-                    search_filters = []
-                    for term in search_terms:
+                search_filters = []
+                for term in search_terms:
                         search_filters.extend([
                             Message.title.ilike(f'%{term}%'),
-                            Message.description.ilike(f'%{term}%')
+                            Message.description.ilike(f'%{term}%'),
+                            Message.tags.any(term)  # 添加标签搜索
                         ])
-                    query = query.filter(or_(*search_filters))
+                query = query.filter(or_(*search_filters))
             time_deltas = {
                 "最近1小时": timedelta(hours=1),
                 "最近24小时": timedelta(days=1),
@@ -533,39 +538,74 @@ def render_main_content(SessionLocal):
     render_pagination(total_count, max_page, PAGE_SIZE)
 
 def render_messages(messages):
+    # 网盘品牌色彩映射
+    netdisk_colors = {
+        '夸克网盘': {'bg': 'linear-gradient(135deg, #4A90E2, #357ABD)', 'text': '夸'},
+        '阿里云盘': {'bg': 'linear-gradient(135deg, #FF6A00, #E55A00)', 'text': '阿'},
+        '百度网盘': {'bg': 'linear-gradient(135deg, #2932E1, #1E27B8)', 'text': '百'},
+        '115网盘': {'bg': 'linear-gradient(135deg, #00C853, #00A644)', 'text': '115'},
+        '天翼云盘': {'bg': 'linear-gradient(135deg, #FF4444, #E63939)', 'text': '天'},
+        '123云盘': {'bg': 'linear-gradient(135deg, #9C27B0, #7B1FA2)', 'text': '123'},
+        'UC网盘': {'bg': 'linear-gradient(135deg, #FF9800, #F57C00)', 'text': 'UC'},
+        '迅雷网盘': {'bg': 'linear-gradient(135deg, #2196F3, #1976D2)', 'text': '迅'}
+    }
+    
     for idx, msg in enumerate(messages):
-        netdisk_tags = ""
-        if msg.links:
-            netdisk_tags = " ".join([f"💾{name}" for name in msg.links.keys()])
-        
-        # 多种时间格式选择，让时间更醒目
+        # 改进的时间格式处理
         now = datetime.now()
         msg_time = msg.timestamp
+        
+        # 使用日期比较而不是天数差，更准确
+        today = now.date()
+        msg_date = msg_time.date()
+        yesterday = today - timedelta(days=1)
         
         # 计算时间差
         time_diff = now - msg_time
         
-        if time_diff.days == 0:
+        if msg_date == today:
             # 今天的消息
-            if time_diff.seconds < 3600:  # 1小时内
-                minutes = time_diff.seconds // 60
+            if time_diff.total_seconds() < 3600:  # 1小时内
+                minutes = int(time_diff.total_seconds() // 60)
                 if minutes < 1:
                     time_str = "🔥刚刚"
                 else:
                     time_str = f"🔥{minutes}分钟前"
             else:
-                time_str = f"⏰今天{msg_time.strftime('%H:%M')}"
-        elif time_diff.days == 1:
+                time_str = f"⏰今天 {msg_time.strftime('%H:%M')}"
+        elif msg_date == yesterday:
             # 昨天的消息
-            time_str = f"📅昨天{msg_time.strftime('%H:%M')}"
-        elif time_diff.days < 7:
+            time_str = f"📅昨天 {msg_time.strftime('%H:%M')}"
+        elif (today - msg_date).days < 7:
             # 一周内
             weekdays = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
             weekday = weekdays[msg_time.weekday()]
-            time_str = f"📆{weekday}{msg_time.strftime('%H:%M')}"
-        else:
-            # 更早的消息
+            time_str = f"📆{weekday} {msg_time.strftime('%H:%M')}"
+        elif msg_time.year == now.year:
+            # 今年的消息
             time_str = f"📋{msg_time.strftime('%m-%d %H:%M')}"
+        else:
+            # 更早的消息（跨年）
+            time_str = f"📋{msg_time.strftime('%Y-%m-%d %H:%M')}"
+        
+        # 生成网盘标签字符串（用于expander标题）
+            netdisk_tags = ""
+        if msg.links:
+            # 网盘品牌emoji映射
+            netdisk_icons = {
+                '夸克网盘': '⚡',      # 闪电 - 极速体验
+                '阿里云盘': '🛡️',      # 盾牌 - 阿里安全生态
+                '百度网盘': '🧠',      # 大脑 - AI智能搜索
+                '115网盘': '💎',       # 钻石 - 高端品质
+                '天翼云盘': '🌊',      # 海浪 - 电信网络覆盖
+                '123云盘': '🎯',       # 靶心 - 简单直达
+                'UC网盘': '🌍',        # 地球 - 全球互联
+                '迅雷网盘': '🚀'       # 火箭 - 极速下载
+            }
+            netdisk_tags = " ".join([
+                f"{netdisk_icons.get(name, '💾')}{name}" 
+                for name in msg.links.keys()
+            ])
         
         # 简单的标题，使用醒目的时间格式
         expander_title = f"**{msg.title}** | {time_str} {netdisk_tags}"
@@ -574,22 +614,45 @@ def render_messages(messages):
             # 在expander内部显示详细的带颜色时间
             detailed_time = msg_time.strftime('%Y年%m月%d日 %H:%M:%S')
             st.markdown(f"<div style='color: #007acc; font-weight: 500; margin-bottom: 8px;'>🕒 详细时间: {detailed_time}</div>", unsafe_allow_html=True)
-            # 描述（加图标并去重“描述：”前缀）
+            
+            # 描述（加图标并去重"描述："前缀）
             if msg.description:
                 desc = clean_prefix(msg.description)
                 st.markdown(f"📝 <b>描述：</b>{desc}", unsafe_allow_html=True)
+            
             if msg.links:
                 # 下载链接按钮与描述同行显示，字体更清晰
                 link_buttons = []
-                for name, link in msg.links.items():
-                    link_buttons.append(
-                        f"<a href='{link}' target='_blank' class='netdisk-tag' style='font-size:13px;font-weight:bold;color:#fff;text-decoration:none;margin-right:8px;'>{name}</a>"
-                    )
+                for name, value in msg.links.items():
+                    if isinstance(value, list):
+                        for item in value:
+                            if isinstance(item, dict) and 'url' in item:
+                                label = item.get('label')
+                                btn_text = f"{name} {label}" if label else name
+                                link_buttons.append(
+                                    f"<a href='{item['url']}' target='_blank' class='netdisk-tag' style='font-size:13px;font-weight:bold;color:#fff;text-decoration:none;margin-right:8px;'>{btn_text}</a>"
+                                )
+                    elif isinstance(value, str):
+                        # 老结构，正则拆分 key
+                        m = re.match(r'^(.*?)(?:[（(]([^）)]+)[）)])?$', name)
+                        netdisk = m.group(1) if m else name
+                        label = m.group(2) if m else None
+                        btn_text = f"{netdisk} {label}" if label else netdisk
+                        link_buttons.append(
+                            f"<a href='{value}' target='_blank' class='netdisk-tag' style='font-size:13px;font-weight:bold;color:#fff;text-decoration:none;margin-right:8px;'>{btn_text}</a>"
+                        )
+                    elif isinstance(value, dict) and 'url' in value:
+                        label = value.get('label')
+                        btn_text = f"{name} {label}" if label else name
+                        link_buttons.append(
+                            f"<a href='{value['url']}' target='_blank' class='netdisk-tag' style='font-size:13px;font-weight:bold;color:#fff;text-decoration:none;margin-right:8px;'>{btn_text}</a>"
+                        )
                 st.markdown(
                     f"<div style='display:flex;align-items:center;flex-wrap:wrap;'>"
                     f"<span style='margin-right:12px;'><b>🔗 下载链接:</b></span>"
                     + " ".join(link_buttons) +
                     "</div>", unsafe_allow_html=True)
+            
             if msg.tags:
                 # 标签与下载按钮同行显示
                 tag_html = "".join([f"<span class='tag-btn' style='margin-right:6px;'>#{tag}</span>" for tag in msg.tags])
@@ -597,12 +660,6 @@ def render_messages(messages):
                     f"<div style='display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:10px;'>"
                     f"<b>🏷️ 标签:</b> {tag_html}"
                     "</div>", unsafe_allow_html=True)
-            # 注释掉ID和频道
-            # col1, col2 = st.columns(2)
-            # with col1:
-            #     st.caption(f"ID: {msg.id}")
-            # with col2:
-            #     st.caption(f"频道: {getattr(msg, 'channel_name', 'Unknown')}")
 
 def render_pagination(total_count, max_page, PAGE_SIZE):
     if max_page <= 1:
@@ -632,4 +689,4 @@ def render_pagination(total_count, max_page, PAGE_SIZE):
     )
 
 if __name__ == "__main__":
-    main()
+    main() 

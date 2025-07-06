@@ -3,10 +3,13 @@ import streamlit_authenticator as stauth
 
 def add_user(username, password, name, email):
     # 读取现有用户
-    with open('users.json', 'r') as f:
-        users = json.load(f)
+    try:
+        with open('users.json', 'r', encoding='utf-8') as f:
+            users = json.load(f)
+    except Exception:
+        users = {}
     
-    # 生成 bcrypt 哈希（streamlit-authenticator 0.4.2 需要）
+    # 生成 bcrypt 哈希
     hasher = stauth.Hasher()
     hashed_password = hasher.hash(password)
     
@@ -18,8 +21,9 @@ def add_user(username, password, name, email):
     }
     
     # 保存
-    with open('users.json', 'w') as f:
+    with open('users.json', 'w', encoding='utf-8') as f:
         json.dump(users, f, ensure_ascii=False, indent=2)
+    print(f"用户 {username} 添加成功！")
 
 # 使用示例
-add_user("admin", "password", "管理员", "admin@example.com") 
+add_user("aabbcc", "#zIBINSGZoh#E^oyhc7G", "管理员", "admin@example.com")
