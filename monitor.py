@@ -7,9 +7,10 @@ import re
 import sys
 from config import settings
 import asyncio
-from telethon.tl.types import MessageEntityTextUrl, MessageEntityUrl
-from urllib.parse import unquote
+from telethon.tl.types import MessageEntityTextUrl, MessageEntityUrl, KeyboardButtonUrl
+from urllib.parse import unquote, urlparse
 from urlextract import URLExtract  # 新增
+from db import async_session
 
 def get_api_credentials():
     """获取 API 凭据，优先使用数据库中的凭据"""
@@ -54,25 +55,53 @@ client = TelegramClient('newquark_session', api_id, api_hash)
 # 获取频道列表
 channel_usernames = get_channels()
 
+# 新增：全面提取所有链接的函数
+def extract_all_urls(text, msg_obj=None):
+    extractor = URLExtract()
+    all_urls = set()
+    if msg_obj is not None:
+        # 实体链接
+        for ent, text_part in msg_obj.get_entities_text():
+            if isinstance(ent, MessageEntityTextUrl):
+                decoded_url = unquote(ent.url)
+                all_urls.add(decoded_url)
+            elif isinstance(ent, MessageEntityUrl):
+                decoded_url = unquote(text_part)
+                all_urls.add(decoded_url)
+        # 按钮链接
+        if getattr(msg_obj, 'reply_markup', None):
+            for row in msg_obj.reply_markup.rows:
+                for button in row.buttons:
+                    if isinstance(button, KeyboardButtonUrl):
+                        decoded_url = unquote(button.url)
+                        all_urls.add(decoded_url)
+        # 网页预览链接
+        if getattr(msg_obj, 'media', None) and hasattr(msg_obj.media, 'webpage'):
+            webpage = msg_obj.media.webpage
+            if hasattr(webpage, 'url') and webpage.url:
+                decoded_url = unquote(webpage.url)
+                all_urls.add(decoded_url)
+    # 裸链兜底
+    for line in text.split('\n'):
+        for url in extractor.find_urls(line):
+            decoded_url = unquote(url)
+            all_urls.add(decoded_url)
+    return all_urls
+
 def parse_message(text, msg_obj=None):
     original_lines = text.split('\n')
     lines_to_process = []
     title = ''
-    # 字段初始化
     description = ''
-    links = {}
     tags = []
     source = ''
     channel = ''
     group = ''
     bot = ''
-    desc_lines_buffer = [] 
+    desc_lines_buffer = []
     last_label = None
-    # 区分词列表
     label_pattern = re.compile(r'^(主链|备用|普码|高码|HDR|杜比|IQ|[\u4e00-\u9fa5A-Za-z0-9]+码)$')
-    # 标签正则表达式
     tag_pattern = re.compile(r'#([\u4e00-\u9fa5A-Za-z0-9_]+)')
-    # 网盘关键字与显示名映射
     netdisk_map = [
         (['quark', '夸克'], '夸克网盘'),
         (['aliyundrive', 'aliyun', '阿里', 'alipan'], '阿里云盘'),
@@ -83,24 +112,39 @@ def parse_message(text, msg_obj=None):
         (['ucdisk', 'uc网盘', 'ucloud', 'drive.uc.cn'], 'UC网盘'),
         (['xunlei', 'thunder', '迅雷'], '迅雷'),
     ]
-    # --- 新增：用 urlextract 提取所有链接 ---
-    extractor = URLExtract()
-    all_urls = set()
-    if msg_obj is not None:
-        # 1. 用Telethon实体提取
-        for ent, text in msg_obj.get_entities_text():
-            if isinstance(ent, MessageEntityTextUrl):
-                decoded_url = unquote(ent.url)
-                all_urls.add(decoded_url)
-            elif isinstance(ent, MessageEntityUrl):
-                decoded_url = unquote(text)
-                all_urls.add(decoded_url)
-    # 2. 兜底：用 urlextract 提取裸链接
-    for line in original_lines:
-        for url in extractor.find_urls(line):
-            decoded_url = unquote(url)
-            all_urls.add(decoded_url)
-    # --- 阶段1: 精确识别标题，并准备待处理行列表 ---
+    # 1. 全量提取所有链接
+    all_urls = extract_all_urls(text, msg_obj)
+    # 2. 分类为网盘链接
+    links = {}
+    valid_labels = {
+        '普码', '高码', '主链', '备用', '4K', 'HDR', 'SDR', '1080P', '4K 120FPS', '4K HDR', '4K HQ', '4K EDR', '4K DV', '4K SDR', '4K 60FPS', '4K 120FPS', '4K HQ 高码率', '前 42 集', 'ATVP', '1080P 5.96G', '4K HDR 60FPS', '4K HQ', '4K DV', '4K EDR', '4K 5.96G', '4K 14.9GB', '4K 8.5GB', '4K 24.1GB', '4K HDR&DV', '4K HDR', '4K 60FPS', '4K 120FPS', '4K HQ 高码率', '4K HQ', '4K DV', '4K EDR', '4K 5.96G', '4K 14.9GB', '4K 8.5GB', '4K 24.1GB', 'ATVP', '前 42 集', '主链', '备用',
+        '大包', '大包2', '大包3', '大包4', '大包5',
+        '1号文件夹', '2号文件夹', '3号文件夹', '4号文件夹', '5号文件夹',
+        '备用链', '备用链接', '普码版', '高码版', '标准版', '高清版',
+        '4K版', '1080P版', 'HDR版', '杜比版', '完整版', '精简版',
+        '导演版', '加长版', '国语版', '粤语版', '英语版', '多语版',
+        '无删减', '剧场版', '特别版', '典藏版', '豪华版'
+    }
+    for url in all_urls:
+        parsed = urlparse(url)
+        netloc = parsed.netloc.lower()
+        for keys, name in netdisk_map:
+            if any(k in netloc for k in keys):
+                # 标签提取逻辑
+                label = None
+                for line in original_lines:
+                    if url in line:
+                        label_match = re.match(r'^([\u4e00-\u9fa5A-Za-z0-9]+)[：:]', line.strip())
+                        if label_match and label_match.group(1) in valid_labels:
+                            label = label_match.group(1)
+                            break
+                if name not in links:
+                    links[name] = []
+                if not any(item['url'] == url for item in links[name]):
+                    links[name].append({'label': label, 'url': url})
+                break
+    # 其余业务逻辑保持不变（标题、描述、标签等）
+    # 阶段1: 精确识别标题，并准备待处理行列表
     title_found_in_pass = False
     for i, line in enumerate(original_lines):
         stripped_line = line.strip()
@@ -135,10 +179,12 @@ def parse_message(text, msg_obj=None):
     ]
     skip_pattern = re.compile(r'^(%s)(：|:)?' % '|'.join(map(lambda x: re.escape(x[0]), skip_keywords)))
     keyword_field_map = {k: v for k, v in skip_keywords if v}
-    # --- 阶段2: 遍历待处理行，提取元数据并构建纯净描述 ---
     for raw_line in lines_to_process:
         line = raw_line.strip()
         if not line:
+            continue
+        # 新增：过滤包含 @xxx 的行
+        if re.search(r'@[A-Za-z0-9_]+', line):
             continue
         cleaned_line_for_check = re.sub(r'^(?:\* |\- |\+ |> |>> |• |➤ |▪ |√ )+', '', line).strip()
         line_fully_handled = False
@@ -150,10 +196,12 @@ def parse_message(text, msg_obj=None):
                 value = cleaned_line_for_check.replace(keyword, '').replace('：', '').replace(':', '').strip()
                 locals()[field] = value
             continue
-        elif cleaned_line_for_check.startswith('📁 大小：') or cleaned_line_for_check.startswith('大小：'):
-            size_info = cleaned_line_for_check.replace('📁 大小：', '').replace('大小：', '').strip()
+        elif cleaned_line_for_check.startswith('📁 大小：') or cleaned_line_for_check.startswith('📂大小：') or cleaned_line_for_check.startswith('大小：'):
+            size_info = cleaned_line_for_check.replace('📁 大小：', '').replace('📂大小：', '').replace('大小：', '').strip()
+            # 只保留包含数字+单位的大小信息，过滤掉无效信息
             if re.search(r'(\d+\s*(GB|MB|TB|KB|G|M|T|K|B|字节|左右|约|每集|单集))', size_info, re.IGNORECASE):
                 desc_lines_buffer.append(cleaned_line_for_check)
+            # 无效的大小信息（如 N、X、无、未知、单个字母、单个汉字等）直接跳过
             continue
         elif cleaned_line_for_check.startswith('链接：'):
             continue
@@ -171,7 +219,6 @@ def parse_message(text, msg_obj=None):
         if found_tags_in_line:
             tags.extend(found_tags_in_line)
             cleaned_line = tag_pattern.sub('', cleaned_line).strip()
-        cleaned_line = re.sub(r'(?:📁\s*)?大小\s*[：:]\s*(?:N|X|无|未知)', '', cleaned_line, flags=re.IGNORECASE).strip()
         cleaned_line = re.sub(r'^.*(标签|投稿人|频道|搜索|机场)\s*[：:].*$', '', cleaned_line, flags=re.IGNORECASE).strip()
         if cleaned_line_for_check.startswith('分享：') or cleaned_line_for_check.startswith('网址：') \
             or cleaned_line_for_check.startswith('🌍') or cleaned_line_for_check.startswith('🔥'):
@@ -191,74 +238,9 @@ def parse_message(text, msg_obj=None):
                     break
             if not should_filter:
                 desc_lines_buffer.append(cleaned_line)
-    valid_labels = {
-        '普码', '高码', '主链', '备用', '4K', 'HDR', 'SDR', '1080P', '4K 120FPS', '4K HDR', '4K HQ', '4K EDR', '4K DV', '4K SDR', '4K 60FPS', '4K 120FPS', '4K HQ 高码率', '前 42 集', 'ATVP', '1080P 5.96G', '4K HDR 60FPS', '4K HQ', '4K DV', '4K EDR', '4K 5.96G', '4K 14.9GB', '4K 8.5GB', '4K 24.1GB', '4K HDR&DV', '4K HDR', '4K 60FPS', '4K 120FPS', '4K HQ 高码率', '4K HQ', '4K DV', '4K EDR', '4K 5.96G', '4K 14.9GB', '4K 8.5GB', '4K 24.1GB', 'ATVP', '前 42 集', '主链', '备用',
-        '大包', '大包2', '大包3', '大包4', '大包5',
-        '1号文件夹', '2号文件夹', '3号文件夹', '4号文件夹', '5号文件夹',
-        '备用链', '备用链接', '普码版', '高码版', '标准版', '高清版',
-        '4K版', '1080P版', 'HDR版', '杜比版', '完整版', '精简版',
-        '导演版', '加长版', '国语版', '粤语版', '英语版', '多语版',
-        '无删减', '剧场版', '特别版', '典藏版', '豪华版'
-    }
-    # --- 新主循环：用 urlextract 提取所有链接，标签赋值逻辑兼容所有格式 ---
-    links = {}
-    last_label = None
-    for raw_line in original_lines:
-        line = raw_line.strip()
-        if not line:
-            continue
-        # 整行是有效标签，赋值last_label，跳过本行
-        if line in valid_labels:
-            last_label = line
-            continue
-        # 检查“标签：链接”格式
-        label = None
-        label_match = re.match(r'^([\u4e00-\u9fa5A-Za-z0-9]+)[：:]', line)
-        if label_match:
-            possible_label = label_match.group(1)
-            if possible_label in valid_labels:
-                label = possible_label
-                line = line[label_match.end():].strip()
-        urls_in_line = extractor.find_urls(line)
-        for url in urls_in_line:
-            decoded_url = unquote(url)
-            for keys, name in netdisk_map:
-                if any(k in decoded_url.lower() for k in keys):
-                    use_label = label if label else last_label
-                    if name not in links:
-                        links[name] = []
-                    if not any(item['url'] == decoded_url for item in links[name]):
-                        links[name].append({'label': use_label if use_label in valid_labels else None, 'url': decoded_url})
-                    last_label = None  # 用完即清空，防止残留
-                    break
-    # --- 新增：全行无条件提取+智能标签识别，合并到links ---
-    def merge_link(links_dict, netdisk, url, label):
-        if netdisk not in links_dict:
-            links_dict[netdisk] = []
-        for item in links_dict[netdisk]:
-            if item['url'] == url:
-                return
-        links_dict[netdisk].append({'label': label, 'url': url})
-    for raw_line in original_lines:
-        line = raw_line.strip()
-        if not line:
-            continue
-        label = None
-        label_match = re.match(r'^([\u4e00-\u9fa5A-Za-z0-9]+)[：:]', line)
-        if label_match:
-            possible_label = label_match.group(1)
-            if possible_label in valid_labels:
-                label = possible_label
-                line = line[label_match.end():].strip()
-        urls_in_line = extractor.find_urls(line)
-        for url in urls_in_line:
-            decoded_url = unquote(url)
-            for keys, name in netdisk_map:
-                if any(k in decoded_url.lower() for k in keys):
-                    merge_link(links, name, decoded_url, label)
-                    break
-    # 整合最终的描述和标签
+    tags = list(set(tags))
     description = '\n'.join(desc_lines_buffer)
+    # --- 新增：描述区净化，去除网盘名、链接及“网盘名:链接”格式 ---
     netdisk_names = ['夸克', '迅雷', '百度', 'UC', '阿里', '天翼', '115', '123云盘']
     netdisk_name_pattern = re.compile(r'(' + '|'.join(netdisk_names) + r')')
     description = netdisk_name_pattern.sub('', description)
@@ -271,7 +253,6 @@ def parse_message(text, msg_obj=None):
     description = re.sub(r'：\s*\n', '\n', description, flags=re.MULTILINE)
     desc_lines_final = [line for line in description.strip().split('\n') if line.strip() and not re.fullmatch(r'[.。·、,，-]+', line.strip())]
     description = '\n'.join(desc_lines_final)
-    tags = list(set(tags))
     return {
         'title': title,
         'description': description,
@@ -319,14 +300,14 @@ async def handler(event):
             max_retries = 3
             for attempt in range(max_retries):
                 try:
-                    with Session(engine) as session:
+                    async with async_session() as session:
                         new_message = Message(
                             timestamp=telegram_local_time,  # 使用转换后的本地时间
                             **parsed_data,
                             netdisk_types=netdisk_types
                         )
                         session.add(new_message)
-                        session.commit()
+                        await session.commit()
                     print(f"[{monitor_time}] 新消息已保存到数据库 (尝试 {attempt + 1}/{max_retries}, 延迟: {delay_seconds:.1f}秒)")
                     break
                 except Exception as db_error:

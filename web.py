@@ -6,6 +6,8 @@ from datetime import datetime, timedelta
 from config import settings
 import logging
 import re
+import pandas as pd
+import altair as alt
 
 # 工具函数：去除重复前缀
 def clean_prefix(text: str) -> str:
@@ -296,7 +298,6 @@ def render_sidebar(username, authenticator, auth_users, SessionLocal):
             help="筛选消息的时间范围",
             on_change=on_time_range_change
         )
-        # 只用selectbox控件管理page_size，不再手动赋值
         page_size_default = st.session_state.get('page_size', 100)
         if page_size_default not in [50, 100, 200]:
             page_size_default = 100
@@ -307,7 +308,6 @@ def render_sidebar(username, authenticator, auth_users, SessionLocal):
             key="page_size",
             help="选择每页显示的消息条数"
         )
-        # 移除 st.session_state.update 的同步逻辑
         st.divider()
         show_statistics(SessionLocal)
         st.divider()
@@ -358,6 +358,7 @@ def show_statistics(SessionLocal):
     import altair as alt
     from sqlalchemy import func
     from models import Message
+    from datetime import datetime, timedelta
     @st.cache_data(ttl=300)
     def get_stats():
         with SessionLocal() as session:
@@ -399,7 +400,6 @@ def show_statistics(SessionLocal):
             "链接数": link_counts
         })
         df = df.melt("日期", var_name="类型", value_name="数量")
-        # 自动修复图表数据的NaN、inf、-inf问题
         import numpy as np
         df["数量"] = df["数量"].replace([np.inf, -np.inf], 0)
         df["数量"] = df["数量"].fillna(0)
@@ -416,7 +416,6 @@ def show_statistics(SessionLocal):
             ),
             tooltip=["日期", "类型", "数量"]
         ).properties(width=340, height=320)
-
         text = alt.Chart(df).mark_text(
             align='center', baseline='bottom', fontSize=12, dy=-8
         ).encode(
@@ -425,8 +424,23 @@ def show_statistics(SessionLocal):
             color=alt.Color("类型:N", scale=alt.Scale(domain=["消息数", "链接数"], range=["#409eff", "#faad14"])),
             text=alt.Text('数量:Q', format='.0f')
         )
-
-        layer = (chart + text).properties(width=340, height=320)\
+        layer = (chart + text)
+        # 单位：百，右上角叠加
+        unit_text = alt.Chart(pd.DataFrame({
+            '日期': [df['日期'].iloc[-1]],
+            '数量': [df['数量'].max() * 0.85]
+        })).mark_text(
+            text='单位：百',
+            align='right',
+            baseline='top',
+            dx=-10, dy=0,
+            fontSize=13,
+            color='#888'
+        ).encode(
+            x='日期:N',
+            y='数量:Q'
+        )
+        final_chart = (layer + unit_text).properties(width=340, height=320)\
             .configure_axis(
                 labelFontSize=13,
                 titleFontSize=15,
@@ -441,9 +455,80 @@ def show_statistics(SessionLocal):
                 labelFontSize=13,
                 titleFontSize=15
             )
+        st.altair_chart(final_chart, use_container_width=True)
+        # 彻底删除下方单位显示
+        # （如有多余st.markdown单位显示，已注释或删除）
 
-        st.altair_chart(layer, use_container_width=True)
-        st.markdown("<div style='text-align:center;color:#888;font-size:13px;margin-top:-10px;'>单位：百</div>", unsafe_allow_html=True)
+        # ====== 新增：最近10小时去重统计条形图 ======
+        st.markdown("#### 🧹 最近10小时每小时去重删除数")
+        @st.cache_data(ttl=60)
+        def get_dedup_stats():
+            sql = """
+                SELECT date_trunc('hour', run_time) AS hour, SUM(deleted) AS del_cnt
+                FROM dedup_stats
+                WHERE run_time >= NOW() - INTERVAL '10 hours'
+                GROUP BY hour
+                ORDER BY hour
+            """
+            from models import engine
+            try:
+                df = pd.read_sql(sql, engine)
+                if not df.empty:
+                    df['del_cnt'] = df['del_cnt'].fillna(0).astype(int)
+                return df
+            except Exception as e:
+                logger.error(f"获取去重统计失败: {e}")
+                return pd.DataFrame()
+        df_stats = get_dedup_stats()
+        now = datetime.now()
+        hours = [now.replace(minute=0, second=0, microsecond=0) - timedelta(hours=i) for i in range(9, -1, -1)]
+        hours = pd.to_datetime(hours)
+        df_full = pd.DataFrame({'hour': hours})
+        if not df_stats.empty:
+            df_stats['hour'] = pd.to_datetime(df_stats['hour'])
+        df_merged = pd.merge(df_full, df_stats, on='hour', how='left').fillna(0)
+        df_merged['del_cnt'] = df_merged['del_cnt'].astype(int)
+        color_scale = alt.Scale(scheme='category10')
+        bar = alt.Chart(df_merged).mark_bar().encode(
+            x=alt.X('hour:T', axis=alt.Axis(format='%H:%M', title=None)),
+            y=alt.Y('del_cnt:Q', axis=alt.Axis(title=None)),
+            color=alt.Color('hour:T', scale=color_scale, legend=None),
+            tooltip=[
+                alt.Tooltip('hour:T', title='时间', format='%Y-%m-%d %H:%M'),
+                alt.Tooltip('del_cnt:Q', title='数量', format='.0f')
+            ]
+        ).properties(
+            width=420,
+            height=260
+        )
+        
+        # 添加数值标签图层
+        text = alt.Chart(df_merged).mark_text(
+            align='center',
+            baseline='bottom',
+            dy=-5,
+            fontSize=12,
+            fontWeight='bold',
+            color='#333'
+        ).encode(
+            x=alt.X('hour:T'),
+            y=alt.Y('del_cnt:Q'),
+            text=alt.Text('del_cnt:Q', format='.0f')
+        )
+        
+        # 组合柱状图和文本标签，然后配置样式
+        chart = alt.layer(bar, text).configure_axis(
+            labelFontSize=13,
+            titleFontSize=15,
+            labelColor="#222",
+            titleColor="#222",
+            gridColor="#bbb",
+            domain=True,
+            domainColor="#888",
+            domainWidth=1.5,
+            tickColor="#888"
+        )
+        st.altair_chart(chart, use_container_width=True)
     except Exception as e:
         st.error(f"统计信息获取失败: {e}")
 
@@ -570,12 +655,12 @@ def render_messages(messages):
             netdisk_icons = {
                 '夸克网盘': '⚡',      # 闪电 - 极速体验
                 '阿里云盘': '🛡️',      # 盾牌 - 阿里安全生态
-                '百度网盘': '🧠',      # 大脑 - AI智能搜索
+                '百度网盘': '🔍',      # 放大镜 - 搜索功能
                 '115网盘': '💎',       # 钻石 - 高端品质
                 '天翼云盘': '🌊',      # 海浪 - 电信网络覆盖
                 '123云盘': '🎯',       # 靶心 - 简单直达
                 'UC网盘': '🌍',        # 地球 - 全球互联
-                '迅雷网盘': '🚀'       # 火箭 - 极速下载
+                '迅雷': '🚀'       # 火箭 - 极速下载
             }
             netdisk_tags = " ".join([
                 f"{netdisk_icons.get(name, '💾')}{name}" 

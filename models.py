@@ -27,6 +27,13 @@ class Credential(Base):
     api_id = Column(String, nullable=False)
     api_hash = Column(String, nullable=False)
 
+class DedupStats(Base):
+    __tablename__ = "dedup_stats"
+    id = Column(Integer, primary_key=True)
+    run_time = Column(DateTime, nullable=False)
+    inserted = Column(Integer, nullable=False)
+    deleted = Column(Integer, nullable=False)
+
 class Channel(Base):
     __tablename__ = "channels"
     id = Column(Integer, primary_key=True, index=True)
@@ -35,8 +42,8 @@ class Channel(Base):
 # 数据库连接配置
 DATABASE_URL = settings.DATABASE_URL
 
-# 创建数据库引擎
-engine = create_engine(DATABASE_URL)
+# 创建数据库引擎，指定时区
+engine = create_engine(DATABASE_URL, connect_args={"options": "-c timezone=Asia/Shanghai"})
 
 # 创建所有表
 def create_tables():

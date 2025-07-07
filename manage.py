@@ -1,10 +1,12 @@
 import sys
 from sqlalchemy.orm import Session
-from models import Channel, Message, engine
+from models import Channel, Message, engine, DedupStats
 from sqlalchemy import update, delete
 import ast
 from datetime import datetime, timedelta
 import json
+from collections import defaultdict
+from sqlalchemy import text
 
 def list_channels():
     with Session(engine) as session:
@@ -65,6 +67,7 @@ def print_help():
   python manage.py --del-channel 频道名
   python manage.py --edit-channel 旧频道名 新频道名
   python manage.py --fix-tags
+  python manage.py --dedup-links-fast [batch_size]
   python manage.py --dedup-links
 """)
 
@@ -123,6 +126,60 @@ if __name__ == "__main__":
                         print(f"ID={msg.id} tags修复失败: {e}")
             session.commit()
             print(f"已修复tags字段脏数据条数: {fixed}")
+    elif "--dedup-links-fast" in sys.argv:
+        # 分批流式去重，降低内存占用
+        batch_size = 5000
+        idx = sys.argv.index("--dedup-links-fast")
+        if len(sys.argv) > idx + 1 and sys.argv[idx+1].isdigit():
+            batch_size = int(sys.argv[idx+1])
+        from sqlalchemy import select, text
+        from sqlalchemy.orm import sessionmaker
+        SessionLocal = sessionmaker(bind=engine)
+        link_to_id = {}
+        id_to_delete = set()
+        with SessionLocal() as session:
+            query = session.query(Message).order_by(Message.timestamp.desc())
+            for msg in query.yield_per(batch_size):
+                links = msg.links
+                if isinstance(links, str):
+                    try:
+                        links = json.loads(links)
+                    except Exception:
+                        continue
+                if not links:
+                    continue
+                urls = extract_urls(links)
+                for url in urls:
+                    if not isinstance(url, str):
+                        continue
+                    url = url.strip().lower()
+                    if url in link_to_id:
+                        old_id = link_to_id[url]
+                        if msg.timestamp < session.get(Message, old_id).timestamp:
+                            # Older message, mark for deletion
+                            id_to_delete.add(msg.id)
+                        else:
+                            id_to_delete.add(old_id)
+                            link_to_id[url] = msg.id
+                    else:
+                        link_to_id[url] = msg.id
+            if id_to_delete:
+                session.execute(delete(Message).where(Message.id.in_(id_to_delete)))
+                # 记录去重统计
+                session.add(DedupStats(
+                    run_time=datetime.now(),
+                    inserted=len(link_to_id),
+                    deleted=len(id_to_delete)
+                ))
+                session.commit()
+                print(f"已删除重复链接消息条数: {len(id_to_delete)} 并写入统计")
+                # 自动清理10小时前的去重统计数据
+                session.execute(text("DELETE FROM dedup_stats WHERE run_time < NOW() - INTERVAL '10 hours'"))
+                session.commit()
+                print("已自动清理10小时之前的去重统计数据")
+            else:
+                print("没有重复链接需要删除。")
+
     elif "--dedup-links" in sys.argv:
         # 升级去重逻辑：相同链接且时间间隔5分钟内，优先保留网盘链接多的，否则保留最新的
         with Session(engine) as session:
@@ -141,6 +198,8 @@ if __name__ == "__main__":
                 if not links:
                     continue
                 for url in extract_urls(links):
+                    if not isinstance(url, str):
+                        continue
                     url = url.strip().lower()
                     if url in link_to_id:
                         old_id = link_to_id[url]
@@ -164,6 +223,10 @@ if __name__ == "__main__":
                 session.execute(delete(Message).where(Message.id.in_(id_to_delete)))
                 session.commit()
                 print(f"已删除重复网盘链接的旧消息条目: {len(id_to_delete)}")
+                # 自动清理10小时前的去重统计数据
+                session.execute(text("DELETE FROM dedup_stats WHERE run_time < NOW() - INTERVAL '10 hours'"))
+                session.commit()
+                print("已自动清理10小时之前的去重统计数据")
             else:
                 print("没有需要删除的重复网盘链接消息。")
     else:

@@ -3,6 +3,7 @@
 
 from pydantic_settings import BaseSettings
 from dotenv import load_dotenv
+from typing import Optional
 
 load_dotenv()  # 加载 .env 文件
 
@@ -11,8 +12,9 @@ class Settings(BaseSettings):
     TELEGRAM_API_ID: int
     TELEGRAM_API_HASH: str
 
-    # 数据库配置
+    # 数据库配置（同步 + 可选异步）
     DATABASE_URL: str
+    DATABASE_URL_ASYNC: Optional[str] = None
 
     # 默认频道配置
     DEFAULT_CHANNELS: str

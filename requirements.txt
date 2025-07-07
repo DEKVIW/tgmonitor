@@ -11,3 +11,6 @@ pydantic-settings==2.1.0
 streamlit-autorefresh
 streamlit-authenticator
 urlextract
+asyncpg
+pandas
+altair
