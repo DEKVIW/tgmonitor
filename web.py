@@ -279,7 +279,7 @@ def render_sidebar(username, authenticator, auth_users, SessionLocal):
         render_tag_selector(SessionLocal)
         netdisk_types = [
             '夸克网盘', '阿里云盘', '百度网盘', '115网盘', 
-            '天翼云盘', '123云盘', 'UC网盘', '迅雷网盘'
+            '天翼云盘', '123云盘', 'UC网盘', '迅雷'
         ]
         st.multiselect(
             "💾 网盘类型",
@@ -529,6 +529,153 @@ def show_statistics(SessionLocal):
             tickColor="#888"
         )
         st.altair_chart(chart, use_container_width=True)
+        
+        # ====== 新增：最近24小时网盘链接分布饼图 ======
+        st.markdown("#### 📊 最近24小时网盘链接分布")
+        @st.cache_data(ttl=300)
+        def get_netdisk_distribution():
+            sql = """
+            SELECT 
+                netdisk_name,
+                COUNT(*) as link_count
+            FROM (
+                SELECT 
+                    jsonb_array_elements_text(netdisk_types) as netdisk_name
+                FROM messages 
+                WHERE timestamp >= NOW() - INTERVAL '24 hours'
+                  AND netdisk_types IS NOT NULL
+            ) t
+            GROUP BY netdisk_name
+            ORDER BY link_count DESC
+            """
+            from models import engine
+            try:
+                df = pd.read_sql(sql, engine)
+                print('【调试】网盘分布SQL:', sql)
+                print('【调试】网盘分布原始数据:', df)
+                # 安全检查
+                if df.empty:
+                    print('【调试】查询结果为空，SQL为：', sql)
+                    return pd.DataFrame(columns=['netdisk_name', 'link_count', 'percentage'])
+                
+                # 数据类型处理
+                df['link_count'] = df['link_count'].fillna(0).astype(int)
+                df['percentage'] = df['link_count'] / df['link_count'].sum()
+                
+                return df
+            except Exception as e:
+                logger.error(f"获取网盘分布统计失败: {e}")
+                return pd.DataFrame(columns=['netdisk_name', 'link_count', 'percentage'])
+        
+        def render_netdisk_pie_chart(df):
+            try:
+                if df.empty:
+                    st.info("暂无网盘链接数据")
+                    return
+
+                # 品牌名提取映射
+                brand_map = {
+                    '夸克网盘': '夸克',
+                    '阿里云盘': '阿里',
+                    '百度网盘': '百度',
+                    '115网盘': '115',
+                    '天翼云盘': '天翼',
+                    '123云盘': '123',
+                    'UC网盘': 'UC',
+                    '迅雷网盘': '迅雷'
+                }
+                netdisk_colors = {
+                    '夸克': '#4E79A7',
+                    '阿里': '#F28E2B',
+                    '百度': '#76B7B2',
+                    '115': '#59A14F',
+                    '天翼': '#E15759',
+                    '123': '#B07AA1',
+                    'UC': '#EDC948',
+                    '迅雷': '#7F7F7F'
+                }
+                # 品牌名字段
+                df['brand'] = df['netdisk_name'].map(brand_map).fillna(df['netdisk_name'])
+                df = df.groupby('brand', as_index=False).agg({'link_count':'sum', 'percentage':'sum'})
+                df = df.sort_values('percentage', ascending=False).reset_index(drop=True)
+                # 占比文本
+                df['percent_label'] = (df['percentage']*100).map(lambda x: f"{x:.1f}%")
+                # 图例标签
+                df['legend_label'] = df['brand'] + ' ' + df['percent_label']
+                # 图例顺序
+                legend_domain = df['brand'].tolist()
+                legend_labels = df['legend_label'].tolist()
+                color_range = [netdisk_colors.get(b, '#cccccc') for b in legend_domain]
+
+                pie = alt.Chart(df).mark_arc(innerRadius=60).encode(
+                    theta=alt.Theta('link_count:Q'),
+                    color=alt.Color('brand:N',
+                        scale=alt.Scale(domain=legend_domain, range=color_range),
+                        legend=alt.Legend(
+                            title="网盘类型",
+                            orient="right",
+                            labelFontSize=13,
+                            titleFontSize=15,
+                            labelFont='Arial',
+                            titleFont='Arial',
+                            symbolLimit=len(legend_domain),
+                            labelExpr='datum.label',
+                        )
+                    ),
+                    order=alt.Order('link_count:Q', sort='descending'),
+                    tooltip=[
+                        alt.Tooltip('brand:N', title='品牌'),
+                        alt.Tooltip('link_count:Q', title='链接数量'),
+                        alt.Tooltip('percent_label:N', title='占比')
+                    ]
+                ).properties(
+                    width=420,
+                    height=260
+                )
+
+                # Altair legend不支持直接自定义label内容，需用labelExpr hack
+                # 生成一个映射字典用于labelExpr
+                label_map = {b: l for b, l in zip(legend_domain, legend_labels)}
+                import json
+                label_expr = '""' + ''.join([f'+(datum.value==\"{b}\"?\"{l}\":"")' for b, l in label_map.items()])
+                pie = pie.encode(
+                    color=alt.Color('brand:N',
+                        scale=alt.Scale(domain=legend_domain, range=color_range),
+                        legend=alt.Legend(
+                            title="网盘类型",
+                            orient="right",
+                            labelFontSize=13,
+                            titleFontSize=15,
+                            labelFont='Arial',
+                            titleFont='Arial',
+                            symbolLimit=len(legend_domain),
+                            labelExpr=label_expr
+                        )
+                    )
+                )
+
+                chart = pie.configure_view(stroke=None)
+                chart = chart.configure_legend(
+                    labelFontSize=13,
+                    titleFontSize=15,
+                    orient='right',
+                    labelFont='Arial',
+                    titleFont='Arial'
+                ).configure_axis(
+                    labelFont='Arial',
+                    titleFont='Arial',
+                    labelFontSize=13,
+                    titleFontSize=15,
+                    labelColor="#222",
+                    titleColor="#222"
+                )
+                st.altair_chart(chart, use_container_width=True)
+            except Exception as e:
+                st.error(f"网盘分布图表渲染失败: {e}")
+        
+        # 获取数据并渲染图表
+        df_netdisk = get_netdisk_distribution()
+        render_netdisk_pie_chart(df_netdisk)
     except Exception as e:
         st.error(f"统计信息获取失败: {e}")
 

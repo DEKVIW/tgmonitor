@@ -132,11 +132,34 @@ def parse_message(text, msg_obj=None):
             if any(k in netloc for k in keys):
                 # 标签提取逻辑
                 label = None
-                for line in original_lines:
+                for i, line in enumerate(original_lines):
                     if url in line:
+                        # 先尝试匹配有冒号的格式
                         label_match = re.match(r'^([\u4e00-\u9fa5A-Za-z0-9]+)[：:]', line.strip())
                         if label_match and label_match.group(1) in valid_labels:
                             label = label_match.group(1)
+                            break
+                        # 如果没有冒号，尝试匹配链接前的标签
+                        else:
+                            url_index = line.find(url)
+                            if url_index > 0:
+                                before_url = line[:url_index].strip()
+                                for valid_label in valid_labels:
+                                    if before_url.endswith(valid_label):
+                                        label = valid_label
+                                        break
+                                if label:
+                                    break
+                        # 新增：上一行短标签智能识别
+                        if not label and i > 0:
+                            prev_line = original_lines[i-1].strip()
+                            if len(prev_line) < 10:
+                                for valid_label in valid_labels:
+                                    if valid_label in prev_line:
+                                        label = valid_label
+                                        break
+                        # 只要找到就break
+                        if label:
                             break
                 if name not in links:
                     links[name] = []
