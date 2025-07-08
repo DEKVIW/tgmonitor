@@ -14,3 +14,9 @@ urlextract
 asyncpg
 pandas
 altair
+
+# 链接检测相关依赖
+aiohttp>=3.8.0
+validators>=0.20.0
+requests-html>=0.10.0
+Brotli>=1.0.9

@@ -425,22 +425,7 @@ def show_statistics(SessionLocal):
             text=alt.Text('数量:Q', format='.0f')
         )
         layer = (chart + text)
-        # 单位：百，右上角叠加
-        unit_text = alt.Chart(pd.DataFrame({
-            '日期': [df['日期'].iloc[-1]],
-            '数量': [df['数量'].max() * 0.85]
-        })).mark_text(
-            text='单位：百',
-            align='right',
-            baseline='top',
-            dx=-10, dy=0,
-            fontSize=13,
-            color='#888'
-        ).encode(
-            x='日期:N',
-            y='数量:Q'
-        )
-        final_chart = (layer + unit_text).properties(width=340, height=320)\
+        final_chart = layer.properties(width=340, height=320)\
             .configure_axis(
                 labelFontSize=13,
                 titleFontSize=15,

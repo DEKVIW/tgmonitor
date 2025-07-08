@@ -136,9 +136,17 @@ def parse_message(text, msg_obj=None):
                     if url in line:
                         # 先尝试匹配有冒号的格式
                         label_match = re.match(r'^([\u4e00-\u9fa5A-Za-z0-9]+)[：:]', line.strip())
-                        if label_match and label_match.group(1) in valid_labels:
-                            label = label_match.group(1)
-                            break
+                        if label_match:
+                            extracted_label = label_match.group(1)
+                            # 优先最长匹配
+                            matched_label = None
+                            for valid_label in valid_labels:
+                                if valid_label in extracted_label:
+                                    if matched_label is None or len(valid_label) > len(matched_label):
+                                        matched_label = valid_label
+                            if matched_label:
+                                label = matched_label
+                                break
                         # 如果没有冒号，尝试匹配链接前的标签
                         else:
                             url_index = line.find(url)
@@ -206,6 +214,9 @@ def parse_message(text, msg_obj=None):
         line = raw_line.strip()
         if not line:
             continue
+        # 新增：只要行里有 http/https 链接，整行跳过
+        if re.search(r'https?://', line):
+            continue
         # 新增：过滤包含 @xxx 的行
         if re.search(r'@[A-Za-z0-9_]+', line):
             continue
@@ -219,12 +230,12 @@ def parse_message(text, msg_obj=None):
                 value = cleaned_line_for_check.replace(keyword, '').replace('：', '').replace(':', '').strip()
                 locals()[field] = value
             continue
-        elif cleaned_line_for_check.startswith('📁 大小：') or cleaned_line_for_check.startswith('📂大小：') or cleaned_line_for_check.startswith('大小：'):
-            size_info = cleaned_line_for_check.replace('📁 大小：', '').replace('📂大小：', '').replace('大小：', '').strip()
-            # 只保留包含数字+单位的大小信息，过滤掉无效信息
+        # 仅行首大小信息识别（允许emoji、空格、标点）
+        if re.match(r'^[^\u4e00-\u9fa5A-Za-z0-9]*大小', cleaned_line_for_check):
+            parts = re.split(r'大小[:：\s]*', cleaned_line_for_check, maxsplit=1)
+            size_info = parts[1].strip() if len(parts) > 1 else ""
             if re.search(r'(\d+\s*(GB|MB|TB|KB|G|M|T|K|B|字节|左右|约|每集|单集))', size_info, re.IGNORECASE):
                 desc_lines_buffer.append(cleaned_line_for_check)
-            # 无效的大小信息（如 N、X、无、未知、单个字母、单个汉字等）直接跳过
             continue
         elif cleaned_line_for_check.startswith('链接：'):
             continue
@@ -263,15 +274,11 @@ def parse_message(text, msg_obj=None):
                 desc_lines_buffer.append(cleaned_line)
     tags = list(set(tags))
     description = '\n'.join(desc_lines_buffer)
-    # --- 新增：描述区净化，去除网盘名、链接及“网盘名:链接”格式 ---
+    # --- 新增：描述区净化，去除网盘名 ---
     netdisk_names = ['夸克', '迅雷', '百度', 'UC', '阿里', '天翼', '115', '123云盘']
     netdisk_name_pattern = re.compile(r'(' + '|'.join(netdisk_names) + r')')
     description = netdisk_name_pattern.sub('', description)
-    for netdisk_list in links.values():
-        for item in netdisk_list:
-            description = description.replace(item['url'], '')
-            encoded_url = item['url'].replace('{', '%7B').replace('}', '%7D')
-            description = description.replace(encoded_url, '')
+    # 链接相关的replace已不需要，直接删除
     description = re.sub(r'：\s*$', '', description, flags=re.MULTILINE)
     description = re.sub(r'：\s*\n', '\n', description, flags=re.MULTILINE)
     desc_lines_final = [line for line in description.strip().split('\n') if line.strip() and not re.fullmatch(r'[.。·、,，-]+', line.strip())]

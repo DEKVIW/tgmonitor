@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, JSON, ARRAY, create_engine
+from sqlalchemy import Column, Integer, String, DateTime, JSON, ARRAY, create_engine, Float, Boolean, Text
 from sqlalchemy.ext.declarative import declarative_base
 from datetime import datetime
 from config import settings
@@ -38,6 +38,38 @@ class Channel(Base):
     __tablename__ = "channels"
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String, nullable=False)
+
+# 新增：链接检测统计表
+class LinkCheckStats(Base):
+    __tablename__ = "link_check_stats"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    check_time = Column(DateTime, nullable=False, index=True)  # 检测时间，加索引便于查询
+    total_messages = Column(Integer, nullable=False)            # 检测消息总数
+    total_links = Column(Integer, nullable=False)               # 检测链接总数
+    valid_links = Column(Integer, nullable=False)               # 有效链接数
+    invalid_links = Column(Integer, nullable=False)             # 无效链接数
+    deleted_messages = Column(Integer, default=0)               # 删除消息数（暂时为0）
+    updated_messages = Column(Integer, default=0)               # 更新消息数（暂时为0）
+    netdisk_stats = Column(JSON)                                # 各网盘统计
+    check_duration = Column(Float)                              # 检测耗时（秒）
+    status = Column(String(50), default='completed')           # 检测状态
+    created_at = Column(DateTime, default=datetime.utcnow)     # 创建时间
+
+# 新增：链接检测详情表
+class LinkCheckDetails(Base):
+    __tablename__ = "link_check_details"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    check_time = Column(DateTime, nullable=False, index=True)  # 检测时间，关联stats表
+    message_id = Column(Integer, nullable=False, index=True)   # 消息ID，关联messages表
+    netdisk_type = Column(String(50), index=True)              # 网盘类型，便于统计
+    url = Column(Text)                                          # 链接URL
+    is_valid = Column(Boolean, nullable=False)                 # 是否有效
+    response_time = Column(Float)                              # 响应时间
+    error_reason = Column(String(200))                         # 错误原因
+    action_taken = Column(String(50), default='none')         # 采取的行动（暂时为'none'）
+    created_at = Column(DateTime, default=datetime.utcnow)     # 创建时间
 
 # 数据库连接配置
 DATABASE_URL = settings.DATABASE_URL
