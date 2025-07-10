@@ -210,12 +210,13 @@ def parse_message(text, msg_obj=None):
     ]
     skip_pattern = re.compile(r'^(%s)(：|:)?' % '|'.join(map(lambda x: re.escape(x[0]), skip_keywords)))
     keyword_field_map = {k: v for k, v in skip_keywords if v}
+    extractor_tmp = URLExtract()
     for raw_line in lines_to_process:
         line = raw_line.strip()
         if not line:
             continue
-        # 新增：只要行里有 http/https 链接，整行跳过
-        if re.search(r'https?://', line):
+        # 新增：只要行里含有任何形式的链接（包含不带 http/https 前缀的裸域名），整行跳过
+        if re.search(r'https?://', line) or extractor_tmp.has_urls(line):
             continue
         # 新增：过滤包含 @xxx 的行
         if re.search(r'@[A-Za-z0-9_]+', line):

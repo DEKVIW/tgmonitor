@@ -1,11 +1,8 @@
-fastapi==0.104.1
-uvicorn==0.24.0
 sqlalchemy==2.0.23
 psycopg2-binary==2.9.9
 python-dotenv==1.0.0
 streamlit==1.28.2
 telethon==1.40.0
-python-multipart==0.0.6
 pydantic==2.5.2
 pydantic-settings==2.1.0 
 streamlit-autorefresh
@@ -14,9 +11,5 @@ urlextract
 asyncpg
 pandas
 altair
-
-# 链接检测相关依赖
 aiohttp>=3.8.0
 validators>=0.20.0
-requests-html>=0.10.0
-Brotli>=1.0.9
