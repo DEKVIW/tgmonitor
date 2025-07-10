@@ -1,7 +1,7 @@
 from sqlalchemy import Column, Integer, String, DateTime, JSON, ARRAY, create_engine, Float, Boolean, Text
 from sqlalchemy.ext.declarative import declarative_base
 from datetime import datetime
-from config import settings
+from app.models.config import settings
 
 Base = declarative_base()
 

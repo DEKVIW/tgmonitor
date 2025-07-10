@@ -7,7 +7,7 @@ Synchronous parts of the project can continue to import and use
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 
-from config import settings
+from app.models.config import settings
 
 # Expect DATABASE_URL_ASYNC in settings; fallback by converting sync URL.
 if hasattr(settings, "DATABASE_URL_ASYNC") and settings.DATABASE_URL_ASYNC:

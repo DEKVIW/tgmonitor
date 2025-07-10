@@ -1,6 +1,6 @@
-from models import create_tables, Channel, engine
+from app.models.models import create_tables, Channel, engine
 from sqlalchemy.orm import Session
-from config import settings
+from app.models.config import settings
 
 def init_channels():
     # 从配置中获取默认频道列表

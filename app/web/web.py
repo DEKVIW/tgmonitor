@@ -3,7 +3,7 @@ import streamlit_authenticator as stauth
 import json
 import os
 from datetime import datetime, timedelta
-from config import settings
+from app.models.config import settings
 import logging
 import re
 import pandas as pd

@@ -1,6 +1,6 @@
 import streamlit as st
 from sqlalchemy.orm import Session
-from models import Credential, Channel, engine
+from app.models.models import Credential, Channel, engine
 
 st.set_page_config(page_title="后台管理", page_icon="🔧", layout="wide")
 st.title("后台管理")

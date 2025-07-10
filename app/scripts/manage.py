@@ -1,6 +1,6 @@
 import sys
 from sqlalchemy.orm import Session
-from models import Channel, Message, engine, DedupStats, LinkCheckStats, LinkCheckDetails
+from app.models.models import Channel, Message, engine, DedupStats, LinkCheckStats, LinkCheckDetails
 from sqlalchemy import update, delete
 import ast
 from datetime import datetime, timedelta

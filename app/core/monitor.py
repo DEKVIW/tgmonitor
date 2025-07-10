@@ -1,16 +1,16 @@
 from telethon import TelegramClient, events
 from sqlalchemy.orm import Session
-from models import Message, engine, Channel, Credential
+from app.models.models import Message, engine, Channel, Credential
 import datetime
 import json
 import re
 import sys
-from config import settings
+from app.models.config import settings
 import asyncio
 from telethon.tl.types import MessageEntityTextUrl, MessageEntityUrl, KeyboardButtonUrl
 from urllib.parse import unquote, urlparse
 from urlextract import URLExtract  # 新增
-from db import async_session
+from app.models.db import async_session
 
 def get_api_credentials():
     """获取 API 凭据，优先使用数据库中的凭据"""
