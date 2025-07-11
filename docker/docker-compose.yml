@@ -1,0 +1,39 @@
+version: "3.8"
+services:
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: tg_monitor
+      POSTGRES_USER: tg_user
+      POSTGRES_PASSWORD: password
+      TZ: Asia/Shanghai
+    volumes:
+      - ../data/postgres:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  monitor:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    env_file: ../.env
+    depends_on:
+      - db
+    volumes:
+      - ../data:/app/data
+      - ../users.json:/app/users.json
+    command: python -m app.core.monitor
+
+  web:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    env_file: ../.env
+    depends_on:
+      - db
+    ports:
+      - "8501:8501"
+    volumes:
+      - ../data:/app/data
+      - ../users.json:/app/users.json
+    command: streamlit run app/web/web.py

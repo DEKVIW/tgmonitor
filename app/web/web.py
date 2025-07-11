@@ -2,12 +2,26 @@ import streamlit as st
 import streamlit_authenticator as stauth
 import json
 import os
+import sys
 from datetime import datetime, timedelta
-from app.models.config import settings
 import logging
 import re
 import pandas as pd
+pd.set_option('future.no_silent_downcasting', True)
 import altair as alt
+
+# 添加项目根目录到Python路径
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(os.path.dirname(current_dir))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+# 导入项目配置和模型
+from app.models.config import settings
+from app.models.models import Message, engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy import or_, func
+from sqlalchemy.sql import text
 
 # 工具函数：去除重复前缀
 def clean_prefix(text: str) -> str:
@@ -106,6 +120,19 @@ def main_app(username, authenticator, auth_users):
     # 合并所有自定义CSS，只插入一次
     st.markdown("""
     <style>
+    /* 彻底隐藏所有高度为0的iframe及其容器 */
+    iframe[height="0"] { display: none !important; }
+    .element-container:has(iframe[height="0"]) { display: none !important; }
+    /* 兼容CookieManager和autorefresh */
+    div[data-testid="stElementContainer"]:has(iframe[src*="CookieManager"]),
+    div[data-testid="stElementContainer"]:has(iframe[src*="autorefresh"]) {
+        display: none !important;
+        height: 0 !important;
+        min-height: 0 !important;
+        padding: 0 !important;
+        margin: 0 !important;
+        overflow: hidden !important;
+    }
     .main > div { padding-top: 0rem; }
     .block-container { padding-top: 1rem; }
     .stApp > header { height: 0; }
@@ -209,41 +236,9 @@ def main_app(username, authenticator, auth_users):
         margin: 0 !important;
         padding: 0 !important;
     }
-    /* 隐藏只包含 <style> 的 stMarkdown 容器 */
-    .stMarkdown:empty, .stMarkdown p:empty {
-        display: none !important;
-        height: 0 !important;
-        min-height: 0 !important;
-        margin: 0 !important;
-        padding: 0 !important;
-    }
-    /* 隐藏空的 flex 容器 */
-    div[style*="display: flex"][style*="justify-content: center"]:empty {
-        display: none !important;
-        height: 0 !important;
-        min-height: 0 !important;
-        margin: 0 !important;
-        padding: 0 !important;
-    }
     @media (max-width: 768px) {
         .netdisk-tag { font-size: 10px; padding: 2px 8px; }
         .tag-btn { font-size: 11px; padding: 4px 12px; }
-    }
-    div[data-testid="stElementContainer"]:has(iframe[src*="CookieManager"]),
-    div[data-testid="stElementContainer"]:has(iframe[src*="autorefresh"]) {
-        display: none !important;
-        height: 0 !important;
-        min-height: 0 !important;
-        padding: 0 !important;
-        margin: 0 !important;
-        overflow: hidden !important;
-    }
-    div[data-testid="stElementContainer"]:has(.stMarkdown:only-child:empty) {
-        display: none !important;
-        height: 0 !important;
-        min-height: 0 !important;
-        margin: 0 !important;
-        padding: 0 !important;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -253,13 +248,7 @@ def main_app(username, authenticator, auth_users):
         st_autorefresh(interval=refresh_interval * 1000, key="auto_refresh")
     except Exception:
         pass
-    from sqlalchemy.orm import sessionmaker
-    from models import Message, engine
-    @st.cache_resource(ttl=300)
-    def get_sessionmaker():
-        SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-        return SessionLocal
-    SessionLocal = get_sessionmaker()
+    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     st.title("📱 TG频道监控")
     render_sidebar(username, authenticator, auth_users, SessionLocal)
     render_main_content(SessionLocal)
@@ -322,7 +311,6 @@ def render_tag_selector(SessionLocal):
         st.session_state['selected_tags'] = [
             tag_map[label] for label in st.session_state.get('tag_multiselect', [])
         ]
-    from sqlalchemy.sql import text
     @st.cache_data(ttl=300)
     def get_tag_stats():
         with SessionLocal() as session:
@@ -357,7 +345,7 @@ def show_statistics(SessionLocal):
     import pandas as pd
     import altair as alt
     from sqlalchemy import func
-    from models import Message
+    from app.models.models import Message
     from datetime import datetime, timedelta
     @st.cache_data(ttl=300)
     def get_stats():
@@ -403,6 +391,7 @@ def show_statistics(SessionLocal):
         import numpy as np
         df["数量"] = df["数量"].replace([np.inf, -np.inf], 0)
         df["数量"] = df["数量"].fillna(0)
+        df["数量"] = df["数量"].infer_objects(copy=False)
         chart = alt.Chart(df).mark_line(point=True, strokeWidth=3).encode(
             x=alt.X("日期:N", axis=alt.Axis(labelAngle=-45, title="")),
             y=alt.Y("数量:Q", title="", axis=alt.Axis(
@@ -455,7 +444,7 @@ def show_statistics(SessionLocal):
                 GROUP BY hour
                 ORDER BY hour
             """
-            from models import engine
+            from app.models.models import engine
             try:
                 df = pd.read_sql(sql, engine)
                 if not df.empty:
@@ -471,7 +460,9 @@ def show_statistics(SessionLocal):
         df_full = pd.DataFrame({'hour': hours})
         if not df_stats.empty:
             df_stats['hour'] = pd.to_datetime(df_stats['hour'])
-        df_merged = pd.merge(df_full, df_stats, on='hour', how='left').fillna(0)
+        df_merged = pd.merge(df_full, df_stats, on='hour', how='left')
+        df_merged = df_merged.fillna(0)
+        df_merged = df_merged.infer_objects(copy=False)
         df_merged['del_cnt'] = df_merged['del_cnt'].astype(int)
         color_scale = alt.Scale(scheme='category10')
         bar = alt.Chart(df_merged).mark_bar().encode(
@@ -533,14 +524,11 @@ def show_statistics(SessionLocal):
             GROUP BY netdisk_name
             ORDER BY link_count DESC
             """
-            from models import engine
+            from app.models.models import engine
             try:
                 df = pd.read_sql(sql, engine)
-                print('【调试】网盘分布SQL:', sql)
-                print('【调试】网盘分布原始数据:', df)
                 # 安全检查
                 if df.empty:
-                    print('【调试】查询结果为空，SQL为：', sql)
                     return pd.DataFrame(columns=['netdisk_name', 'link_count', 'percentage'])
                 
                 # 数据类型处理
@@ -666,8 +654,6 @@ def show_statistics(SessionLocal):
 
 def render_main_content(SessionLocal):
     PAGE_SIZE = st.session_state['page_size']
-    from sqlalchemy import or_, func
-    from models import Message
     @st.cache_data(ttl=60)
     def get_filtered_messages(search_query, time_range, selected_tags, selected_netdisks, 
                             min_content_length, has_links_only, page_num, page_size):
@@ -696,7 +682,10 @@ def render_main_content(SessionLocal):
                 filters = [Message.tags.any(tag) for tag in selected_tags]
                 query = query.filter(or_(*filters))
             if selected_netdisks:
-                filters = [Message.netdisk_types.op('@>')(json.dumps([nd])) for nd in selected_netdisks]
+                filters = []
+                for nd in selected_netdisks:
+                    filter_expr = text("netdisk_types @> :netdisk_type")
+                    filters.append(filter_expr.bindparams(netdisk_type=json.dumps([nd])))
                 query = query.filter(or_(*filters))
             if min_content_length > 0:
                 query = query.filter(

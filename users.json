@@ -1,7 +1,8 @@
 {
   "admin": {
-    "password": "password",
-    "name": "管理员",
-    "email": "admin@example.com"
+    "password": "$2b$12$5AvwsrAc6BgAYkScbn.RmeUI8yb2HULb8bCnv1/BOe5Ro1s9nCj2q",
+    "name": "系统管理员",
+    "email": "admin@example.com",
+    "role": "admin"
   }
 } 

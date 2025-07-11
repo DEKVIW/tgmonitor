@@ -50,7 +50,7 @@ def get_channels():
 api_id, api_hash = get_api_credentials()
 
 # session 文件名
-client = TelegramClient('newquark_session', api_id, api_hash)
+client = TelegramClient('tg_monitor_session', api_id, api_hash)
 
 # 获取频道列表
 channel_usernames = get_channels()
