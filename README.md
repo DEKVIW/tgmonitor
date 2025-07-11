@@ -2,8 +2,18 @@
 
 基于 Python + Telethon + Streamlit 的 Telegram 频道消息监控与管理系统。
 
-- 自动监听指定 Telegram 频道消息，只保存包含网盘链接的消息
-- Web 界面可视化浏览和筛选消息
+- 自动监听**网盘影视资源分享**类 Telegram 频道，只保存包含网盘链接的消息
+- 支持主流网盘类型：**阿里云盘、百度网盘、夸克网盘、天翼云盘、115 网盘、123 云盘、UC 网盘、迅雷** 
+- 推荐/适配频道（可自定义扩展）：
+
+| 频道名         | 频道名        | 频道名           | 频道名   |
+| -------------- | ------------- | ---------------- | -------- |
+| BaiduCloudDisk | tianyirigeng  | Aliyun_4K_Movies | NewQuark |
+| XiangxiuNB     | shareAliyun   | bdwpzhpd         | Lsp115   |
+| tyypzhpd       | SharePanBaidu | QuarkFree        | alyp_1   |
+| vip115hot      | QukanMovie    |                  |          |
+
+- Web 界面可视化浏览和筛选消息，支持频道管理、消息去重、标签修复等维护功能
 - 支持频道管理、消息去重、标签修复等维护功能
 - 支持 systemd/定时任务后台运行，日志可查
 
