@@ -22,6 +22,7 @@ services:
     volumes:
       - ../data:/app/data
       - ../users.json:/app/users.json
+      - ../tg_monitor_session.session:/app/tg_monitor_session.session
     command: python -m app.core.monitor
 
   web:
