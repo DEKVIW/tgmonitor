@@ -1,0 +1,36 @@
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+
+# 虚拟环境
+venv/
+env/
+.tgmonitor-venv/
+tgmonitor-venv/
+
+# IDE 配置
+.vscode/
+.idea/
+
+# Git
+.git/
+.gitignore
+
+# 日志和临时文件
+*.log
+*.tmp
+
+# 数据和备份
+data/
+*.bak
+
+# Jupyter
+.ipynb_checkpoints
+
+# 操作系统垃圾
+.DS_Store
+
+# 环境变量和密钥
+.env
+.env.* 
