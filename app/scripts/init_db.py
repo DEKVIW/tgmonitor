@@ -55,13 +55,12 @@ def init_default_users():
     
     # 创建新用户文件
     try:
-        # 生成 bcrypt 哈希密码
-        passwords = [user_info["password"] for user_info in default_users.values()]
-        hasher = stauth.Hasher(passwords)
+        # 生成 bcrypt 哈希密码 - 0.4.2版本的正确用法
+        hasher = stauth.Hasher()
         users_with_hash = {}
         
-        for i, (username, user_info) in enumerate(default_users.items()):
-            hashed_password = hasher.hash_passwords()[i]
+        for username, user_info in default_users.items():
+            hashed_password = hasher.hash(user_info["password"])
             users_with_hash[username] = {
                 "password": hashed_password,
                 "name": user_info["name"],

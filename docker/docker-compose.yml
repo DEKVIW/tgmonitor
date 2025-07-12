@@ -12,13 +12,26 @@ services:
     ports:
       - "5432:5432"
 
-  monitor:
+  tgmonitor:
     build:
       context: ..
       dockerfile: docker/Dockerfile
+    image: tgmonitor:latest
+    env_file: ../.env
+    environment:
+      - TZ=Asia/Shanghai
+    volumes:
+      - ../data:/app/data
+      - ../users.json:/app/users.json
+      - ../tg_monitor_session.session:/app/tg_monitor_session.session
+
+  monitor:
+    image: tgmonitor:latest
     env_file: ../.env
     depends_on:
       - db
+    environment:
+      - TZ=Asia/Shanghai
     volumes:
       - ../data:/app/data
       - ../users.json:/app/users.json
@@ -26,14 +39,14 @@ services:
     command: python -m app.core.monitor
 
   web:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile
+    image: tgmonitor:latest
     env_file: ../.env
     depends_on:
       - db
     ports:
       - "8501:8501"
+    environment:
+      - TZ=Asia/Shanghai
     volumes:
       - ../data:/app/data
       - ../users.json:/app/users.json

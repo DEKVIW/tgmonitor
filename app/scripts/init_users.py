@@ -60,23 +60,15 @@ def create_default_users():
         return
     
     # 创建默认用户
-    credentials = {}
+    hasher = stauth.Hasher()  # 0.4.2版本：不需要参数
+    
     for username, user_info in default_users.items():
-        credentials[username] = {
-            "password": user_info["password"],
-            "name": user_info["name"],
-            "email": user_info["email"]
-        }
-    
-    hasher = stauth.Hasher(list(credentials.values()))
-    hashed_credentials = hasher.hash_passwords(credentials)
-    
-    for username, user_info in hashed_credentials.items():
+        hashed_password = hasher.hash(user_info["password"])  # 0.4.2版本：直接调用hash方法
         users[username] = {
-            "password": user_info["password"],
+            "password": hashed_password,
             "name": user_info["name"],
             "email": user_info["email"],
-            "role": default_users[username].get("role", "user")
+            "role": user_info.get("role", "user")
         }
     
     save_users(users)
@@ -102,11 +94,9 @@ def add_user(username: str, password: str, name: str = "", email: str = "", role
         print(f"可用角色: {', '.join(USER_ROLES.keys())}")
         return False
     
-    # 生成密码哈希
-    credentials = {username: {"password": password, "name": name or username, "email": email}}
-    hasher = stauth.Hasher([{"password": password, "name": name or username, "email": email}])
-    hashed_credentials = hasher.hash_passwords(credentials)
-    hashed_password = hashed_credentials[username]["password"]
+    # 生成密码哈希 - 0.4.2版本的正确用法
+    hasher = stauth.Hasher()
+    hashed_password = hasher.hash(password)
     
     # 添加用户
     users[username] = {
@@ -164,11 +154,9 @@ def change_password(username: str, new_password: str):
         print(f"❌ 用户 {username} 不存在！")
         return False
     
-    # 生成新密码哈希
-    credentials = {username: {"password": new_password, "name": users[username].get("name", username), "email": users[username].get("email", "")}}
-    hasher = stauth.Hasher([{"password": new_password, "name": users[username].get("name", username), "email": users[username].get("email", "")}])
-    hashed_credentials = hasher.hash_passwords(credentials)
-    hashed_password = hashed_credentials[username]["password"]
+    # 生成新密码哈希 - 0.4.2版本的正确用法
+    hasher = stauth.Hasher()
+    hashed_password = hasher.hash(new_password)
     
     # 更新密码
     users[username]["password"] = hashed_password

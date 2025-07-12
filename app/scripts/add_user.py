@@ -9,7 +9,7 @@ def add_user(username, password, name, email):
     except Exception:
         users = {}
     
-    # 生成 bcrypt 哈希
+    # 生成 bcrypt 哈希 - 0.4.2版本的正确用法
     hasher = stauth.Hasher()
     hashed_password = hasher.hash(password)
     

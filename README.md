@@ -14,18 +14,12 @@
 | vip115hot      | QukanMovie    |                  |          |
 
 - Web 界面可视化浏览和筛选消息，支持频道管理、消息去重、标签修复等维护功能
-- 支持频道管理、消息去重、标签修复等维护功能
-- 支持 systemd/定时任务后台运行，日志可查
 
 ## 环境与依赖版本建议
 
 - **推荐 Python 版本**：3.10 或 3.11（3.12 也可，优先用 3.10/3.11，兼容性最佳）
-  - Python 3.8 也能运行，但不推荐，未来部分依赖可能不再支持。
-  - Python 3.9 及以上均可，建议开发和生产环境保持一致。
 - **推荐 PostgreSQL 版本**：13、14 或 15
-  - 兼容 12~16，推荐用 13/14/15，社区支持好，性能优良。
 - **依赖安装**：已在 requirements.txt 中声明，`pip install -r requirements.txt` 一键安装。
-- **注意**：如用 Docker，建议基础镜像用 `python:3.10-slim` 和 `postgres:15`。
 
 ## 首次 Telethon 登录
 
@@ -149,7 +143,12 @@ docker-compose run --rm monitor python -m app.scripts.init_users --edit-user 用
 
 # 查看所有用户
 docker-compose run --rm monitor python -m app.scripts.init_users --list-users
+
+#删除用户
+docker-compose run --rm monitor python -m app.scripts.init_users --delete-user 用户名
 ```
+
+注意操作后服务需要重启：
 
 ### 5. 启动服务
 
@@ -179,20 +178,9 @@ docker-compose logs -f db
 ### 6. 管理脚本用法
 
 ```bash
-docker-compose run --rm monitor python -m app.scripts.manage --list-channels
-docker-compose run --rm monitor python -m app.scripts.manage --add-channel 频道名
-docker-compose run --rm monitor python -m app.scripts.manage --dedup-links
-```
-
-**用户管理命令**：
-
-```bash
-docker-compose run --rm monitor python -m app.scripts.init_users --create-default
-docker-compose run --rm monitor python -m app.scripts.init_users --add-user 用户名 密码
-docker-compose run --rm monitor python -m app.scripts.init_users --change-password 用户名 新密码
-docker-compose run --rm monitor python -m app.scripts.init_users --change-username 旧用户名 新用户名
-docker-compose run --rm monitor python -m app.scripts.init_users --edit-user 用户名 [姓名] [邮箱]
-docker-compose run --rm monitor python -m app.scripts.init_users --list-users
+docker-compose run --rm monitor python -m app.scripts.manage --list-channels #列出频道
+docker-compose run --rm monitor python -m app.scripts.manage --add-channel #添加频道（多个用空格分隔）
+docker-compose run --rm monitor python -m app.scripts.manage --dedup-links #链接去重
 ```
 
 ### 7. 其它注意事项
@@ -201,13 +189,7 @@ docker-compose run --rm monitor python -m app.scripts.init_users --list-users
   ```
   DATABASE_URL=postgresql://tg_user:password@db:5432/tg_monitor
   ```
-- **SECRET_SALT 密钥**：用于用户登录验证，建议使用随机生成的强密钥
-
-  - 可以使用在线工具生成：https://www.random.org/strings/
-  - 或使用命令生成：`openssl rand -hex 32`
-  - 示例：`SECRET_SALT=a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef1234`
-
-- 日志文件建议输出到 `data/` 目录，便于查看和备份
+  
 - 管理脚本、初始化等操作都建议用 `docker-compose run --rm ...` 方式临时运行
 
 ## 快速部署
@@ -349,14 +331,6 @@ python -m app.scripts.init_users --change-username 旧用户名 新用户名  # 
 python -m app.scripts.init_users --edit-user 用户名 [姓名] [邮箱]  # 编辑用户信息
 python -m app.scripts.init_users --list-users              # 查看所有用户
 ```
-
-## 其他说明
-
-- 支持 systemd 服务和定时任务，详见文档或源码注释。
-- 日志、会话等文件统一放在 `data/` 目录，便于管理。
-- 代码结构清晰，易于二次开发和维护。
-
-如需详细文档或遇到问题，欢迎提 issue 或 PR！
 
 **查看帮助**: `python -m app.scripts.manage --help
 
