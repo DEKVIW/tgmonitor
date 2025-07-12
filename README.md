@@ -145,7 +145,7 @@ docker-compose run --rm monitor python -m app.scripts.init_users --edit-user 用
 docker-compose run --rm monitor python -m app.scripts.init_users --list-users
 
 #删除用户
-docker-compose run --rm monitor python -m app.scripts.init_users --delete-user 用户名
+docker-compose run --rm monitor python -m app.scripts.init_users --remove-user 用户名
 ```
 
 注意操作后服务需要重启：
@@ -317,7 +317,6 @@ python -m app.scripts.manage --list-channels                # 查看频道列表
 python -m app.scripts.manage --add-channel 频道名           # 添加频道
 python -m app.scripts.manage --del-channel 频道名           # 删除频道
 python -m app.scripts.manage --edit-channel 旧频道名 新频道名  # 修改频道名
-python -m app.scripts.manage --fix-tags                     # 修复tags脏数据
 python -m app.scripts.manage --dedup-links                  # 网盘链接去重
 ```
 
