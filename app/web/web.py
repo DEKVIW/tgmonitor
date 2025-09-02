@@ -70,6 +70,20 @@ def load_auth_users():
         logger.error(f"加载用户数据失败: {e}")
         return {"usernames": {}}
 
+def init_authenticator(auth_users):
+    """初始化认证器"""
+    try:
+        authenticator = stauth.Authenticate(
+            auth_users,
+            "tg_cookie",
+            settings.SECRET_SALT,
+            cookie_expiry_days=1
+        )
+        return authenticator
+    except Exception as e:
+        logger.error(f"初始化认证器失败: {e}")
+        return None
+
 def show_login_success_message():
     if st.session_state.get("show_login_success", True):
         try:
@@ -96,21 +110,28 @@ def handle_logout(authenticator):
 
 def main():
     try:
-        auth_users = load_auth_users()
-        authenticator = stauth.Authenticate(
-            auth_users,
-            "tg_cookie",
-            settings.SECRET_SALT,
-            cookie_expiry_days=1
-        )
-        authenticator.login(location="main")
-        if st.session_state.get("authentication_status"):
-            show_login_success_message()
-            main_app(st.session_state.get('username'), authenticator, auth_users)
-        elif st.session_state.get("authentication_status") is False:
-            st.error("用户名或密码错误")
-        elif st.session_state.get("authentication_status") is None:
-            st.warning("请输入用户名和密码")
+        # 使用session_state避免重复初始化
+        if 'auth_users' not in st.session_state:
+            st.session_state.auth_users = load_auth_users()
+        
+        if 'authenticator' not in st.session_state:
+            st.session_state.authenticator = init_authenticator(st.session_state.auth_users)
+        
+        auth_users = st.session_state.auth_users
+        authenticator = st.session_state.authenticator
+        
+        if authenticator:
+            authenticator.login(location="main")
+            
+            if st.session_state.get("authentication_status"):
+                show_login_success_message()
+                main_app(st.session_state.get('username'), authenticator, auth_users)
+            elif st.session_state.get("authentication_status") is False:
+                st.error("用户名或密码错误")
+            elif st.session_state.get("authentication_status") is None:
+                st.warning("请输入用户名和密码")
+        else:
+            st.error("认证器初始化失败，请检查配置")
     except Exception as e:
         logger.error(f"应用启动失败: {e}")
         st.error("应用启动失败，请检查配置")

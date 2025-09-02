@@ -1,6 +1,6 @@
 import sys
 from sqlalchemy.orm import Session
-from app.models.models import Channel, Message, engine, DedupStats, LinkCheckStats, LinkCheckDetails
+from app.models.models import Channel, Message, engine, DedupStats, LinkCheckStats, LinkCheckDetails, Credential
 from sqlalchemy import update, delete
 import ast
 from datetime import datetime, timedelta
@@ -11,14 +11,21 @@ import asyncio
 import time
 import signal
 import os
+from telethon import TelegramClient
+from app.models.config import settings
+import re
 
 # 新增：导入链接检测模块
 try:
-    from link_validator import LinkValidator
+    from .link_validator import LinkValidator
     LINK_VALIDATOR_AVAILABLE = True
 except ImportError:
-    LINK_VALIDATOR_AVAILABLE = False
-    print("⚠️  警告: link_validator.py 未找到，链接检测功能不可用")
+    try:
+        from link_validator import LinkValidator
+        LINK_VALIDATOR_AVAILABLE = True
+    except ImportError:
+        LINK_VALIDATOR_AVAILABLE = False
+        print("⚠️  警告: link_validator.py 未找到，链接检测功能不可用")
 
 # 全局变量用于中断处理
 current_check_session = None
@@ -106,15 +113,170 @@ def signal_handler(signum, frame):
             print("✅ 检测结果已保存")
         except Exception as e:
             print(f"❌ 保存失败: {e}")
+    
+    # 强制退出程序
+    import os
+    os._exit(0)
 
 # 注册信号处理器
 signal.signal(signal.SIGINT, signal_handler)   # Ctrl+C
 signal.signal(signal.SIGTERM, signal_handler)  # 终止信号
 
+async def list_channels_detailed():
+    """显示当前监听频道列表，包含详细信息（异步版本）"""
+    def get_api_credentials():
+        with Session(engine) as session:
+            cred = session.query(Credential).first()
+            if cred:
+                return int(cred.api_id), cred.api_hash
+        return settings.TELEGRAM_API_ID, settings.TELEGRAM_API_HASH
+
+    def get_channels():
+        with Session(engine) as session:
+            chans = session.query(Channel).all()
+            return [chan.username for chan in chans]
+
+    api_id, api_hash = get_api_credentials()
+    channels = get_channels()
+    
+    if not channels:
+        print("📭 当前没有监听任何频道")
+        return
+    
+    # 分类频道
+    standard_channels = []
+    invite_channels = []
+    
+    for channel in channels:
+        if channel.startswith('+'):
+            invite_channels.append(channel)
+        else:
+            standard_channels.append(channel)
+    
+    print(f"📡 当前监听频道列表：")
+    print(f"总数: {len(channels)} 个频道")
+    print("=" * 50)
+    
+    # 创建Telegram客户端
+    client = TelegramClient('tg_monitor_session', api_id, api_hash)
+    
+    try:
+        await client.start()
+        
+        # 获取频道详细信息
+        channel_info = {}
+        print("🔍 正在获取频道详细信息...")
+        
+        for channel in channels:
+            try:
+                entity = await client.get_entity(f"https://t.me/{channel}")
+                channel_info[channel] = {
+                    'title': getattr(entity, 'title', '未知'),
+                    'id': entity.id,
+                    'username': getattr(entity, 'username', None)
+                }
+                print(f"  ✅ {channel} -> {getattr(entity, 'title', '未知')} (ID: {entity.id})")
+            except Exception as e:
+                channel_info[channel] = {
+                    'title': '获取失败',
+                    'id': '获取失败',
+                    'username': None
+                }
+                print(f"  ❌ {channel} -> 获取失败: {str(e)}")
+        
+        print("\n" + "=" * 50)
+        
+        # 显示标准频道
+        if standard_channels:
+            print(f"📡 标准频道 ({len(standard_channels)}个):")
+            print("序号  用户名               显示名称                   频道ID")
+            print("----  -------------------  -------------------------  -----------")
+            for i, channel in enumerate(standard_channels, 1):
+                info = channel_info.get(channel, {})
+                title = info.get('title', '未知')[:20]  # 限制标题长度
+                channel_id = info.get('id', '未知')
+                print(f"  {i:2d}  {channel:<18}  {title:<24}  {channel_id}")
+        
+        # 显示邀请链接哈希频道
+        if invite_channels:
+            print(f"\n🔗 邀请链接哈希频道 ({len(invite_channels)}个):")
+            print("序号  邀请哈希              显示名称                   频道ID")
+            print("----  -------------------  -------------------------  -----------")
+            for i, channel in enumerate(invite_channels, 1):
+                info = channel_info.get(channel, {})
+                title = info.get('title', '未知')[:20]  # 限制标题长度
+                channel_id = info.get('id', '未知')
+                print(f"  {i:2d}  {channel:<18}  {title:<24}  {channel_id}")
+        
+        # 统计信息
+        print(f"\n📊 统计信息:")
+        print(f"  - 标准频道: {len(standard_channels)} 个 ({len(standard_channels)/len(channels)*100:.1f}%)")
+        print(f"  - 邀请链接哈希: {len(invite_channels)} 个 ({len(invite_channels)/len(channels)*100:.1f}%)")
+        print(f"  - 总频道数: {len(channels)} 个")
+        
+    except Exception as e:
+        print(f"❌ 连接Telegram失败: {str(e)}")
+        # 如果连接失败，显示简化版本
+        list_channels_simple()
+        
+    finally:
+        await client.disconnect()
+
 def list_channels():
+    """显示当前监听频道列表（简化版本）"""
     with Session(engine) as session:
         chans = session.query(Channel).all()
-        print("当前频道列表：")
+        
+        if not chans:
+            print("📭 当前没有监听任何频道")
+            return
+        
+        # 分类频道
+        standard_channels = []
+        invite_channels = []
+        
+        for chan in chans:
+            if chan.username.startswith('+'):
+                invite_channels.append(chan)
+            else:
+                standard_channels.append(chan)
+        
+        print(f"📡 当前监听频道列表：")
+        print(f"总数: {len(chans)} 个频道")
+        print("=" * 50)
+        
+        # 显示标准频道
+        if standard_channels:
+            print(f"📡 标准频道 ({len(standard_channels)}个):")
+            print("序号  用户名               显示名称                   频道ID")
+            print("----  -------------------  -------------------------  -----------")
+            for i, chan in enumerate(standard_channels, 1):
+                print(f"  {i:2d}  {chan.username:<18}  {'待获取':<24}  {'待获取'}")
+        
+        # 显示邀请链接哈希频道
+        if invite_channels:
+            print(f"\n🔗 邀请链接哈希频道 ({len(invite_channels)}个):")
+            print("序号  邀请哈希              显示名称                   频道ID")
+            print("----  -------------------  -------------------------  -----------")
+            for i, chan in enumerate(invite_channels, 1):
+                print(f"  {i:2d}  {chan.username:<18}  {'待获取':<24}  {'待获取'}")
+        
+        # 统计信息
+        print(f"\n📊 统计信息:")
+        print(f"  - 标准频道: {len(standard_channels)} 个 ({len(standard_channels)/len(chans)*100:.1f}%)")
+        print(f"  - 邀请链接哈希: {len(invite_channels)} 个 ({len(invite_channels)/len(chans)*100:.1f}%)")
+        print(f"  - 总频道数: {len(chans)} 个")
+
+def list_channels_simple():
+    """显示当前监听频道列表（简化版本，无详细信息）"""
+    with Session(engine) as session:
+        chans = session.query(Channel).all()
+        
+        if not chans:
+            print("📭 当前没有监听任何频道")
+            return
+        
+        print("📡 当前频道列表：")
         for chan in chans:
             print(f"- {chan.username}")
 
@@ -180,6 +342,26 @@ def print_help():
   python manage.py --show-interrupted
   python manage.py --clear-link-check-data
   python manage.py --clear-old-link-check-data [days]
+  python manage.py --diagnose-channels
+  python manage.py --test-monitor
+
+📡 频道管理命令详细说明:
+  --list-channels                             显示当前数据库中的所有频道列表
+  --add-channel <频道名>                       添加新频道到监控列表
+                                              示例: python manage.py --add-channel example_channel
+  --del-channel <频道名>                       从监控列表中删除指定频道
+                                              示例: python manage.py --del-channel example_channel
+  --edit-channel <旧频道名> <新频道名>          修改频道用户名
+                                              示例: python manage.py --edit-channel old_name new_name
+  --diagnose-channels                         诊断所有频道的有效性
+                                              - 检查频道是否存在且可访问
+                                              - 显示频道详细信息 (ID、标题、参与者数量)
+                                              - 识别无效频道并显示错误原因
+                                              - 提供修复建议
+  --test-monitor                              测试监控功能
+                                              - 验证Telegram客户端连接
+                                              - 测试事件处理器是否正常工作
+                                              - 检查频道访问权限
 
 🔗 链接检测命令说明:
   --check-links [hours] [max_concurrent]    检测指定时间范围内的链接 (默认24小时, 5并发)
@@ -246,6 +428,211 @@ def print_help():
 📖 详细说明:
   更多详细信息请查看 README_LINK_CHECK.md 文件
 """)
+
+def is_invite_link_hash(channel_name):
+    """判断是否为邀请链接哈希格式"""
+    pattern = r'^\+[a-zA-Z0-9_-]{10,}$'
+    return bool(re.match(pattern, channel_name))
+
+async def diagnose_channels():
+    """诊断每个频道是否可以正常访问"""
+    
+    def get_api_credentials():
+        """获取 API 凭据"""
+        with Session(engine) as session:
+            cred = session.query(Credential).first()
+            if cred:
+                return int(cred.api_id), cred.api_hash
+        return settings.TELEGRAM_API_ID, settings.TELEGRAM_API_HASH
+
+    def get_channels():
+        """获取频道列表"""
+        channels = set()
+        
+        with Session(engine) as session:
+            db_channels = [c.username for c in session.query(Channel).all()]
+            channels.update(db_channels)
+        
+        if hasattr(settings, 'DEFAULT_CHANNELS'):
+            env_channels = [c.strip() for c in settings.DEFAULT_CHANNELS.split(',') if c.strip()]
+            channels.update(env_channels)
+            
+        return list(channels)
+    
+    # 获取凭据和频道列表
+    api_id, api_hash = get_api_credentials()
+    channel_usernames = get_channels()
+    
+    print(f"🔍 开始诊断 {len(channel_usernames)} 个频道...")
+    print(f"频道列表: {channel_usernames}")
+    print("-" * 50)
+    
+    # 创建客户端
+    client = TelegramClient('tg_monitor_session', api_id, api_hash)
+    
+    try:
+        await client.start()
+        print("✅ Telegram客户端连接成功")
+        
+        valid_channels = []
+        invalid_channels = []
+        
+        # 统一检查所有频道（标准频道和邀请链接哈希）
+        print(f"\n🔍 检查所有频道 ({len(channel_usernames)} 个):")
+        for i, channel in enumerate(channel_usernames, 1):
+            try:
+                print(f"[{i}/{len(channel_usernames)}] 检查频道: {channel}")
+                
+                # 统一使用 get_entity 解析，无论是标准频道还是邀请链接哈希
+                entity = await client.get_entity(f"https://t.me/{channel}")
+                
+                # 获取频道详细信息
+                channel_info = await client.get_entity(entity)
+                
+                # 判断频道类型
+                channel_type = 'invite_link' if is_invite_link_hash(channel) else 'standard'
+                
+                print(f"  ✅ 成功 - {channel_info.title}")
+                print(f"     ID: {channel_info.id}")
+                print(f"     类型: {channel_type}")
+                print(f"     参与者数量: {getattr(channel_info, 'participants_count', '未知')}")
+                
+                valid_channels.append({
+                    'username': channel,
+                    'title': channel_info.title,
+                    'id': channel_info.id,
+                    'type': channel_type
+                })
+                
+            except Exception as e:
+                error_msg = str(e)
+                print(f"  ❌ 失败 - {channel}")
+                print(f"     错误: {error_msg}")
+                
+                invalid_channels.append({
+                    'username': channel,
+                    'error': error_msg,
+                    'type': 'unknown'
+                })
+        
+        print("\n" + "=" * 50)
+        print("📊 诊断结果总结:")
+        
+        # 按类型分组显示有效频道
+        standard_valid = [ch for ch in valid_channels if ch['type'] == 'standard']
+        invite_valid = [ch for ch in valid_channels if ch['type'] == 'invite_link']
+        
+        print(f"✅ 有效频道 ({len(valid_channels)}个):")
+        if standard_valid:
+            print(f"  标准频道 ({len(standard_valid)}个):")
+            for ch in standard_valid:
+                print(f"    - {ch['username']} ({ch['title']}) - ID: {ch['id']}")
+        
+        if invite_valid:
+            print(f"  邀请链接哈希频道 ({len(invite_valid)}个):")
+            for ch in invite_valid:
+                print(f"    - {ch['username']} ({ch['title']}) - ID: {ch['id']}")
+            
+        if invalid_channels:
+            print(f"\n❌ 无效频道 ({len(invalid_channels)}个):")
+            for ch in invalid_channels:
+                print(f"   - {ch['username']}")
+                print(f"     错误: {ch['error']}")
+                
+            print("\n🔧 建议修复方案:")
+            print("1. 检查频道用户名或邀请链接是否正确")
+            print("2. 确认你的账号是否有权限访问这些频道")
+            print("3. 尝试手动加入这些频道")
+            print("4. 使用 --del-channel 命令移除无效频道")
+        
+        # 返回结果
+        return valid_channels, invalid_channels
+        
+    except Exception as e:
+        print(f"❌ 客户端连接失败: {str(e)}")
+        return [], []
+        
+    finally:
+        await client.disconnect()
+
+def clean_invalid_channels(invalid_channels):
+    """从数据库中清理无效频道"""
+    if not invalid_channels:
+        print("✅ 没有需要清理的无效频道")
+        return
+        
+    print(f"\n🧹 开始清理 {len(invalid_channels)} 个无效频道...")
+    
+    with Session(engine) as session:
+        for ch in invalid_channels:
+            try:
+                channel_to_delete = session.query(Channel).filter(Channel.username == ch['username']).first()
+                if channel_to_delete:
+                    session.delete(channel_to_delete)
+                    print(f"  🗑️  已从数据库删除: {ch['username']}")
+                else:
+                    print(f"  ⚠️  数据库中未找到: {ch['username']}")
+            except Exception as e:
+                print(f"  ❌ 删除失败 {ch['username']}: {str(e)}")
+        
+        try:
+            session.commit()
+            print("✅ 数据库清理完成")
+        except Exception as e:
+            print(f"❌ 数据库提交失败: {str(e)}")
+            session.rollback()
+
+async def test_event_handler():
+    """测试修复后的事件处理器"""
+    def get_api_credentials():
+        with Session(engine) as session:
+            cred = session.query(Credential).first()
+            if cred:
+                return int(cred.api_id), cred.api_hash
+        return settings.TELEGRAM_API_ID, settings.TELEGRAM_API_HASH
+
+    def get_valid_channels():
+        """只获取有效的频道"""
+        channels = set()
+        with Session(engine) as session:
+            db_channels = [c.username for c in session.query(Channel).all()]
+            channels.update(db_channels)
+        return list(channels)
+    
+    api_id, api_hash = get_api_credentials()
+    valid_channels = get_valid_channels()
+    
+    if not valid_channels:
+        print("❌ 没有有效的频道可供监听")
+        return
+    
+    print(f"🎯 测试监听 {len(valid_channels)} 个有效频道...")
+    
+    client = TelegramClient('tg_monitor_session', api_id, api_hash)
+    
+    try:
+        await client.start()
+        
+        # 注册事件处理器
+        from telethon import events
+        
+        @client.on(events.NewMessage(chats=valid_channels))
+        async def test_handler(event):
+            print(f"📨 收到来自 {event.chat.username or event.chat.title} 的消息")
+        
+        print("✅ 事件处理器注册成功，开始测试...")
+        print("💡 发送一条消息到任何监听的频道进行测试")
+        print("⏹️  按 Ctrl+C 停止测试")
+        
+        # 运行10秒进行测试
+        await asyncio.sleep(10)
+        
+    except KeyboardInterrupt:
+        print("\n⏹️  测试已停止")
+    except Exception as e:
+        print(f"❌ 测试失败: {str(e)}")
+    finally:
+        await client.disconnect()
 
 def parse_time_period(period_str):
     """解析时间段字符串，返回开始和结束时间"""
@@ -1076,7 +1463,14 @@ def extract_urls(links):
 
 if __name__ == "__main__":
     if "--list-channels" in sys.argv:
-        list_channels()
+        # 使用异步版本获取详细信息
+        import asyncio
+        try:
+            asyncio.run(list_channels_detailed())
+        except Exception as e:
+            print(f"❌ 获取详细信息失败: {str(e)}")
+            print("显示简化版本...")
+            list_channels()
     elif "--add-channel" in sys.argv:
         idx = sys.argv.index("--add-channel")
         if len(sys.argv) > idx + 1:
@@ -1299,6 +1693,14 @@ if __name__ == "__main__":
         if len(sys.argv) > idx + 1 and sys.argv[idx+1].isdigit():
             days = int(sys.argv[idx+1])
         clear_old_link_check_data(days)
+        
+    elif "--diagnose-channels" in sys.argv:
+        # 诊断频道
+        asyncio.run(diagnose_channels())
+        
+    elif "--test-monitor" in sys.argv:
+        # 测试事件处理器
+        asyncio.run(test_event_handler())
         
     else:
         print_help() 

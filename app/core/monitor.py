@@ -46,6 +46,38 @@ def get_channels():
     
     return list(channels)
 
+def is_invite_link_hash(channel_name):
+    """判断是否为邀请链接哈希格式"""
+    pattern = r'^\+[a-zA-Z0-9_-]{10,}$'
+    return bool(re.match(pattern, channel_name))
+
+async def build_channel_id_mapping(client):
+    """构建所有频道到真实ID的映射"""
+    channel_ids = []
+    channel_info = {}
+    channels = get_channels()
+    
+    print(f"🔍 开始解析 {len(channels)} 个频道到ID...")
+    
+    for channel in channels:
+        try:
+            # 无论是普通频道还是邀请链接哈希，都能解析
+            entity = await client.get_entity(f"https://t.me/{channel}")
+            channel_ids.append(entity.id)
+            channel_info[channel] = {
+                'id': entity.id,
+                'title': getattr(entity, 'title', 'N/A'),
+                'username': getattr(entity, 'username', None),
+                'type': 'invite_link' if is_invite_link_hash(channel) else 'standard'
+            }
+            print(f"✅ 解析频道: {channel} -> ID: {entity.id}, Title: {getattr(entity, 'title', 'N/A')}")
+        except Exception as e:
+            print(f"❌ 解析失败: {channel}: {e}")
+            # 解析失败的频道不添加到监听列表
+    
+    print(f"✅ 成功解析 {len(channel_ids)} 个频道ID")
+    return channel_ids, channel_info
+
 # 获取 API 凭据
 api_id, api_hash = get_api_credentials()
 
@@ -54,6 +86,10 @@ client = TelegramClient('tg_monitor_session', api_id, api_hash)
 
 # 获取频道列表
 channel_usernames = get_channels()
+
+# 频道ID列表和频道信息（将在启动时构建）
+channel_ids = []
+channel_info = {}
 
 # 新增：全面提取所有链接的函数
 def extract_all_urls(text, msg_obj=None):
@@ -295,9 +331,25 @@ def parse_message(text, msg_obj=None):
         'bot': bot
     }
 
-@client.on(events.NewMessage(chats=channel_usernames))
+def get_channel_name_by_id(chat_id):
+    """根据聊天ID获取频道名称"""
+    for channel, info in channel_info.items():
+        if info['id'] == chat_id:
+            return channel
+    return None
+
+@client.on(events.NewMessage(chats=channel_ids))
 async def handler(event):
     try:
+        # 获取聊天对象
+        chat = await event.get_chat()
+        
+        # 获取频道名称用于日志
+        channel_name = get_channel_name_by_id(chat.id)
+        if not channel_name:
+            print(f"[DEBUG] 无法获取频道名称，ID: {chat.id}")
+            return
+        
         message = event.raw_text
         # 使用Telegram消息的原始时间，正确处理时区
         telegram_time = event.date
@@ -315,7 +367,11 @@ async def handler(event):
         # 计算监控延迟
         delay_seconds = (monitor_time - telegram_local_time).total_seconds()
         
-        print(f"[{monitor_time}] 收到新消息，开始解析... (延迟: {delay_seconds:.1f}秒)")
+        # 获取频道信息用于日志
+        chat_title = getattr(chat, 'title', 'Unknown')
+        chat_username = getattr(chat, 'username', 'Unknown')
+        
+        print(f"[{monitor_time}] 收到来自 {chat_title}({channel_name}) 的新消息，开始解析... (延迟: {delay_seconds:.1f}秒)")
         
         # 解析消息
         try:
@@ -365,7 +421,7 @@ async def handler(event):
         except:
             pass
 
-print(f"✅ 正在监听 Telegram 频道：{channel_usernames} ...")
+print(f"✅ 正在监听 Telegram 频道：{len(channel_usernames)} 个频道...")
 
 # 添加连接状态监控
 @client.on(events.Raw)
@@ -382,8 +438,18 @@ if __name__ == "__main__":
         # 使用已存在的 session 文件启动
         client.start()
         print(f"[{datetime.datetime.now()}] ✅ 监控服务启动成功")
+        
+        # 构建频道ID映射
+        print("🔍 正在构建频道ID映射...")
+        # 使用 client.loop 而不是 asyncio.run
+        loop = client.loop
+        ids, info = loop.run_until_complete(build_channel_id_mapping(client))
+        channel_ids.extend(ids)
+        channel_info.update(info)
+        print(f"✅ 频道ID映射构建完成: {len(channel_ids)} 个频道")
+        
         client.run_until_disconnected()
     except Exception as e:
         print(f"[{datetime.datetime.now()}] ❌ 启动失败: {str(e)}")
-        print("请先手动运行一次程序进行登录：python monitor.py")
+        print("请先手动运行一次程序进行登录：python -m app.core.monitor")
         sys.exit(1) 

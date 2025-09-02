@@ -3,7 +3,7 @@
 基于 Python + Telethon + Streamlit 的 Telegram 频道消息监控与管理系统。
 
 - 自动监听**网盘影视资源分享**类 Telegram 频道，只保存包含网盘链接的消息
-- 支持主流网盘类型：**阿里云盘、百度网盘、夸克网盘、天翼云盘、115 网盘、123 云盘、UC 网盘、迅雷** 
+- 支持主流网盘类型：**阿里云盘、百度网盘、夸克网盘、天翼云盘、115 网盘、123 云盘、UC 网盘、迅雷**
 - 推荐/适配频道（可自定义扩展）：
 
 | 频道名         | 频道名        | 频道名           | 频道名   |
@@ -189,7 +189,6 @@ docker-compose run --rm monitor python -m app.scripts.manage --dedup-links #链�
   ```
   DATABASE_URL=postgresql://tg_user:password@db:5432/tg_monitor
   ```
-  
 - 管理脚本、初始化等操作都建议用 `docker-compose run --rm ...` 方式临时运行
 
 ## 快速部署
@@ -243,31 +242,7 @@ python -m app.scripts.init_db
 
 **注意**: 此命令会自动创建默认管理员用户（用户名: admin，密码: admin123）
 
-### 6. 用户管理（可选）
-
-如果需要创建其他用户或修改用户信息：
-
-```bash
-# 创建默认用户（如果还没有）
-python -m app.scripts.init_users --create-default
-
-# 添加新用户
-python -m app.scripts.init_users --add-user 用户名 密码 [姓名] [邮箱]
-
-# 修改密码
-python -m app.scripts.init_users --change-password 用户名 新密码
-
-# 修改用户名
-python -m app.scripts.init_users --change-username 旧用户名 新用户名
-
-# 编辑用户信息
-python -m app.scripts.init_users --edit-user 用户名 [姓名] [邮箱]
-
-# 查看所有用户
-python -m app.scripts.init_users --list-users
-```
-
-### 7. 启动服务
+### 6. 启动服务
 
 **第一步：前台测试运行**
 
@@ -310,7 +285,7 @@ tail -f data/monitor.log
 tail -f data/web.log
 ```
 
-### 8. 管理维护命令
+### 7. 管理维护命令
 
 ```bash
 python -m app.scripts.manage --list-channels                # 查看频道列表
@@ -318,7 +293,23 @@ python -m app.scripts.manage --add-channel 频道名           # 添加频道
 python -m app.scripts.manage --del-channel 频道名           # 删除频道
 python -m app.scripts.manage --edit-channel 旧频道名 新频道名  # 修改频道名
 python -m app.scripts.manage --dedup-links                  # 网盘链接去重
+python -m app.scripts.manage --dedup-links-fast [批次大小]   # 快速网盘链接去重
 ```
+
+**去重功能说明**：
+
+- **`--dedup-links`**: 标准去重，智能判断逻辑
+
+  - 相同链接且时间间隔 5 分钟内：优先保留网盘链接数量多的消息
+  - 超过 5 分钟：保留最新的消息
+  - 适合精确去重，但内存占用较大
+
+- **`--dedup-links-fast [批次大小]`**: 快速去重，分批处理
+  - 默认批次大小：5000 条消息
+  - 可自定义批次：`--dedup-links-fast 1000`
+  - 简单时间比较：保留最新的消息
+  - 内存占用低，适合大数据量处理
+  - 自动清理 10 小时前的去重统计数据
 
 **用户管理命令**：
 
@@ -329,6 +320,7 @@ python -m app.scripts.init_users --change-password 用户名 新密码  # 修改
 python -m app.scripts.init_users --change-username 旧用户名 新用户名  # 修改用户名
 python -m app.scripts.init_users --edit-user 用户名 [姓名] [邮箱]  # 编辑用户信息
 python -m app.scripts.init_users --list-users              # 查看所有用户
+python -m app.scripts.init_users --remove-user 用户名       # 删除用户
 ```
 
 **查看帮助**: `python -m app.scripts.manage --help
