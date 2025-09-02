@@ -47,3 +47,4 @@ env.bak/
 *.session
 *.session-journal
 telegram_sessions/ 
+*.md 
