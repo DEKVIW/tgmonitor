@@ -75,8 +75,18 @@ class LinkCheckDetails(Base):
 # 数据库连接配置
 DATABASE_URL = settings.DATABASE_URL
 
-# 创建数据库引擎，指定时区
-engine = create_engine(DATABASE_URL, connect_args={"options": "-c timezone=Asia/Shanghai"})
+# 创建数据库引擎，添加连接池配置和时区设置
+engine = create_engine(
+    DATABASE_URL, 
+    connect_args={"options": "-c timezone=Asia/Shanghai"},
+    pool_size=5,           # 连接池大小
+    max_overflow=10,       # 最大溢出连接
+    pool_timeout=30,       # 连接超时时间（秒）
+    pool_recycle=3600,     # 连接回收时间（1小时）
+    pool_pre_ping=True,    # 连接前ping测试
+    echo=False,            # 关闭SQL日志
+    pool_reset_on_return='commit'  # 连接返回时重置
+)
 
 # 创建所有表
 def create_tables():

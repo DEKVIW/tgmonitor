@@ -77,7 +77,7 @@ def init_authenticator(auth_users):
             auth_users,
             "tg_cookie",
             settings.SECRET_SALT,
-            cookie_expiry_days=1
+            cookie_expiry_days=30
         )
         return authenticator
     except Exception as e:

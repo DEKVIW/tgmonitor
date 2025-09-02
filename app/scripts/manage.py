@@ -27,6 +27,74 @@ except ImportError:
         LINK_VALIDATOR_AVAILABLE = False
         print("⚠️  警告: link_validator.py 未找到，链接检测功能不可用")
 
+def ensure_session_file(session_name):
+    """确保指定的 session 文件存在，如果不存在则自动复制"""
+    import os
+    
+    # 显示调试信息
+    current_dir = os.getcwd()
+    print(f"🔍 调试信息:")
+    print(f"   - 当前工作目录: {current_dir}")
+    
+    # 使用绝对路径
+    main_session = os.path.join(current_dir, 'tg_monitor_session.session')
+    target_session = os.path.join(current_dir, f'{session_name}.session')
+    
+    print(f"   - 主 session 文件: {main_session}")
+    print(f"   - 目标 session 文件: {target_session}")
+    
+    # 检查目标 session 是否存在
+    if os.path.exists(target_session):
+        target_size = os.path.getsize(target_session)
+        print(f"   - 目标 session 已存在: ✅ (大小: {target_size} 字节)")
+        return True
+    
+    # 检查主 session 是否存在
+    if not os.path.exists(main_session):
+        print(f"   - 主 session 不存在: ❌")
+        print(f"❌ 主 session 文件 {main_session} 不存在")
+        print("💡 请先运行监控服务或手动登录 Telegram")
+        return False
+    
+    # 获取主session文件信息
+    main_size = os.path.getsize(main_session)
+    print(f"   - 主 session 存在: ✅ (大小: {main_size} 字节)")
+    
+    # 检查磁盘空间
+    import shutil
+    disk_usage = shutil.disk_usage(current_dir)
+    free_space = disk_usage.free
+    print(f"   - 可用磁盘空间: {free_space} 字节")
+    
+    if free_space < main_size * 2:  # 需要至少2倍空间用于复制
+        print(f"❌ 磁盘空间不足，需要至少 {main_size * 2} 字节")
+        return False
+    
+    # 自动复制 session 文件
+    try:
+        print(f"   - 开始复制文件...")
+        shutil.copy2(main_session, target_session)
+        
+        # 验证复制结果
+        if os.path.exists(target_session):
+            target_size = os.path.getsize(target_session)
+            if target_size == main_size:
+                print(f"✅ 已成功复制 session 文件: {target_session}")
+                print(f"   - 复制后大小: {target_size} 字节")
+                return True
+            else:
+                print(f"❌ 复制后文件大小不匹配: 期望 {main_size} 字节，实际 {target_size} 字节")
+                # 删除错误的文件
+                os.remove(target_session)
+                return False
+        else:
+            print(f"❌ 复制后目标文件不存在")
+            return False
+            
+    except Exception as e:
+        print(f"❌ 复制 session 文件失败: {e}")
+        return False
+
 # 全局变量用于中断处理
 current_check_session = None
 interrupted = False
@@ -124,6 +192,12 @@ signal.signal(signal.SIGTERM, signal_handler)  # 终止信号
 
 async def list_channels_detailed():
     """显示当前监听频道列表，包含详细信息（异步版本）"""
+    # 确保 session 文件存在
+    if not ensure_session_file('tg_monitor_session_list'):
+        print("显示简化版本...")
+        list_channels_simple()
+        return
+    
     def get_api_credentials():
         with Session(engine) as session:
             cred = session.query(Credential).first()
@@ -158,7 +232,7 @@ async def list_channels_detailed():
     print("=" * 50)
     
     # 创建Telegram客户端
-    client = TelegramClient('tg_monitor_session', api_id, api_hash)
+    client = TelegramClient('tg_monitor_session_list', api_id, api_hash)
     
     try:
         await client.start()
@@ -437,6 +511,11 @@ def is_invite_link_hash(channel_name):
 async def diagnose_channels():
     """诊断每个频道是否可以正常访问"""
     
+    # 确保 session 文件存在
+    if not ensure_session_file('tg_monitor_session_diagnose'):
+        print("❌ 无法进行频道诊断，缺少必要的 session 文件")
+        return [], []
+    
     def get_api_credentials():
         """获取 API 凭据"""
         with Session(engine) as session:
@@ -468,7 +547,7 @@ async def diagnose_channels():
     print("-" * 50)
     
     # 创建客户端
-    client = TelegramClient('tg_monitor_session', api_id, api_hash)
+    client = TelegramClient('tg_monitor_session_diagnose', api_id, api_hash)
     
     try:
         await client.start()
@@ -584,6 +663,11 @@ def clean_invalid_channels(invalid_channels):
 
 async def test_event_handler():
     """测试修复后的事件处理器"""
+    # 确保 session 文件存在
+    if not ensure_session_file('tg_monitor_session_test'):
+        print("❌ 无法进行测试，缺少必要的 session 文件")
+        return
+    
     def get_api_credentials():
         with Session(engine) as session:
             cred = session.query(Credential).first()
@@ -608,7 +692,7 @@ async def test_event_handler():
     
     print(f"🎯 测试监听 {len(valid_channels)} 个有效频道...")
     
-    client = TelegramClient('tg_monitor_session', api_id, api_hash)
+    client = TelegramClient('tg_monitor_session_test', api_id, api_hash)
     
     try:
         await client.start()
@@ -726,7 +810,7 @@ def check_links_by_period(period_str, max_concurrent=5, show_invalid_details=Tru
         return
     
     print(f"🔍 开始检测 {period_desc} 的链接...")
-    print(f"📅 时间范围: {start_time.strftime('%Y-%m-%d %H:%M:%S')} 至 {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"�� 时间范围: {start_time.strftime('%Y-%m-%d %H:%M:%S')} 至 {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
     
     # 获取指定时间范围内的消息
     with Session(engine) as session:
