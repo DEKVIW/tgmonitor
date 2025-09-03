@@ -350,10 +350,10 @@ def parse_message(text, msg_obj=None):
     # 3. 删除特定的关键词（但保留行中其他内容）
     exclude_keywords = ['类型', '标签', '频道', '群组', '投稿源', '来自', '下载地址', '地址', '链接', '描述', '简介']
     for keyword in exclude_keywords:
-        # 删除"关键词："或"关键词:"格式
-        description = re.sub(rf'{re.escape(keyword)}[：:]\s*', '', description)
-        # 删除"emoji 关键词："格式（处理多个空格）
-        description = re.sub(rf'\s+{re.escape(keyword)}\s*[：:]\s*', '', description)
+        # 删除"关键词："或"关键词:"格式（允许前面有空格）
+        description = re.sub(rf'\s*{re.escape(keyword)}[：:]?\s*', '', description)
+        # 删除"emoji 关键词："格式（处理多个空格），冒号可有可无
+        description = re.sub(rf'\s+{re.escape(keyword)}\s*[：:]?\s*', '', description)
         # 删除"【关键词】："格式（带方括号）
         description = re.sub(rf'【{re.escape(keyword)}】：\s*', '', description)
         # 删除"【关键词】"格式（带方括号，无冒号）
