@@ -16,30 +16,53 @@ BACKUP_DIR="/mnt/Google/backup/tg-monitor"
 DATE=$(date +%Y%m%d_%H%M%S)
 BACKUP_FILE="$BACKUP_DIR/tg_monitor_$DATE.sql.gz"
 
-# 从.env文件读取数据库配置
+# 使用 Python 解析 DATABASE_URL（解决特殊字符问题）
 echo "正在读取数据库配置..."
 
-# 读取DATABASE_URL并解析
-DATABASE_URL=$(grep "^DATABASE_URL=" "$PROJECT_ROOT/.env" | cut -d'=' -f2-)
+# 创建临时 Python 脚本来解析 URL
+cat > /tmp/parse_db_url.py << 'EOF'
+import os
+import urllib.parse
+from dotenv import load_dotenv
 
-if [ -z "$DATABASE_URL" ]; then
-    echo "错误: 在.env文件中未找到DATABASE_URL配置"
-    exit 1
-fi
+# 加载 .env 文件
+load_dotenv('/root/data/python/tg-monitor/.env')
 
-# 解析DATABASE_URL: postgresql://username:password@host:port/database
-# 提取各个组件
-DB_USER=$(echo "$DATABASE_URL" | sed -n 's|.*://\([^:]*\):.*|\1|p')
-DB_PASS=$(echo "$DATABASE_URL" | sed -n 's|.*://[^:]*:\([^@]*\)@.*|\1|p')
-DB_HOST=$(echo "$DATABASE_URL" | sed -n 's|.*@\([^:]*\):.*|\1|p')
-DB_PORT=$(echo "$DATABASE_URL" | sed -n 's|.*@[^:]*:\([^/]*\)/.*|\1|p')
-DB_NAME=$(echo "$DATABASE_URL" | sed -n 's|.*/\([^?]*\).*|\1|p')
+# 获取 DATABASE_URL
+database_url = os.getenv('DATABASE_URL')
+if not database_url:
+    print("错误: 未找到 DATABASE_URL")
+    exit(1)
+
+# 使用 urllib.parse.unquote 来正确解码 URL 编码的字符
+parsed = urllib.parse.urlparse(database_url)
+
+# 解码用户名和密码
+username = urllib.parse.unquote(parsed.username) if parsed.username else ""
+password = urllib.parse.unquote(parsed.password) if parsed.password else ""
+
+# 输出解析结果
+print(f"DB_USER={username}")
+print(f"DB_PASS={password}")
+print(f"DB_HOST={parsed.hostname}")
+print(f"DB_PORT={parsed.port}")
+print(f"DB_NAME={parsed.path[1:] if parsed.path else ''}")
+
+# 调试信息
+print(f"# 原始 DATABASE_URL: {database_url}")
+print(f"# 解码后的密码: {password}")
+EOF
+
+# 执行 Python 脚本并获取结果
+cd "$PROJECT_ROOT"
+eval $(python3 /tmp/parse_db_url.py)
+
+# 清理临时文件
+rm -f /tmp/parse_db_url.py
 
 # 验证解析结果
 if [ -z "$DB_USER" ] || [ -z "$DB_PASS" ] || [ -z "$DB_HOST" ] || [ -z "$DB_PORT" ] || [ -z "$DB_NAME" ]; then
-    echo "错误: 无法解析DATABASE_URL: $DATABASE_URL"
-    echo "请检查.env文件中的DATABASE_URL格式是否正确"
-    echo "正确格式: postgresql://username:password@host:port/database"
+    echo "错误: 无法解析 DATABASE_URL"
     exit 1
 fi
 
@@ -59,31 +82,27 @@ echo "开始备份数据库..."
 
 # 执行备份
 if pg_dump -U "$DB_USER" -h "$DB_HOST" -p "$DB_PORT" -d "$DB_NAME" | gzip > "$BACKUP_FILE"; then
-    echo "✅ 备份成功完成: $BACKUP_FILE"
-    
     # 获取备份文件大小
     BACKUP_SIZE=$(du -h "$BACKUP_FILE" | cut -f1)
-    echo "备份文件大小: $BACKUP_SIZE"
     
-    # 只保留最新的3份备份
-    echo "清理旧备份文件..."
+    # 成功时只显示一条简洁信息
+    echo "✅ 备份成功: $BACKUP_FILE ($BACKUP_SIZE)"
+    
+    # 清理旧备份文件（静默执行）
     OLD_BACKUPS=$(ls -t "$BACKUP_DIR"/tg_monitor_*.sql.gz 2>/dev/null | tail -n +4)
     if [ -n "$OLD_BACKUPS" ]; then
-        echo "$OLD_BACKUPS" | xargs rm -f
-        echo "已删除 $(echo "$OLD_BACKUPS" | wc -l) 个旧备份文件"
-    else
-        echo "没有需要清理的旧备份文件"
+        echo "$OLD_BACKUPS" | xargs rm -f >/dev/null 2>&1
     fi
     
-    # 显示当前备份文件列表
-    echo ""
-    echo "当前备份文件列表:"
-    ls -lh "$BACKUP_DIR"/tg_monitor_*.sql.gz 2>/dev/null | while read line; do
-        echo "  $line"
-    done
-    
 else
+    # 失败时显示详细信息
     echo "❌ 备份失败！"
+    echo "错误详情:"
+    echo "  数据库: $DB_NAME"
+    echo "  主机: $DB_HOST:$DB_PORT"
+    echo "  用户: $DB_USER"
+    echo "  目标文件: $BACKUP_FILE"
+    echo "  时间: $(date '+%Y-%m-%d %H:%M:%S')"
     exit 1
 fi
 

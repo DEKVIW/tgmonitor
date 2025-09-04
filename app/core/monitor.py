@@ -363,6 +363,10 @@ def parse_message(text, msg_obj=None):
     description = re.sub(r'https?://[^\s]+', '', description)
     description = re.sub(r'@[A-Za-z0-9_]+', '', description)
     
+    # 4.5. 清理残留的【】：格式（关键词被删除后留下的）
+    description = re.sub(r'【】：\s*', '', description)
+    description = re.sub(r'【】\s*', '', description)
+    
     # 5. 清理多余的空格和空行
     description = re.sub(r'\n\s*\n', '\n', description)  # 删除空行
     description = re.sub(r'^\s+|\s+$', '', description, flags=re.MULTILINE)  # 删除行首行尾空格
