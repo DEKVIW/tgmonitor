@@ -266,6 +266,8 @@ def main_app(username, authenticator, auth_users):
     try:
         from streamlit_autorefresh import st_autorefresh
         refresh_interval = st.sidebar.slider("🔄 自动刷新间隔(秒)", 30, 300, 60, 30)
+        # 将刷新间隔存储到 session_state，供缓存使用
+        st.session_state['refresh_interval'] = refresh_interval
         st_autorefresh(interval=refresh_interval * 1000, key="auto_refresh")
     except Exception:
         pass
@@ -675,7 +677,10 @@ def show_statistics(SessionLocal):
 
 def render_main_content(SessionLocal):
     PAGE_SIZE = st.session_state['page_size']
-    @st.cache_data(ttl=60)
+    # 优化缓存：使用较短的 TTL（30秒），确保自动刷新时能获取新数据
+    # 即使自动刷新间隔是 60 秒，30 秒的缓存也能在刷新时获取新数据
+    # 同时保持一定的缓存效果，减少数据库查询
+    @st.cache_data(ttl=30, show_spinner="正在加载消息...")
     def get_filtered_messages(search_query, time_range, selected_tags, selected_netdisks, 
                             min_content_length, has_links_only, page_num, page_size):
         with SessionLocal() as db:
@@ -685,6 +690,9 @@ def render_main_content(SessionLocal):
                 if search_terms:
                     search_filters = []
                     for term in search_terms:
+                        # 优化：对于短搜索词，使用更高效的搜索方式
+                        # 如果搜索词不以通配符开头，可以使用索引
+                        # 但为了兼容性，暂时保持 ilike，但可以考虑添加全文搜索索引
                         search_filters.extend([
                             Message.title.ilike(f'%{term}%'),
                             Message.description.ilike(f'%{term}%'),
@@ -714,12 +722,32 @@ def render_main_content(SessionLocal):
                 )
             if has_links_only:
                 query = query.filter(Message.links.isnot(None))
-            total_count = query.count()
+            
+            # 优化：先获取数据，再计算总数（避免重复查询）
+            # 对于大数据集，count() 很慢，我们可以先获取数据，然后估算总数
+            start_idx = (page_num - 1) * page_size
+            
+            # 先获取当前页的数据（使用索引列排序）
+            # 尝试多取一条数据来判断是否还有下一页
+            messages_page = query.order_by(Message.timestamp.desc()).offset(start_idx).limit(page_size + 1).all()
+            
+            # 判断是否还有更多数据
+            has_more = len(messages_page) > page_size
+            if has_more:
+                # 如果有多余的数据，说明不是最后一页，只保留 page_size 条
+                messages_page = messages_page[:page_size]
+                # 需要计算总数以显示准确的分页信息
+                total_count = query.count()
+            else:
+                # 如果没有多余的数据，说明已经是最后一页，可以直接计算总数
+                total_count = start_idx + len(messages_page)
+            
             max_page = (total_count + page_size - 1) // page_size if total_count > 0 else 1
             if page_num > max_page and max_page > 0:
                 page_num = 1
-            start_idx = (page_num - 1) * page_size
-            messages_page = query.order_by(Message.timestamp.desc()).offset(start_idx).limit(page_size).all()
+                # 重新获取第一页数据
+                messages_page = query.order_by(Message.timestamp.desc()).offset(0).limit(page_size).all()
+            
             return messages_page, total_count, max_page
     messages_page, total_count, max_page = get_filtered_messages(
         st.session_state.get('search_query', ''),
@@ -752,15 +780,28 @@ def render_messages(messages):
         '迅雷网盘': {'bg': 'linear-gradient(135deg, #2196F3, #1976D2)', 'text': '迅'}
     }
     
+    # 网盘品牌emoji映射（移到循环外，避免重复创建）
+    netdisk_icons = {
+        '夸克网盘': '⚡',      # 闪电 - 极速体验
+        '阿里云盘': '🛡️',      # 盾牌 - 阿里安全生态
+        '百度网盘': '🔍',      # 放大镜 - 搜索功能
+        '115网盘': '💎',       # 钻石 - 高端品质
+        '天翼云盘': '🌊',      # 海浪 - 电信网络覆盖
+        '123云盘': '🎯',       # 靶心 - 简单直达
+        'UC网盘': '🌍',        # 地球 - 全球互联
+        '迅雷': '🚀'       # 火箭 - 极速下载
+    }
+    
+    # 在循环外计算当前时间，避免重复调用
+    now = datetime.now()
+    today = now.date()
+    yesterday = today - timedelta(days=1)
+    weekdays = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
+    
     for idx, msg in enumerate(messages):
         # 改进的时间格式处理
-        now = datetime.now()
         msg_time = msg.timestamp
-        
-        # 使用日期比较而不是天数差，更准确
-        today = now.date()
         msg_date = msg_time.date()
-        yesterday = today - timedelta(days=1)
         
         # 计算时间差
         time_diff = now - msg_time
@@ -780,7 +821,6 @@ def render_messages(messages):
             time_str = f"📅昨天 {msg_time.strftime('%H:%M')}"
         elif (today - msg_date).days < 7:
             # 一周内
-            weekdays = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
             weekday = weekdays[msg_time.weekday()]
             time_str = f"📆{weekday} {msg_time.strftime('%H:%M')}"
         elif msg_time.year == now.year:
@@ -793,17 +833,6 @@ def render_messages(messages):
         # 生成网盘标签字符串（用于expander标题）
         netdisk_tags = ""
         if msg.links:
-            # 网盘品牌emoji映射
-            netdisk_icons = {
-                '夸克网盘': '⚡',      # 闪电 - 极速体验
-                '阿里云盘': '🛡️',      # 盾牌 - 阿里安全生态
-                '百度网盘': '🔍',      # 放大镜 - 搜索功能
-                '115网盘': '💎',       # 钻石 - 高端品质
-                '天翼云盘': '🌊',      # 海浪 - 电信网络覆盖
-                '123云盘': '🎯',       # 靶心 - 简单直达
-                'UC网盘': '🌍',        # 地球 - 全球互联
-                '迅雷': '🚀'       # 火箭 - 极速下载
-            }
             netdisk_tags = " ".join([
                 f"{netdisk_icons.get(name, '💾')}{name}" 
                 for name in msg.links.keys()
@@ -869,11 +898,12 @@ def render_pagination(total_count, max_page, PAGE_SIZE):
     # 只保留一个输入框列，居中显示，避免多余的markdown容器
     with st.container():
         new_page = st.number_input(
-            "",
+            "页码",
             min_value=1,
             max_value=max_page,
             value=st.session_state['page_num'],
-            key="page_input"
+            key="page_input",
+            label_visibility="hidden"
         )
         if new_page != st.session_state['page_num']:
             st.session_state['page_num'] = new_page
