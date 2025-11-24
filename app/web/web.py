@@ -138,6 +138,12 @@ def main():
 
 def main_app(username, authenticator, auth_users):
     init_session_state()
+    # 初始化刷新间隔和缓存TTL（如果还没有设置）
+    if 'refresh_interval' not in st.session_state:
+        st.session_state['refresh_interval'] = 60
+    if 'cache_ttl' not in st.session_state:
+        st.session_state['cache_ttl'] = 55  # 默认值，会在sidebar slider后更新
+    
     # 合并所有自定义CSS，只插入一次
     st.markdown("""
     <style>
@@ -263,14 +269,26 @@ def main_app(username, authenticator, auth_users):
     }
     </style>
     """, unsafe_allow_html=True)
+    # 自动刷新功能 - 需要在sidebar渲染之前设置，以便后续缓存可以使用
     try:
         from streamlit_autorefresh import st_autorefresh
-        refresh_interval = st.sidebar.slider("🔄 自动刷新间隔(秒)", 30, 300, 60, 30)
+        # 如果session_state中还没有刷新间隔，使用默认值
+        if 'refresh_interval' not in st.session_state:
+            st.session_state['refresh_interval'] = 60
+        refresh_interval = st.sidebar.slider("🔄 自动刷新间隔(秒)", 30, 300, st.session_state['refresh_interval'], 30)
         # 将刷新间隔存储到 session_state，供缓存使用
         st.session_state['refresh_interval'] = refresh_interval
-        st_autorefresh(interval=refresh_interval * 1000, key="auto_refresh")
-    except Exception:
-        pass
+        # 更新缓存TTL
+        cache_ttl = max(15, refresh_interval - 5)
+        st.session_state['cache_ttl'] = cache_ttl
+        # 确保刷新间隔至少比缓存TTL长，避免缓存未过期时刷新无效
+        st_autorefresh(interval=refresh_interval * 1000, key="auto_refresh", limit=None)
+    except ImportError as e:
+        logger.warning(f"streamlit_autorefresh 未安装，自动刷新功能不可用: {e}")
+        st.sidebar.warning("⚠️ 自动刷新功能不可用，请安装 streamlit-autorefresh")
+    except Exception as e:
+        logger.error(f"自动刷新功能初始化失败: {e}")
+        st.sidebar.error(f"❌ 自动刷新功能异常: {str(e)}")
     SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     st.title("📱 TG频道监控")
     render_sidebar(username, authenticator, auth_users, SessionLocal)
@@ -334,7 +352,9 @@ def render_tag_selector(SessionLocal):
         st.session_state['selected_tags'] = [
             tag_map[label] for label in st.session_state.get('tag_multiselect', [])
         ]
-    @st.cache_data(ttl=300)
+    # 使用动态TTL，基于刷新间隔
+    cache_ttl = st.session_state.get('cache_ttl', 55)
+    @st.cache_data(ttl=cache_ttl, max_entries=5)
     def get_tag_stats():
         with SessionLocal() as session:
             result = session.execute(text("""
@@ -370,7 +390,9 @@ def show_statistics(SessionLocal):
     from sqlalchemy import func
     from app.models.models import Message
     from datetime import datetime, timedelta
-    @st.cache_data(ttl=300)
+    # 使用动态TTL，基于刷新间隔
+    cache_ttl = st.session_state.get('cache_ttl', 55)
+    @st.cache_data(ttl=cache_ttl, max_entries=5)
     def get_stats():
         with SessionLocal() as session:
             total = session.query(Message).count()
@@ -458,7 +480,9 @@ def show_statistics(SessionLocal):
 
         # ====== 新增：最近10小时去重统计条形图 ======
         st.markdown("#### 🧹 最近10小时每小时去重删除数")
-        @st.cache_data(ttl=60)
+        # 使用动态TTL，基于刷新间隔（去重统计可以稍长一些）
+        cache_ttl = st.session_state.get('cache_ttl', 55)
+        @st.cache_data(ttl=min(cache_ttl + 30, 120), max_entries=3)
         def get_dedup_stats():
             sql = """
                 SELECT date_trunc('hour', run_time) AS hour, SUM(deleted) AS del_cnt
@@ -531,7 +555,9 @@ def show_statistics(SessionLocal):
         
         # ====== 新增：最近24小时网盘链接分布饼图 ======
         st.markdown("#### 📊 最近24小时网盘链接分布")
-        @st.cache_data(ttl=300)
+        # 使用动态TTL，基于刷新间隔
+        cache_ttl = st.session_state.get('cache_ttl', 55)
+        @st.cache_data(ttl=cache_ttl, max_entries=3)
         def get_netdisk_distribution():
             sql = """
             SELECT 
@@ -677,10 +703,10 @@ def show_statistics(SessionLocal):
 
 def render_main_content(SessionLocal):
     PAGE_SIZE = st.session_state['page_size']
-    # 优化缓存：使用较短的 TTL（30秒），确保自动刷新时能获取新数据
-    # 即使自动刷新间隔是 60 秒，30 秒的缓存也能在刷新时获取新数据
-    # 同时保持一定的缓存效果，减少数据库查询
-    @st.cache_data(ttl=30, show_spinner="正在加载消息...")
+    # 使用动态TTL，基于刷新间隔，确保自动刷新时能获取新数据
+    # 缓存TTL比刷新间隔稍短，这样刷新时缓存已过期，能获取最新数据
+    cache_ttl = st.session_state.get('cache_ttl', 55)
+    @st.cache_data(ttl=cache_ttl, max_entries=10, show_spinner="正在加载消息...")
     def get_filtered_messages(search_query, time_range, selected_tags, selected_netdisks, 
                             min_content_length, has_links_only, page_num, page_size):
         with SessionLocal() as db:

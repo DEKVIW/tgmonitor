@@ -7,10 +7,14 @@ import re
 import sys
 from app.models.config import settings
 import asyncio
+import warnings
 from telethon.tl.types import MessageEntityTextUrl, MessageEntityUrl, KeyboardButtonUrl
 from urllib.parse import unquote, urlparse
 from urlextract import URLExtract  # 新增
 from app.models.db import async_session
+
+# 抑制 Telethon 异步会话实验性功能的警告
+warnings.filterwarnings('ignore', message='.*async sessions support is an experimental feature.*', category=UserWarning)
 
 def get_api_credentials():
     """获取 API 凭据，优先使用数据库中的凭据"""
