@@ -84,14 +84,6 @@ def init_authenticator(auth_users):
         logger.error(f"初始化认证器失败: {e}")
         return None
 
-def show_login_success_message():
-    if st.session_state.get("show_login_success", True):
-        try:
-            st.toast(f"欢迎 {st.session_state.get('name')}！", icon="🎉")
-        except Exception:
-            st.success(f"欢迎 {st.session_state.get('name')}！")
-        st.session_state["show_login_success"] = False
-
 def init_session_state():
     if 'selected_tags' not in st.session_state:
         st.session_state['selected_tags'] = []
@@ -124,7 +116,6 @@ def main():
             authenticator.login(location="main")
             
             if st.session_state.get("authentication_status"):
-                show_login_success_message()
                 main_app(st.session_state.get('username'), authenticator, auth_users)
             elif st.session_state.get("authentication_status") is False:
                 st.error("用户名或密码错误")
