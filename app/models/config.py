@@ -27,6 +27,12 @@ class Settings(BaseSettings):
 
     # 新增密钥
     SECRET_SALT: str
+    
+    # 前端URL（用于CORS配置）
+    FRONTEND_URL: Optional[str] = "http://localhost:3000"
+
+    # 游客模式配置（允许未登录用户访问消息列表）
+    PUBLIC_DASHBOARD_ENABLED: bool = False
 
     class Config:
         env_file = ".env"  # 指定 .env 文件

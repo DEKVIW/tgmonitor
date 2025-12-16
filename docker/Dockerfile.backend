@@ -1,0 +1,23 @@
+FROM python:3.10-slim
+
+WORKDIR /app
+
+# 安装系统依赖（如果需要）
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
+
+# 安装Python依赖
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+
+# 复制应用代码
+COPY app/ ./app/
+
+# 暴露端口
+EXPOSE 8000
+
+# 默认启动命令（可被compose覆盖）
+CMD ["uvicorn", "app.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+

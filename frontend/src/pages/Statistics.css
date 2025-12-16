@@ -1,0 +1,62 @@
+.statistics-loading {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 400px;
+}
+
+.statistics-page {
+  padding: 8px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.statistics-charts {
+  margin-top: 8px;
+}
+
+.chart-card {
+  border-radius: 8px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+  width: 100%;
+}
+
+.chart-card .ant-card-body {
+  padding: 24px;
+}
+
+.netdisk-chart-empty {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 350px;
+  color: #999;
+}
+
+/* 小屏优化 */
+@media (max-width: 768px) {
+  .statistics-page {
+    padding: 8px 10px;
+    gap: 10px;
+  }
+
+  .refresh-control-card {
+    margin-bottom: 10px;
+  }
+
+  .chart-card .ant-card-body {
+    padding: 16px;
+  }
+
+  .trend-chart,
+  .dedup-chart,
+  .netdisk-chart {
+    width: 100%;
+  }
+
+  .netdisk-chart-empty {
+    height: 280px;
+  }
+}
+

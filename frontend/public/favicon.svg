@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Telegram style icon">
+  <defs>
+    <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3ba6f6"/>
+      <stop offset="100%" stop-color="#1b75cf"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="url(#g)"/>
+  <!-- 简化的纸飞机造型，向右上方飞行 -->
+  <path
+    d="M53 12 12 30a1.2 1.2 0 0 0 .1 2.2l10.4 3.8 3.2 12a1.1 1.1 0 0 0 1.9.4l6.1-7.3 9 6.3a1.2 1.2 0 0 0 1.9-.7L55 13.6A1.2 1.2 0 0 0 53 12Z"
+    fill="#e8f5ff"
+  />
+  <!-- 机身内阴影，增加立体感 -->
+  <path
+    d="m24.3 35.2 7.4 5.4 2.1-6.2-9.5-.8Z"
+    fill="#c8e6ff"
+  />
+</svg>
+

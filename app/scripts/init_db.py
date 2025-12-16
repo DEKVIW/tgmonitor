@@ -3,8 +3,12 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 from app.models.config import settings
 import json
-import streamlit_authenticator as stauth
 import os
+
+from passlib.context import CryptContext
+
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 def init_channels():
     # 从配置中获取默认频道列表
@@ -55,19 +59,18 @@ def init_default_users():
     
     # 创建新用户文件
     try:
-        # 生成 bcrypt 哈希密码 - 0.4.2版本的正确用法
-        hasher = stauth.Hasher()
+        # 生成 bcrypt 哈希密码（与后端一致）
         users_with_hash = {}
-        
+
         for username, user_info in default_users.items():
-            hashed_password = hasher.hash(user_info["password"])
+            hashed_password = pwd_context.hash(user_info["password"])
             users_with_hash[username] = {
                 "password": hashed_password,
                 "name": user_info["name"],
                 "email": user_info["email"],
                 "role": user_info.get("role", "user")
             }
-        
+
         # 保存用户文件
         with open(USER_DATA_FILE, 'w', encoding='utf-8') as f:
             json.dump(users_with_hash, f, ensure_ascii=False, indent=2)

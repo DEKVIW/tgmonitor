@@ -11,22 +11,15 @@ services:
       - ../data/postgres:/var/lib/postgresql/data
     ports:
       - "5432:5432"
+    networks:
+      - tg-network
 
-  tgmonitor:
+  # Telegram监控服务：监听频道并抓取消息到数据库
+  monitor:
     build:
       context: ..
-      dockerfile: docker/Dockerfile
-    image: tgmonitor:latest
-    env_file: ../.env
-    environment:
-      - TZ=Asia/Shanghai
-    volumes:
-      - ../data:/app/data
-      - ../users.json:/app/users.json
-      - ../tg_monitor_session.session:/app/tg_monitor_session.session
-
-  monitor:
-    image: tgmonitor:latest
+      dockerfile: docker/Dockerfile.backend
+    image: tgmonitor-backend:latest
     env_file: ../.env
     depends_on:
       - db
@@ -36,18 +29,60 @@ services:
       - ../data:/app/data
       - ../users.json:/app/users.json
       - ../tg_monitor_session.session:/app/tg_monitor_session.session
+    networks:
+      - tg-network
     command: python -m app.core.monitor
+    restart: unless-stopped
 
-  web:
-    image: tgmonitor:latest
+  # FastAPI后端服务：提供REST API接口
+  backend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.backend
+    image: tgmonitor-backend:latest
     env_file: ../.env
     depends_on:
       - db
     ports:
-      - "8501:8501"
+      - "8000:8000" # FastAPI端口
     environment:
       - TZ=Asia/Shanghai
     volumes:
       - ../data:/app/data
       - ../users.json:/app/users.json
-    command: streamlit run app/web/web.py
+      - ../tg_monitor_session.session:/app/tg_monitor_session.session
+    networks:
+      - tg-network
+    command: uvicorn app.api.main:app --host 0.0.0.0 --port 8000
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.frontend
+    image: tgmonitor-frontend:latest
+    ports:
+      - "3000:80" # Nginx端口
+    depends_on:
+      - backend
+    networks:
+      - tg-network
+
+  # 保留旧的web服务作为备用（已注释）
+  # web:
+  #   image: tgmonitor:latest
+  #   env_file: ../.env
+  #   depends_on:
+  #     - db
+  #   ports:
+  #     - "8501:8501"
+  #   environment:
+  #     - TZ=Asia/Shanghai
+  #   volumes:
+  #     - ../data:/app/data
+  #     - ../users.json:/app/users.json
+  #   command: streamlit run app/web/web.py
+
+networks:
+  tg-network:
+    driver: bridge

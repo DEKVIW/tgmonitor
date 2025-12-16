@@ -1,15 +1,30 @@
+# 数据库相关
 sqlalchemy==2.0.23
 psycopg2-binary==2.9.9
-python-dotenv==1.0.0
-streamlit==1.40.1
-telethon==1.40.0
-pydantic==2.5.2
-pydantic-settings==2.1.0 
-streamlit-autorefresh
-streamlit-authenticator==0.4.2
-urlextract
 asyncpg
-pandas==2.3.1
-altair==5.5.0
+
+# FastAPI 相关
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
+
+# 配置和工具
+python-dotenv==1.0.0
+pydantic==2.5.2
+pydantic-settings==2.1.0
+
+# Telegram 相关
+telethon==1.40.0
+urlextract
 aiohttp>=3.8.0
+
+# 数据处理（保留，可能用于脚本）
+pandas==2.3.1
 validators>=0.20.0
+
+# 注意：已移除 Streamlit 相关依赖
+# streamlit==1.40.1
+# streamlit-autorefresh
+# streamlit-authenticator==0.4.2
+# altair==5.5.0

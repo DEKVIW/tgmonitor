@@ -1,0 +1,151 @@
+.message-item {
+  margin-bottom: 6px;
+  padding: 2px 0;
+}
+
+.message-collapse {
+  border: 1px solid #e6e6e6;
+  border-radius: 8px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.ant-collapse-content > .ant-collapse-content-box {
+  /* 上下0，左右留出间距 */
+  padding: 0 8px !important;
+}
+
+.message-header {
+  width: 100%;
+  padding: 0 2px;
+}
+
+.message-title {
+  font-size: 14px;
+  margin-right: 0;
+  white-space: normal;
+}
+
+.message-time-inline {
+  margin-left: 4px;
+  font-size: 14px;
+  color: #222;
+  font-weight: 600;
+}
+
+.netdisk-tags-inline {
+  margin-left: 8px;
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.message-time {
+  font-size: 14px;
+  color: #222;
+  font-weight: 600;
+}
+
+.netdisk-tags {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.netdisk-plain {
+  font-size: 13px;
+  color: #222;
+  white-space: nowrap;
+}
+
+.message-content {
+  padding: 0;
+}
+
+.message-detail-time {
+  margin: 0 0 2px 0;
+  padding: 0;
+  border: 0;
+  font-size: 16px;
+}
+
+.message-description {
+  margin: 0;
+  line-height: 1.55;
+  font-size: 16px;
+}
+
+.message-links {
+  margin: 0 0 4px 0;
+  font-size: 16px;
+}
+
+.netdisk-link {
+  display: inline-block;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border-radius: 12px;
+  padding: 5px 12px;
+  font-size: 13px;
+  font-weight: bold;
+  text-decoration: none;
+  margin-right: 4px;
+  margin-bottom: 4px;
+  transition: all 0.2s ease;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+}
+
+.netdisk-link:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 3px 6px rgba(0, 0, 0, 0.16);
+}
+
+.message-tags {
+  margin-top: 4px;
+  font-size: 16px;
+}
+
+.message-tag {
+  border-radius: 14px;
+  padding: 1px 8px;
+  font-size: 11px;
+  border: 1px solid #409eff;
+  background: #f0f9ff;
+  color: #409eff;
+  transition: all 0.2s ease;
+}
+
+.message-tag:hover {
+  background: #409eff;
+  color: white;
+  transform: translateY(-1px);
+}
+
+@media (max-width: 768px) {
+  .message-header {
+    gap: 4px;
+  }
+  .message-title {
+    margin-right: 0;
+    white-space: normal;
+    overflow: visible;
+    text-overflow: unset;
+  }
+  .netdisk-tag,
+  .netdisk-link {
+    font-size: 11px;
+    padding: 4px 9px;
+  }
+}
+
+/* 覆盖 Ant Design 副文本默认灰色，避免时间发灰 */
+:where(.ant-typography.ant-typography-secondary) {
+  color: #444 !important;
+}
+
+/* 消息内容内的 typography 去掉默认 1em 底部间距，保持紧凑 */
+.message-content :where(.ant-typography),
+.message-content :where(.ant-typography) p {
+  margin-bottom: 0 !important;
+}

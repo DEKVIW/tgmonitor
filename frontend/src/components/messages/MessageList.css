@@ -1,0 +1,42 @@
+.message-list-loading {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 240px;
+}
+
+.message-total-hint {
+  background: #e9f3fc;
+  color: #0b5fa4;
+  padding: 8px 12px;
+  border-radius: 8px;
+  margin-bottom: 8px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.message-list-pagination {
+  display: flex;
+  justify-content: center;
+  padding: 8px 0 2px;
+  margin-top: 4px;
+  width: 100%;
+}
+
+/* PC端：允许选项区域换行 */
+@media (min-width: 769px) {
+  .message-list-pagination .ant-pagination {
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  /* 如果空间不够，每页条数和快速跳转换到下一行 */
+  @media (max-width: 1024px) {
+    .message-list-pagination .ant-pagination-options {
+      flex-basis: 100%;
+      justify-content: center;
+      margin-top: 8px;
+      margin-left: 0;
+    }
+  }
+}

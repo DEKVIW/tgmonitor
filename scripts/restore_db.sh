@@ -7,9 +7,20 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
-# 进入项目目录并激活虚拟环境
+# 进入项目目录
 cd "$PROJECT_ROOT"
-source tgmonitor-venv/bin/activate
+
+# 检测虚拟环境名称（支持 venv 和 tgmonitor-venv）
+if [ -d "venv" ]; then
+    VENV_PATH="venv"
+elif [ -d "tgmonitor-venv" ]; then
+    VENV_PATH="tgmonitor-venv"
+else
+    echo "错误: 未找到虚拟环境（venv 或 tgmonitor-venv）"
+    exit 1
+fi
+
+source "$VENV_PATH/bin/activate"
 
 # 检查项目根目录是否存在
 if [ ! -f "$PROJECT_ROOT/.env" ]; then
@@ -72,10 +83,21 @@ EOF
 
 # 进入项目目录并激活虚拟环境
 cd "$PROJECT_ROOT"
-source tgmonitor-venv/bin/activate
 
-# 执行 Python 脚本并获取结果
-eval $(python3 /tmp/parse_db_url_restore.py "$PROJECT_ROOT")
+# 检测虚拟环境名称（支持 venv 和 tgmonitor-venv）
+if [ -d "venv" ]; then
+    VENV_PATH="venv"
+elif [ -d "tgmonitor-venv" ]; then
+    VENV_PATH="tgmonitor-venv"
+else
+    echo "错误: 未找到虚拟环境（venv 或 tgmonitor-venv）"
+    exit 1
+fi
+
+source "$VENV_PATH/bin/activate"
+
+# 执行 Python 脚本并获取结果（使用虚拟环境的 Python）
+eval $("$VENV_PATH/bin/python3" /tmp/parse_db_url_restore.py "$PROJECT_ROOT")
 
 # 清理临时文件
 rm -f /tmp/parse_db_url_restore.py
@@ -92,6 +114,7 @@ echo "  主机: $DB_HOST"
 echo "  端口: $DB_PORT"
 echo "  用户: $DB_USER"
 echo "  数据库: $DB_NAME"
+echo "  密码: ${DB_PASS:0:5}****（已隐藏）"
 echo ""
 echo "📁 找到最新备份文件:"
 echo "  文件: $(basename "$BACKUP_FILE")"
@@ -114,6 +137,24 @@ export PGPASSWORD="$DB_PASS"
 
 echo ""
 echo "开始恢复数据库..."
+
+# 先测试密码是否正确
+echo "正在测试数据库连接..."
+if psql -U "$DB_USER" -h "$DB_HOST" -p "$DB_PORT" -d "$DB_NAME" -c "SELECT 1;" > /dev/null 2>&1; then
+    echo "✅ 数据库连接成功"
+else
+    echo "❌ 数据库连接失败！密码可能不正确"
+    echo ""
+    echo "解决方案："
+    echo "1. 使用 postgres 用户恢复（推荐）："
+    echo "   sudo -u postgres psql -d tg_monitor < backup/$(basename "$BACKUP_FILE" .gz)"
+    echo ""
+    echo "2. 或者修改数据库用户密码："
+    echo "   sudo -u postgres psql -c \"ALTER USER tg_user WITH PASSWORD '你的密码';\""
+    echo ""
+    unset PGPASSWORD
+    exit 1
+fi
 
 # 先清空数据库（删除所有表）
 echo "正在清空现有数据库..."
