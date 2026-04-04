@@ -10,6 +10,7 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import { useAuthStore } from '@/store/authStore'
 import { logout, changePassword } from '@/api/auth'
 import { ChangePasswordRequest } from '@/types/auth'
+import { LOGIN_PATH } from '@/utils/routes'
 import './Header.css'
 
 interface HeaderProps {
@@ -31,7 +32,7 @@ const Header = ({ collapsed, onToggle }: HeaderProps) => {
       console.error('登出失败:', error)
     } finally {
       logoutStore()
-      navigate('/login', { replace: true })
+      navigate(LOGIN_PATH, { replace: true })
     }
   }
 

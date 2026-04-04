@@ -10,7 +10,6 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, s
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_admin_user, get_db
-from app.models.config import settings
 from app.models.models import Channel, Credential
 from app.schemas.admin_models import (
     BulkCreateResponse,
@@ -56,6 +55,7 @@ from app.services.maintenance_service import (
     dedup_links,
     fix_tags,
 )
+from app.services.system_config_service import apply_system_config, get_system_config_values
 from app.services.user_service import (
     add_user,
     bulk_create_random_users,
@@ -72,7 +72,6 @@ from app.services.user_service import (
     update_user,
 )
 from app.utils.channel_utils import normalize_channel_username
-from app.utils.env_utils import upsert_env_value
 
 
 def _count_admin_users() -> int:
@@ -401,9 +400,7 @@ async def get_system_config(
     
     需要 Bearer Token 认证（管理员权限）
     """
-    return SystemConfigResponse(
-        public_dashboard_enabled=settings.PUBLIC_DASHBOARD_ENABLED
-    )
+    return SystemConfigResponse(**get_system_config_values())
 
 
 @router.put("/config", response_model=SystemConfigResponse, summary="更新系统配置")
@@ -418,20 +415,10 @@ async def update_system_config(
     
     注意：配置更新会写入 .env 文件，需要重启服务才能完全生效
     """
-    previous_value = settings.PUBLIC_DASHBOARD_ENABLED
     try:
-        settings.PUBLIC_DASHBOARD_ENABLED = config_data.public_dashboard_enabled
-        upsert_env_value(
-            ".env",
-            "PUBLIC_DASHBOARD_ENABLED",
-            str(config_data.public_dashboard_enabled).lower(),
-        )
-
-        return SystemConfigResponse(
-            public_dashboard_enabled=settings.PUBLIC_DASHBOARD_ENABLED
-        )
+        updated_values = apply_system_config(config_data.model_dump())
+        return SystemConfigResponse(**updated_values)
     except Exception as e:
-        settings.PUBLIC_DASHBOARD_ENABLED = previous_value
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"更新系统配置失败: {str(e)}"

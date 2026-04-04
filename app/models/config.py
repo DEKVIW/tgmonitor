@@ -34,6 +34,17 @@ class Settings(BaseSettings):
     # 游客模式配置（允许未登录用户访问消息列表）
     PUBLIC_DASHBOARD_ENABLED: bool = False
 
+    # 链接检测默认配置
+    LINK_CHECK_DEFAULT_MAX_CONCURRENT: int = 5
+    LINK_CHECK_MAX_ALLOWED_CONCURRENT: int = 10
+    LINK_CHECK_MAX_ALLOWED_LINKS: int = 1000
+    LINK_CHECK_POLL_INTERVAL_SECONDS: int = 2
+
+    # 监控服务配置
+    MONITOR_CHANNEL_REFRESH_INTERVAL_SECONDS: int = 60
+    MONITOR_DB_WRITE_MAX_RETRIES: int = 3
+    MONITOR_DB_WRITE_RETRY_DELAY_SECONDS: float = 1.0
+
     class Config:
         env_file = ".env"  # 指定 .env 文件
         env_file_encoding = "utf-8"

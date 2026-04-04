@@ -14,6 +14,7 @@ os.environ.setdefault("SECRET_SALT", "test-salt")
 
 from app.services import link_check_service
 from app.services import link_check_runtime
+from app.models.config import settings
 
 
 class LinkCheckServiceTestCase(unittest.TestCase):
@@ -90,6 +91,19 @@ class LinkCheckServiceTestCase(unittest.TestCase):
                 self.assertFalse(created_again)
                 self.assertEqual(first_task_id, second_task_id)
                 self.assertTrue(second_status.get("reused_existing"))
+
+    def test_check_safety_limits_uses_runtime_settings(self) -> None:
+        original_max_links = settings.LINK_CHECK_MAX_ALLOWED_LINKS
+        original_max_concurrent = settings.LINK_CHECK_MAX_ALLOWED_CONCURRENT
+        settings.LINK_CHECK_MAX_ALLOWED_LINKS = 200
+        settings.LINK_CHECK_MAX_ALLOWED_CONCURRENT = 4
+        try:
+            self.assertTrue(link_check_service.check_safety_limits(200, 4))
+            self.assertFalse(link_check_service.check_safety_limits(201, 4))
+            self.assertFalse(link_check_service.check_safety_limits(200, 5))
+        finally:
+            settings.LINK_CHECK_MAX_ALLOWED_LINKS = original_max_links
+            settings.LINK_CHECK_MAX_ALLOWED_CONCURRENT = original_max_concurrent
 
 
 if __name__ == "__main__":

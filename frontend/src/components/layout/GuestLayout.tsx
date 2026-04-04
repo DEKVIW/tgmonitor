@@ -4,9 +4,9 @@
 
 import { ReactNode } from 'react'
 import { Layout as AntLayout } from 'antd'
-import { useNavigate } from 'react-router-dom'
-import { Button } from 'antd'
 import './Layout.css'
+import './Header.css'
+import './GuestLayout.css'
 
 const { Content } = AntLayout
 
@@ -15,25 +15,14 @@ interface GuestLayoutProps {
 }
 
 const GuestLayout = ({ children }: GuestLayoutProps) => {
-  const navigate = useNavigate()
-
   return (
     <AntLayout className="app-layout guest-layout">
-      <AntLayout.Header
-        style={{
-          background: '#fff',
-          padding: '0 24px',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          borderBottom: '1px solid #f0f0f0',
-        }}
-      >
+      <header className="app-header guest-header">
         <div style={{ fontSize: '18px', fontWeight: 500 }}>TG频道监控</div>
-        <Button type="primary" onClick={() => navigate('/login')}>
+        <span className="guest-subtitle" aria-hidden="true">
           登录
-        </Button>
-      </AntLayout.Header>
+        </span>
+      </header>
       <Content className="content-wrapper guest-content-wrapper">
         {children}
       </Content>

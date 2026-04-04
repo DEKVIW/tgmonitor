@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
+from app.models.config import settings
 from app.models.models import LinkCheckDetails, LinkCheckStats, Message, engine
 
 logger = logging.getLogger(__name__)
@@ -24,8 +25,8 @@ logger = logging.getLogger(__name__)
 TASK_STATUS_DIR = Path(__file__).resolve().parents[2] / "data" / "runtime" / "link_check_tasks"
 ACTIVE_TASK_FILE = TASK_STATUS_DIR / "_active_task.json"
 MAX_LOG_LINES = 800
-MAX_LINKS_PER_TASK = 5000
-MAX_CONCURRENT_PER_TASK = 10
+DEFAULT_MAX_LINKS_PER_TASK = 5000
+DEFAULT_MAX_CONCURRENT_PER_TASK = 10
 MAX_URL_LOG_LENGTH = 96
 RUNNING_TASK_STATUSES = {"running", "stopping"}
 FINAL_TASK_STATUSES = {"completed", "failed", "stopped"}
@@ -127,14 +128,29 @@ def check_safety_limits(url_count: int, max_concurrent: int) -> bool:
 
 
 def get_safety_limit_error(url_count: int, max_concurrent: int) -> Optional[str]:
+    max_links_per_task = max(
+        100,
+        int(getattr(settings, "LINK_CHECK_MAX_ALLOWED_LINKS", DEFAULT_MAX_LINKS_PER_TASK) or DEFAULT_MAX_LINKS_PER_TASK),
+    )
+    max_concurrent_per_task = max(
+        1,
+        int(
+            getattr(
+                settings,
+                "LINK_CHECK_MAX_ALLOWED_CONCURRENT",
+                DEFAULT_MAX_CONCURRENT_PER_TASK,
+            )
+            or DEFAULT_MAX_CONCURRENT_PER_TASK
+        ),
+    )
     violations: List[str] = []
-    if url_count > MAX_LINKS_PER_TASK:
+    if url_count > max_links_per_task:
         violations.append(
-            f"链接数量 {url_count} 超过安全上限 {MAX_LINKS_PER_TASK}，请缩小时间范围后重试"
+            f"链接数量 {url_count} 超过安全上限 {max_links_per_task}，请缩小时间范围后重试"
         )
-    if max_concurrent > MAX_CONCURRENT_PER_TASK:
+    if max_concurrent > max_concurrent_per_task:
         violations.append(
-            f"并发数 {max_concurrent} 超过安全上限 {MAX_CONCURRENT_PER_TASK}，请降低并发后重试"
+            f"并发数 {max_concurrent} 超过安全上限 {max_concurrent_per_task}，请降低并发后重试"
         )
     if not violations:
         return None

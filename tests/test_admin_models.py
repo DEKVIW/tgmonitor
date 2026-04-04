@@ -9,6 +9,7 @@ from app.schemas.admin_models import (
     ChannelCreate,
     LinkCheckTaskCreate,
     LinkCleanupApplyRequest,
+    SystemConfigUpdate,
     UserCreate,
 )
 
@@ -32,6 +33,19 @@ class AdminModelsTestCase(unittest.TestCase):
     def test_link_cleanup_request_validates_mode(self) -> None:
         with self.assertRaises(ValidationError):
             LinkCleanupApplyRequest(mode="delete_everything")
+
+    def test_system_config_update_rejects_default_concurrency_above_max(self) -> None:
+        with self.assertRaises(ValidationError):
+            SystemConfigUpdate(
+                public_dashboard_enabled=True,
+                link_check_default_max_concurrent=6,
+                link_check_max_allowed_concurrent=5,
+                link_check_max_allowed_links=1000,
+                link_check_poll_interval_seconds=2,
+                monitor_channel_refresh_interval_seconds=60,
+                monitor_db_write_max_retries=3,
+                monitor_db_write_retry_delay_seconds=1.0,
+            )
 
     def test_user_create_rejects_space_in_username(self) -> None:
         with self.assertRaises(ValidationError):

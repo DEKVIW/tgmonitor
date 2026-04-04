@@ -6,6 +6,7 @@ import { ReactNode } from 'react'
 import { Navigate } from 'react-router-dom'
 import { Spin } from 'antd'
 import { useAuthStore } from '@/store/authStore'
+import { LOGIN_PATH } from '@/utils/routes'
 
 interface ProtectedRouteProps {
   children: ReactNode
@@ -24,11 +25,10 @@ export const ProtectedRoute = ({ children }: ProtectedRouteProps) => {
   }
 
   if (!isAuthenticated || !token) {
-    return <Navigate to="/login" replace />
+    return <Navigate to={LOGIN_PATH} replace />
   }
 
   return <>{children}</>
 }
 
 export default ProtectedRoute
-

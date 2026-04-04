@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.models.config import settings
 from app.api import admin, admin_extras_runtime, auth, messages, statistics
-from app.schemas.admin_models import SystemConfigResponse
+from app.schemas.admin_models import PublicSystemConfigResponse
 import logging
 
 # 配置日志
@@ -66,14 +66,14 @@ async def health_check():
     return {"status": "healthy"}
 
 
-@app.get("/api/config/public", response_model=SystemConfigResponse, summary="获取公开系统配置")
+@app.get("/api/config/public", response_model=PublicSystemConfigResponse, summary="获取公开系统配置")
 async def get_public_config():
     """
     获取公开的系统配置（无需认证）
     
     用于前端判断是否启用游客模式
     """
-    return SystemConfigResponse(
+    return PublicSystemConfigResponse(
         public_dashboard_enabled=settings.PUBLIC_DASHBOARD_ENABLED
     )
 

@@ -27,7 +27,10 @@ logging.basicConfig(level=getattr(logging, settings.LOG_LEVEL, "INFO"))
 logger = logging.getLogger(__name__)
 monitor_metrics = MonitorMetrics(logger)
 
-CHANNEL_REFRESH_INTERVAL_SECONDS = 60
+CHANNEL_REFRESH_INTERVAL_SECONDS = max(
+    10,
+    int(getattr(settings, "MONITOR_CHANNEL_REFRESH_INTERVAL_SECONDS", 60) or 60),
+)
 FAILED_MESSAGES_LOG = Path("data/failed_messages.log")
 ERROR_MESSAGES_LOG = Path("data/error_messages.log")
 
@@ -294,7 +297,8 @@ async def handler(event: Any) -> None:
                 for netdisk_type in record.get("links", {}).keys()
             }
         )
-        max_retries = 3
+        max_retries = max(1, int(getattr(settings, "MONITOR_DB_WRITE_MAX_RETRIES", 3) or 3))
+        retry_delay_seconds = float(getattr(settings, "MONITOR_DB_WRITE_RETRY_DELAY_SECONDS", 1.0) or 1.0)
         for attempt in range(max_retries):
             try:
                 async with async_session() as session:
@@ -343,7 +347,7 @@ async def handler(event: Any) -> None:
                         f"[{monitor_time}] channel={channel_name} message={message_text}\n",
                     )
                 else:
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(retry_delay_seconds)
     except Exception as exc:
         monitor_metrics.record_failure("handler", error=str(exc))
         log_monitor_event(logger, "handler_error", level=logging.WARNING, error=str(exc))

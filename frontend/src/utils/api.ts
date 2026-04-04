@@ -4,6 +4,7 @@
 
 import axios, { AxiosInstance, AxiosError, InternalAxiosRequestConfig } from 'axios'
 import { API_BASE_URL, TOKEN_KEY } from './constants'
+import { LOGIN_PATH, isPathMatch } from './routes'
 import { message } from 'antd'
 
 const isLinkCheckTaskPoll404 = (error: AxiosError): boolean => {
@@ -62,8 +63,8 @@ apiClient.interceptors.response.use(
         case 401:
           // 未授权，清除token并跳转到登录页
           localStorage.removeItem(TOKEN_KEY)
-          if (window.location.pathname !== '/login') {
-            window.location.href = '/login'
+          if (!isPathMatch(window.location.pathname, LOGIN_PATH)) {
+            window.location.href = LOGIN_PATH
             message.error('登录已过期，请重新登录')
           }
           break

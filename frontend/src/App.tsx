@@ -11,6 +11,7 @@ import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import Statistics from './pages/Statistics'
 import Admin from './pages/AdminRuntime'
+import { LOGIN_PATH } from './utils/routes'
 
 function App() {
   // Zustand persist会自动处理localStorage，无需手动恢复
@@ -18,7 +19,7 @@ function App() {
   return (
     <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <Routes>
-        <Route path="/login" element={<Login />} />
+        <Route path={LOGIN_PATH} element={<Login />} />
         {/* 根路径：根据系统配置决定是否允许游客访问 */}
         <Route
           path="/"

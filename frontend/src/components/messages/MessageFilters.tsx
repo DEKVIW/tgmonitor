@@ -137,6 +137,7 @@ const MessageFilters = ({ disabled = false }: MessageFiltersProps) => {
     <div className="filters-toolbar">
       <div className="filters-left">
         <Search
+          className="filters-search"
           placeholder="搜索消息（关键词用空格分隔）"
           allowClear
           enterButton={<SearchOutlined />}
@@ -147,8 +148,9 @@ const MessageFilters = ({ disabled = false }: MessageFiltersProps) => {
         />
       </div>
       <div className="filters-right">
-        <Space size={12}>
+        <Space size={10} className="filters-actions" wrap={false}>
           <Select
+            className="toolbar-select toolbar-select--time"
             value={filters.time_range}
             onChange={(value) => setFilters({ time_range: value })}
             style={{ width: 160 }}
@@ -157,6 +159,7 @@ const MessageFilters = ({ disabled = false }: MessageFiltersProps) => {
             {timeRangeOptions}
           </Select>
           <Select
+            className="toolbar-select toolbar-select--page"
             value={filters.page_size}
             onChange={(value) => setFilters({ page_size: value })}
             style={{ width: 120 }}
@@ -165,15 +168,20 @@ const MessageFilters = ({ disabled = false }: MessageFiltersProps) => {
             {pageSizeOptions}
           </Select>
           <Tooltip title="高级筛选">
-            <Button icon={<FilterOutlined />} onClick={() => setDrawerOpen(true)} disabled={disabled}>
+            <Button
+              className="toolbar-button toolbar-button--advanced"
+              icon={<FilterOutlined />}
+              onClick={() => setDrawerOpen(true)}
+              disabled={disabled}
+            >
               高级筛选
             </Button>
           </Tooltip>
           <Tooltip title="重置筛选">
-            <Button icon={<ClearOutlined />} onClick={resetFilters} disabled={disabled} />
+            <Button className="toolbar-button" icon={<ClearOutlined />} onClick={resetFilters} disabled={disabled} />
           </Tooltip>
           <Tooltip title="刷新数据">
-            <Button icon={<ReloadOutlined />} onClick={triggerReload} disabled={disabled} />
+            <Button className="toolbar-button" icon={<ReloadOutlined />} onClick={triggerReload} disabled={disabled} />
           </Tooltip>
           <div className="refresh-inline">
             <span className="refresh-label">自动刷新</span>

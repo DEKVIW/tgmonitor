@@ -33,11 +33,22 @@
 
 .app-sidebar.collapsed .sidebar-menu .ant-menu-item {
   margin: 8px 8px;
+  padding-inline: 0 !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   text-align: center;
 }
 
-.app-sidebar.collapsed .sidebar-menu .ant-menu-item .anticon {
-  margin-right: 0;
+.app-sidebar.collapsed .sidebar-menu.ant-menu-inline-collapsed > .ant-menu-item .ant-menu-item-icon,
+.app-sidebar.collapsed .sidebar-menu.ant-menu-inline-collapsed > .ant-menu-item .anticon {
+  margin-inline-end: 0 !important;
+  font-size: 18px;
+}
+
+.app-sidebar.collapsed .sidebar-menu.ant-menu-inline-collapsed > .ant-menu-item .ant-menu-title-content {
+  width: 0;
+  opacity: 0;
 }
 
 .sidebar-menu .ant-menu-item-selected {

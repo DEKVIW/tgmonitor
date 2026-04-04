@@ -1,9 +1,9 @@
 .filters-toolbar {
   display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
+  flex-wrap: nowrap;
+  align-items: center;
   justify-content: space-between;
-  gap: 14px;
+  gap: 16px;
   width: 100%;
   overflow: visible;
   padding: 16px 18px;
@@ -18,8 +18,13 @@
 }
 
 .filters-left {
-  flex: 1 1 420px;
-  min-width: min(100%, 320px);
+  flex: 1 1 auto;
+  min-width: 280px;
+  max-width: 620px;
+}
+
+.filters-search {
+  width: 100%;
 }
 
 /* 防止 iOS Safari 自动缩放：确保输入框字体至少 16px */
@@ -42,16 +47,37 @@
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  flex: 1 1 360px;
-  white-space: nowrap;
-  flex-wrap: wrap;
-  gap: 12px;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  gap: 10px;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
-.filters-right > .ant-space {
+.filters-right > .ant-space,
+.filters-actions {
   display: flex;
   justify-content: flex-end;
-  flex-wrap: wrap;
+  align-items: center;
+  flex-wrap: nowrap;
+  min-width: max-content;
+}
+
+.filters-actions .ant-space-item {
+  flex: 0 0 auto;
+}
+
+.toolbar-select--time {
+  min-width: 144px;
+}
+
+.toolbar-select--page {
+  min-width: 118px;
+}
+
+.toolbar-button {
+  flex: 0 0 auto;
 }
 
 .refresh-inline {
@@ -62,6 +88,7 @@
   padding: 6px 10px;
   border-radius: 999px;
   background: rgba(244, 248, 251, 0.9);
+  white-space: nowrap;
 }
 
 .refresh-label {
@@ -108,13 +135,28 @@
   border-radius: 12px;
 }
 
-@media (max-width: 992px) {
+@media (max-width: 1180px) {
+  .filters-toolbar {
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+
+  .filters-left,
+  .filters-right {
+    flex: 1 1 100%;
+    max-width: none;
+  }
+
   .filters-right {
     justify-content: flex-start;
+    overflow-x: visible;
   }
 
   .filters-right > .ant-space {
     justify-content: flex-start;
+    min-width: 0;
+    width: 100%;
+    flex-wrap: wrap;
   }
 }
 

@@ -7,6 +7,7 @@ import { ReactNode } from 'react'
 import { Navigate } from 'react-router-dom'
 import { Spin } from 'antd'
 import { useAuthStore } from '@/store/authStore'
+import { LOGIN_PATH } from '@/utils/routes'
 
 interface AdminRouteProps {
   children: ReactNode
@@ -26,7 +27,7 @@ export const AdminRoute = ({ children }: AdminRouteProps) => {
 
   // 未登录，跳转到登录页
   if (!isAuthenticated || !token) {
-    return <Navigate to="/login" replace />
+    return <Navigate to={LOGIN_PATH} replace />
   }
 
   // 已登录但不是 admin，跳转到首页
@@ -38,4 +39,3 @@ export const AdminRoute = ({ children }: AdminRouteProps) => {
 }
 
 export default AdminRoute
-

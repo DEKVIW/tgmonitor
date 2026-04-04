@@ -29,9 +29,27 @@ export interface ChannelCreate {
 
 export interface SystemConfigResponse {
   public_dashboard_enabled: boolean
+  link_check_default_max_concurrent: number
+  link_check_max_allowed_concurrent: number
+  link_check_max_allowed_links: number
+  link_check_poll_interval_seconds: number
+  monitor_channel_refresh_interval_seconds: number
+  monitor_db_write_max_retries: number
+  monitor_db_write_retry_delay_seconds: number
 }
 
 export interface SystemConfigUpdate {
+  public_dashboard_enabled: boolean
+  link_check_default_max_concurrent: number
+  link_check_max_allowed_concurrent: number
+  link_check_max_allowed_links: number
+  link_check_poll_interval_seconds: number
+  monitor_channel_refresh_interval_seconds: number
+  monitor_db_write_max_retries: number
+  monitor_db_write_retry_delay_seconds: number
+}
+
+export interface PublicSystemConfigResponse {
   public_dashboard_enabled: boolean
 }
 

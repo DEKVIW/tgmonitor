@@ -70,9 +70,33 @@ class ChannelCreate(BaseModel):
 
 class SystemConfigResponse(BaseModel):
     public_dashboard_enabled: bool
+    link_check_default_max_concurrent: int
+    link_check_max_allowed_concurrent: int
+    link_check_max_allowed_links: int
+    link_check_poll_interval_seconds: int
+    monitor_channel_refresh_interval_seconds: int
+    monitor_db_write_max_retries: int
+    monitor_db_write_retry_delay_seconds: float
 
 
 class SystemConfigUpdate(BaseModel):
+    public_dashboard_enabled: bool
+    link_check_default_max_concurrent: int = Field(ge=1, le=10)
+    link_check_max_allowed_concurrent: int = Field(ge=1, le=10)
+    link_check_max_allowed_links: int = Field(ge=100, le=5000)
+    link_check_poll_interval_seconds: int = Field(ge=1, le=30)
+    monitor_channel_refresh_interval_seconds: int = Field(ge=10, le=3600)
+    monitor_db_write_max_retries: int = Field(ge=1, le=10)
+    monitor_db_write_retry_delay_seconds: float = Field(ge=0.1, le=30.0)
+
+    @model_validator(mode="after")
+    def validate_link_check_config(self) -> "SystemConfigUpdate":
+        if self.link_check_default_max_concurrent > self.link_check_max_allowed_concurrent:
+            raise ValueError("link_check_default_max_concurrent cannot exceed link_check_max_allowed_concurrent")
+        return self
+
+
+class PublicSystemConfigResponse(BaseModel):
     public_dashboard_enabled: bool
 
 

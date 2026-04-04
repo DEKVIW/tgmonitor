@@ -49,20 +49,53 @@ class AdminApiTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertIn("检测时间格式无效", context.exception.detail)
 
     async def test_update_system_config_rolls_back_runtime_value_when_env_write_fails(self) -> None:
-        original_value = settings.PUBLIC_DASHBOARD_ENABLED
+        original_values = {
+            "PUBLIC_DASHBOARD_ENABLED": settings.PUBLIC_DASHBOARD_ENABLED,
+            "LINK_CHECK_DEFAULT_MAX_CONCURRENT": settings.LINK_CHECK_DEFAULT_MAX_CONCURRENT,
+            "LINK_CHECK_MAX_ALLOWED_CONCURRENT": settings.LINK_CHECK_MAX_ALLOWED_CONCURRENT,
+            "LINK_CHECK_MAX_ALLOWED_LINKS": settings.LINK_CHECK_MAX_ALLOWED_LINKS,
+            "LINK_CHECK_POLL_INTERVAL_SECONDS": settings.LINK_CHECK_POLL_INTERVAL_SECONDS,
+            "MONITOR_CHANNEL_REFRESH_INTERVAL_SECONDS": settings.MONITOR_CHANNEL_REFRESH_INTERVAL_SECONDS,
+            "MONITOR_DB_WRITE_MAX_RETRIES": settings.MONITOR_DB_WRITE_MAX_RETRIES,
+            "MONITOR_DB_WRITE_RETRY_DELAY_SECONDS": settings.MONITOR_DB_WRITE_RETRY_DELAY_SECONDS,
+        }
         settings.PUBLIC_DASHBOARD_ENABLED = False
+        settings.LINK_CHECK_DEFAULT_MAX_CONCURRENT = 5
+        settings.LINK_CHECK_MAX_ALLOWED_CONCURRENT = 10
+        settings.LINK_CHECK_MAX_ALLOWED_LINKS = 1000
+        settings.LINK_CHECK_POLL_INTERVAL_SECONDS = 2
+        settings.MONITOR_CHANNEL_REFRESH_INTERVAL_SECONDS = 60
+        settings.MONITOR_DB_WRITE_MAX_RETRIES = 3
+        settings.MONITOR_DB_WRITE_RETRY_DELAY_SECONDS = 1.0
         try:
-            with patch("app.api.admin.upsert_env_value", side_effect=OSError("disk full")):
+            with patch("app.services.system_config_service.upsert_env_values", side_effect=OSError("disk full")):
                 with self.assertRaises(HTTPException) as context:
                     await admin.update_system_config(
-                        SystemConfigUpdate(public_dashboard_enabled=True),
+                        SystemConfigUpdate(
+                            public_dashboard_enabled=True,
+                            link_check_default_max_concurrent=4,
+                            link_check_max_allowed_concurrent=8,
+                            link_check_max_allowed_links=1200,
+                            link_check_poll_interval_seconds=3,
+                            monitor_channel_refresh_interval_seconds=120,
+                            monitor_db_write_max_retries=5,
+                            monitor_db_write_retry_delay_seconds=2.5,
+                        ),
                         current_user={"role": "admin"},
                     )
 
             self.assertEqual(context.exception.status_code, 500)
             self.assertFalse(settings.PUBLIC_DASHBOARD_ENABLED)
+            self.assertEqual(settings.LINK_CHECK_DEFAULT_MAX_CONCURRENT, 5)
+            self.assertEqual(settings.LINK_CHECK_MAX_ALLOWED_CONCURRENT, 10)
+            self.assertEqual(settings.LINK_CHECK_MAX_ALLOWED_LINKS, 1000)
+            self.assertEqual(settings.LINK_CHECK_POLL_INTERVAL_SECONDS, 2)
+            self.assertEqual(settings.MONITOR_CHANNEL_REFRESH_INTERVAL_SECONDS, 60)
+            self.assertEqual(settings.MONITOR_DB_WRITE_MAX_RETRIES, 3)
+            self.assertEqual(settings.MONITOR_DB_WRITE_RETRY_DELAY_SECONDS, 1.0)
         finally:
-            settings.PUBLIC_DASHBOARD_ENABLED = original_value
+            for name, value in original_values.items():
+                setattr(settings, name, value)
 
     async def test_apply_link_check_cleanup_not_found_returns_404(self) -> None:
         with patch("app.api.admin.apply_link_check_cleanup", side_effect=LookupError("链接检测记录不存在")):

@@ -9,6 +9,7 @@ import { Navigate } from 'react-router-dom'
 import { Spin } from 'antd'
 import { getPublicConfig } from '@/api/admin'
 import { useAuthStore } from '@/store/authStore'
+import { LOGIN_PATH } from '@/utils/routes'
 import GuestLayout from './layout/GuestLayout'
 
 interface GuestRouteProps {
@@ -53,7 +54,7 @@ const GuestRoute = ({ children }: GuestRouteProps) => {
 
   // 如果游客模式未启用，重定向到登录页
   if (!publicDashboardEnabled) {
-    return <Navigate to="/login" replace />
+    return <Navigate to={LOGIN_PATH} replace />
   }
 
   // 游客模式：未登录且游客模式已启用

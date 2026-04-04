@@ -22,6 +22,7 @@ import type { TableProps } from 'antd'
 import { EyeOutlined, HistoryOutlined, PlayCircleOutlined } from '@ant-design/icons'
 import {
   applyLinkCheckCleanup,
+  getSystemConfig,
   getLinkCheckDateRange,
   getLinkCheckHistory,
   getLinkCheckResult,
@@ -35,6 +36,7 @@ import type {
   LinkCheckTaskResult,
   LinkCheckTaskStatus,
   LinkCleanupApplyRequest,
+  SystemConfigResponse,
 } from '@/types/admin'
 
 const { Text } = Typography
@@ -62,6 +64,7 @@ const formatDateTime = (value: string) => {
 }
 
 const LinkCheckManagerRefined = () => {
+  const [systemConfig, setSystemConfig] = useState<SystemConfigResponse | null>(null)
   const [dateBounds, setDateBounds] = useState<LinkCheckDateRange | null>(null)
   const [dateRange, setDateRange] = useState<DateRangeValue>(() => {
     const today = dayjs()
@@ -78,6 +81,8 @@ const LinkCheckManagerRefined = () => {
   const [cleanupMode, setCleanupMode] = useState<LinkCleanupApplyRequest['mode']>('remove_invalid_links')
   const [cleanupLoading, setCleanupLoading] = useState(false)
   const pollingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const maxAllowedConcurrent = systemConfig?.link_check_max_allowed_concurrent ?? 10
+  const pollingIntervalMs = (systemConfig?.link_check_poll_interval_seconds ?? 2) * 1000
 
   const minDate = dateBounds?.min_date ? dayjs(dateBounds.min_date) : null
   const maxDate = dayjs(dateBounds?.max_date || dayjs().format('YYYY-MM-DD'))
@@ -85,15 +90,42 @@ const LinkCheckManagerRefined = () => {
   useEffect(() => {
     void loadInitialData()
 
+    const handleSystemConfigUpdated = (event: Event) => {
+      const nextConfig = (event as CustomEvent<SystemConfigResponse>).detail
+      if (!nextConfig) {
+        return
+      }
+      setSystemConfig(nextConfig)
+      setMaxConcurrent((current) =>
+        Math.min(current || nextConfig.link_check_default_max_concurrent, nextConfig.link_check_max_allowed_concurrent)
+      )
+    }
+
+    window.addEventListener('tg-system-config-updated', handleSystemConfigUpdated as EventListener)
+
     return () => {
       if (pollingIntervalRef.current) {
         clearInterval(pollingIntervalRef.current)
       }
+      window.removeEventListener('tg-system-config-updated', handleSystemConfigUpdated as EventListener)
     }
   }, [])
 
   const loadInitialData = async () => {
-    await Promise.all([loadHistory(), loadDateBounds()])
+    await Promise.all([loadHistory(), loadDateBounds(), loadSystemConfig()])
+  }
+
+  const loadSystemConfig = async () => {
+    try {
+      const data = await getSystemConfig()
+      setSystemConfig(data)
+      setMaxConcurrent((current) => {
+        const nextValue = current || data.link_check_default_max_concurrent
+        return Math.min(nextValue, data.link_check_max_allowed_concurrent)
+      })
+    } catch (error: any) {
+      message.error(error.response?.data?.detail || '加载系统配置失败')
+    }
   }
 
   const loadDateBounds = async () => {
@@ -150,7 +182,7 @@ const LinkCheckManagerRefined = () => {
         }
         console.error('获取任务状态失败', error)
       }
-    }, 2000)
+    }, pollingIntervalMs)
   }
 
   const startTask = async () => {
@@ -323,7 +355,17 @@ const LinkCheckManagerRefined = () => {
 
             <div className="link-check-form-field">
               <Text strong>并发数</Text>
-              <InputNumber min={1} max={10} value={maxConcurrent} onChange={(value) => setMaxConcurrent(value || 5)} />
+              <InputNumber
+                min={1}
+                max={maxAllowedConcurrent}
+                value={maxConcurrent}
+                onChange={(value) =>
+                  setMaxConcurrent(Math.min(value || systemConfig?.link_check_default_max_concurrent || 5, maxAllowedConcurrent))
+                }
+              />
+              <Text type="secondary" className="link-check-helper-text">
+                默认 {systemConfig?.link_check_default_max_concurrent ?? 5}，系统上限 {maxAllowedConcurrent}
+              </Text>
             </div>
 
             <div className="link-check-form-actions">

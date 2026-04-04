@@ -106,16 +106,6 @@ def parse_time_period(period_str: str) -> Tuple[datetime, datetime, str]:
     return start_time, end_time, period_desc
 
 
-def check_safety_limits(url_count: int, max_concurrent: int) -> bool:
-    max_links = 1000
-    max_concurrent_global = 10
-    if url_count > max_links:
-        return False
-    if max_concurrent > max_concurrent_global:
-        return False
-    return True
-
-
 def _build_task_status(period_desc: str, max_concurrent: int) -> Dict[str, Any]:
     return {
         "status": "running",

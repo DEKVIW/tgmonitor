@@ -9,6 +9,7 @@ import {
   ChannelResponse,
   ChannelCreate,
   ChannelSampleResponse,
+  PublicSystemConfigResponse,
   SystemConfigResponse,
   SystemConfigUpdate,
   UserResponse,
@@ -223,9 +224,9 @@ export const updateSystemConfig = async (data: SystemConfigUpdate): Promise<Syst
 /**
  * 获取公开系统配置（无需认证）
  */
-export const getPublicConfig = async (): Promise<SystemConfigResponse> => {
+export const getPublicConfig = async (): Promise<PublicSystemConfigResponse> => {
   const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || '/api'}/config/public`)
-  return response.json()
+  return response.json() as Promise<PublicSystemConfigResponse>
 }
 
 /**

@@ -6,6 +6,7 @@ import { useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuthStore } from '@/store/authStore'
 import { getCurrentUser } from '@/api/auth'
+import { LOGIN_PATH } from '@/utils/routes'
 
 /**
  * 检查认证状态并获取用户信息
@@ -44,7 +45,7 @@ export const useRequireAuth = () => {
 
   useEffect(() => {
     if (!isAuthenticated || !token) {
-      navigate('/login', { replace: true })
+      navigate(LOGIN_PATH, { replace: true })
     }
   }, [isAuthenticated, token, navigate])
 

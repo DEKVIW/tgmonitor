@@ -1,0 +1,101 @@
+.system-config-page {
+  width: 100%;
+}
+
+.system-config-toolbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.system-config-title {
+  margin: 0 0 4px !important;
+}
+
+.system-config-subtitle {
+  max-width: 860px;
+  margin: 0 !important;
+  color: rgba(0, 0, 0, 0.65);
+}
+
+.system-config-switch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.system-config-switch-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.system-config-field-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+}
+
+.system-config-field-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 164px;
+  padding: 16px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 14px;
+  background:
+    linear-gradient(180deg, rgba(248, 250, 252, 0.96) 0%, rgba(255, 255, 255, 0.96) 100%);
+}
+
+.system-config-field-card .ant-input-number {
+  width: 100%;
+}
+
+.system-config-inline-alert {
+  margin-top: 16px;
+}
+
+.system-config-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.system-config-summary-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.system-config-summary-divider {
+  margin: 4px 0 !important;
+}
+
+.system-config-note {
+  margin: 0 !important;
+}
+
+@media (max-width: 992px) {
+  .system-config-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
+@media (max-width: 576px) {
+  .system-config-switch-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .system-config-summary-item {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 6px;
+  }
+}
