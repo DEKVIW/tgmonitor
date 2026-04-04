@@ -12,7 +12,7 @@ from telethon import TelegramClient, events
 from sqlalchemy.orm import Session
 
 from app.core.monitor_observability import MonitorMetrics, log_monitor_event
-from app.core.monitor_parser import parse_message_content
+from app.core.monitor_parser import parse_message_content, parse_message_records
 from app.models.config import settings
 from app.models.db import async_session
 from app.models.models import Channel, Credential, Message, engine
@@ -168,8 +168,18 @@ channel_id_to_name: Dict[int, str] = {}
 channel_signature = tuple(sorted(channel_usernames))
 
 
-async def parse_message(text: str, msg_obj: Any = None, channel_name: str | None = None) -> Dict[str, Any]:
-    parsed_data, _ = await parse_message_content(text, msg_obj=msg_obj, channel_name=channel_name)
+async def parse_message(
+    text: str,
+    msg_obj: Any = None,
+    channel_name: str | None = None,
+    channel_id: int | None = None,
+) -> Dict[str, Any]:
+    parsed_data, _ = await parse_message_content(
+        text,
+        msg_obj=msg_obj,
+        channel_name=channel_name,
+        channel_id=channel_id,
+    )
     return parsed_data
 
 
@@ -234,12 +244,14 @@ async def handler(event: Any) -> None:
         )
 
         try:
-            parsed_data, diagnostics = await parse_message_content(
+            parsed_records, diagnostics = await parse_message_records(
                 message_text,
                 msg_obj=event.message,
                 channel_name=channel_name,
+                channel_id=incoming_chat_id,
             )
-            monitor_metrics.record_parse(diagnostics, has_links=bool(parsed_data.get("links")))
+            parsed_records = [record for record in parsed_records if record.get("links")]
+            monitor_metrics.record_parse(diagnostics, has_links=bool(parsed_records))
         except Exception as parse_error:
             monitor_metrics.record_failure("parse", channel=channel_name, error=str(parse_error))
             log_monitor_event(
@@ -258,7 +270,7 @@ async def handler(event: Any) -> None:
             )
             return
 
-        if not parsed_data.get("links"):
+        if not parsed_records:
             monitor_metrics.increment("messages_filtered_no_links")
             log_monitor_event(
                 logger,
@@ -266,38 +278,51 @@ async def handler(event: Any) -> None:
                 channel=channel_name,
                 reason="no_netdisk_links",
                 delay_seconds=f"{delay_seconds:.1f}",
+                raw_url_count=diagnostics.raw_url_count,
+                resolved_url_count=diagnostics.resolved_url_count,
+                redirect_resolved_count=diagnostics.redirect_resolved_count,
+                raw_url_samples="|".join(diagnostics.raw_url_samples),
+                resolved_url_samples="|".join(diagnostics.resolved_url_samples),
             )
             print(f"[{monitor_time}] 过滤掉无网盘链接的消息")
             return
 
-        netdisk_types = list(parsed_data["links"].keys())
+        saved_netdisk_types = sorted(
+            {
+                netdisk_type
+                for record in parsed_records
+                for netdisk_type in record.get("links", {}).keys()
+            }
+        )
         max_retries = 3
         for attempt in range(max_retries):
             try:
                 async with async_session() as session:
                     try:
-                        new_message = Message(
-                            timestamp=telegram_local_time,
-                            **parsed_data,
-                            netdisk_types=netdisk_types,
-                        )
-                        session.add(new_message)
+                        for parsed_data in parsed_records:
+                            new_message = Message(
+                                timestamp=telegram_local_time,
+                                **parsed_data,
+                                netdisk_types=list(parsed_data["links"].keys()),
+                            )
+                            session.add(new_message)
                         await session.commit()
                     except Exception:
                         await session.rollback()
                         raise
 
-                monitor_metrics.increment("messages_saved")
+                monitor_metrics.increment("messages_saved", len(parsed_records))
                 log_monitor_event(
                     logger,
                     "message_saved",
                     channel=channel_name,
                     delay_seconds=f"{delay_seconds:.1f}",
-                    netdisk_types=",".join(netdisk_types),
+                    netdisk_types=",".join(saved_netdisk_types),
+                    saved_records=len(parsed_records),
                 )
                 print(
                     f"[{monitor_time}] 新消息已保存到数据库 "
-                    f"(尝试 {attempt + 1}/{max_retries}, 延迟: {delay_seconds:.1f}秒)"
+                    f"(尝试 {attempt + 1}/{max_retries}, 共 {len(parsed_records)} 条, 延迟: {delay_seconds:.1f}秒)"
                 )
                 break
             except Exception as db_error:

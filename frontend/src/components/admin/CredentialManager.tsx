@@ -112,6 +112,7 @@ const CredentialManager = () => {
       <Modal
         title="添加API凭据"
         open={modalVisible}
+        rootClassName="responsive-modal-root"
         onCancel={() => {
           setModalVisible(false)
           form.resetFields()
@@ -159,4 +160,3 @@ const CredentialManager = () => {
 }
 
 export default CredentialManager
-

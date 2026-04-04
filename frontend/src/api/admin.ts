@@ -8,6 +8,7 @@ import {
   CredentialCreate,
   ChannelResponse,
   ChannelCreate,
+  ChannelSampleResponse,
   SystemConfigResponse,
   SystemConfigUpdate,
   UserResponse,
@@ -25,10 +26,16 @@ import {
   ClearOldDataRequest,
   ChannelDiagnosisResult,
   MonitorTestResult,
+  LinkCheckDateRange,
   LinkCheckTaskCreate,
   LinkCheckTaskStatus,
   LinkCheckTaskHistory,
-  LinkCheckTaskResult
+  LinkCheckTaskResult,
+  LinkCleanupApplyRequest,
+  LinkCleanupResult,
+  LinkCheckHistoryBatchDeleteRequest,
+  LinkCheckHistoryBatchDeleteResult,
+  LinkCheckHistoryDeleteResult,
 } from '@/types/admin'
 
 /**
@@ -101,6 +108,32 @@ export const testMonitor = async (): Promise<MonitorTestResult> => {
   return response.data
 }
 
+export const getChannelSamples = async (
+  channelId: number,
+  params: { limit?: number; page?: number; page_size?: number; only_with_links?: boolean } = {}
+): Promise<ChannelSampleResponse> => {
+  const search = new URLSearchParams()
+
+  if (params.limit !== undefined) {
+    search.set('limit', String(params.limit))
+  }
+  if (params.page !== undefined) {
+    search.set('page', String(params.page))
+  }
+  if (params.page_size !== undefined) {
+    search.set('page_size', String(params.page_size))
+  }
+  if (params.only_with_links !== undefined) {
+    search.set('only_with_links', String(params.only_with_links))
+  }
+
+  const query = search.toString()
+  const response = await apiClient.get<ChannelSampleResponse>(
+    `/admin/channels/${channelId}/samples${query ? `?${query}` : ''}`
+  )
+  return response.data
+}
+
 /**
  * 开始链接检测任务
  */
@@ -109,11 +142,26 @@ export const startLinkCheckTask = async (data: LinkCheckTaskCreate): Promise<Lin
   return response.data
 }
 
+export const getLinkCheckDateRange = async (): Promise<LinkCheckDateRange> => {
+  const response = await apiClient.get<LinkCheckDateRange>('/admin/link-check/date-range')
+  return response.data
+}
+
+export const getActiveLinkCheckTask = async (): Promise<LinkCheckTaskStatus> => {
+  const response = await apiClient.get<LinkCheckTaskStatus>('/admin/link-check/active')
+  return response.data
+}
+
 /**
  * 获取任务状态
  */
 export const getLinkCheckTaskStatus = async (taskId: string): Promise<LinkCheckTaskStatus> => {
   const response = await apiClient.get<LinkCheckTaskStatus>(`/admin/link-check/tasks/${taskId}`)
+  return response.data
+}
+
+export const stopLinkCheckTask = async (taskId: string): Promise<LinkCheckTaskStatus> => {
+  const response = await apiClient.post<LinkCheckTaskStatus>(`/admin/link-check/tasks/${taskId}/stop`)
   return response.data
 }
 
@@ -130,6 +178,29 @@ export const getLinkCheckHistory = async (limit: number = 20): Promise<LinkCheck
  */
 export const getLinkCheckResult = async (checkTime: string): Promise<LinkCheckTaskResult> => {
   const response = await apiClient.get<LinkCheckTaskResult>(`/admin/link-check/tasks/${checkTime}/result`)
+  return response.data
+}
+
+/**
+ * 应用死链清理
+ */
+export const applyLinkCheckCleanup = async (
+  checkTime: string,
+  data: LinkCleanupApplyRequest
+): Promise<LinkCleanupResult> => {
+  const response = await apiClient.post<LinkCleanupResult>(`/admin/link-check/tasks/${checkTime}/cleanup`, data)
+  return response.data
+}
+
+export const deleteLinkCheckHistory = async (checkTime: string): Promise<LinkCheckHistoryDeleteResult> => {
+  const response = await apiClient.delete<LinkCheckHistoryDeleteResult>(`/admin/link-check/tasks/${checkTime}/history`)
+  return response.data
+}
+
+export const deleteLinkCheckHistories = async (
+  data: LinkCheckHistoryBatchDeleteRequest
+): Promise<LinkCheckHistoryBatchDeleteResult> => {
+  const response = await apiClient.post<LinkCheckHistoryBatchDeleteResult>('/admin/link-check/history/delete', data)
   return response.data
 }
 

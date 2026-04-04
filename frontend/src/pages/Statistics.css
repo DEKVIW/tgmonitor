@@ -6,19 +6,21 @@
 }
 
 .statistics-page {
-  padding: 8px 16px;
+  width: min(100%, var(--page-max-width));
+  margin: 0 auto;
+  padding: 22px clamp(16px, 2.2vw, 32px) 36px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 18px;
 }
 
 .statistics-charts {
-  margin-top: 8px;
+  margin-top: 4px;
 }
 
 .chart-card {
-  border-radius: 8px;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+  border-radius: 22px;
+  box-shadow: var(--shadow-soft);
   width: 100%;
 }
 
@@ -31,14 +33,14 @@
   justify-content: center;
   align-items: center;
   height: 350px;
-  color: #999;
+  color: var(--text-muted);
 }
 
 /* 小屏优化 */
 @media (max-width: 768px) {
   .statistics-page {
-    padding: 8px 10px;
-    gap: 10px;
+    padding: 12px 12px 24px;
+    gap: 14px;
   }
 
   .refresh-control-card {

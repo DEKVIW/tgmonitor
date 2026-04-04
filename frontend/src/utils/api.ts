@@ -6,6 +6,21 @@ import axios, { AxiosInstance, AxiosError, InternalAxiosRequestConfig } from 'ax
 import { API_BASE_URL, TOKEN_KEY } from './constants'
 import { message } from 'antd'
 
+const isLinkCheckTaskPoll404 = (error: AxiosError): boolean => {
+  const status = error.response?.status
+  const method = error.config?.method?.toLowerCase()
+  const url = error.config?.url || ''
+
+  return (
+    status === 404 &&
+    method === 'get' &&
+    (
+      /^\/admin\/link-check\/tasks\/[^/]+$/.test(url) ||
+      url === '/admin/link-check/active'
+    )
+  )
+}
+
 // 创建axios实例
 const apiClient: AxiosInstance = axios.create({
   baseURL: API_BASE_URL,
@@ -35,6 +50,10 @@ apiClient.interceptors.response.use(
     return response
   },
   (error: AxiosError) => {
+    if (isLinkCheckTaskPoll404(error)) {
+      return Promise.reject(error)
+    }
+
     if (error.response) {
       const status = error.response.status
       const data = error.response.data as any

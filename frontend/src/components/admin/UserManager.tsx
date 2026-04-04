@@ -361,6 +361,7 @@ const UserManager = () => {
       <Modal
         title={editingUser ? '编辑用户' : '添加用户'}
         open={modalVisible}
+        rootClassName="responsive-modal-root"
         onCancel={() => {
           setModalVisible(false)
           form.resetFields()
@@ -442,6 +443,7 @@ const UserManager = () => {
       <Modal
         title="修改密码"
         open={passwordModalVisible}
+        rootClassName="responsive-modal-root"
         onCancel={() => {
           setPasswordModalVisible(false)
           passwordForm.resetFields()
@@ -485,6 +487,7 @@ const UserManager = () => {
       <Modal
         title="批量随机创建用户"
         open={bulkCreateVisible}
+        rootClassName="responsive-modal-root"
         onCancel={() => {
           setBulkCreateVisible(false)
         }}
@@ -549,6 +552,7 @@ const UserManager = () => {
       <Modal
         title="批量重置密码结果"
         open={!!resetResult}
+        rootClassName="responsive-modal-root"
         onCancel={() => setResetResult(null)}
         footer={[
           <Button key="ok" type="primary" onClick={() => setResetResult(null)}>
@@ -583,4 +587,3 @@ const UserManager = () => {
 }
 
 export default UserManager
-

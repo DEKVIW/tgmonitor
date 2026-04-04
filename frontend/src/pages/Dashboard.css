@@ -1,21 +1,24 @@
 .dashboard-page {
-  padding: 8px 50px;
+  width: min(100%, var(--page-max-width));
+  margin: 0 auto;
+  padding: 22px clamp(16px, 2.2vw, 32px) 36px;
 }
 
 /* 游客模式：增大左右padding，避免消息框太长条 */
 .dashboard-page.guest-mode {
-  padding: 8px 64px;
+  max-width: var(--page-reading-width);
 }
 
 .dashboard-content {
   width: 100%;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 16px;
 }
 
 .filters-bar {
-  padding: 4px 0;
+  position: relative;
+  z-index: 2;
 }
 
 .messages-area {
@@ -24,10 +27,10 @@
 
 @media (max-width: 768px) {
   .dashboard-page {
-    padding: 6px;
+    padding: 12px 12px 24px;
   }
   
   .dashboard-page.guest-mode {
-    padding: 6px 12px;
+    max-width: none;
   }
 }

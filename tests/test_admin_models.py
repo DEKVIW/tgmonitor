@@ -4,7 +4,13 @@ import unittest
 
 from pydantic import ValidationError
 
-from app.schemas.admin_models import BulkUsernamesRequest, ChannelCreate, LinkCheckTaskCreate, UserCreate
+from app.schemas.admin_models import (
+    BulkUsernamesRequest,
+    ChannelCreate,
+    LinkCheckTaskCreate,
+    LinkCleanupApplyRequest,
+    UserCreate,
+)
 
 
 class AdminModelsTestCase(unittest.TestCase):
@@ -22,6 +28,10 @@ class AdminModelsTestCase(unittest.TestCase):
     def test_link_check_task_create_validates_concurrency(self) -> None:
         with self.assertRaises(ValidationError):
             LinkCheckTaskCreate(period="today", max_concurrent=0)
+
+    def test_link_cleanup_request_validates_mode(self) -> None:
+        with self.assertRaises(ValidationError):
+            LinkCleanupApplyRequest(mode="delete_everything")
 
     def test_user_create_rejects_space_in_username(self) -> None:
         with self.assertRaises(ValidationError):

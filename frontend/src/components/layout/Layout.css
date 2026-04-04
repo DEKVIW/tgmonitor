@@ -25,7 +25,8 @@
 }
 
 .layout-content {
-  transition: margin-left 0.2s;
+  position: relative;
+  transition: margin-left var(--transition-base);
 }
 
 .content-wrapper {
@@ -33,12 +34,12 @@
   padding: 0;
   background: transparent;
   border-radius: 0;
-  min-height: calc(100vh - 64px);
+  min-height: calc(100vh - var(--header-height));
 }
 
 /* 覆盖 Ant Design Layout 默认灰色背景，统一为纯白 */
-.ant-layout {
-  background: #ffffff;
+.app-layout .ant-layout {
+  background: transparent;
 }
 
 /* 游客模式布局 */
@@ -49,6 +50,15 @@
 .guest-content-wrapper {
   padding: 0 !important;
   margin: 0 !important;
+}
+
+.sidebar-backdrop {
+  position: fixed;
+  inset: var(--header-height) 0 0 0;
+  border: 0;
+  background: rgba(15, 23, 42, 0.24);
+  backdrop-filter: blur(2px);
+  z-index: 98;
 }
 
 /* 响应式设计 */

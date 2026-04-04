@@ -4,8 +4,10 @@
   align-items: center;
   padding: 0 24px;
   height: 64px;
-  background: #fff;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  background: rgba(255, 255, 255, 0.8);
+  border-bottom: 1px solid rgba(216, 227, 238, 0.82);
+  box-shadow: 0 10px 28px rgba(25, 52, 79, 0.08);
+  backdrop-filter: blur(14px);
   position: sticky;
   top: 0;
   z-index: 100;
@@ -20,7 +22,8 @@
   margin: 0;
   font-size: 20px;
   font-weight: 600;
-  color: #333;
+  color: var(--text-strong);
+  letter-spacing: 0.01em;
 }
 
 .header-title.clickable {
@@ -30,7 +33,7 @@
 }
 
 .header-title.clickable:hover {
-  color: #1890ff;
+  color: var(--primary);
 }
 
 .header-right {
@@ -48,12 +51,35 @@
 
 .user-name {
   font-weight: 500;
-  color: #333;
+  color: var(--text-strong);
 }
 
 .user-email {
   font-size: 12px;
-  color: #999;
+  color: var(--text-muted);
   margin-top: 4px;
+}
+
+@media (max-width: 768px) {
+  .app-header {
+    padding: 0 14px;
+  }
+
+  .header-title {
+    font-size: 18px;
+  }
+}
+
+@media (max-width: 576px) {
+  .header-title {
+    max-width: 190px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .user-name-text {
+    display: none;
+  }
 }
 

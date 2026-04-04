@@ -14,7 +14,7 @@ from typing import Awaitable, Callable, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 import validators
 
-class LinkValidator:
+class LegacyLinkValidator:
     """链接有效性检测器"""
     
     def __init__(self):
@@ -565,6 +565,9 @@ async def main():
     print(f"检测完成: {summary['valid_links']}/{summary['total_links']} 个链接有效")
     print(f"成功率: {summary['success_rate']:.1f}%")
     print(f"平均响应时间: {summary['avg_response_time']:.2f}秒")
+
+from app.services.link_check.validator import LinkValidator
+
 
 if __name__ == "__main__":
     asyncio.run(main()) 

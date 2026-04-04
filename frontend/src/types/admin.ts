@@ -16,6 +16,11 @@ export interface CredentialCreate {
 export interface ChannelResponse {
   id: number
   username: string
+  title?: string | null
+  telegram_id?: number | null
+  channel_type?: string | null
+  resolution_status?: string | null
+  resolution_error?: string | null
 }
 
 export interface ChannelCreate {
@@ -140,9 +145,62 @@ export interface MonitorTestResult {
   error?: string
 }
 
+export interface ChannelSampleEntity {
+  type: string
+  url: string
+  text?: string | null
+}
+
+export interface ParsedMessageRecord {
+  title: string
+  description: string
+  links: Record<string, Array<Record<string, any>>>
+  tags: string[]
+  source: string
+  channel: string
+  group_name: string
+  bot: string
+}
+
+export interface ChannelMessageSample {
+  message_id: number
+  timestamp: string
+  text: string
+  text_length: number
+  has_media: boolean
+  raw_urls: string[]
+  entity_urls: ChannelSampleEntity[]
+  button_urls: string[]
+  webpage_url?: string | null
+  parsed_records: ParsedMessageRecord[]
+  diagnostics: Record<string, any>
+  extracted_link_count: number
+}
+
+export interface ChannelSampleResponse {
+  channel_id: number
+  username: string
+  title?: string | null
+  telegram_id?: number | null
+  requested_limit: number
+  page: number
+  page_size: number
+  sample_count: number
+  has_more: boolean
+  inspected_count: number
+  only_with_links: boolean
+  samples: ChannelMessageSample[]
+}
+
 export interface LinkCheckTaskCreate {
   period: string
   max_concurrent: number
+}
+
+export interface LinkCheckDateRange {
+  min_date?: string | null
+  max_date: string
+  latest_message_date?: string | null
 }
 
 export interface LinkCheckTaskStatus {
@@ -150,10 +208,18 @@ export interface LinkCheckTaskStatus {
   status: string
   progress: number
   period_desc?: string
+  total_messages?: number
   total_links?: number
   checked_links?: number
   valid_links?: number
   invalid_links?: number
+  started_at?: string
+  updated_at?: string
+  current_phase?: string
+  current_platform?: string
+  stop_requested?: boolean
+  reused_existing?: boolean
+  status_counts?: Record<string, number>
   check_time?: string
   duration?: number
   logs?: string[]
@@ -167,6 +233,8 @@ export interface LinkCheckTaskHistory {
   total_links: number
   valid_links: number
   invalid_links: number
+  updated_messages?: number
+  deleted_messages?: number
   status: string
   duration?: number
 }
@@ -178,6 +246,8 @@ export interface LinkCheckTaskResult {
     total_links: number
     valid_links: number
     invalid_links: number
+    updated_messages?: number
+    deleted_messages?: number
     netdisk_stats?: Record<string, any>
     duration?: number
     status: string
@@ -188,6 +258,46 @@ export interface LinkCheckTaskResult {
     is_valid: boolean
     response_time?: number
     error_reason?: string
+    status?: string
   }>
+}
+
+export interface LinkCleanupApplyRequest {
+  mode: 'remove_invalid_links' | 'delete_message_if_empty'
+  dry_run?: boolean
+}
+
+export interface LinkCleanupResult {
+  success: boolean
+  check_time: string
+  mode: 'remove_invalid_links' | 'delete_message_if_empty'
+  dry_run?: boolean
+  total_invalid_details: number
+  cleanup_candidates: number
+  matched_messages: number
+  updated_messages: number
+  deleted_messages: number
+  removed_links: number
+  skipped_messages: number
+}
+
+export interface LinkCheckHistoryDeleteResult {
+  success: boolean
+  check_time: string
+  deleted_details: number
+  deleted_stats: number
+}
+
+export interface LinkCheckHistoryBatchDeleteRequest {
+  check_times: string[]
+}
+
+export interface LinkCheckHistoryBatchDeleteResult {
+  success: boolean
+  requested_count: number
+  deleted_runs: number
+  deleted_details: number
+  deleted_stats: number
+  missing_check_times: string[]
 }
 

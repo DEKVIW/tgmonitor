@@ -35,10 +35,17 @@ interface MessageFiltersProps {
 }
 
 const MessageFilters = ({ disabled = false }: MessageFiltersProps) => {
-  const { filters, setFilters, resetFilters, refreshInterval, setRefreshInterval } = useMessageStore()
+  const {
+    filters,
+    setFilters,
+    resetFilters,
+    refreshInterval,
+    setRefreshInterval,
+    triggerReload,
+  } = useMessageStore()
   const [tagOptions, setTagOptions] = useState<TagStatsResponse[]>([])
   const [drawerOpen, setDrawerOpen] = useState(false)
-
+  const [searchValue, setSearchValue] = useState(filters.search_query || '')
   const [draft, setDraft] = useState(filters)
 
   // 加载标签选项
@@ -53,8 +60,27 @@ const MessageFilters = ({ disabled = false }: MessageFiltersProps) => {
     setDraft(filters)
   }, [filters])
 
+  useEffect(() => {
+    setSearchValue(filters.search_query || '')
+  }, [filters.search_query])
+
+  useEffect(() => {
+    if ((filters.search_query || '') === searchValue) {
+      return
+    }
+
+    const timer = window.setTimeout(() => {
+      setFilters({ search_query: searchValue })
+    }, 350)
+
+    return () => window.clearTimeout(timer)
+  }, [filters.search_query, searchValue, setFilters])
+
   const handleSearch = (value: string) => {
-    setFilters({ search_query: value })
+    setSearchValue(value)
+    if ((filters.search_query || '') !== value) {
+      setFilters({ search_query: value })
+    }
   }
 
   const timeRangeOptions = useMemo(
@@ -114,9 +140,9 @@ const MessageFilters = ({ disabled = false }: MessageFiltersProps) => {
           placeholder="搜索消息（关键词用空格分隔）"
           allowClear
           enterButton={<SearchOutlined />}
-          value={filters.search_query}
+          value={searchValue}
           onSearch={handleSearch}
-          onChange={(e) => setFilters({ search_query: e.target.value })}
+          onChange={(e) => setSearchValue(e.target.value)}
           disabled={disabled}
         />
       </div>
@@ -147,7 +173,7 @@ const MessageFilters = ({ disabled = false }: MessageFiltersProps) => {
             <Button icon={<ClearOutlined />} onClick={resetFilters} disabled={disabled} />
           </Tooltip>
           <Tooltip title="刷新数据">
-            <Button icon={<ReloadOutlined />} onClick={() => setFilters({ ...filters })} disabled={disabled} />
+            <Button icon={<ReloadOutlined />} onClick={triggerReload} disabled={disabled} />
           </Tooltip>
           <div className="refresh-inline">
             <span className="refresh-label">自动刷新</span>
@@ -174,6 +200,7 @@ const MessageFilters = ({ disabled = false }: MessageFiltersProps) => {
         onClose={() => setDrawerOpen(false)}
         width={360}
         maskClosable={!disabled}
+        rootClassName="responsive-drawer-root"
       >
         <Space direction="vertical" size="large" style={{ width: '100%' }}>
           <div className="drawer-block">

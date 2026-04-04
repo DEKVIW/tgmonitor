@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import uuid
 from typing import Any, Dict, List
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
@@ -24,6 +23,8 @@ from app.schemas.admin_models import (
     ClearOldDataRequest,
     CredentialCreate,
     CredentialResponse,
+    LinkCleanupApplyRequest,
+    LinkCleanupResult,
     LinkCheckTaskCreate,
     LinkCheckTaskHistory,
     LinkCheckTaskResult,
@@ -39,13 +40,14 @@ from app.schemas.admin_models import (
     UserUpdate,
     UsernameChange,
 )
-from app.services.channel_service import diagnose_channels, test_monitor
+from app.services.channel_service import diagnose_channels, resolve_channel_runtime_details, test_monitor
+from app.services.link_cleanup_service import apply_link_check_cleanup
 from app.services.link_check_service import (
     get_task_history,
     get_task_result,
     get_task_status,
-    init_task_status,
     parse_time_period,
+    start_or_reuse_task,
     run_link_check_task,
 )
 from app.services.maintenance_service import (
@@ -102,12 +104,25 @@ def _ensure_not_last_admin(username: str, target_role: str | None = None) -> Non
         )
 
 
-def _serialize_channel(channel: Channel) -> ChannelResponse:
+def _serialize_channel(
+    channel: Channel,
+    *,
+    runtime_info: Dict[str, Any] | None = None,
+    runtime_error: Dict[str, Any] | None = None,
+) -> ChannelResponse:
     try:
         username = normalize_channel_username(channel.username)
     except ValueError:
         username = channel.username
-    return ChannelResponse(id=channel.id, username=username)
+    return ChannelResponse(
+        id=channel.id,
+        username=username,
+        title=(runtime_info or {}).get("title"),
+        telegram_id=(runtime_info or {}).get("id"),
+        channel_type=(runtime_info or {}).get("type") or (runtime_error or {}).get("type"),
+        resolution_status="ok" if runtime_info else ("error" if runtime_error else "unknown"),
+        resolution_error=(runtime_error or {}).get("error"),
+    )
 
 
 def _find_channel_conflict(
@@ -239,7 +254,25 @@ async def get_channels(
     """
     try:
         channels = db.query(Channel).all()
-        return [_serialize_channel(channel) for channel in channels]
+        normalized_usernames: List[str] = []
+        channel_username_map: Dict[int, str] = {}
+        for channel in channels:
+            try:
+                normalized_username = normalize_channel_username(channel.username)
+            except ValueError:
+                normalized_username = channel.username
+            normalized_usernames.append(normalized_username)
+            channel_username_map[channel.id] = normalized_username
+
+        runtime_info_map, runtime_error_map = await resolve_channel_runtime_details(normalized_usernames)
+        return [
+            _serialize_channel(
+                channel,
+                runtime_info=runtime_info_map.get(channel_username_map[channel.id]),
+                runtime_error=runtime_error_map.get(channel_username_map[channel.id]),
+            )
+            for channel in channels
+        ]
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -951,15 +984,20 @@ async def start_link_check_task(
                 detail=str(exc),
             ) from exc
 
-        task_id = str(uuid.uuid4())
-        initial_status = init_task_status(task_id, task_data.period, task_data.max_concurrent)
-
-        background_tasks.add_task(
-            run_link_check_task,
-            task_id,
+        task_id, initial_status, created = start_or_reuse_task(
             task_data.period,
-            task_data.max_concurrent
+            task_data.max_concurrent,
         )
+
+        if created:
+            background_tasks.add_task(
+                run_link_check_task,
+                task_id,
+                task_data.period,
+                task_data.max_concurrent
+            )
+        else:
+            initial_status["reused_existing"] = True
 
         return LinkCheckTaskStatus(
             task_id=task_id,
@@ -1047,4 +1085,39 @@ async def get_link_check_result(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"获取检测结果失败: {str(e)}"
         )
+
+
+@router.post("/link-check/tasks/{check_time}/cleanup", response_model=LinkCleanupResult, summary="应用死链清理")
+async def apply_link_check_cleanup_api(
+    check_time: str,
+    request: LinkCleanupApplyRequest,
+    db: Session = Depends(get_db),
+    current_user: Dict[str, Any] = Depends(get_admin_user),
+) -> LinkCleanupResult:
+    """
+    根据某次链接检测结果应用清理动作。
+    """
+    try:
+        result = apply_link_check_cleanup(
+            db,
+            check_time,
+            mode=request.mode,
+            dry_run=request.dry_run,
+        )
+        return LinkCleanupResult(**result)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"应用死链清理失败: {str(exc)}",
+        ) from exc
 

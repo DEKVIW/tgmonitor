@@ -1,14 +1,10 @@
-/**
- * 后台管理页面
- */
-
-import { Tabs, Card } from 'antd'
+import { Card, Tabs } from 'antd'
 import CredentialManager from '@/components/admin/CredentialManager'
-import ChannelManager from '@/components/admin/ChannelManager'
+import ChannelManager from '@/components/admin/ChannelManagerRefined'
 import SystemConfig from '@/components/admin/SystemConfig'
 import UserManager from '@/components/admin/UserManager'
 import DataMaintenance from '@/components/admin/DataMaintenance'
-import LinkCheckManager from '@/components/admin/LinkCheckManager'
+import LinkCheckManager from '@/components/admin/LinkCheckManagerRefined'
 import './Admin.css'
 
 const Admin = () => {
@@ -25,7 +21,7 @@ const Admin = () => {
     },
     {
       key: 'credentials',
-      label: 'API凭据管理',
+      label: 'API 凭据管理',
       children: <CredentialManager />,
     },
     {
@@ -47,7 +43,7 @@ const Admin = () => {
 
   return (
     <div className="admin-page">
-      <Card title="🔧 后台管理" className="admin-card" variant="outlined">
+      <Card title="后台管理" className="admin-card" variant="outlined">
         <Tabs items={tabItems} />
       </Card>
     </div>
@@ -55,4 +51,3 @@ const Admin = () => {
 }
 
 export default Admin
-

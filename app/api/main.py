@@ -5,7 +5,7 @@ FastAPI 应用主入口
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.models.config import settings
-from app.api import auth, messages, statistics, admin
+from app.api import admin, admin_extras_runtime, auth, messages, statistics
 from app.schemas.admin_models import SystemConfigResponse
 import logging
 
@@ -46,6 +46,7 @@ app.include_router(auth.router)
 app.include_router(messages.router)
 app.include_router(statistics.router)
 app.include_router(admin.router)
+app.include_router(admin_extras_runtime.router)
 
 
 @app.get("/", summary="API 根路径")

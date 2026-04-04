@@ -1,18 +1,24 @@
 .message-item {
-  margin-bottom: 6px;
-  padding: 2px 0;
+  margin-bottom: 12px;
+  padding: 0;
 }
 
 .message-collapse {
-  border: 1px solid #e6e6e6;
-  border-radius: 8px;
-  background: #fff;
+  overflow: hidden;
+  border: 1px solid rgba(216, 227, 238, 0.92);
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: var(--shadow-soft);
   cursor: pointer;
 }
 
-.ant-collapse-content > .ant-collapse-content-box {
+.message-collapse .ant-collapse-header {
+  padding: 18px 20px !important;
+}
+
+.message-collapse .ant-collapse-content > .ant-collapse-content-box {
   /* 上下0，左右留出间距 */
-  padding: 0 8px !important;
+  padding: 0 20px 18px !important;
 }
 
 .message-header {
@@ -21,15 +27,16 @@
 }
 
 .message-title {
-  font-size: 14px;
+  font-size: 15px;
   margin-right: 0;
   white-space: normal;
+  line-height: 1.7;
 }
 
 .message-time-inline {
-  margin-left: 4px;
-  font-size: 14px;
-  color: #222;
+  margin-left: 6px;
+  font-size: 13px;
+  color: var(--text-muted);
   font-weight: 600;
 }
 
@@ -54,8 +61,15 @@
 }
 
 .netdisk-plain {
-  font-size: 13px;
-  color: #222;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(11, 107, 203, 0.08);
+  color: var(--primary-strong);
+  font-size: 12px;
+  font-weight: 600;
   white-space: nowrap;
 }
 
@@ -64,60 +78,61 @@
 }
 
 .message-detail-time {
-  margin: 0 0 2px 0;
+  margin: 0 0 10px 0;
   padding: 0;
   border: 0;
-  font-size: 16px;
+  font-size: 14px;
 }
 
 .message-description {
   margin: 0;
-  line-height: 1.55;
-  font-size: 16px;
+  line-height: 1.72;
+  font-size: 15px;
+  color: var(--text-base);
 }
 
 .message-links {
-  margin: 0 0 4px 0;
-  font-size: 16px;
+  margin: 14px 0 4px 0;
+  font-size: 15px;
 }
 
 .netdisk-link {
   display: inline-block;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(135deg, #0b6bcb 0%, #1194b8 100%);
   color: white;
-  border-radius: 12px;
-  padding: 5px 12px;
-  font-size: 13px;
-  font-weight: bold;
+  border-radius: 999px;
+  padding: 7px 14px;
+  font-size: 12px;
+  font-weight: 700;
   text-decoration: none;
   margin-right: 4px;
   margin-bottom: 4px;
-  transition: all 0.2s ease;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+  transition: transform var(--transition-base), box-shadow var(--transition-base);
+  box-shadow: 0 10px 22px rgba(11, 107, 203, 0.22);
 }
 
 .netdisk-link:hover {
   transform: translateY(-1px);
-  box-shadow: 0 3px 6px rgba(0, 0, 0, 0.16);
+  box-shadow: 0 14px 24px rgba(11, 107, 203, 0.28);
 }
 
 .message-tags {
-  margin-top: 4px;
-  font-size: 16px;
+  margin-top: 14px;
+  font-size: 15px;
 }
 
 .message-tag {
-  border-radius: 14px;
-  padding: 1px 8px;
-  font-size: 11px;
-  border: 1px solid #409eff;
-  background: #f0f9ff;
-  color: #409eff;
-  transition: all 0.2s ease;
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 12px;
+  border: 1px solid rgba(11, 107, 203, 0.18);
+  background: rgba(11, 107, 203, 0.08);
+  color: var(--primary-strong);
+  transition: all var(--transition-base);
 }
 
 .message-tag:hover {
-  background: #409eff;
+  background: var(--primary);
   color: white;
   transform: translateY(-1px);
 }
@@ -141,7 +156,7 @@
 
 /* 覆盖 Ant Design 副文本默认灰色，避免时间发灰 */
 :where(.ant-typography.ant-typography-secondary) {
-  color: #444 !important;
+  color: var(--text-muted) !important;
 }
 
 /* 消息内容内的 typography 去掉默认 1em 底部间距，保持紧凑 */

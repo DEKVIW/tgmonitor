@@ -1,20 +1,25 @@
 .filters-toolbar {
   display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 10px;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
   width: 100%;
   overflow: visible;
-  padding: 4px 0 6px;
+  padding: 16px 18px;
   position: sticky;
-  top: 0;
+  top: calc(var(--header-height) + 12px);
   z-index: 5;
-  background: #fff;
+  background: var(--surface-bg);
+  border: 1px solid var(--surface-border);
+  border-radius: 24px;
+  box-shadow: var(--shadow-soft);
+  backdrop-filter: blur(14px);
 }
 
 .filters-left {
-  flex: 1;
-  min-width: 320px;
+  flex: 1 1 420px;
+  min-width: min(100%, 320px);
 }
 
 /* 防止 iOS Safari 自动缩放：确保输入框字体至少 16px */
@@ -36,17 +41,17 @@
 .filters-right {
   display: flex;
   align-items: center;
-  flex: 0 0 auto;
+  justify-content: flex-end;
+  flex: 1 1 360px;
   white-space: nowrap;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   gap: 12px;
-  overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
 }
 
 .filters-right > .ant-space {
   display: flex;
-  flex-wrap: nowrap;
+  justify-content: flex-end;
+  flex-wrap: wrap;
 }
 
 .refresh-inline {
@@ -54,14 +59,17 @@
   align-items: center;
   gap: 6px;
   flex: 0 0 auto;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(244, 248, 251, 0.9);
 }
 
 .refresh-label {
-  color: #555;
+  color: var(--text-base);
   font-size: 13px;
 }
 .refresh-unit {
-  color: #555;
+  color: var(--text-muted);
   font-size: 13px;
 }
 
@@ -73,7 +81,7 @@
 
 .drawer-block-title {
   font-weight: 600;
-  color: #333;
+  color: var(--text-strong);
 }
 
 .drawer-tags-preview {
@@ -94,4 +102,42 @@
 }
 .filters-right {
   scrollbar-width: none;
+}
+
+.filters-toolbar .ant-btn {
+  border-radius: 12px;
+}
+
+@media (max-width: 992px) {
+  .filters-right {
+    justify-content: flex-start;
+  }
+
+  .filters-right > .ant-space {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 768px) {
+  .filters-toolbar {
+    top: 8px;
+    padding: 14px;
+    border-radius: 22px;
+  }
+
+  .filters-left,
+  .filters-right {
+    flex-basis: 100%;
+    min-width: 0;
+  }
+
+  .filters-right > .ant-space {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .refresh-inline {
+    width: 100%;
+    justify-content: center;
+  }
 }

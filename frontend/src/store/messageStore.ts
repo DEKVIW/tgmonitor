@@ -11,6 +11,8 @@ interface MessageState {
   resetFilters: () => void
   refreshInterval: number
   setRefreshInterval: (value: number) => void
+  reloadToken: number
+  triggerReload: () => void
 }
 
 const defaultFilters: MessageFilters = {
@@ -27,6 +29,7 @@ const defaultFilters: MessageFilters = {
 export const useMessageStore = create<MessageState>((set) => ({
   filters: defaultFilters,
   refreshInterval: 60,
+  reloadToken: 0,
   
   setFilters: (newFilters: Partial<MessageFilters>) => {
     set((state) => {
@@ -45,6 +48,10 @@ export const useMessageStore = create<MessageState>((set) => ({
 
   setRefreshInterval: (value: number) => {
     set({ refreshInterval: value })
+  },
+
+  triggerReload: () => {
+    set((state) => ({ reloadToken: state.reloadToken + 1 }))
   },
 }))
 

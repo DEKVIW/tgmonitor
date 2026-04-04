@@ -52,6 +52,11 @@ class CredentialCreate(BaseModel):
 class ChannelResponse(ORMModel):
     id: int
     username: str
+    title: Optional[str] = None
+    telegram_id: Optional[int] = None
+    channel_type: Optional[str] = None
+    resolution_status: Optional[str] = None
+    resolution_error: Optional[str] = None
 
 
 class ChannelCreate(BaseModel):
@@ -256,6 +261,42 @@ class MonitorTestResult(BaseModel):
     error: Optional[str] = None
 
 
+class ChannelMessageSampleEntity(BaseModel):
+    type: str
+    url: str
+    text: Optional[str] = None
+
+
+class ChannelMessageSample(BaseModel):
+    message_id: int
+    timestamp: str
+    text: str
+    text_length: int
+    has_media: bool = False
+    raw_urls: List[str] = Field(default_factory=list)
+    entity_urls: List[ChannelMessageSampleEntity] = Field(default_factory=list)
+    button_urls: List[str] = Field(default_factory=list)
+    webpage_url: Optional[str] = None
+    parsed_records: List[Dict[str, Any]] = Field(default_factory=list)
+    diagnostics: Dict[str, Any] = Field(default_factory=dict)
+    extracted_link_count: int = 0
+
+
+class ChannelSampleResponse(BaseModel):
+    channel_id: int
+    username: str
+    title: Optional[str] = None
+    telegram_id: Optional[int] = None
+    requested_limit: int
+    page: int = 1
+    page_size: int = 10
+    sample_count: int
+    has_more: bool = False
+    inspected_count: int = 0
+    only_with_links: bool
+    samples: List[ChannelMessageSample] = Field(default_factory=list)
+
+
 class LinkCheckTaskCreate(BaseModel):
     period: str = Field(min_length=1, max_length=128)
     max_concurrent: int = Field(default=5, ge=1, le=10)
@@ -271,13 +312,21 @@ class LinkCheckTaskStatus(BaseModel):
     status: str
     progress: int
     period_desc: Optional[str] = None
+    total_messages: Optional[int] = None
     total_links: Optional[int] = None
     checked_links: Optional[int] = None
     valid_links: Optional[int] = None
     invalid_links: Optional[int] = None
+    started_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    current_phase: Optional[str] = None
+    current_platform: Optional[str] = None
+    stop_requested: bool = False
+    reused_existing: bool = False
+    status_counts: Optional[Dict[str, int]] = None
     check_time: Optional[str] = None
     duration: Optional[float] = None
-    logs: Optional[List[str]] = None
+    logs: List[str] = Field(default_factory=list)
     error: Optional[str] = None
 
 
@@ -288,6 +337,8 @@ class LinkCheckTaskHistory(BaseModel):
     total_links: int
     valid_links: int
     invalid_links: int
+    updated_messages: Optional[int] = None
+    deleted_messages: Optional[int] = None
     status: str
     duration: Optional[float] = None
 
@@ -295,3 +346,71 @@ class LinkCheckTaskHistory(BaseModel):
 class LinkCheckTaskResult(BaseModel):
     stats: Dict[str, Any]
     details: List[Dict[str, Any]]
+
+
+class LinkCheckDateRange(BaseModel):
+    min_date: Optional[str] = None
+    max_date: str
+    latest_message_date: Optional[str] = None
+
+
+class LinkCleanupApplyRequest(BaseModel):
+    mode: str = Field(default="remove_invalid_links")
+    dry_run: bool = False
+
+    @field_validator("mode")
+    @classmethod
+    def validate_mode(cls, value: str) -> str:
+        normalized = _normalize_text(value, field_name="mode").lower()
+        if normalized not in {"remove_invalid_links", "delete_message_if_empty"}:
+            raise ValueError("mode must be remove_invalid_links or delete_message_if_empty")
+        return normalized
+
+
+class LinkCleanupResult(BaseModel):
+    success: bool
+    check_time: str
+    mode: str
+    dry_run: bool = False
+    total_invalid_details: int = 0
+    cleanup_candidates: int = 0
+    matched_messages: int = 0
+    updated_messages: int = 0
+    deleted_messages: int = 0
+    removed_links: int = 0
+    skipped_messages: int = 0
+
+
+class LinkCheckHistoryDeleteResult(BaseModel):
+    success: bool
+    check_time: str
+    deleted_details: int = 0
+    deleted_stats: int = 0
+
+
+class LinkCheckHistoryBatchDeleteRequest(BaseModel):
+    check_times: List[str] = Field(min_length=1, max_length=200)
+
+    @model_validator(mode="after")
+    def normalize_check_times(self) -> "LinkCheckHistoryBatchDeleteRequest":
+        normalized: List[str] = []
+        seen: set[str] = set()
+        for raw_value in self.check_times:
+            value = _normalize_text(raw_value, field_name="check_times")
+            if value in seen:
+                continue
+            normalized.append(value)
+            seen.add(value)
+        if not normalized:
+            raise ValueError("check_times must contain at least one item")
+        self.check_times = normalized
+        return self
+
+
+class LinkCheckHistoryBatchDeleteResult(BaseModel):
+    success: bool
+    requested_count: int = 0
+    deleted_runs: int = 0
+    deleted_details: int = 0
+    deleted_stats: int = 0
+    missing_check_times: List[str] = Field(default_factory=list)

@@ -10,7 +10,7 @@ import GuestRoute from './components/GuestRoute'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import Statistics from './pages/Statistics'
-import Admin from './pages/Admin'
+import Admin from './pages/AdminRuntime'
 
 function App() {
   // Zustand persist会自动处理localStorage，无需手动恢复

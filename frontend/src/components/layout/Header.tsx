@@ -115,6 +115,7 @@ const Header = ({ collapsed, onToggle }: HeaderProps) => {
       <Modal
         title="修改密码"
         open={passwordModalVisible}
+        rootClassName="responsive-modal-root"
         onCancel={() => {
           setPasswordModalVisible(false)
           passwordForm.resetFields()

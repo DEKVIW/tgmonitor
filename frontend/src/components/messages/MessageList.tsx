@@ -1,14 +1,14 @@
-/**
+﻿/**
  * 消息列表组件
  */
 
-import { useState, useEffect } from 'react'
-import { Spin, Empty, Pagination, Alert } from 'antd'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Alert, Empty, Pagination, Spin } from 'antd'
 import { getMessages } from '@/api/messages'
-import { MessageListResponse } from '@/types/message'
-import { useMessageStore } from '@/store/messageStore'
-import MessageItem from './MessageItem'
 import { useMediaQuery } from '@/hooks/useMediaQuery'
+import { useMessageStore } from '@/store/messageStore'
+import { MessageListResponse } from '@/types/message'
+import MessageItem from './MessageItem'
 import './MessageList.css'
 
 interface MessageListProps {
@@ -16,49 +16,56 @@ interface MessageListProps {
 }
 
 const MessageList = ({ isGuestMode = false }: MessageListProps) => {
-  const { filters, setFilters, refreshInterval } = useMessageStore()
+  const { filters, setFilters, refreshInterval, reloadToken } = useMessageStore()
   const [loading, setLoading] = useState(false)
   const [data, setData] = useState<MessageListResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
   const isMobile = useMediaQuery('(max-width: 768px)')
+  const requestIdRef = useRef(0)
 
-  // 加载消息列表
-  const loadMessages = async () => {
+  const loadMessages = useCallback(async () => {
+    const requestId = ++requestIdRef.current
     setLoading(true)
     setError(null)
+
     try {
       const response = await getMessages(filters)
+      if (requestId !== requestIdRef.current) {
+        return
+      }
       setData(response)
-    } catch (err: any) {
-      setError(err.response?.data?.detail || '加载消息失败')
+    } catch (err: unknown) {
+      if (requestId !== requestIdRef.current) {
+        return
+      }
+      const message =
+        err && typeof err === 'object' && 'response' in err
+          ? (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+          : undefined
+      setError(message || '加载消息失败')
       setData(null)
     } finally {
-      setLoading(false)
+      if (requestId === requestIdRef.current) {
+        setLoading(false)
+      }
     }
-  }
+  }, [filters])
 
-  // 当筛选条件变化时重新加载
   useEffect(() => {
     loadMessages()
-  }, [
-    filters.search_query,
-    filters.time_range,
-    filters.selected_tags,
-    filters.selected_netdisks,
-    filters.min_content_length,
-    filters.has_links_only,
-    filters.page,
-    filters.page_size,
-  ])
+  }, [loadMessages, reloadToken])
 
-  // 自动刷新
   useEffect(() => {
-    if (!refreshInterval || refreshInterval <= 0) return
-    const timer = setInterval(() => {
+    if (!refreshInterval || refreshInterval <= 0) {
+      return
+    }
+
+    const timer = window.setInterval(() => {
       loadMessages()
     }, refreshInterval * 1000)
-    return () => clearInterval(timer)
-  }, [refreshInterval, filters])
+
+    return () => window.clearInterval(timer)
+  }, [loadMessages, refreshInterval])
 
   const handlePageChange = (page: number, pageSize?: number) => {
     setFilters({ page, page_size: pageSize || filters.page_size })
@@ -85,8 +92,10 @@ const MessageList = ({ isGuestMode = false }: MessageListProps) => {
   return (
     <div className="message-list">
       <div className="message-total-hint">
-        共找到 {data.total} 条消息{isGuestMode && '（最近24小时）'}
+        共找到 {data.total} 条消息
+        {isGuestMode ? '（最近 24 小时）' : ''}
       </div>
+
       {data.messages.map((message) => (
         <MessageItem key={message.id} message={message} />
       ))}
@@ -101,9 +110,10 @@ const MessageList = ({ isGuestMode = false }: MessageListProps) => {
             showSizeChanger={!isMobile}
             showQuickJumper={!isMobile}
             showLessItems={isMobile}
-            showTotal={!isMobile ? (total, range) =>
-              `第 ${range[0]}-${range[1]} 条 / 共 ${total} 条`
-              : undefined
+            showTotal={
+              !isMobile
+                ? (total, range) => `第 ${range[0]}-${range[1]} 条 / 共 ${total} 条`
+                : undefined
             }
             onChange={handlePageChange}
             onShowSizeChange={handlePageChange}
@@ -116,4 +126,3 @@ const MessageList = ({ isGuestMode = false }: MessageListProps) => {
 }
 
 export default MessageList
-

@@ -152,12 +152,139 @@ const ChannelManager = () => {
     }
   }
 
+  /*
   const columns = [
     {
       title: '频道用户名',
       dataIndex: 'username',
       key: 'username',
       ellipsis: true,
+    },
+    {
+      title: '频道标题',
+      dataIndex: 'title',
+      key: 'title',
+      ellipsis: true,
+      render: (value: string | null | undefined) => value || <span style={{ color: '#999' }}>未解析</span>,
+    },
+    {
+      title: 'Telegram ID',
+      dataIndex: 'telegram_id',
+      key: 'telegram_id',
+      width: 160,
+      render: (value: number | null | undefined) => value ?? <span style={{ color: '#999' }}>-</span>,
+    },
+    {
+      title: '类型',
+      dataIndex: 'channel_type',
+      key: 'channel_type',
+      width: 120,
+      render: (value: string | null | undefined) => {
+        if (!value) {
+          return <Tag>未知</Tag>
+        }
+        return (
+          <Tag color={value === 'invite_link' ? 'green' : 'blue'}>
+            {value === 'invite_link' ? '邀请链接' : '标准频道'}
+          </Tag>
+        )
+      },
+    },
+    {
+      title: '解析状态',
+      dataIndex: 'resolution_status',
+      key: 'resolution_status',
+      width: 130,
+      render: (value: string | null | undefined, record: ChannelResponse) => {
+        if (value === 'ok') {
+          return <Tag color="success">正常</Tag>
+        }
+        if (value === 'error') {
+          return <Tag color="error">{record.resolution_error || '解析失败'}</Tag>
+        }
+        return <Tag>未解析</Tag>
+      },
+    },
+    {
+      title: '操作',
+      key: 'action',
+      width: 200,
+      render: (_: any, record: ChannelResponse) => (
+        <Space>
+          <Button
+            type="link"
+            icon={<EditOutlined />}
+            onClick={() => handleEdit(record)}
+          >
+            编辑
+          </Button>
+          <Popconfirm
+            title="确定要删除这个频道吗？"
+            onConfirm={() => handleDelete(record.id)}
+            okText="确定"
+            cancelText="取消"
+          >
+            <Button type="link" danger icon={<DeleteOutlined />}>
+              删除
+            </Button>
+          </Popconfirm>
+        </Space>
+      ),
+    },
+  ]
+  */
+
+  const columns = [
+    {
+      title: '频道用户名',
+      dataIndex: 'username',
+      key: 'username',
+      ellipsis: true,
+    },
+    {
+      title: '频道标题',
+      dataIndex: 'title',
+      key: 'title',
+      ellipsis: true,
+      render: (value: string | null | undefined) => value || <span style={{ color: '#999' }}>未解析</span>,
+    },
+    {
+      title: 'Telegram ID',
+      dataIndex: 'telegram_id',
+      key: 'telegram_id',
+      width: 160,
+      render: (value: number | null | undefined) => value ?? <span style={{ color: '#999' }}>-</span>,
+    },
+    {
+      title: '类型',
+      dataIndex: 'channel_type',
+      key: 'channel_type',
+      width: 120,
+      render: (value: string | null | undefined) => {
+        if (!value) {
+          return <Tag>未知</Tag>
+        }
+        return (
+          <Tag color={value === 'invite_link' ? 'green' : 'blue'}>
+            {value === 'invite_link' ? '邀请链接' : '标准频道'}
+          </Tag>
+        )
+      },
+    },
+    {
+      title: '解析状态',
+      dataIndex: 'resolution_status',
+      key: 'resolution_status',
+      width: 140,
+      render: (value: string | null | undefined, record: ChannelResponse) => {
+        if (value === 'ok') {
+          return <Tag color="success">正常</Tag>
+        }
+        if (value === 'error') {
+          return <Tag color="error">{record.resolution_error || '解析失败'}</Tag>
+        }
+        return <Tag>未解析</Tag>
+      },
     },
     {
       title: '操作',
@@ -243,6 +370,7 @@ const ChannelManager = () => {
       <Modal
         title="添加频道"
         open={modalVisible}
+        rootClassName="responsive-modal-root"
         onCancel={() => {
           setModalVisible(false)
           form.resetFields()
@@ -274,6 +402,7 @@ const ChannelManager = () => {
       <Modal
         title="编辑频道"
         open={editModalVisible}
+        rootClassName="responsive-modal-root"
         onCancel={() => {
           setEditModalVisible(false)
           editForm.resetFields()
@@ -317,6 +446,7 @@ const ChannelManager = () => {
       <Modal
         title="频道诊断结果"
         open={diagnosisModalVisible}
+        rootClassName="responsive-modal-root"
         onCancel={() => {
           setDiagnosisModalVisible(false)
           setDiagnosisResult(null)
@@ -414,4 +544,3 @@ const ChannelManager = () => {
 }
 
 export default ChannelManager
-

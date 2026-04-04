@@ -52,6 +52,19 @@ def _default_rules() -> Dict[str, Any]:
             {"name": "UC网盘", "keys": ["ucdisk", "uc网盘", "ucloud", "drive.uc.cn"]},
             {"name": "迅雷", "keys": ["xunlei", "thunder", "迅雷"]},
         ],
+        "redirect_resolver": {
+            "max_depth": 4,
+            "max_redirect_hops": 8,
+            "force_get_domains": [
+                "t.cn",
+                "weibo.cn",
+                "weibo.com",
+                "t.co",
+                "x.com",
+                "url.cn",
+                "bit.ly",
+            ],
+        },
         "profiles": {
             "default": {
                 "title_fields": ["名称", "标题"],
@@ -104,9 +117,105 @@ def _default_rules() -> Dict[str, Any]:
                     ".*群主自用机场.*守候网络.*9折活动.*",
                     ".*云盘播放器.*VidHub.*",
                 ],
+                "intermediate_netdisk_domains": {},
+            },
+            "course_list_default": {
+                "content_mode": "course_list",
+                "line_message_mode": "per_link_line",
+                "netdisk_hint_aliases": {
+                    "夸克网盘": ["KK", "QK", "quark", "夸克"],
+                    "百度网盘": ["BD", "baidu", "百度", "百度盘"],
+                },
+                "intermediate_netdisk_domains": {},
+            },
+            "movie_default": {
+                "content_mode": "movie",
+                "title_fields": ["名称", "标题", "片名", "剧名"],
+                "metadata": {
+                    "source": ["来自", "来源"],
+                    "channel": ["频道"],
+                    "group": ["群组"],
+                    "bot": ["投稿"],
+                },
+                "ignored_line_prefixes": [
+                    "链接",
+                    "下载地址",
+                    "分享",
+                    "网址",
+                    "搜索",
+                    "机场",
+                    "公费服",
+                ],
+                "valid_labels": [
+                    "主链",
+                    "备用",
+                    "普码",
+                    "高清",
+                    "HDR",
+                    "SDR",
+                    "1080P",
+                    "4K",
+                    "4K HDR",
+                    "4K SDR",
+                    "4K DV",
+                    "4K EDR",
+                    "4K 60FPS",
+                    "4K 120FPS",
+                    "原盘",
+                    "REMUX",
+                    "杜比视界",
+                    "杜比全景声",
+                ],
+                "regions": [],
+                "course_keywords": [],
+                "categories": [
+                    "电影",
+                    "剧集",
+                    "电视剧",
+                    "短剧",
+                    "综艺",
+                    "动漫",
+                    "动画",
+                    "国漫",
+                    "国产",
+                    "国产剧",
+                    "纪录片",
+                ],
+                "filter_patterns": [
+                    ".*群主自用机场.*",
+                    ".*每日同步更新.*",
+                    ".*最新热门抖音快手百度番茄红果等付费短剧推荐.*",
+                    ".*云盘合作播放器.*",
+                    ".*播放器.*字幕问题.*",
+                ],
+                "movie_description_fields": ["描述", "简介", "剧情", "介绍"],
+                "movie_tag_fields": ["标签"],
+                "movie_size_fields": ["大小"],
+                "movie_noise_fields": ["来自", "频道", "群组", "投稿", "搜索", "机场", "公费服"],
+                "movie_meta_fields": ["评分", "TMDB评分", "豆瓣评分", "类型", "地区", "语言", "画质", "质量", "片长", "主演", "导演", "更新", "简介"],
+                "intermediate_netdisk_domains": {},
             }
         },
-        "channel_profiles": {},
+        "channel_profiles": {
+            "wpzyk": "course_list_default",
+            "vip115hot": "movie_default",
+            "xx123pan": "movie_default",
+            "gotopan": "movie_default",
+            "+h10ulzfxiQZiYTdi": "movie_default",
+            "QukanMovie": "movie_default",
+            "alyp_1": "movie_default",
+            "QuarkFree": "movie_default",
+            "tyypzhpd": "movie_default",
+            "Lsp115": "movie_default",
+            "bdwpzhpd": "movie_default",
+            "shareAliyun": "movie_default",
+            "Aliyun_4K_Movies": "movie_default",
+            "tianyirigeng": "movie_default",
+            "+eQXY7Ewx-4I4NDFl": "movie_default",
+        },
+        "channel_profile_ids": {
+            "1817746196": "course_list_default",
+        },
     }
 
 
@@ -133,14 +242,41 @@ def load_monitor_rules(force_reload: bool = False) -> Dict[str, Any]:
             file_rules = json.loads(RULES_FILE.read_text(encoding="utf-8"))
             rules = _deep_merge(rules, file_rules)
 
+        netdisk_map = rules.setdefault("netdisk_map", [])
+        if not any(
+            isinstance(item, dict)
+            and any(key in {"yun.139.com", "caiyun.139.com"} for key in item.get("keys", []))
+            for item in netdisk_map
+        ):
+            netdisk_map.append(
+                {
+                    "name": "\u0031\u0033\u0039\u4e91\u76d8",
+                    "keys": [
+                        "yun.139.com",
+                        "caiyun.139.com",
+                    ],
+                }
+            )
+
         _rules_cache = rules
         _rules_mtime = file_mtime
         return deepcopy(rules)
 
 
-def resolve_channel_profile(channel_name: str | None, rules: Dict[str, Any] | None = None) -> Dict[str, Any]:
+def resolve_channel_profile(
+    channel_name: str | None,
+    rules: Dict[str, Any] | None = None,
+    channel_id: int | None = None,
+) -> Dict[str, Any]:
     loaded_rules = rules or load_monitor_rules()
     default_profile = deepcopy(loaded_rules["profiles"]["default"])
+    channel_profile_ids = loaded_rules.get("channel_profile_ids", {})
+    if channel_id is not None:
+        profile_name = channel_profile_ids.get(str(channel_id)) or channel_profile_ids.get(channel_id)
+        if profile_name:
+            profile_overrides = loaded_rules.get("profiles", {}).get(profile_name, {})
+            return _deep_merge(default_profile, profile_overrides)
+
     if not channel_name:
         return default_profile
 

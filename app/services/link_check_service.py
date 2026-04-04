@@ -2,11 +2,14 @@
 Link check service used by the admin backend.
 """
 
+import json
 import logging
+import os
 import threading
 import time
 from copy import deepcopy
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
@@ -17,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 _task_status: Dict[str, Dict[str, Any]] = {}
 _task_status_lock = threading.RLock()
+TASK_STATUS_DIR = Path(__file__).resolve().parents[2] / "data" / "runtime" / "link_check_tasks"
 
 try:
     from app.scripts.link_validator import LinkValidator
@@ -130,9 +134,45 @@ def _clone_task_status(status: Dict[str, Any]) -> Dict[str, Any]:
     return deepcopy(status)
 
 
+def _get_task_status_path(task_id: str) -> Path:
+    return TASK_STATUS_DIR / f"{task_id}.json"
+
+
+def _persist_task_status(task_id: str, status: Dict[str, Any]) -> None:
+    path = _get_task_status_path(task_id)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        temp_path = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+        payload = json.dumps(status, ensure_ascii=False, separators=(",", ":"))
+        temp_path.write_text(payload, encoding="utf-8")
+        os.replace(temp_path, path)
+    except OSError as exc:
+        logger.warning("Failed to persist link check task status for %s: %s", task_id, exc)
+
+
+def _load_persisted_task_status(task_id: str) -> Optional[Dict[str, Any]]:
+    path = _get_task_status_path(task_id)
+    if not path.exists():
+        return None
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning("Failed to read persisted link check task status for %s: %s", task_id, exc)
+        return None
+
+    if not isinstance(payload, dict):
+        logger.warning("Ignoring invalid persisted link check task status for %s", task_id)
+        return None
+    return payload
+
+
 def _ensure_task_status(task_id: str, period_str: str, max_concurrent: int) -> Dict[str, Any]:
     with _task_status_lock:
         status = _task_status.get(task_id)
+        if status is None:
+            status = _load_persisted_task_status(task_id)
         if status is None:
             try:
                 _, _, period_desc = parse_time_period(period_str)
@@ -140,14 +180,20 @@ def _ensure_task_status(task_id: str, period_str: str, max_concurrent: int) -> D
                 period_desc = period_str
             status = _build_task_status(period_desc, max_concurrent)
             _task_status[task_id] = status
-        return status
+            _persist_task_status(task_id, status)
+        elif task_id not in _task_status:
+            _task_status[task_id] = status
+        return _clone_task_status(status)
 
 
 def _update_task_status(task_id: str, **fields: Any) -> Dict[str, Any]:
     with _task_status_lock:
-        status = _task_status.setdefault(task_id, {})
+        status = _task_status.get(task_id) or _load_persisted_task_status(task_id) or {}
         status.update(fields)
-        return _clone_task_status(status)
+        _task_status[task_id] = status
+        snapshot = _clone_task_status(status)
+        _persist_task_status(task_id, snapshot)
+        return snapshot
 
 
 def init_task_status(task_id: str, period_str: str, max_concurrent: int) -> Dict[str, Any]:
@@ -159,7 +205,9 @@ def init_task_status(task_id: str, period_str: str, max_concurrent: int) -> Dict
     status = _build_task_status(period_desc, max_concurrent)
     with _task_status_lock:
         _task_status[task_id] = status
-        return _clone_task_status(status)
+        snapshot = _clone_task_status(status)
+        _persist_task_status(task_id, snapshot)
+        return snapshot
 
 
 async def run_link_check_task(task_id: str, period_str: str, max_concurrent: int):
@@ -246,6 +294,7 @@ async def run_link_check_task(task_id: str, period_str: str, max_concurrent: int
         )
 
         validator = LinkValidator()
+        validator.result_cache.clear()
         check_start_time = time.time()
 
         async def progress_callback(checked: int, total: int, valid: int, invalid: int) -> None:
@@ -299,7 +348,8 @@ async def run_link_check_task(task_id: str, period_str: str, max_concurrent: int
                     url=result.get("url", record["url"]),
                     is_valid=result.get("is_valid", False),
                     response_time=result.get("response_time", 0),
-                    error_reason=result.get("error"),
+                    error_reason=result.get("error") or result.get("reason"),
+                    action_taken=result.get("status", "none"),
                 )
                 session.add(detail)
 
@@ -331,7 +381,12 @@ async def run_link_check_task(task_id: str, period_str: str, max_concurrent: int
 
 
 def get_task_status(task_id: str) -> Optional[Dict[str, Any]]:
+    persisted_status = _load_persisted_task_status(task_id)
     with _task_status_lock:
+        if persisted_status is not None:
+            _task_status[task_id] = persisted_status
+            return _clone_task_status(persisted_status)
+
         status = _task_status.get(task_id)
         return _clone_task_status(status) if status is not None else None
 
@@ -360,6 +415,26 @@ def get_task_history(limit: int = 20) -> List[Dict[str, Any]]:
         ]
 
 
+def get_link_check_date_range() -> Dict[str, Optional[str]]:
+    with Session(engine) as session:
+        earliest_message = (
+            session.query(Message)
+            .order_by(Message.timestamp.asc())
+            .first()
+        )
+        latest_message = (
+            session.query(Message)
+            .order_by(Message.timestamp.desc())
+            .first()
+        )
+
+    return {
+        "min_date": earliest_message.timestamp.date().isoformat() if earliest_message else None,
+        "max_date": datetime.now().date().isoformat(),
+        "latest_message_date": latest_message.timestamp.date().isoformat() if latest_message else None,
+    }
+
+
 def get_task_result(check_time_str: str) -> Dict[str, Any]:
     check_time = datetime.fromisoformat(check_time_str)
 
@@ -382,6 +457,8 @@ def get_task_result(check_time_str: str) -> Dict[str, Any]:
                 "total_links": stats.total_links,
                 "valid_links": stats.valid_links,
                 "invalid_links": stats.invalid_links,
+                "updated_messages": stats.updated_messages,
+                "deleted_messages": stats.deleted_messages,
                 "netdisk_stats": stats.netdisk_stats,
                 "duration": stats.check_duration,
                 "status": stats.status,
@@ -393,7 +470,37 @@ def get_task_result(check_time_str: str) -> Dict[str, Any]:
                     "is_valid": detail.is_valid,
                     "response_time": detail.response_time,
                     "error_reason": detail.error_reason,
+                    "status": detail.action_taken,
                 }
                 for detail in details
             ],
         }
+
+
+from app.services import link_check_runtime as _runtime
+from app.services.link_check_runtime import (  # noqa: E402,F401
+    ACTIVE_TASK_FILE,
+    FINAL_TASK_STATUSES,
+    LINK_VALIDATOR_AVAILABLE,
+    MAX_LOG_LINES,
+    RUNNING_TASK_STATUSES,
+    TASK_STATUS_DIR,
+    check_safety_limits,
+    delete_task_history_entries,
+    delete_task_history_entry,
+    extract_urls,
+    get_active_task_snapshot,
+    get_link_check_date_range,
+    get_task_history,
+    get_task_result,
+    get_task_status,
+    init_task_status,
+    parse_time_period,
+    request_task_stop,
+    run_link_check_task,
+    should_stop_task,
+    start_or_reuse_task,
+)
+
+_task_status = _runtime._task_status
+_task_status_lock = _runtime._task_status_lock

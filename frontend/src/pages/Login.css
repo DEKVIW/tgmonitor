@@ -3,26 +3,35 @@
   justify-content: center;
   align-items: center;
   min-height: 100vh;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  padding: 20px;
+  padding: 24px;
+  background:
+    radial-gradient(circle at 18% 18%, rgba(11, 107, 203, 0.18), transparent 28%),
+    radial-gradient(circle at 82% 14%, rgba(21, 128, 61, 0.14), transparent 22%),
+    linear-gradient(160deg, #f6fbff 0%, #eef5fb 48%, #f3f8f4 100%);
 }
 
 .login-card {
   width: 100%;
-  max-width: 400px;
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
-  border-radius: 12px;
+  max-width: 440px;
+  overflow: hidden;
+  box-shadow: var(--shadow-strong);
+  border: 1px solid rgba(216, 227, 238, 0.9);
+  border-radius: 28px;
+  backdrop-filter: blur(16px);
 }
 
 .login-card .ant-card-head {
   text-align: center;
-  border-bottom: 2px solid #f0f0f0;
+  border-bottom: 1px solid rgba(216, 227, 238, 0.72);
+  background:
+    linear-gradient(135deg, rgba(11, 107, 203, 0.08), rgba(17, 148, 184, 0.05)),
+    rgba(255, 255, 255, 0.9);
 }
 
 .login-card .ant-card-head-title {
   font-size: 24px;
   font-weight: 600;
-  color: #333;
+  color: var(--text-strong);
 }
 
 .login-card .ant-form-item {
@@ -35,9 +44,19 @@
 }
 
 .login-card .ant-btn-primary {
-  border-radius: 8px;
-  height: 42px;
+  border-radius: 14px;
+  height: 46px;
   font-size: 16px;
-  font-weight: 500;
+  font-weight: 600;
+}
+
+@media (max-width: 768px) {
+  .login-container {
+    padding: 16px;
+  }
+
+  .login-card {
+    border-radius: 24px;
+  }
 }
 

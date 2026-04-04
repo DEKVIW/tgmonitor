@@ -41,6 +41,14 @@ const Layout = ({ children }: LayoutProps) => {
       <Header collapsed={collapsed} onToggle={() => setCollapsed(!collapsed)} />
       <AntLayout>
         <Sidebar collapsed={collapsed} />
+        {isMobile && !collapsed && (
+          <button
+            type="button"
+            className="sidebar-backdrop"
+            aria-label="关闭侧边栏"
+            onClick={() => setCollapsed(true)}
+          />
+        )}
         <AntLayout
           className="layout-content"
           style={{ marginLeft: contentMarginLeft }}

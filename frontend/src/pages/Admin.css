@@ -1,10 +1,15 @@
 .admin-page {
-  padding: 0;
+  width: min(100%, var(--page-max-width));
+  margin: 0 auto;
+  padding: 22px clamp(16px, 2.2vw, 32px) 36px;
 }
 
 .admin-card {
-  border-radius: 8px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  overflow: hidden;
+  border-radius: 28px;
+  border: 1px solid rgba(216, 227, 238, 0.9);
+  box-shadow: var(--shadow-soft);
+  backdrop-filter: blur(14px);
 }
 
 .manager-header {
@@ -13,15 +18,291 @@
   justify-content: flex-end;
 }
 
+.admin-card .ant-card-head {
+  background:
+    linear-gradient(135deg, rgba(11, 107, 203, 0.08), rgba(17, 148, 184, 0.05)),
+    rgba(255, 255, 255, 0.92);
+  border-bottom: 1px solid rgba(216, 227, 238, 0.82);
+}
+
+.admin-card .ant-card-head-title {
+  color: var(--text-strong);
+  font-weight: 700;
+}
+
+.admin-card .ant-tabs-nav {
+  margin-bottom: 20px;
+}
+
+.admin-card .ant-tabs-tab {
+  padding: 10px 14px;
+  border-radius: 14px;
+}
+
+.admin-card .ant-tabs-tab-active {
+  background: rgba(11, 107, 203, 0.08);
+}
+
+.admin-card .ant-table-wrapper {
+  border-radius: 18px;
+  overflow: hidden;
+}
+
+.admin-card .ant-table-container {
+  border: 1px solid rgba(216, 227, 238, 0.9);
+  border-radius: 18px;
+}
+
+.admin-card .ant-btn-link {
+  font-weight: 600;
+}
+
+.channel-title-text {
+  display: inline-block;
+  max-width: 100%;
+}
+
+.channel-title-text,
+.channel-sample-summary-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.channel-sample-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  justify-content: space-between;
+  gap: 12px 16px;
+  margin-bottom: 16px;
+}
+
+.channel-sample-toolbar-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 140px;
+}
+
+.channel-sample-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  width: 100%;
+}
+
+.channel-sample-summary-text {
+  color: var(--text-secondary);
+}
+
+.channel-sample-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.sample-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sample-tag-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.sample-entity-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sample-entity-item {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid rgba(216, 227, 238, 0.9);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.sample-pre-block,
+.sample-json-block {
+  margin: 0;
+  padding: 14px 16px;
+  border-radius: 16px;
+  border: 1px solid rgba(216, 227, 238, 0.92);
+  background: rgba(245, 249, 252, 0.92);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+}
+
+.sample-record-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sample-record-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid rgba(216, 227, 238, 0.92);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.85);
+}
+
+.sample-record-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.sample-pretty-text {
+  margin-bottom: 0;
+  white-space: pre-wrap;
+}
+
+.sample-link-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sample-link-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.link-check-task-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 16px;
+}
+
+.link-check-date-range {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.link-check-date-range .ant-picker {
+  flex: 1 1 180px;
+  min-width: 0;
+}
+
+.link-check-date-separator {
+  color: #6b7280;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.link-check-form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 140px;
+}
+
+.link-check-form-field-wide {
+  flex: 1 1 460px;
+  min-width: min(100%, 420px);
+}
+
+.link-check-form-actions {
+  display: flex;
+  align-items: end;
+  padding-top: 28px;
+  margin-left: auto;
+}
+
+.link-check-helper-text {
+  display: block;
+}
+
+.link-check-log-console {
+  border: 1px solid rgba(16, 40, 78, 0.12);
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at top right, rgba(59, 130, 246, 0.08), transparent 38%),
+    linear-gradient(180deg, rgba(15, 23, 42, 0.94), rgba(16, 24, 39, 0.98));
+  color: rgba(241, 245, 249, 0.94);
+  padding: 14px 16px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.link-check-log-console-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.link-check-log-console-header .ant-typography {
+  color: rgba(248, 250, 252, 0.95);
+}
+
+.link-check-log-console .ant-list {
+  max-height: 260px;
+  overflow: auto;
+}
+
+.link-check-log-lines {
+  max-height: 320px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.link-check-log-line {
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+  color: rgba(226, 232, 240, 0.95);
+  font-family: 'Consolas', 'SFMono-Regular', 'Cascadia Mono', monospace;
+  font-size: 12px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.link-check-log-line:last-child {
+  border-bottom: 0;
+}
+
+.link-check-history-table .ant-table-cell {
+  white-space: nowrap;
+}
+
+.link-check-history-table .ant-table-tbody .ant-space {
+  flex-wrap: nowrap;
+}
+
+.link-check-history-table .ant-table-tbody .ant-btn {
+  padding-inline: 4px;
+}
+
 /* 移动端适配 */
 @media (max-width: 768px) {
   .admin-page {
-    padding: 0;
+    padding: 12px 12px 24px;
   }
 
   .admin-card {
     margin: 0;
-    border-radius: 0;
+    border-radius: 22px;
   }
 
   .admin-card .ant-card-body {
@@ -55,69 +336,69 @@
   }
 
   /* Modal 在移动端全屏 */
-  .ant-modal {
+  .responsive-modal-root .ant-modal {
     max-width: 100vw;
     margin: 0;
     top: 0;
     padding-bottom: 0;
   }
 
-  .ant-modal-content {
+  .responsive-modal-root .ant-modal-content {
     border-radius: 0;
     height: 100vh;
     display: flex;
     flex-direction: column;
   }
 
-  .ant-modal-body {
+  .responsive-modal-root .ant-modal-body {
     flex: 1;
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
   }
 
   /* Form 在移动端优化 */
-  .ant-form-item-label {
+  .admin-page .ant-form-item-label {
     padding-bottom: 4px;
   }
 
-  .ant-form-item-label > label {
+  .admin-page .ant-form-item-label > label {
     font-size: 14px;
   }
 
   /* Card 间距优化 */
-  .ant-card {
+  .admin-page .ant-card {
     margin-bottom: 12px;
   }
 
-  .ant-card-head {
+  .admin-page .ant-card-head {
     padding: 12px 16px;
     min-height: 48px;
   }
 
-  .ant-card-head-title {
+  .admin-page .ant-card-head-title {
     font-size: 16px;
   }
 
-  .ant-card-body {
+  .admin-page .ant-card-body {
     padding: 12px;
   }
 
   /* Space 组件在移动端垂直排列 */
-  .ant-space-horizontal {
+  .admin-page .ant-space-horizontal {
     flex-wrap: wrap;
   }
 
   /* 操作按钮在移动端优化 */
-  .ant-table-tbody .ant-btn {
+  .admin-page .ant-table-tbody .ant-btn {
     padding: 4px 8px;
     font-size: 12px;
     height: auto;
   }
 
   /* Select 和 Input 在移动端字体大小 */
-  .ant-select-selector,
-  .ant-input,
-  .ant-input-number-input {
+  .admin-page .ant-select-selector,
+  .admin-page .ant-input,
+  .admin-page .ant-input-number-input {
     font-size: 16px !important;
   }
 
@@ -175,13 +456,52 @@
     width: 100%;
   }
 
+  .channel-sample-toolbar {
+    align-items: stretch;
+  }
+
+  .channel-sample-toolbar-group {
+    width: 100%;
+  }
+
+  .link-check-task-form {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .link-check-form-field,
+  .link-check-form-field-wide,
+  .link-check-form-actions {
+    width: 100%;
+    min-width: 0;
+    padding-top: 0;
+    margin-left: 0;
+  }
+
+  .link-check-form-field-wide .ant-picker,
+  .link-check-date-range .ant-picker,
+  .link-check-form-actions .ant-btn,
+  .channel-sample-toolbar .ant-input-number,
+  .channel-sample-toolbar .ant-btn {
+    width: 100%;
+    max-width: none;
+  }
+
+  .link-check-date-range {
+    align-items: stretch;
+  }
+
+  .link-check-date-separator {
+    display: none;
+  }
+
   /* 表格操作列在移动端优化 */
-  .ant-table-tbody .ant-space {
+  .admin-page .ant-table-tbody .ant-space {
     flex-wrap: wrap;
     gap: 4px;
   }
 
-  .ant-table-tbody .ant-btn {
+  .admin-page .ant-table-tbody .ant-btn {
     margin: 2px 0;
   }
 }

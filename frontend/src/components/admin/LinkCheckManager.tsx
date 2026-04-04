@@ -30,8 +30,10 @@ import {
   getLinkCheckTaskStatus,
   getLinkCheckHistory,
   getLinkCheckResult,
+  applyLinkCheckCleanup,
 } from '@/api/admin'
 import {
+  LinkCleanupApplyRequest,
   LinkCheckTaskCreate,
   LinkCheckTaskStatus,
   LinkCheckTaskHistory,
@@ -50,7 +52,10 @@ const LinkCheckManager = () => {
   const [resultModalVisible, setResultModalVisible] = useState(false)
   const [selectedResult, setSelectedResult] = useState<LinkCheckTaskResult | null>(null)
   const [resultLoading, setResultLoading] = useState(false)
+  const [cleanupMode, setCleanupMode] = useState<LinkCleanupApplyRequest['mode']>('remove_invalid_links')
+  const [cleanupLoading, setCleanupLoading] = useState(false)
   const pollingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const pollingNotFoundCountRef = useRef(0)
 
   useEffect(() => {
     loadHistory()
@@ -83,6 +88,7 @@ const LinkCheckManager = () => {
       }
       const task = await startLinkCheckTask(taskData)
       setCurrentTask(task)
+      pollingNotFoundCountRef.current = 0
       message.success('检测任务已启动')
 
       // 开始轮询任务状态
@@ -93,6 +99,7 @@ const LinkCheckManager = () => {
   }
 
   const startPolling = (taskId: string) => {
+    pollingNotFoundCountRef.current = 0
     // 清除之前的轮询
     if (pollingIntervalRef.current) {
       clearInterval(pollingIntervalRef.current)
@@ -102,6 +109,7 @@ const LinkCheckManager = () => {
     pollingIntervalRef.current = setInterval(async () => {
       try {
         const status = await getLinkCheckTaskStatus(taskId)
+        pollingNotFoundCountRef.current = 0
         setCurrentTask(status)
 
         // 如果任务完成或失败，停止轮询
@@ -112,7 +120,11 @@ const LinkCheckManager = () => {
           }
           loadHistory() // 刷新历史记录
         }
-      } catch (error) {
+      } catch (error: any) {
+        if (error?.response?.status === 404) {
+          pollingNotFoundCountRef.current += 1
+          return
+        }
         console.error('获取任务状态失败:', error)
       }
     }, 2000) // 每2秒轮询一次
@@ -132,6 +144,44 @@ const LinkCheckManager = () => {
     } finally {
       setResultLoading(false)
     }
+  }
+
+  const handleApplyCleanup = () => {
+    if (!selectedResult?.stats?.check_time) return
+
+    const actionText =
+      cleanupMode === 'delete_message_if_empty'
+        ? '移除本次检测确认失效的网盘链接；如果消息已没有有效链接，则删除整条消息。'
+        : '仅移除本次检测确认失效的网盘链接，保留消息正文和其他有效网盘链接。'
+
+    Modal.confirm({
+      title: '确认应用死链清理？',
+      content: actionText,
+      okText: '确认清理',
+      cancelText: '取消',
+      okButtonProps: { danger: cleanupMode === 'delete_message_if_empty' },
+      onOk: async () => {
+        setCleanupLoading(true)
+        try {
+          const result = await applyLinkCheckCleanup(selectedResult.stats.check_time, {
+            mode: cleanupMode,
+            dry_run: false,
+          })
+
+          message.success(
+            `清理完成：移除 ${result.removed_links} 个失效链接，更新 ${result.updated_messages} 条消息，删除 ${result.deleted_messages} 条消息`
+          )
+
+          const refreshedResult = await getLinkCheckResult(selectedResult.stats.check_time)
+          setSelectedResult(refreshedResult)
+          await loadHistory()
+        } catch (error: any) {
+          message.error(error.response?.data?.detail || '应用死链清理失败')
+        } finally {
+          setCleanupLoading(false)
+        }
+      },
+    })
   }
 
   const formatDuration = (seconds?: number) => {
@@ -205,6 +255,8 @@ const LinkCheckManager = () => {
       ),
     },
   ]
+
+  const invalidDetails = selectedResult?.details.filter((detail) => !detail.is_valid) || []
 
   return (
     <div className="link-check-manager">
@@ -345,6 +397,7 @@ const LinkCheckManager = () => {
       <Modal
         title="检测结果详情"
         open={resultModalVisible}
+        rootClassName="responsive-modal-root"
         onCancel={() => {
           setResultModalVisible(false)
           setSelectedResult(null)
@@ -379,15 +432,53 @@ const LinkCheckManager = () => {
               <Descriptions.Item label="失效链接">
                 <Tag color="error">{selectedResult.stats.invalid_links}</Tag>
               </Descriptions.Item>
+              <Descriptions.Item label="已更新消息">
+                {selectedResult.stats.updated_messages ?? 0}
+              </Descriptions.Item>
+              <Descriptions.Item label="已删除消息">
+                {selectedResult.stats.deleted_messages ?? 0}
+              </Descriptions.Item>
               <Descriptions.Item label="检测耗时">
                 {formatDuration(selectedResult.stats.duration)}
               </Descriptions.Item>
             </Descriptions>
 
+            {invalidDetails.length > 0 && (
+              <Card size="small" style={{ marginBottom: 16 }}>
+                <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+                  <Alert
+                    type="info"
+                    showIcon
+                    message="死链清理会修改消息数据，但不会删除这次检测历史记录"
+                    description="普通前台消息页直接读取消息里的 links 字段，因此清理后，对应网盘标签和下载链接会自动消失。"
+                  />
+                  <Space wrap>
+                    <Text strong>处理策略:</Text>
+                    <Select<LinkCleanupApplyRequest['mode']>
+                      value={cleanupMode}
+                      onChange={setCleanupMode}
+                      style={{ width: 260 }}
+                    >
+                      <Option value="remove_invalid_links">仅移除失效网盘链接</Option>
+                      <Option value="delete_message_if_empty">移除失效链接，空消息则删除整条</Option>
+                    </Select>
+                    <Button
+                      type="primary"
+                      danger={cleanupMode === 'delete_message_if_empty'}
+                      loading={cleanupLoading}
+                      onClick={handleApplyCleanup}
+                    >
+                      应用死链清理
+                    </Button>
+                  </Space>
+                </Space>
+              </Card>
+            )}
+
             <div>
               <Text strong>失效链接详情（最多显示1000条）:</Text>
               <Table
-                dataSource={selectedResult.details.filter((d) => !d.is_valid)}
+                dataSource={invalidDetails}
                 rowKey={(record, index) => `${record.url}-${index}`}
                 pagination={{ pageSize: 20 }}
                 size="small"
@@ -430,4 +521,3 @@ const LinkCheckManager = () => {
 }
 
 export default LinkCheckManager
-
