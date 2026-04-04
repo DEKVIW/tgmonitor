@@ -10,7 +10,7 @@ import aiohttp
 import re
 import time
 import random
-from typing import Dict, List, Tuple, Optional
+from typing import Awaitable, Callable, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 import validators
 
@@ -389,6 +389,119 @@ class LinkValidator:
         
         return all_results
     
+    async def retry_failed_links_with_identity(self, failed_results: List[Dict]) -> List[Dict]:
+        """Retry failed results while preserving the original input index."""
+        if not failed_results:
+            return []
+
+        retry_results = []
+        for result in failed_results:
+            if not self.is_retryable_error(result):
+                retry_results.append(result)
+                continue
+
+            final_result = result
+            for _ in range(self.max_retries):
+                await asyncio.sleep(self.retry_delay)
+                new_result = await self.check_single_link(result["url"])
+                new_result["_input_index"] = result.get("_input_index")
+                final_result = new_result
+
+                if new_result["is_valid"] or not self.is_retryable_error(new_result):
+                    break
+
+            retry_results.append(final_result)
+
+        return retry_results
+
+    async def check_multiple_links_with_progress(
+        self,
+        urls: List[str],
+        max_concurrent: int = 5,
+        progress_callback: Optional[Callable[[int, int, int, int], Awaitable[None]]] = None,
+    ) -> List[Dict]:
+        """Check links concurrently while preserving input order and reporting progress."""
+        if not urls:
+            if progress_callback is not None:
+                await progress_callback(0, 0, 0, 0)
+            return []
+
+        indexed_urls = list(enumerate(urls))
+        netdisk_groups: Dict[str, List[Tuple[int, str]]] = {}
+        for input_index, url in indexed_urls:
+            netdisk_type = self.get_netdisk_type(url)
+            netdisk_groups.setdefault(netdisk_type, []).append((input_index, url))
+
+        all_results: List[Optional[Dict]] = [None] * len(urls)
+        checked = 0
+        valid = 0
+        invalid = 0
+
+        async def report_progress() -> None:
+            if progress_callback is not None:
+                await progress_callback(checked, len(urls), valid, invalid)
+
+        for netdisk_type, entries in netdisk_groups.items():
+            limits = self.get_netdisk_limits(netdisk_type)
+            netdisk_concurrent = min(limits["max_concurrent"], max_concurrent)
+            semaphore = asyncio.Semaphore(netdisk_concurrent)
+
+            async def check_with_semaphore(input_index: int, url: str) -> Tuple[int, Dict]:
+                async with semaphore:
+                    try:
+                        result = await self.check_single_link(url)
+                    except Exception as exc:
+                        result = {
+                            "url": url,
+                            "netdisk_type": netdisk_type,
+                            "is_valid": False,
+                            "status_code": None,
+                            "response_time": None,
+                            "error": str(exc),
+                            "reason": "检查异常",
+                        }
+
+                result["_input_index"] = input_index
+                return input_index, result
+
+            tasks = [
+                asyncio.create_task(check_with_semaphore(input_index, url))
+                for input_index, url in entries
+            ]
+
+            for task in asyncio.as_completed(tasks):
+                input_index, result = await task
+                all_results[input_index] = result
+                checked += 1
+                if result["is_valid"]:
+                    valid += 1
+                else:
+                    invalid += 1
+                await report_progress()
+
+        failed_results = [result for result in all_results if result and not result["is_valid"]]
+        if failed_results:
+            retry_results = await self.retry_failed_links_with_identity(failed_results)
+            for retry_result in retry_results:
+                input_index = retry_result.get("_input_index")
+                if input_index is None:
+                    continue
+
+                old_result = all_results[input_index]
+                if old_result and old_result["is_valid"] != retry_result["is_valid"]:
+                    if retry_result["is_valid"]:
+                        valid += 1
+                        invalid -= 1
+                    else:
+                        valid -= 1
+                        invalid += 1
+
+                all_results[input_index] = retry_result
+
+            await report_progress()
+
+        return [result for result in all_results if result is not None]
+
     def get_summary(self, results: List[Dict]) -> Dict:
         """获取检测结果摘要"""
         total = len(results)

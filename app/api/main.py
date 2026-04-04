@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.models.config import settings
 from app.api import auth, messages, statistics, admin
-from app.schemas.admin import SystemConfigResponse
+from app.schemas.admin_models import SystemConfigResponse
 import logging
 
 # 配置日志

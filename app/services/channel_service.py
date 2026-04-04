@@ -11,6 +11,7 @@ from telethon import TelegramClient, events
 from sqlalchemy.orm import Session
 from app.models.models import Channel, Credential, engine
 from app.models.config import settings
+from app.utils.channel_utils import dedupe_preserve_order, normalize_channel_username
 import logging
 
 logger = logging.getLogger(__name__)
@@ -54,17 +55,25 @@ def get_api_credentials() -> Tuple[int, str]:
 
 def get_channels() -> List[str]:
     """获取频道列表"""
-    channels = set()
+    channels: List[str] = []
     
     with Session(engine) as session:
-        db_channels = [c.username for c in session.query(Channel).all()]
-        channels.update(db_channels)
+        for channel in session.query(Channel).all():
+            try:
+                channels.append(normalize_channel_username(channel.username))
+            except ValueError:
+                logger.warning("Skipping invalid channel from database: %s", channel.username)
     
     if hasattr(settings, 'DEFAULT_CHANNELS'):
-        env_channels = [c.strip() for c in settings.DEFAULT_CHANNELS.split(',') if c.strip()]
-        channels.update(env_channels)
+        for raw_channel in settings.DEFAULT_CHANNELS.split(','):
+            if not raw_channel.strip():
+                continue
+            try:
+                channels.append(normalize_channel_username(raw_channel))
+            except ValueError:
+                logger.warning("Skipping invalid channel from settings: %s", raw_channel)
     
-    return list(channels)
+    return dedupe_preserve_order(channels)
 
 
 async def diagnose_channels() -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
@@ -142,11 +151,9 @@ async def test_monitor() -> Dict[str, Any]:
         }
     
     api_id, api_hash = get_api_credentials()
-    
-    with Session(engine) as session:
-        db_channels = [c.username for c in session.query(Channel).all()]
-    
-    if not db_channels:
+
+    channel_usernames = get_channels()
+    if not channel_usernames:
         return {
             "success": False,
             "error": "没有有效的频道可供监听"
@@ -160,7 +167,7 @@ async def test_monitor() -> Dict[str, Any]:
         # 注册事件处理器
         message_received = False
         
-        @client.on(events.NewMessage(chats=db_channels))
+        @client.on(events.NewMessage(chats=channel_usernames))
         async def test_handler(event):
             nonlocal message_received
             message_received = True
@@ -172,7 +179,7 @@ async def test_monitor() -> Dict[str, Any]:
         
         return {
             "success": True,
-            "channels_tested": len(db_channels),
+            "channels_tested": len(channel_usernames),
             "message_received": message_received,
             "message": "测试完成，事件处理器已注册"
         }

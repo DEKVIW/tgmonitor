@@ -1,77 +1,132 @@
 """
-管理相关 API 路由
-包括API凭据管理和频道管理
+管理相关 API 路由。
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+from __future__ import annotations
+
+import uuid
+from typing import Any, Dict, List
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
-from typing import List
-from app.schemas.admin import (
-    CredentialResponse,
-    CredentialCreate,
-    ChannelResponse,
+
+from app.api.dependencies import get_admin_user, get_db
+from app.models.config import settings
+from app.models.models import Channel, Credential
+from app.schemas.admin_models import (
+    BulkCreateResponse,
+    BulkRandomCreateRequest,
+    BulkSimpleResponse,
+    BulkUsernamesRequest,
     ChannelCreate,
+    ChannelDiagnosisResult,
+    ChannelResponse,
+    ClearOldDataRequest,
+    CredentialCreate,
+    CredentialResponse,
+    LinkCheckTaskCreate,
+    LinkCheckTaskHistory,
+    LinkCheckTaskResult,
+    LinkCheckTaskStatus,
+    MaintenanceResult,
+    MonitorTestResult,
+    PasswordChange,
+    RoleChange,
     SystemConfigResponse,
     SystemConfigUpdate,
-    UserResponse,
     UserCreate,
+    UserResponse,
     UserUpdate,
-    PasswordChange,
     UsernameChange,
-    RoleChange,
-    BulkRandomCreateRequest,
-    BulkCreateResponse,
-    BulkUsernamesRequest,
-    BulkSimpleResponse,
-    BulkResetResult,
-    MaintenanceResult,
-    ClearOldDataRequest
 )
-from app.models.models import Credential, Channel
-from app.api.dependencies import get_db, get_current_user, get_admin_user
-from app.models.config import settings
+from app.services.channel_service import diagnose_channels, test_monitor
+from app.services.link_check_service import (
+    get_task_history,
+    get_task_result,
+    get_task_status,
+    init_task_status,
+    parse_time_period,
+    run_link_check_task,
+)
+from app.services.maintenance_service import (
+    clear_link_check_data,
+    clear_old_link_check_data,
+    dedup_links,
+    fix_tags,
+)
 from app.services.user_service import (
-    list_users,
-    get_user,
     add_user,
-    update_user,
-    change_password,
-    change_username,
-    change_user_role,
-    remove_user,
-    get_available_roles,
     bulk_create_random_users,
     bulk_remove_users,
     bulk_reset_passwords,
-    export_users
+    change_password,
+    change_user_role,
+    change_username,
+    export_users,
+    get_available_roles,
+    get_user,
+    list_users,
+    remove_user,
+    update_user,
 )
-from app.services.maintenance_service import (
-    fix_tags,
-    dedup_links,
-    clear_link_check_data,
-    clear_old_link_check_data
-)
-from app.services.channel_service import (
-    diagnose_channels,
-    test_monitor
-)
-from app.services.link_check_service import (
-    run_link_check_task,
-    get_task_status,
-    get_task_history,
-    get_task_result
-)
-from app.schemas.admin import (
-    ChannelDiagnosisResult,
-    MonitorTestResult,
-    LinkCheckTaskCreate,
-    LinkCheckTaskStatus,
-    LinkCheckTaskHistory,
-    LinkCheckTaskResult
-)
-import uuid
-from typing import Dict, Any, List
-import os
+from app.utils.channel_utils import normalize_channel_username
+from app.utils.env_utils import upsert_env_value
+
+
+def _count_admin_users() -> int:
+    return sum(1 for user in list_users() if user.get("role") == "admin")
+
+
+def _get_user_or_404(username: str) -> Dict[str, Any]:
+    user = get_user(username)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"用户 {username} 不存在",
+        )
+    return user
+
+
+def _ensure_not_last_admin(username: str, target_role: str | None = None) -> None:
+    user = get_user(username)
+    if not user:
+        return
+    if user.get("role") != "admin":
+        return
+    if target_role == "admin":
+        return
+    if _count_admin_users() <= 1:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="至少需要保留一个管理员",
+        )
+
+
+def _serialize_channel(channel: Channel) -> ChannelResponse:
+    try:
+        username = normalize_channel_username(channel.username)
+    except ValueError:
+        username = channel.username
+    return ChannelResponse(id=channel.id, username=username)
+
+
+def _find_channel_conflict(
+    db: Session,
+    username: str,
+    *,
+    exclude_id: int | None = None,
+) -> Channel | None:
+    normalized_username = normalize_channel_username(username)
+    for channel in db.query(Channel).all():
+        if exclude_id is not None and channel.id == exclude_id:
+            continue
+        try:
+            existing_username = normalize_channel_username(channel.username)
+        except ValueError:
+            continue
+        if existing_username == normalized_username:
+            return channel
+    return None
 
 router = APIRouter(prefix="/api/admin", tags=["管理"])
 
@@ -184,7 +239,7 @@ async def get_channels(
     """
     try:
         channels = db.query(Channel).all()
-        return [ChannelResponse.from_orm(channel) for channel in channels]
+        return [_serialize_channel(channel) for channel in channels]
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -204,20 +259,19 @@ async def create_channel(
     需要 Bearer Token 认证
     """
     try:
-        # 检查是否已存在相同的频道
-        existing = db.query(Channel).filter(Channel.username == channel_data.username).first()
-        if existing:
+        existing = _find_channel_conflict(db, channel_data.username)
+        if existing is not None:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
+                status_code=status.HTTP_409_CONFLICT,
                 detail=f"频道 {channel_data.username} 已存在"
             )
-        
+
         channel = Channel(username=channel_data.username)
         db.add(channel)
         db.commit()
         db.refresh(channel)
-        
-        return ChannelResponse.from_orm(channel)
+
+        return _serialize_channel(channel)
     except HTTPException:
         raise
     except Exception as e:
@@ -247,23 +301,19 @@ async def update_channel(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"频道 {channel_id} 不存在"
             )
-        
-        # 检查新用户名是否已存在
-        existing = db.query(Channel).filter(
-            Channel.username == channel_data.username,
-            Channel.id != channel_id
-        ).first()
-        if existing:
+
+        existing = _find_channel_conflict(db, channel_data.username, exclude_id=channel_id)
+        if existing is not None:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
+                status_code=status.HTTP_409_CONFLICT,
                 detail=f"频道 {channel_data.username} 已存在"
             )
-        
+
         channel.username = channel_data.username
         db.commit()
         db.refresh(channel)
-        
-        return ChannelResponse.from_orm(channel)
+
+        return _serialize_channel(channel)
     except HTTPException:
         raise
     except Exception as e:
@@ -335,40 +385,20 @@ async def update_system_config(
     
     注意：配置更新会写入 .env 文件，需要重启服务才能完全生效
     """
+    previous_value = settings.PUBLIC_DASHBOARD_ENABLED
     try:
-        # 更新配置对象
         settings.PUBLIC_DASHBOARD_ENABLED = config_data.public_dashboard_enabled
-        
-        # 更新 .env 文件
-        env_file = ".env"
-        if os.path.exists(env_file):
-            # 读取现有 .env 内容
-            with open(env_file, 'r', encoding='utf-8') as f:
-                lines = f.readlines()
+        upsert_env_value(
+            ".env",
+            "PUBLIC_DASHBOARD_ENABLED",
+            str(config_data.public_dashboard_enabled).lower(),
+        )
 
-            # 确保最后一行以换行结尾，避免黏连
-            if lines and not lines[-1].endswith('\n'):
-                lines[-1] = lines[-1] + '\n'
-            
-            # 更新或添加 PUBLIC_DASHBOARD_ENABLED
-            updated = False
-            for i, line in enumerate(lines):
-                if line.startswith('PUBLIC_DASHBOARD_ENABLED='):
-                    lines[i] = f'PUBLIC_DASHBOARD_ENABLED={str(config_data.public_dashboard_enabled).lower()}\n'
-                    updated = True
-                    break
-            
-            if not updated:
-                lines.append(f'PUBLIC_DASHBOARD_ENABLED={str(config_data.public_dashboard_enabled).lower()}\n')
-            
-            # 写回文件
-            with open(env_file, 'w', encoding='utf-8') as f:
-                f.writelines(lines)
-        
         return SystemConfigResponse(
             public_dashboard_enabled=settings.PUBLIC_DASHBOARD_ENABLED
         )
     except Exception as e:
+        settings.PUBLIC_DASHBOARD_ENABLED = previous_value
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"更新系统配置失败: {str(e)}"
@@ -425,12 +455,7 @@ async def get_user_info(
     需要 Bearer Token 认证（管理员权限）
     """
     try:
-        user = get_user(username)
-        if not user:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"用户 {username} 不存在"
-            )
+        user = _get_user_or_404(username)
         return UserResponse(**user)
     except HTTPException:
         raise
@@ -452,6 +477,12 @@ async def create_user(
     需要 Bearer Token 认证（管理员权限）
     """
     try:
+        if get_user(user_data.username):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"用户 {user_data.username} 已存在",
+            )
+
         success = add_user(
             username=user_data.username,
             password=user_data.password,
@@ -495,6 +526,10 @@ async def update_user_info(
     需要 Bearer Token 认证（管理员权限）
     """
     try:
+        _get_user_or_404(username)
+        if user_data.role is not None and user_data.role != "admin":
+            _ensure_not_last_admin(username, user_data.role)
+
         success = update_user(
             username=username,
             name=user_data.name,
@@ -537,6 +572,7 @@ async def change_user_password(
     需要 Bearer Token 认证（管理员权限）
     """
     try:
+        _get_user_or_404(username)
         success = change_password(username, password_data.new_password)
         
         if not success:
@@ -567,6 +603,23 @@ async def change_user_username(
     需要 Bearer Token 认证（管理员权限）
     """
     try:
+        _get_user_or_404(username)
+        if username == "admin":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="不能修改 admin 用户名",
+            )
+        if username == username_data.new_username:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="新用户名不能与原用户名相同",
+            )
+        if get_user(username_data.new_username):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"用户 {username_data.new_username} 已存在",
+            )
+
         success = change_username(username, username_data.new_username)
         
         if not success:
@@ -597,6 +650,10 @@ async def change_user_role_api(
     需要 Bearer Token 认证（管理员权限）
     """
     try:
+        _get_user_or_404(username)
+        if role_data.new_role != "admin":
+            _ensure_not_last_admin(username, role_data.new_role)
+
         success = change_user_role(username, role_data.new_role)
         
         if not success:
@@ -628,6 +685,14 @@ async def delete_user(
     注意：不能删除 admin 用户
     """
     try:
+        _get_user_or_404(username)
+        if username == "admin":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="不能删除 admin 用户",
+            )
+        _ensure_not_last_admin(username)
+
         success = remove_user(username)
         
         if not success:
@@ -878,22 +943,30 @@ async def start_link_check_task(
     - 2024-01-15:2024-01-20: 日期范围
     """
     try:
+        try:
+            parse_time_period(task_data.period)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
+
         task_id = str(uuid.uuid4())
-        
-        # 添加后台任务
+        initial_status = init_task_status(task_id, task_data.period, task_data.max_concurrent)
+
         background_tasks.add_task(
             run_link_check_task,
             task_id,
             task_data.period,
             task_data.max_concurrent
         )
-        
-        # 返回初始状态
+
         return LinkCheckTaskStatus(
             task_id=task_id,
-            status="running",
-            progress=0
+            **initial_status
         )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -926,7 +999,7 @@ async def get_link_check_task_status(
 
 @router.get("/link-check/tasks", response_model=List[LinkCheckTaskHistory], summary="获取检测历史")
 async def get_link_check_history(
-    limit: int = 20,
+    limit: int = Query(20, ge=1, le=200),
     current_user: Dict[str, Any] = Depends(get_admin_user)
 ) -> List[LinkCheckTaskHistory]:
     """
@@ -962,6 +1035,11 @@ async def get_link_check_result(
                 detail=result["error"]
             )
         return LinkCheckTaskResult(**result)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"检测时间格式无效: {str(e)}"
+        ) from e
     except HTTPException:
         raise
     except Exception as e:

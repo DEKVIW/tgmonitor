@@ -1,120 +1,110 @@
 """
-链接检测服务
-复用 app/scripts/manage.py 和 app/scripts/link_validator.py 中的逻辑
+Link check service used by the admin backend.
 """
 
-import asyncio
-import json
-import time
-from datetime import datetime, timedelta
-from typing import Dict, Any, List, Optional
-from sqlalchemy.orm import Session
-from app.models.models import Message, LinkCheckStats, LinkCheckDetails, engine
-from app.models.config import settings
 import logging
+import threading
+import time
+from copy import deepcopy
+from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional, Tuple
+
+from sqlalchemy.orm import Session
+
+from app.models.models import LinkCheckDetails, LinkCheckStats, Message, engine
 
 logger = logging.getLogger(__name__)
 
-# 任务状态存储（内存，生产环境建议用Redis）
 _task_status: Dict[str, Dict[str, Any]] = {}
+_task_status_lock = threading.RLock()
 
-# 尝试导入LinkValidator
 try:
     from app.scripts.link_validator import LinkValidator
+
     LINK_VALIDATOR_AVAILABLE = True
 except ImportError:
     try:
         from link_validator import LinkValidator
+
         LINK_VALIDATOR_AVAILABLE = True
     except ImportError:
         LINK_VALIDATOR_AVAILABLE = False
-        logger.warning("link_validator.py 未找到，链接检测功能不可用")
+        logger.warning("link_validator.py not found, link check is unavailable")
 
 
-def extract_urls(links):
-    """提取所有URL（复用manage.py中的函数）"""
-    urls = []
+def extract_urls(links: Any) -> List[str]:
+    urls: List[str] = []
     if isinstance(links, str):
         urls.append(links)
     elif isinstance(links, dict):
-        for v in links.values():
-            urls.extend(extract_urls(v))
+        for value in links.values():
+            urls.extend(extract_urls(value))
     elif isinstance(links, list):
         for item in links:
-            if isinstance(item, dict) and 'url' in item:
-                urls.append(item['url'])
+            if isinstance(item, dict) and "url" in item:
+                urls.append(item["url"])
             else:
                 urls.extend(extract_urls(item))
     return urls
 
 
-def parse_time_period(period_str: str) -> tuple:
-    """解析时间段字符串，返回开始和结束时间"""
-    from datetime import datetime, timedelta
-    
+def parse_time_period(period_str: str) -> Tuple[datetime, datetime, str]:
     now = datetime.now()
     period_str = period_str.lower().strip()
-    
-    if period_str == 'today':
+
+    if period_str == "today":
         start_time = now.replace(hour=0, minute=0, second=0, microsecond=0)
         end_time = now
-        period_desc = '今天'
-    elif period_str == 'yesterday':
+        period_desc = "今天"
+    elif period_str == "yesterday":
         yesterday = now - timedelta(days=1)
         start_time = yesterday.replace(hour=0, minute=0, second=0, microsecond=0)
         end_time = yesterday.replace(hour=23, minute=59, second=59, microsecond=999999)
-        period_desc = '昨天'
-    elif period_str == 'week':
+        period_desc = "昨天"
+    elif period_str == "week":
         start_time = now - timedelta(days=7)
         end_time = now
-        period_desc = '最近7天'
-    elif period_str == 'month':
+        period_desc = "最近7天"
+    elif period_str == "month":
         start_time = now - timedelta(days=30)
         end_time = now
-        period_desc = '最近30天'
-    elif period_str == 'year':
+        period_desc = "最近30天"
+    elif period_str == "year":
         start_time = now - timedelta(days=365)
         end_time = now
-        period_desc = '最近365天'
-    elif ':' in period_str:
-        # 日期范围格式：2024-01-15:2024-01-20
-        parts = period_str.split(':')
-        if len(parts) == 2:
-            start_str, end_str = parts
-            start_time = datetime.strptime(start_str.strip(), '%Y-%m-%d')
-            end_time = datetime.strptime(end_str.strip(), '%Y-%m-%d') + timedelta(days=1)
-            period_desc = f'{start_str} 至 {end_str}'
-        else:
+        period_desc = "最近365天"
+    elif ":" in period_str:
+        parts = period_str.split(":")
+        if len(parts) != 2:
             raise ValueError("日期范围格式错误")
-    elif len(period_str) == 10 and '-' in period_str:
-        # 单个日期：2024-01-15
-        start_time = datetime.strptime(period_str, '%Y-%m-%d')
+        start_str, end_str = parts
+        start_time = datetime.strptime(start_str.strip(), "%Y-%m-%d")
+        end_time = datetime.strptime(end_str.strip(), "%Y-%m-%d") + timedelta(days=1)
+        period_desc = f"{start_str} 至 {end_str}"
+    elif len(period_str) == 10 and "-" in period_str:
+        start_time = datetime.strptime(period_str, "%Y-%m-%d")
         end_time = start_time + timedelta(days=1)
         period_desc = period_str
-    elif len(period_str) == 7 and '-' in period_str:
-        # 月份：2024-01
-        start_time = datetime.strptime(period_str, '%Y-%m')
+    elif len(period_str) == 7 and "-" in period_str:
+        start_time = datetime.strptime(period_str, "%Y-%m")
         if start_time.month == 12:
             end_time = datetime(start_time.year + 1, 1, 1)
         else:
             end_time = datetime(start_time.year, start_time.month + 1, 1)
         period_desc = period_str
     elif len(period_str) == 4:
-        # 年份：2024
         start_time = datetime(int(period_str), 1, 1)
         end_time = datetime(int(period_str) + 1, 1, 1)
         period_desc = period_str
     else:
         raise ValueError(f"无法解析时间段: {period_str}")
-    
+
     return start_time, end_time, period_desc
 
 
 def check_safety_limits(url_count: int, max_concurrent: int) -> bool:
-    """检查安全限制"""
     max_links = 1000
     max_concurrent_global = 10
-    
     if url_count > max_links:
         return False
     if max_concurrent > max_concurrent_global:
@@ -122,177 +112,239 @@ def check_safety_limits(url_count: int, max_concurrent: int) -> bool:
     return True
 
 
-async def run_link_check_task(
-    task_id: str,
-    period_str: str,
-    max_concurrent: int
-):
-    """
-    运行链接检测任务（异步）
-    
-    Args:
-        task_id: 任务ID
-        period_str: 时间段字符串
-        max_concurrent: 最大并发数
-    """
-    if not LINK_VALIDATOR_AVAILABLE:
-        _task_status[task_id] = {
-            "status": "failed",
-            "error": "链接检测功能不可用，请确保 link_validator.py 存在",
-            "progress": 0
-        }
-        return
-    
+def _build_task_status(period_desc: str, max_concurrent: int) -> Dict[str, Any]:
+    return {
+        "status": "running",
+        "progress": 0,
+        "period_desc": period_desc,
+        "max_concurrent": max_concurrent,
+        "total_links": 0,
+        "checked_links": 0,
+        "valid_links": 0,
+        "invalid_links": 0,
+        "logs": [],
+    }
+
+
+def _clone_task_status(status: Dict[str, Any]) -> Dict[str, Any]:
+    return deepcopy(status)
+
+
+def _ensure_task_status(task_id: str, period_str: str, max_concurrent: int) -> Dict[str, Any]:
+    with _task_status_lock:
+        status = _task_status.get(task_id)
+        if status is None:
+            try:
+                _, _, period_desc = parse_time_period(period_str)
+            except Exception:
+                period_desc = period_str
+            status = _build_task_status(period_desc, max_concurrent)
+            _task_status[task_id] = status
+        return status
+
+
+def _update_task_status(task_id: str, **fields: Any) -> Dict[str, Any]:
+    with _task_status_lock:
+        status = _task_status.setdefault(task_id, {})
+        status.update(fields)
+        return _clone_task_status(status)
+
+
+def init_task_status(task_id: str, period_str: str, max_concurrent: int) -> Dict[str, Any]:
     try:
-        # 解析时间段
+        _, _, period_desc = parse_time_period(period_str)
+    except Exception:
+        period_desc = period_str
+
+    status = _build_task_status(period_desc, max_concurrent)
+    with _task_status_lock:
+        _task_status[task_id] = status
+        return _clone_task_status(status)
+
+
+async def run_link_check_task(task_id: str, period_str: str, max_concurrent: int):
+    _ensure_task_status(task_id, period_str, max_concurrent)
+
+    if not LINK_VALIDATOR_AVAILABLE:
+        _update_task_status(
+            task_id,
+            status="failed",
+            error="链接检测功能不可用，请确认 link_validator.py 存在",
+            progress=0,
+        )
+        return
+
+    try:
         start_time, end_time, period_desc = parse_time_period(period_str)
-        
-        # 更新任务状态
-        _task_status[task_id] = {
-            "status": "running",
-            "progress": 0,
-            "period_desc": period_desc,
-            "start_time": start_time.isoformat(),
-            "end_time": end_time.isoformat(),
-            "max_concurrent": max_concurrent,
-            "total_links": 0,
-            "checked_links": 0,
-            "valid_links": 0,
-            "invalid_links": 0,
-            "logs": []
-        }
-        
-        # 获取消息
+        _update_task_status(
+            task_id,
+            status="running",
+            period_desc=period_desc,
+            start_time=start_time.isoformat(),
+            end_time=end_time.isoformat(),
+            max_concurrent=max_concurrent,
+            logs=[],
+        )
+
         with Session(engine) as session:
-            messages = session.query(Message).filter(
-                Message.timestamp >= start_time,
-                Message.timestamp < end_time,
-                Message.links.isnot(None)
-            ).all()
-        
+            messages = (
+                session.query(Message)
+                .filter(
+                    Message.timestamp >= start_time,
+                    Message.timestamp < end_time,
+                    Message.links.isnot(None),
+                )
+                .all()
+            )
+
         if not messages:
-            _task_status[task_id] = {
-                "status": "completed",
-                "progress": 100,
-                "error": "没有找到需要检测的消息",
-                "total_links": 0
-            }
+            _update_task_status(
+                task_id,
+                status="completed",
+                progress=100,
+                error="没有找到需要检测的消息",
+                total_links=0,
+                checked_links=0,
+                valid_links=0,
+                invalid_links=0,
+            )
             return
-        
-        # 提取链接
-        all_urls = []
+
+        link_records: List[Dict[str, Any]] = []
         for msg in messages:
-            urls = extract_urls(msg.links)
-            if urls:
-                all_urls.extend(urls)
-        
-        if not all_urls:
-            _task_status[task_id] = {
-                "status": "completed",
-                "progress": 100,
-                "error": "没有找到需要检测的链接",
-                "total_links": 0
-            }
+            for url in extract_urls(msg.links):
+                if isinstance(url, str) and url.strip():
+                    link_records.append({"message_id": msg.id, "url": url.strip()})
+
+        if not link_records:
+            _update_task_status(
+                task_id,
+                status="completed",
+                progress=100,
+                error="没有找到需要检测的链接",
+                total_links=0,
+                checked_links=0,
+                valid_links=0,
+                invalid_links=0,
+            )
             return
-        
-        # 安全检查
+
+        all_urls = [record["url"] for record in link_records]
         if not check_safety_limits(len(all_urls), max_concurrent):
-            _task_status[task_id] = {
-                "status": "failed",
-                "error": f"链接数量 ({len(all_urls)}) 或并发数 ({max_concurrent}) 超过安全限制",
-                "progress": 0
-            }
+            _update_task_status(
+                task_id,
+                status="failed",
+                error=f"链接数量 ({len(all_urls)}) 或并发数 ({max_concurrent}) 超过安全限制",
+                progress=0,
+            )
             return
-        
-        # 更新任务状态
-        _task_status[task_id]["total_links"] = len(all_urls)
-        _task_status[task_id]["logs"].append(f"开始检测 {len(all_urls)} 个链接...")
-        
-        # 开始检测
+
+        _update_task_status(
+            task_id,
+            total_links=len(all_urls),
+            logs=[f"开始检测 {len(all_urls)} 个链接"],
+        )
+
         validator = LinkValidator()
         check_start_time = time.time()
-        
-        # 使用回调更新进度
-        async def progress_callback(checked: int, total: int, valid: int, invalid: int):
+
+        async def progress_callback(checked: int, total: int, valid: int, invalid: int) -> None:
             progress = int((checked / total) * 100) if total > 0 else 0
-            _task_status[task_id].update({
-                "progress": progress,
-                "checked_links": checked,
-                "valid_links": valid,
-                "invalid_links": invalid,
-            })
-        
-        # 检测链接（简化版，实际需要修改LinkValidator支持进度回调）
-        results = await validator.check_multiple_links(all_urls, max_concurrent)
-        
-        # 计算统计
+            _update_task_status(
+                task_id,
+                progress=progress,
+                checked_links=checked,
+                valid_links=valid,
+                invalid_links=invalid,
+            )
+
+        if hasattr(validator, "check_multiple_links_with_progress"):
+            results = await validator.check_multiple_links_with_progress(
+                all_urls,
+                max_concurrent=max_concurrent,
+                progress_callback=progress_callback,
+            )
+        else:
+            results = await validator.check_multiple_links(all_urls, max_concurrent)
+            await progress_callback(
+                len(results),
+                len(results),
+                sum(1 for result in results if result.get("is_valid")),
+                sum(1 for result in results if not result.get("is_valid")),
+            )
+
         summary = validator.get_summary(results)
         check_duration = time.time() - check_start_time
-        
-        # 保存结果到数据库
         check_time = datetime.now()
+
         with Session(engine) as session:
             stats = LinkCheckStats(
                 check_time=check_time,
                 total_messages=len(messages),
                 total_links=len(all_urls),
-                valid_links=summary['valid_links'],
-                invalid_links=summary['invalid_links'],
-                netdisk_stats=summary['netdisk_stats'],
+                valid_links=summary["valid_links"],
+                invalid_links=summary["invalid_links"],
+                netdisk_stats=summary["netdisk_stats"],
                 check_duration=check_duration,
-                status='completed'
+                status="completed",
             )
             session.add(stats)
             session.commit()
-            
-            # 保存详细结果
-            for result in results:
+
+            for record, result in zip(link_records, results):
                 detail = LinkCheckDetails(
                     check_time=check_time,
-                    message_id=0,
-                    netdisk_type=result.get('netdisk_type', 'unknown'),
-                    url=result.get('url', ''),
-                    is_valid=result.get('is_valid', False),
-                    response_time=result.get('response_time', 0),
-                    error_reason=result.get('error')
+                    message_id=record["message_id"],
+                    netdisk_type=result.get("netdisk_type", "unknown"),
+                    url=result.get("url", record["url"]),
+                    is_valid=result.get("is_valid", False),
+                    response_time=result.get("response_time", 0),
+                    error_reason=result.get("error"),
                 )
                 session.add(detail)
-            
+
             session.commit()
-        
-        # 更新任务状态
-        _task_status[task_id].update({
-            "status": "completed",
-            "progress": 100,
-            "checked_links": len(all_urls),
-            "valid_links": summary['valid_links'],
-            "invalid_links": summary['invalid_links'],
-            "check_time": check_time.isoformat(),
-            "duration": check_duration,
-            "logs": _task_status[task_id]["logs"] + [f"检测完成！有效: {summary['valid_links']}, 无效: {summary['invalid_links']}"]
-        })
-        
+
+        current_status = get_task_status(task_id) or {}
+        logs = list(current_status.get("logs") or [])
+        logs.append(f"检测完成，有效 {summary['valid_links']}，无效 {summary['invalid_links']}")
+        _update_task_status(
+            task_id,
+            status="completed",
+            progress=100,
+            checked_links=len(all_urls),
+            valid_links=summary["valid_links"],
+            invalid_links=summary["invalid_links"],
+            check_time=check_time.isoformat(),
+            duration=check_duration,
+            logs=logs,
+        )
     except Exception as e:
         logger.error(f"链接检测任务失败: {e}", exc_info=True)
-        _task_status[task_id] = {
-            "status": "failed",
-            "error": str(e),
-            "progress": _task_status.get(task_id, {}).get("progress", 0)
-        }
+        current_status = get_task_status(task_id) or {}
+        _update_task_status(
+            task_id,
+            status="failed",
+            error=str(e),
+            progress=current_status.get("progress", 0),
+        )
 
 
 def get_task_status(task_id: str) -> Optional[Dict[str, Any]]:
-    """获取任务状态"""
-    return _task_status.get(task_id)
+    with _task_status_lock:
+        status = _task_status.get(task_id)
+        return _clone_task_status(status) if status is not None else None
 
 
 def get_task_history(limit: int = 20) -> List[Dict[str, Any]]:
-    """获取任务历史（从数据库）"""
     with Session(engine) as session:
-        stats = session.query(LinkCheckStats).order_by(
-            LinkCheckStats.check_time.desc()
-        ).limit(limit).all()
-        
+        stats = (
+            session.query(LinkCheckStats)
+            .order_by(LinkCheckStats.check_time.desc())
+            .limit(limit)
+            .all()
+        )
+
         return [
             {
                 "id": stat.id,
@@ -309,23 +361,20 @@ def get_task_history(limit: int = 20) -> List[Dict[str, Any]]:
 
 
 def get_task_result(check_time_str: str) -> Dict[str, Any]:
-    """获取检测结果详情"""
     check_time = datetime.fromisoformat(check_time_str)
-    
+
     with Session(engine) as session:
-        # 获取统计
-        stats = session.query(LinkCheckStats).filter(
-            LinkCheckStats.check_time == check_time
-        ).first()
-        
+        stats = session.query(LinkCheckStats).filter(LinkCheckStats.check_time == check_time).first()
         if not stats:
             return {"error": "检测记录不存在"}
-        
-        # 获取详细结果
-        details = session.query(LinkCheckDetails).filter(
-            LinkCheckDetails.check_time == check_time
-        ).limit(1000).all()
-        
+
+        details = (
+            session.query(LinkCheckDetails)
+            .filter(LinkCheckDetails.check_time == check_time)
+            .limit(1000)
+            .all()
+        )
+
         return {
             "stats": {
                 "check_time": stats.check_time.isoformat(),
@@ -346,6 +395,5 @@ def get_task_result(check_time_str: str) -> Dict[str, Any]:
                     "error_reason": detail.error_reason,
                 }
                 for detail in details
-            ]
+            ],
         }
-

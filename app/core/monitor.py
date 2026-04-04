@@ -1,515 +1,361 @@
+﻿from __future__ import annotations
+
+import asyncio
+import datetime
+import logging
+import sys
+import warnings
+from pathlib import Path
+from typing import Any, Dict, List, Tuple
+
 from telethon import TelegramClient, events
 from sqlalchemy.orm import Session
-from app.models.models import Message, engine, Channel, Credential
-import datetime
-import json
-import re
-import sys
+
+from app.core.monitor_observability import MonitorMetrics, log_monitor_event
+from app.core.monitor_parser import parse_message_content
 from app.models.config import settings
-import asyncio
-import warnings
-from telethon.tl.types import MessageEntityTextUrl, MessageEntityUrl, KeyboardButtonUrl
-from urllib.parse import unquote, urlparse
-from urlextract import URLExtract  # 新增
 from app.models.db import async_session
+from app.models.models import Channel, Credential, Message, engine
+from app.utils.channel_utils import dedupe_preserve_order, normalize_channel_username
 
-# 抑制 Telethon 异步会话实验性功能的警告
-warnings.filterwarnings('ignore', message='.*async sessions support is an experimental feature.*', category=UserWarning)
+warnings.filterwarnings(
+    "ignore",
+    message=".*async sessions support is an experimental feature.*",
+    category=UserWarning,
+)
+logging.basicConfig(level=getattr(logging, settings.LOG_LEVEL, "INFO"))
+logger = logging.getLogger(__name__)
+monitor_metrics = MonitorMetrics(logger)
 
-def get_api_credentials():
-    """获取 API 凭据，优先使用数据库中的凭据"""
+CHANNEL_REFRESH_INTERVAL_SECONDS = 60
+FAILED_MESSAGES_LOG = Path("data/failed_messages.log")
+ERROR_MESSAGES_LOG = Path("data/error_messages.log")
+
+
+def get_api_credentials() -> Tuple[int, str]:
+    """获取 API 凭据，优先使用数据库中的凭据。"""
     with Session(engine) as session:
-        # 尝试从数据库获取凭据
-        cred = session.query(Credential).first()
-        if cred:
-            return int(cred.api_id), cred.api_hash
-    # 如果数据库中没有凭据，使用 .env 中的配置
+        credential = session.query(Credential).first()
+        if credential:
+            return int(credential.api_id), credential.api_hash
     return settings.TELEGRAM_API_ID, settings.TELEGRAM_API_HASH
 
-def get_channels():
-    """获取频道列表，合并数据库和 .env 中的频道"""
-    channels = set()
-    
-    # 从数据库获取频道
-    with Session(engine) as session:
-        db_channels = [c.username for c in session.query(Channel).all()]
-        channels.update(db_channels)
-    
-    # 从 .env 获取默认频道
-    if hasattr(settings, 'DEFAULT_CHANNELS'):
-        env_channels = [c.strip() for c in settings.DEFAULT_CHANNELS.split(',') if c.strip()]
-        channels.update(env_channels)
-        
-        # 将 .env 中的频道添加到数据库
-        with Session(engine) as session:
-            for username in env_channels:
-                if username not in db_channels:
-                    channel = Channel(username=username)
-                    session.add(channel)
-            session.commit()
-    
-    return list(channels)
 
-def is_invite_link_hash(channel_name):
-    """判断是否为邀请链接哈希格式"""
-    pattern = r'^\+[a-zA-Z0-9_-]{10,}$'
-    return bool(re.match(pattern, channel_name))
 
-async def build_channel_id_mapping(client):
-    """构建所有频道到真实ID的映射"""
-    channel_ids = []
-    channel_info = {}
-    channels = get_channels()
-    
-    print(f"🔍 开始解析 {len(channels)} 个频道到ID...")
-    
-    for channel in channels:
+def _load_channels_from_settings() -> List[str]:
+    channels: List[str] = []
+    raw_channels = getattr(settings, "DEFAULT_CHANNELS", "") or ""
+    for raw_channel in raw_channels.split(","):
+        if not raw_channel.strip():
+            continue
         try:
-            # 无论是普通频道还是邀请链接哈希，都能解析
-            entity = await client.get_entity(f"https://t.me/{channel}")
-            channel_ids.append(entity.id)
-            channel_info[channel] = {
-                'id': entity.id,
-                'title': getattr(entity, 'title', 'N/A'),
-                'username': getattr(entity, 'username', None),
-                'type': 'invite_link' if is_invite_link_hash(channel) else 'standard'
+            channels.append(normalize_channel_username(raw_channel))
+        except ValueError:
+            logger.warning("Skipping invalid channel from settings: %s", raw_channel)
+    return dedupe_preserve_order(channels)
+
+
+
+def get_channels() -> List[str]:
+    """获取频道列表，并将 .env 中的默认频道同步入库。"""
+    db_channels: List[str] = []
+    db_channel_set = set()
+    env_channels = _load_channels_from_settings()
+
+    with Session(engine) as session:
+        for channel in session.query(Channel).all():
+            try:
+                normalized = normalize_channel_username(channel.username)
+            except ValueError:
+                logger.warning("Skipping invalid channel from database: %s", channel.username)
+                continue
+            db_channels.append(normalized)
+            db_channel_set.add(normalized)
+
+        pending_channels = [username for username in env_channels if username not in db_channel_set]
+        if pending_channels:
+            for username in pending_channels:
+                session.add(Channel(username=username))
+            session.commit()
+
+    return dedupe_preserve_order(db_channels + env_channels)
+
+
+
+def is_invite_link_hash(channel_name: str) -> bool:
+    """判断是否为邀请链接哈希格式。"""
+    import re
+
+    return bool(re.match(r"^\+[a-zA-Z0-9_-]{10,}$", channel_name))
+
+
+async def build_channel_id_mapping(
+    tg_client: TelegramClient,
+    channels: List[str] | None = None,
+) -> Tuple[List[int], Dict[str, Dict[str, Any]]]:
+    """构建所有频道到真实 ID 的映射。"""
+    resolved_channels = channels if channels is not None else get_channels()
+    resolved_ids: List[int] = []
+    resolved_info: Dict[str, Dict[str, Any]] = {}
+
+    print(f"🔍 开始解析 {len(resolved_channels)} 个频道到ID...")
+    for channel in resolved_channels:
+        try:
+            entity = await tg_client.get_entity(f"https://t.me/{channel}")
+            resolved_ids.append(entity.id)
+            resolved_info[channel] = {
+                "id": entity.id,
+                "title": getattr(entity, "title", "N/A"),
+                "username": getattr(entity, "username", None),
+                "type": "invite_link" if is_invite_link_hash(channel) else "standard",
             }
             print(f"✅ 解析频道: {channel} -> ID: {entity.id}, Title: {getattr(entity, 'title', 'N/A')}")
-        except Exception as e:
-            print(f"❌ 解析失败: {channel}: {e}")
-            # 解析失败的频道不添加到监听列表
-    
-    print(f"✅ 成功解析 {len(channel_ids)} 个频道ID")
-    return channel_ids, channel_info
+        except Exception as exc:
+            monitor_metrics.record_failure("channel_resolve", channel=channel, error=str(exc))
+            print(f"❌ 解析失败: {channel}: {exc}")
 
-# 获取 API 凭据
-api_id, api_hash = get_api_credentials()
+    print(f"✅ 成功解析 {len(resolved_ids)} 个频道ID")
+    return resolved_ids, resolved_info
 
-# session 文件名
-client = TelegramClient('tg_monitor_session', api_id, api_hash)
 
-# 获取频道列表
-channel_usernames = get_channels()
+async def refresh_channel_mapping(force: bool = False) -> bool:
+    """定时刷新监听频道，保证后台改动无需重启即可生效。"""
+    global channel_signature
 
-# 频道ID列表和频道信息（将在启动时构建）
-channel_ids = []
-channel_info = {}
+    latest_channels = get_channels()
+    latest_signature = tuple(sorted(latest_channels))
+    active_signature = tuple(sorted(channel_info.keys()))
+    if not force and latest_signature == channel_signature and active_signature == latest_signature:
+        return False
 
-# 新增：全面提取所有链接的函数
-def extract_all_urls(text, msg_obj=None):
-    extractor = URLExtract()
-    all_urls = set()
-    if msg_obj is not None:
-        # 实体链接
-        for ent, text_part in msg_obj.get_entities_text():
-            if isinstance(ent, MessageEntityTextUrl):
-                decoded_url = unquote(ent.url)
-                all_urls.add(decoded_url)
-            elif isinstance(ent, MessageEntityUrl):
-                decoded_url = unquote(text_part)
-                all_urls.add(decoded_url)
-        # 按钮链接
-        if getattr(msg_obj, 'reply_markup', None):
-            for row in msg_obj.reply_markup.rows:
-                for button in row.buttons:
-                    if isinstance(button, KeyboardButtonUrl):
-                        decoded_url = unquote(button.url)
-                        all_urls.add(decoded_url)
-        # 网页预览链接
-        if getattr(msg_obj, 'media', None) and hasattr(msg_obj.media, 'webpage'):
-            webpage = msg_obj.media.webpage
-            if hasattr(webpage, 'url') and webpage.url:
-                decoded_url = unquote(webpage.url)
-                all_urls.add(decoded_url)
-    # 裸链兜底
-    for line in text.split('\n'):
-        for url in extractor.find_urls(line):
-            decoded_url = unquote(url)
-            all_urls.add(decoded_url)
-    return all_urls
+    ids, info = await build_channel_id_mapping(client, latest_channels)
+    channel_usernames.clear()
+    channel_usernames.extend(latest_channels)
+    channel_ids.clear()
+    channel_ids.extend(ids)
+    channel_info.clear()
+    channel_info.update(info)
+    channel_id_to_name.clear()
+    channel_id_to_name.update({item["id"]: channel for channel, item in info.items()})
+    channel_signature = latest_signature
 
-def parse_message(text, msg_obj=None):
-    original_lines = text.split('\n')
-    lines_to_process = []
-    title = ''
-    description = ''
-    tags = []
-    source = ''
-    channel = ''
-    group = ''
-    bot = ''
-    desc_lines_buffer = []
-    last_label = None
-    label_pattern = re.compile(r'^(主链|备用|普码|高码|HDR|杜比|IQ|[\u4e00-\u9fa5A-Za-z0-9]+码)$')
-    tag_pattern = re.compile(r'#([\u4e00-\u9fa5A-Za-z0-9_]+)')
-    netdisk_map = [
-        (['quark', '夸克'], '夸克网盘'),
-        (['aliyundrive', 'aliyun', '阿里', 'alipan'], '阿里云盘'),
-        (['baidu', 'pan.baidu'], '百度网盘'),
-        (['115.com', '115网盘', '115pan', '115', '115cdn.com'], '115网盘'),
-        (['cloud.189', '天翼', '189.cn'], '天翼云盘'),
-        (['123pan.com', 'www.123pan.com', '123912.com', 'www.123912.com', '123'], '123云盘'),
-        (['ucdisk', 'uc网盘', 'ucloud', 'drive.uc.cn'], 'UC网盘'),
-        (['xunlei', 'thunder', '迅雷'], '迅雷'),
-    ]
-    # 1. 全量提取所有链接
-    all_urls = extract_all_urls(text, msg_obj)
-    # 2. 分类为网盘链接
-    links = {}
-    valid_labels = {
-        '普码', '高码', '主链', '备用', '4K', 'HDR', 'SDR', '1080P', '4K 120FPS', '4K HDR', '4K HQ', '4K EDR', '4K DV', '4K SDR', '4K 60FPS', '4K 120FPS', '4K HQ 高码率', '前 42 集', 'ATVP', '1080P 5.96G', '4K HDR 60FPS', '4K HQ', '4K DV', '4K EDR', '4K 5.96G', '4K 14.9GB', '4K 8.5GB', '4K 24.1GB', '4K HDR&DV', '4K HDR', '4K 60FPS', '4K 120FPS', '4K HQ 高码率', '4K HQ', '4K DV', '4K EDR', '4K 5.96G', '4K 14.9GB', '4K 8.5GB', '4K 24.1GB', 'ATVP', '前 42 集', '主链', '备用',
-        '大包', '大包2', '大包3', '大包4', '大包5',
-        '1号文件夹', '2号文件夹', '3号文件夹', '4号文件夹', '5号文件夹',
-        '备用链', '备用链接', '普码版', '高码版', '标准版', '高清版',
-        '4K版', '1080P版', 'HDR版', '杜比版', '完整版', '精简版',
-        '导演版', '加长版', '国语版', '粤语版', '英语版', '多语版',
-        '无删减', '剧场版', '特别版', '典藏版', '豪华版'
-    }
-    for url in all_urls:
-        parsed = urlparse(url)
-        netloc = parsed.netloc.lower()
-        for keys, name in netdisk_map:
-            if any(k in netloc for k in keys):
-                # 标签提取逻辑
-                label = None
-                for i, line in enumerate(original_lines):
-                    if url in line:
-                        # 先尝试匹配有冒号的格式
-                        label_match = re.match(r'^([\u4e00-\u9fa5A-Za-z0-9]+)[：:]', line.strip())
-                        if label_match:
-                            extracted_label = label_match.group(1)
-                            # 优先最长匹配
-                            matched_label = None
-                            for valid_label in valid_labels:
-                                if valid_label in extracted_label:
-                                    if matched_label is None or len(valid_label) > len(matched_label):
-                                        matched_label = valid_label
-                            if matched_label:
-                                label = matched_label
-                                break
-                        # 如果没有冒号，尝试匹配链接前的标签
-                        else:
-                            url_index = line.find(url)
-                            if url_index > 0:
-                                before_url = line[:url_index].strip()
-                                for valid_label in valid_labels:
-                                    if before_url.endswith(valid_label):
-                                        label = valid_label
-                                        break
-                                if label:
-                                    break
-                        # 新增：上一行短标签智能识别
-                        if not label and i > 0:
-                            prev_line = original_lines[i-1].strip()
-                            if len(prev_line) < 10:
-                                for valid_label in valid_labels:
-                                    if valid_label in prev_line:
-                                        label = valid_label
-                                        break
-                        # 只要找到就break
-                        if label:
-                            break
-                if name not in links:
-                    links[name] = []
-                if not any(item['url'] == url for item in links[name]):
-                    links[name].append({'label': label, 'url': url})
-                break
-    # 其余业务逻辑保持不变（标题、描述、标签等）
-    # 阶段1: 精确识别标题，并准备待处理行列表
-    title_found_in_pass = False
-    for i, line in enumerate(original_lines):
-        stripped_line = line.strip()
-        if not stripped_line:
-            continue
-        if stripped_line.startswith('名称：'):
-            title = stripped_line.replace('名称：', '').strip()
-            title_found_in_pass = True
-            lines_to_process.extend(original_lines[:i])
-            lines_to_process.extend(original_lines[i+1:])
-            break
-    if not title_found_in_pass and original_lines:
-        first_meaningful_line_idx = -1
-        for i, line in enumerate(original_lines):
-            if line.strip():
-                first_meaningful_line_idx = i
-                break
-        if first_meaningful_line_idx != -1:
-            title = original_lines[first_meaningful_line_idx].strip()
-            lines_to_process.extend(original_lines[:first_meaningful_line_idx])
-            lines_to_process.extend(original_lines[first_meaningful_line_idx+1:])
-        else:
-            return {'title': '', 'description': '', 'links': {}, 'tags': [], 'source': '', 'channel': '', 'group_name': '', 'bot': ''}
-    # 统一定义需要过滤的“杂项行”关键词及其对应字段
-    skip_keywords = [
-        ('🎉 来自', 'source'),
-        ('📢 频道', 'channel'),
-        ('👥 群组', 'group'),
-        ('🤖 投稿', 'bot'),
-        ('🔍 投稿/搜索', None),
-        ('⚠️', None)
-    ]
-    skip_pattern = re.compile(r'^(%s)(：|:)?' % '|'.join(map(lambda x: re.escape(x[0]), skip_keywords)))
-    keyword_field_map = {k: v for k, v in skip_keywords if v}
-    extractor_tmp = URLExtract()
-    for raw_line in lines_to_process:
-        line = raw_line.strip()
-        if not line:
-            continue
-        # 新增：只要行里含有任何形式的链接（包含不带 http/https 前缀的裸域名），整行跳过
-        if re.search(r'https?://', line) or extractor_tmp.has_urls(line):
-            continue
-        # 新增：过滤包含 @xxx 的行
-        if re.search(r'@[A-Za-z0-9_]+', line):
-            continue
-        cleaned_line_for_check = re.sub(r'^(?:\* |\- |\+ |> |>> |• |➤ |▪ |√ )+', '', line).strip()
-        line_fully_handled = False
-        m = skip_pattern.match(cleaned_line_for_check)
-        if m:
-            keyword = m.group(1)
-            field = keyword_field_map.get(keyword)
-            if field:
-                value = cleaned_line_for_check.replace(keyword, '').replace('：', '').replace(':', '').strip()
-                locals()[field] = value
-            continue
-        # 仅行首大小信息识别（允许emoji、空格、标点）
-        if re.match(r'^[^\u4e00-\u9fa5A-Za-z0-9]*大小', cleaned_line_for_check):
-            parts = re.split(r'大小[:：\s]*', cleaned_line_for_check, maxsplit=1)
-            size_info = parts[1].strip() if len(parts) > 1 else ""
-            
-            # 过滤无意义的大小信息
-            if size_info:
-                # 检查是否包含有效的大小信息
-                has_valid_size = re.search(r'(\d+\s*(GB|MB|TB|KB|G|M|T|K|B|字节|左右|约|每集|单集))', size_info, re.IGNORECASE)
-                
-                # 过滤掉无意义的大小值
-                meaningless_sizes = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', '未知', '待定', '暂无', '无', '空', '？', '?', '...', '…', '---', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', '——', ' ']
-                
-                # 如果大小信息有意义且不是无意义的值，则保留
-                if has_valid_size and not any(meaningless in size_info for meaningless in meaningless_sizes):
-                    desc_lines_buffer.append(cleaned_line_for_check)
-            continue
-        elif cleaned_line_for_check.startswith('链接：'):
-            continue
-        elif cleaned_line_for_check.startswith('描述区域'):
-            continue
-        elif label_pattern.match(cleaned_line_for_check):
-            last_label = cleaned_line_for_check
-            continue
-        if line_fully_handled:
-            continue
-        cleaned_line = cleaned_line_for_check
-        cleaned_line = re.sub(r'\bvia\s*\S+', '', cleaned_line, flags=re.IGNORECASE).strip()
-        cleaned_line = re.sub(r'\bvia\s*$', '', cleaned_line, flags=re.IGNORECASE).strip() 
-        found_tags_in_line = tag_pattern.findall(cleaned_line)
-        if found_tags_in_line:
-            tags.extend(found_tags_in_line)
-            cleaned_line = tag_pattern.sub('', cleaned_line).strip()
-        cleaned_line = re.sub(r'^.*(标签|投稿人|频道|搜索|机场)\s*[：:].*$', '', cleaned_line, flags=re.IGNORECASE).strip()
-        if cleaned_line_for_check.startswith('分享：') or cleaned_line_for_check.startswith('网址：') \
-            or cleaned_line_for_check.startswith('🌍') or cleaned_line_for_check.startswith('🔥'):
-            continue
-        cleaned_line = re.sub(r'[🔗\s]*链接[：:：]?\s*[^\s]+', '', cleaned_line).strip()
-        if cleaned_line:
-            filter_patterns = [
-                r'.*🌍.*群主自用机场.*守候网络.*9折活动.*',
-                r'.*🔥.*云盘播放神器.*VidHub.*',
-                r'.*群主自用机场.*守候网络.*9折活动.*',
-                r'.*云盘播放神器.*VidHub.*'
-            ]
-            should_filter = False
-            for pattern in filter_patterns:
-                if re.search(pattern, cleaned_line, re.IGNORECASE):
-                    should_filter = True
-                    break
-            if not should_filter:
-                desc_lines_buffer.append(cleaned_line)
-    tags = list(set(tags))
-    description = '\n'.join(desc_lines_buffer)
-    
-    # --- 新增：描述区净化，去除网盘名 ---
-    netdisk_names = ['夸克', '迅雷', '百度', 'UC', '阿里', '天翼', '115', '123云盘']
-    netdisk_name_pattern = re.compile(r'(' + '|'.join(netdisk_names) + r')')
-    description = netdisk_name_pattern.sub('', description)
-    
-    # --- 新增：删除不需要的关键词和emoji，但保留正常内容 ---
-    # 1. 删除emoji + 关键词组合（处理多个空格的情况）
-    emoji_keyword_patterns = [
-        # 匹配 "emoji 关键词：值" 的完整模式，允许任意空格分布（排除大小）
-        r'[📁🏷️🎬📢👥🤖👇📂🔗📋📝🙍]\s*[类型标签来自频道群组投稿下载链接描述简介]\s*[：:]\s*.*',
-        # 匹配 "emoji 关键词 关键词：值" 的模式（如 "🙍 来 自： 热心盘友"）（排除大小）
-        r'[📁🏷️🎬📢👥🤖👇📂🔗📋📝🙍]\s+[类型标签来自频道群组投稿下载链接描述简介]+\s*[：:]\s*.*',
-        # 匹配包含emoji和关键词的整行（排除大小）
-        r'.*[📁🏷️🎬📢👥🤖👇📂🔗📋📝🙍].*[类型标签来自频道群组投稿下载链接描述简介].*[：:].*',
-        # 匹配包含关键词和emoji的整行（排除大小）
-        r'.*[类型标签来自频道群组投稿下载链接描述简介].*[📁🏷️🎬📢👥🤖👇📂🔗📋📝🙍].*[：:].*'
-    ]
-    
-    for pattern in emoji_keyword_patterns:
-        description = re.sub(pattern, '', description)
-    
-    # 2. 删除单独的emoji
-    for emoji in ['📁', '🏷️', '🎬', '📢', '👥', '🤖', '👇', '📂', '🔗', '📋', '📝', '🙍']:
-        description = re.sub(re.escape(emoji), '', description)
-    
-    # 3. 删除特定的关键词（但保留行中其他内容）
-    exclude_keywords = ['类型', '标签', '频道', '群组', '投稿源', '来自', '下载地址', '地址', '链接', '描述', '简介']
-    for keyword in exclude_keywords:
-        # 删除"关键词："或"关键词:"格式（允许前面有空格）
-        description = re.sub(rf'\s*{re.escape(keyword)}[：:]?\s*', '', description)
-        # 删除"emoji 关键词："格式（处理多个空格），冒号可有可无
-        description = re.sub(rf'\s+{re.escape(keyword)}\s*[：:]?\s*', '', description)
-        # 删除"【关键词】："格式（带方括号）
-        description = re.sub(rf'【{re.escape(keyword)}】：\s*', '', description)
-        # 删除"【关键词】"格式（带方括号，无冒号）
-        description = re.sub(rf'【{re.escape(keyword)}】\s*', '', description)
-    
-    # 4. 删除链接和@符号
-    description = re.sub(r'https?://[^\s]+', '', description)
-    description = re.sub(r'@[A-Za-z0-9_]+', '', description)
-    
-    # 4.5. 清理残留的【】：格式（关键词被删除后留下的）
-    description = re.sub(r'【】：\s*', '', description)
-    description = re.sub(r'【】\s*', '', description)
-    
-    # 5. 清理多余的空格和空行
-    description = re.sub(r'\n\s*\n', '\n', description)  # 删除空行
-    description = re.sub(r'^\s+|\s+$', '', description, flags=re.MULTILINE)  # 删除行首行尾空格
-    
-    # 链接相关的replace已不需要，直接删除
-    description = re.sub(r'：\s*$', '', description, flags=re.MULTILINE)
-    description = re.sub(r'：\s*\n', '\n', description, flags=re.MULTILINE)
-    desc_lines_final = [line for line in description.strip().split('\n') if line.strip() and not re.fullmatch(r'[.。·、,，-]+', line.strip())]
-    description = '\n'.join(desc_lines_final)
-    return {
-        'title': title,
-        'description': description,
-        'links': links,
-        'tags': tags,
-        'source': source,
-        'channel': channel,
-        'group_name': group,
-        'bot': bot
-    }
+    monitor_metrics.record_refresh(
+        configured=len(latest_channels),
+        active=len(channel_ids),
+        changed=bool(force or latest_signature != active_signature),
+    )
+    print(f"[{datetime.datetime.now()}] refreshed monitored channels: {len(channel_ids)}")
+    return True
 
-def get_channel_name_by_id(chat_id):
-    """根据聊天ID获取频道名称"""
-    for channel, info in channel_info.items():
-        if info['id'] == chat_id:
-            return channel
-    return None
 
-@client.on(events.NewMessage(chats=channel_ids))
-async def handler(event):
-    try:
-        # 获取聊天对象
-        chat = await event.get_chat()
-        
-        # 获取频道名称用于日志
-        channel_name = get_channel_name_by_id(chat.id)
-        if not channel_name:
-            print(f"[DEBUG] 无法获取频道名称，ID: {chat.id}")
-            return
-        
-        message = event.raw_text
-        # 使用Telegram消息的原始时间，正确处理时区
-        telegram_time = event.date
-        monitor_time = datetime.datetime.now()
-        
-        # 正确处理时区转换
-        if telegram_time.tzinfo is not None:
-            # 如果telegram_time有时区信息，转换为本地时间
-            # 假设Telegram时间是UTC，转换为北京时间（UTC+8）
-            telegram_local_time = telegram_time.replace(tzinfo=None) + datetime.timedelta(hours=8)
-        else:
-            # 如果没有时区信息，直接使用
-            telegram_local_time = telegram_time
-        
-        # 计算监控延迟
-        delay_seconds = (monitor_time - telegram_local_time).total_seconds()
-        
-        # 获取频道信息用于日志
-        chat_title = getattr(chat, 'title', 'Unknown')
-        chat_username = getattr(chat, 'username', 'Unknown')
-        
-        print(f"[{monitor_time}] 收到来自 {chat_title}({channel_name}) 的新消息，开始解析... (延迟: {delay_seconds:.1f}秒)")
-        
-        # 解析消息
+async def channel_refresh_loop() -> None:
+    """定时刷新频道映射。"""
+    while True:
         try:
-            parsed_data = parse_message(message, event.message) # Pass event.message to parse_message
-        except Exception as parse_error:
-            print(f"[{monitor_time}] 消息解析失败: {str(parse_error)}")
-            print(f"[{monitor_time}] 原始消息: {message[:200]}...")  # 记录前200字符
+            await asyncio.sleep(CHANNEL_REFRESH_INTERVAL_SECONDS)
+            await refresh_channel_mapping()
+        except Exception as refresh_error:
+            monitor_metrics.record_failure("channel_refresh", error=str(refresh_error))
+            print(f"[{datetime.datetime.now()}] channel refresh failed: {refresh_error}")
+
+
+api_id, api_hash = get_api_credentials()
+client = TelegramClient("tg_monitor_session", api_id, api_hash)
+channel_usernames = get_channels()
+channel_ids: List[int] = []
+channel_info: Dict[str, Dict[str, Any]] = {}
+channel_id_to_name: Dict[int, str] = {}
+channel_signature = tuple(sorted(channel_usernames))
+
+
+async def parse_message(text: str, msg_obj: Any = None, channel_name: str | None = None) -> Dict[str, Any]:
+    parsed_data, _ = await parse_message_content(text, msg_obj=msg_obj, channel_name=channel_name)
+    return parsed_data
+
+
+
+def get_event_channel_id(event: Any) -> int | None:
+    peer_id = getattr(getattr(event, "message", None), "peer_id", None)
+    return getattr(peer_id, "channel_id", None) or getattr(peer_id, "chat_id", None)
+
+
+
+def get_channel_name_by_id(chat_id: int | None) -> str | None:
+    """根据聊天 ID 获取频道名称。"""
+    if chat_id is None:
+        return None
+    return channel_id_to_name.get(chat_id)
+
+
+
+def _to_local_telegram_time(telegram_time: datetime.datetime) -> datetime.datetime:
+    if telegram_time.tzinfo is not None:
+        return telegram_time.replace(tzinfo=None) + datetime.timedelta(hours=8)
+    return telegram_time
+
+
+
+def _append_local_log(path: Path, content: str) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as file_obj:
+            file_obj.write(content)
+    except Exception:
+        pass
+
+
+@client.on(events.NewMessage())
+async def handler(event: Any) -> None:
+    try:
+        incoming_chat_id = get_event_channel_id(event)
+        if incoming_chat_id is None or incoming_chat_id not in channel_ids:
+            monitor_metrics.increment("messages_skipped_unmonitored")
             return
-        
-        # 只保存包含网盘链接的消息
-        if parsed_data['links']:
-            netdisk_types = list(parsed_data['links'].keys())
-            max_retries = 3
-            for attempt in range(max_retries):
-                try:
-                    async with async_session() as session:
+
+        chat = await event.get_chat()
+        channel_name = get_channel_name_by_id(incoming_chat_id)
+        if not channel_name:
+            await refresh_channel_mapping(force=True)
+            channel_name = get_channel_name_by_id(incoming_chat_id)
+            if not channel_name:
+                monitor_metrics.record_failure("channel_lookup", chat_id=incoming_chat_id)
+                print(f"[DEBUG] 无法获取频道名称，ID: {incoming_chat_id}")
+                return
+
+        message_text = event.raw_text or ""
+        telegram_local_time = _to_local_telegram_time(event.date)
+        monitor_time = datetime.datetime.now()
+        delay_seconds = (monitor_time - telegram_local_time).total_seconds()
+        chat_title = getattr(chat, "title", "Unknown")
+
+        print(
+            f"[{monitor_time}] 收到来自 {chat_title}({channel_name}) 的新消息，开始解析... "
+            f"(延迟: {delay_seconds:.1f}秒)"
+        )
+
+        try:
+            parsed_data, diagnostics = await parse_message_content(
+                message_text,
+                msg_obj=event.message,
+                channel_name=channel_name,
+            )
+            monitor_metrics.record_parse(diagnostics, has_links=bool(parsed_data.get("links")))
+        except Exception as parse_error:
+            monitor_metrics.record_failure("parse", channel=channel_name, error=str(parse_error))
+            log_monitor_event(
+                logger,
+                "parse_error",
+                level=logging.WARNING,
+                channel=channel_name,
+                chat_id=incoming_chat_id,
+                error=str(parse_error),
+            )
+            print(f"[{monitor_time}] 消息解析失败: {parse_error}")
+            print(f"[{monitor_time}] 原始消息: {message_text[:200]}...")
+            _append_local_log(
+                ERROR_MESSAGES_LOG,
+                f"[{monitor_time}] parse_error={parse_error} channel={channel_name} message={message_text[:500]}\n",
+            )
+            return
+
+        if not parsed_data.get("links"):
+            monitor_metrics.increment("messages_filtered_no_links")
+            log_monitor_event(
+                logger,
+                "message_filtered",
+                channel=channel_name,
+                reason="no_netdisk_links",
+                delay_seconds=f"{delay_seconds:.1f}",
+            )
+            print(f"[{monitor_time}] 过滤掉无网盘链接的消息")
+            return
+
+        netdisk_types = list(parsed_data["links"].keys())
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                async with async_session() as session:
+                    try:
                         new_message = Message(
-                            timestamp=telegram_local_time,  # 使用转换后的本地时间
+                            timestamp=telegram_local_time,
                             **parsed_data,
-                            netdisk_types=netdisk_types
+                            netdisk_types=netdisk_types,
                         )
                         session.add(new_message)
                         await session.commit()
-                    print(f"[{monitor_time}] 新消息已保存到数据库 (尝试 {attempt + 1}/{max_retries}, 延迟: {delay_seconds:.1f}秒)")
-                    break
-                except Exception as db_error:
-                    print(f"[{monitor_time}] 数据库写入失败 (尝试 {attempt + 1}/{max_retries}): {str(db_error)}")
-                    if attempt == max_retries - 1:
-                        print(f"[{monitor_time}] 数据库写入最终失败，消息丢失")
-                        # 可以考虑写入本地文件作为备份
-                        try:
-                            with open('data/failed_messages.log', 'a', encoding='utf-8') as f:
-                                f.write(f"[{monitor_time}] 失败消息: {message}\n")
-                        except:
-                            pass
-                    else:
-                        await asyncio.sleep(1)  # 用异步sleep替换阻塞sleep
-        else:
-            print(f"[{monitor_time}] 过滤掉无网盘链接的消息")
-            
-    except Exception as e:
-        print(f"[{datetime.datetime.now()}] 消息处理发生未知错误: {str(e)}")
-        # 记录原始消息到错误日志
-        try:
-            with open('data/error_messages.log', 'a', encoding='utf-8') as f:
-                f.write(f"[{datetime.datetime.now()}] 错误: {str(e)}, 消息: {event.raw_text[:200]}...\n")
-        except:
-            pass
+                    except Exception:
+                        await session.rollback()
+                        raise
+
+                monitor_metrics.increment("messages_saved")
+                log_monitor_event(
+                    logger,
+                    "message_saved",
+                    channel=channel_name,
+                    delay_seconds=f"{delay_seconds:.1f}",
+                    netdisk_types=",".join(netdisk_types),
+                )
+                print(
+                    f"[{monitor_time}] 新消息已保存到数据库 "
+                    f"(尝试 {attempt + 1}/{max_retries}, 延迟: {delay_seconds:.1f}秒)"
+                )
+                break
+            except Exception as db_error:
+                monitor_metrics.record_failure("db_write", channel=channel_name, error=str(db_error))
+                log_monitor_event(
+                    logger,
+                    "db_write_retry",
+                    level=logging.WARNING,
+                    channel=channel_name,
+                    attempt=attempt + 1,
+                    error=str(db_error),
+                )
+                print(f"[{monitor_time}] 数据库写入失败 (尝试 {attempt + 1}/{max_retries}): {db_error}")
+                if attempt == max_retries - 1:
+                    print(f"[{monitor_time}] 数据库写入最终失败，消息丢失")
+                    _append_local_log(
+                        FAILED_MESSAGES_LOG,
+                        f"[{monitor_time}] channel={channel_name} message={message_text}\n",
+                    )
+                else:
+                    await asyncio.sleep(1)
+    except Exception as exc:
+        monitor_metrics.record_failure("handler", error=str(exc))
+        log_monitor_event(logger, "handler_error", level=logging.WARNING, error=str(exc))
+        print(f"[{datetime.datetime.now()}] 消息处理发生未知错误: {exc}")
+        raw_text = getattr(event, "raw_text", "") or ""
+        _append_local_log(
+            ERROR_MESSAGES_LOG,
+            f"[{datetime.datetime.now()}] error={exc} message={raw_text[:500]}\n",
+        )
+
 
 print(f"✅ 正在监听 Telegram 频道：{len(channel_usernames)} 个频道...")
 
-# 添加连接状态监控
+
 @client.on(events.Raw)
-async def connection_handler(event):
-    """监控连接状态"""
-    if hasattr(event, 'connected'):
+async def connection_handler(event: Any) -> None:
+    """监控连接状态。"""
+    if hasattr(event, "connected"):
         if event.connected:
             print(f"[{datetime.datetime.now()}] ✅ Telegram连接已建立")
         else:
             print(f"[{datetime.datetime.now()}] ❌ Telegram连接已断开")
 
+
 if __name__ == "__main__":
     try:
-        # 使用已存在的 session 文件启动
         client.start()
         print(f"[{datetime.datetime.now()}] ✅ 监控服务启动成功")
-        
-        # 构建频道ID映射
-        print("🔍 正在构建频道ID映射...")
-        # 使用 client.loop 而不是 asyncio.run
+
         loop = client.loop
-        ids, info = loop.run_until_complete(build_channel_id_mapping(client))
-        channel_ids.extend(ids)
-        channel_info.update(info)
+        print("🔍 正在构建频道ID映射...")
+        loop.run_until_complete(refresh_channel_mapping(force=True))
+        loop.create_task(channel_refresh_loop())
         print(f"✅ 频道ID映射构建完成: {len(channel_ids)} 个频道")
-        
+
         client.run_until_disconnected()
-    except Exception as e:
-        print(f"[{datetime.datetime.now()}] ❌ 启动失败: {str(e)}")
+    except Exception as exc:
+        print(f"[{datetime.datetime.now()}] ❌ 启动失败: {exc}")
         print("请先手动运行一次程序进行登录：python -m app.core.monitor")
-        sys.exit(1) 
+        sys.exit(1)
