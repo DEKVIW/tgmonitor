@@ -10,7 +10,8 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, s
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_admin_user, get_db
-from app.models.models import Channel, Credential
+from app.core.monitor_rules import resolve_channel_profile_name
+from app.models.models import Channel, Credential, ensure_channel_parser_profile_column
 from app.schemas.admin_models import (
     BulkCreateResponse,
     BulkRandomCreateRequest,
@@ -113,9 +114,17 @@ def _serialize_channel(
         username = normalize_channel_username(channel.username)
     except ValueError:
         username = channel.username
+    parser_profile = getattr(channel, "parser_profile", None)
+    effective_parser_profile = resolve_channel_profile_name(
+        username,
+        channel_id=(runtime_info or {}).get("id"),
+        parser_profile=parser_profile,
+    )
     return ChannelResponse(
         id=channel.id,
         username=username,
+        parser_profile=parser_profile,
+        effective_parser_profile=effective_parser_profile,
         title=(runtime_info or {}).get("title"),
         telegram_id=(runtime_info or {}).get("id"),
         channel_type=(runtime_info or {}).get("type") or (runtime_error or {}).get("type"),
@@ -252,6 +261,7 @@ async def get_channels(
     需要 Bearer Token 认证
     """
     try:
+        ensure_channel_parser_profile_column()
         channels = db.query(Channel).all()
         normalized_usernames: List[str] = []
         channel_username_map: Dict[int, str] = {}
@@ -291,6 +301,7 @@ async def create_channel(
     需要 Bearer Token 认证
     """
     try:
+        ensure_channel_parser_profile_column()
         existing = _find_channel_conflict(db, channel_data.username)
         if existing is not None:
             raise HTTPException(
@@ -298,7 +309,7 @@ async def create_channel(
                 detail=f"频道 {channel_data.username} 已存在"
             )
 
-        channel = Channel(username=channel_data.username)
+        channel = Channel(username=channel_data.username, parser_profile=channel_data.parser_profile)
         db.add(channel)
         db.commit()
         db.refresh(channel)
@@ -327,6 +338,7 @@ async def update_channel(
     需要 Bearer Token 认证（管理员权限）
     """
     try:
+        ensure_channel_parser_profile_column()
         channel = db.query(Channel).filter(Channel.id == channel_id).first()
         if not channel:
             raise HTTPException(
@@ -342,6 +354,7 @@ async def update_channel(
             )
 
         channel.username = channel_data.username
+        channel.parser_profile = channel_data.parser_profile
         db.commit()
         db.refresh(channel)
 

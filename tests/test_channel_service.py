@@ -45,16 +45,45 @@ class _DummyEntity:
 
 
 class _DummyMessage:
-    def __init__(self, message_id: int, text: str) -> None:
+    def __init__(self, message_id: int, text: str, *, media=None, post_author: str | None = None) -> None:
         self.id = message_id
         self.message = text
         self.raw_text = text
         self.date = datetime(2026, 4, 4, 12, 0, 0)
-        self.media = None
+        self.media = media
         self.reply_markup = None
+        self.grouped_id = None
+        self.post_author = post_author
 
     def get_entities_text(self):
         return []
+
+    def to_dict(self):
+        return {
+            "_": "Message",
+            "id": self.id,
+            "message": self.message,
+            "raw_text": self.raw_text,
+            "date": self.date.isoformat(),
+            "post_author": self.post_author,
+            "media": None,
+        }
+
+
+class _DummyWebpage:
+    def __init__(self, *, url: str, title: str | None = None, description: str | None = None) -> None:
+        self.url = url
+        self.title = title
+        self.description = description
+        self.site_name = "Telegraph"
+        self.author = "tester"
+        self.type = "article"
+        self.display_url = "telegra.ph/sample"
+
+
+class _DummyMedia:
+    def __init__(self, webpage=None) -> None:
+        self.webpage = webpage
 
 
 class _DummySampleClient:
@@ -126,6 +155,8 @@ class ChannelServiceTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["samples"][0]["message_id"], 1)
         self.assertEqual(result["title"], "Sample Channel")
         self.assertEqual(result["requested_limit"], 5)
+        self.assertIn("parser_debug", result["samples"][0])
+        self.assertEqual(result["samples"][0]["parser_debug"]["extracted_link_count"], 1)
 
     async def test_fetch_channel_message_samples_supports_page_slicing(self) -> None:
         dummy_client = _DummySampleClient(
@@ -167,6 +198,42 @@ class ChannelServiceTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["sample_count"], 1)
         self.assertEqual(result["samples"][0]["message_id"], 2)
         self.assertTrue(result["has_more"])
+
+    async def test_fetch_channel_message_samples_includes_raw_snapshot_and_preview_fields(self) -> None:
+        message = _DummyMessage(
+            7,
+            "sample https://telegra.ph/test-page",
+            media=_DummyMedia(
+                _DummyWebpage(
+                    url="https://telegra.ph/test-page",
+                    title="网页预览标题",
+                    description="网页预览描述",
+                )
+            ),
+            post_author="Author",
+        )
+        dummy_client = _DummySampleClient([message])
+        parse_result = (
+            [{"title": "sample", "description": "", "links": {}, "tags": [], "source": "", "channel": "", "group_name": "", "bot": ""}],
+            ParseDiagnostics(profile_name="alpha", extracted_link_count=0),
+        )
+
+        with (
+            patch("app.services.channel_service.ensure_session_file", return_value=True),
+            patch("app.services.channel_service.get_api_credentials", return_value=(1, "hash")),
+            patch("app.services.channel_service.TelegramClient", return_value=dummy_client),
+            patch("app.services.channel_service.parse_message_records", new=AsyncMock(return_value=parse_result)),
+        ):
+            result = await channel_service.fetch_channel_message_samples("alpha", limit=5, only_with_links=False)
+
+        sample = result["samples"][0]
+        self.assertEqual(sample["message_link"], "https://t.me/alpha/7")
+        self.assertEqual(sample["media_kind"], "webpage")
+        self.assertEqual(sample["post_author"], "Author")
+        self.assertEqual(sample["webpage_preview"]["title"], "网页预览标题")
+        self.assertEqual(sample["webpage_preview"]["description"], "网页预览描述")
+        self.assertEqual(sample["raw_message"]["_"], "Message")
+        self.assertEqual(sample["parser_debug"]["parsed_records"][0]["title"], "sample")
 
 
 if __name__ == "__main__":

@@ -14,7 +14,7 @@ from urllib.parse import parse_qsl, unquote, urljoin, urlparse
 
 import aiohttp
 
-from app.core.monitor_rules import load_monitor_rules, resolve_channel_profile
+from app.core.monitor_rules import load_monitor_rules, resolve_channel_profile, resolve_channel_profile_name
 
 try:
     from telethon.tl.types import KeyboardButtonUrl, MessageEntityTextUrl, MessageEntityUrl
@@ -2205,9 +2205,21 @@ async def parse_message_records(
     msg_obj: Any = None,
     channel_name: str | None = None,
     channel_id: int | None = None,
+    parser_profile: str | None = None,
 ) -> Tuple[List[Dict[str, Any]], ParseDiagnostics]:
     rules = load_monitor_rules()
-    profile = resolve_channel_profile(channel_name, rules, channel_id=channel_id)
+    profile_name = resolve_channel_profile_name(
+        channel_name,
+        rules,
+        channel_id=channel_id,
+        parser_profile=parser_profile,
+    )
+    profile = resolve_channel_profile(
+        channel_name,
+        rules,
+        channel_id=channel_id,
+        parser_profile=parser_profile,
+    )
     resolver_config = get_redirect_resolver_config(rules)
 
     if profile.get("line_message_mode") != LINE_MESSAGE_MODE_PER_LINK:
@@ -2216,6 +2228,7 @@ async def parse_message_records(
             msg_obj=msg_obj,
             channel_name=channel_name,
             channel_id=channel_id,
+            parser_profile=parser_profile,
         )
         return [parsed_data], diagnostics
 
@@ -2225,7 +2238,7 @@ async def parse_message_records(
     intermediate_netdisk_domains = profile.get("intermediate_netdisk_domains", {})
     original_lines = text.split("\n")
 
-    diagnostics = ParseDiagnostics(profile_name=channel_name or "default")
+    diagnostics = ParseDiagnostics(profile_name=profile_name)
     all_urls = extract_all_urls(text, msg_obj)
     diagnostics.raw_url_count = len(all_urls)
     diagnostics.raw_url_samples = sorted(all_urls)[:3]
@@ -2261,6 +2274,7 @@ async def parse_message_records(
         msg_obj=msg_obj,
         channel_name=channel_name,
         channel_id=channel_id,
+        parser_profile=parser_profile,
     )
     return [parsed_data], diagnostics
 
@@ -2270,16 +2284,28 @@ async def parse_message_content(
     msg_obj: Any = None,
     channel_name: str | None = None,
     channel_id: int | None = None,
+    parser_profile: str | None = None,
 ) -> Tuple[Dict[str, Any], ParseDiagnostics]:
     rules = load_monitor_rules()
-    profile = resolve_channel_profile(channel_name, rules, channel_id=channel_id)
+    profile_name = resolve_channel_profile_name(
+        channel_name,
+        rules,
+        channel_id=channel_id,
+        parser_profile=parser_profile,
+    )
+    profile = resolve_channel_profile(
+        channel_name,
+        rules,
+        channel_id=channel_id,
+        parser_profile=parser_profile,
+    )
     resolver_config = get_redirect_resolver_config(rules)
     netdisk_map = _get_netdisk_map(rules)
     redirect_query_keys = rules.get("redirect_query_keys", [])
     valid_labels = profile.get("valid_labels", [])
     intermediate_netdisk_domains = profile.get("intermediate_netdisk_domains", {})
 
-    diagnostics = ParseDiagnostics(profile_name=channel_name or "default")
+    diagnostics = ParseDiagnostics(profile_name=profile_name)
     original_lines = text.split("\n")
     hint_aliases = get_netdisk_hint_aliases(profile)
     title = ""

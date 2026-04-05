@@ -15,8 +15,11 @@ from app.core.monitor_observability import MonitorMetrics, log_monitor_event
 from app.core.monitor_parser import parse_message_content, parse_message_records
 from app.models.config import settings
 from app.models.db import async_session
-from app.models.models import Channel, Credential, Message, engine
-from app.utils.channel_utils import dedupe_preserve_order, normalize_channel_username
+from app.models.models import Credential, Message, engine
+from app.services.channel_registry import (
+    get_runtime_channel_parser_profiles,
+    get_runtime_channels,
+)
 
 warnings.filterwarnings(
     "ignore",
@@ -43,45 +46,13 @@ def get_api_credentials() -> Tuple[int, str]:
             return int(credential.api_id), credential.api_hash
     return settings.TELEGRAM_API_ID, settings.TELEGRAM_API_HASH
 
-
-
-def _load_channels_from_settings() -> List[str]:
-    channels: List[str] = []
-    raw_channels = getattr(settings, "DEFAULT_CHANNELS", "") or ""
-    for raw_channel in raw_channels.split(","):
-        if not raw_channel.strip():
-            continue
-        try:
-            channels.append(normalize_channel_username(raw_channel))
-        except ValueError:
-            logger.warning("Skipping invalid channel from settings: %s", raw_channel)
-    return dedupe_preserve_order(channels)
-
-
-
 def get_channels() -> List[str]:
-    """获取频道列表，并将 .env 中的默认频道同步入库。"""
-    db_channels: List[str] = []
-    db_channel_set = set()
-    env_channels = _load_channels_from_settings()
+    """获取运行时频道列表，仅从数据库读取。"""
+    return get_runtime_channels()
 
-    with Session(engine) as session:
-        for channel in session.query(Channel).all():
-            try:
-                normalized = normalize_channel_username(channel.username)
-            except ValueError:
-                logger.warning("Skipping invalid channel from database: %s", channel.username)
-                continue
-            db_channels.append(normalized)
-            db_channel_set.add(normalized)
 
-        pending_channels = [username for username in env_channels if username not in db_channel_set]
-        if pending_channels:
-            for username in pending_channels:
-                session.add(Channel(username=username))
-            session.commit()
-
-    return dedupe_preserve_order(db_channels + env_channels)
+def get_channel_parser_profiles() -> Dict[str, str | None]:
+    return get_runtime_channel_parser_profiles()
 
 
 
@@ -95,6 +66,7 @@ def is_invite_link_hash(channel_name: str) -> bool:
 async def build_channel_id_mapping(
     tg_client: TelegramClient,
     channels: List[str] | None = None,
+    parser_profiles: Dict[str, str | None] | None = None,
 ) -> Tuple[List[int], Dict[str, Dict[str, Any]]]:
     """构建所有频道到真实 ID 的映射。"""
     resolved_channels = channels if channels is not None else get_channels()
@@ -111,6 +83,7 @@ async def build_channel_id_mapping(
                 "title": getattr(entity, "title", "N/A"),
                 "username": getattr(entity, "username", None),
                 "type": "invite_link" if is_invite_link_hash(channel) else "standard",
+                "parser_profile": (parser_profiles or {}).get(channel),
             }
             print(f"✅ 解析频道: {channel} -> ID: {entity.id}, Title: {getattr(entity, 'title', 'N/A')}")
         except Exception as exc:
@@ -126,12 +99,13 @@ async def refresh_channel_mapping(force: bool = False) -> bool:
     global channel_signature
 
     latest_channels = get_channels()
+    parser_profiles = get_channel_parser_profiles()
     latest_signature = tuple(sorted(latest_channels))
     active_signature = tuple(sorted(channel_info.keys()))
     if not force and latest_signature == channel_signature and active_signature == latest_signature:
         return False
 
-    ids, info = await build_channel_id_mapping(client, latest_channels)
+    ids, info = await build_channel_id_mapping(client, latest_channels, parser_profiles=parser_profiles)
     channel_usernames.clear()
     channel_usernames.extend(latest_channels)
     channel_ids.clear()
@@ -247,11 +221,13 @@ async def handler(event: Any) -> None:
         )
 
         try:
+            parser_profile = (channel_info.get(channel_name) or {}).get("parser_profile")
             parsed_records, diagnostics = await parse_message_records(
                 message_text,
                 msg_obj=event.message,
                 channel_name=channel_name,
                 channel_id=incoming_chat_id,
+                parser_profile=parser_profile,
             )
             parsed_records = [record for record in parsed_records if record.get("links")]
             monitor_metrics.record_parse(diagnostics, has_links=bool(parsed_records))

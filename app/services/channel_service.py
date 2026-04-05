@@ -15,8 +15,8 @@ from telethon import TelegramClient, events
 
 from app.core.monitor_parser import extract_all_urls, parse_message_records
 from app.models.config import settings
-from app.models.models import Channel, Credential, engine
-from app.utils.channel_utils import dedupe_preserve_order, normalize_channel_username
+from app.models.models import Credential, engine
+from app.services.channel_registry import get_runtime_channels
 
 try:
     from telethon.tl.types import KeyboardButtonUrl, MessageEntityTextUrl, MessageEntityUrl
@@ -61,31 +61,81 @@ def get_api_credentials() -> Tuple[int, str]:
 
 
 def get_channels() -> List[str]:
-    """Return normalized channel usernames from the database and default settings."""
-    channels: List[str] = []
+    """Return runtime channels from the database only."""
+    return get_runtime_channels()
 
-    with Session(engine) as session:
-        for channel in session.query(Channel).all():
-            try:
-                channels.append(normalize_channel_username(channel.username))
-            except ValueError:
-                logger.warning("Skipping invalid channel from database: %s", channel.username)
 
-    default_channels = getattr(settings, "DEFAULT_CHANNELS", "") or ""
-    for raw_channel in default_channels.split(","):
-        if not raw_channel.strip():
-            continue
+def _normalize_optional_text(value: Any) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
+def _sanitize_telegram_value(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, bytes):
+        return {"type": "bytes", "length": len(value)}
+    if isinstance(value, dict):
+        return {str(key): _sanitize_telegram_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_sanitize_telegram_value(item) for item in value]
+    if hasattr(value, "isoformat"):
         try:
-            channels.append(normalize_channel_username(raw_channel))
-        except ValueError:
-            logger.warning("Skipping invalid channel from settings: %s", raw_channel)
+            return value.isoformat()
+        except TypeError:
+            pass
+    if hasattr(value, "to_dict") and callable(value.to_dict):
+        try:
+            return _sanitize_telegram_value(value.to_dict())
+        except Exception:  # pragma: no cover - defensive serialization fallback
+            pass
+    return str(value)
 
-    return dedupe_preserve_order(channels)
+
+def _build_raw_message_snapshot(message: Any) -> Dict[str, Any]:
+    if hasattr(message, "to_dict") and callable(message.to_dict):
+        try:
+            snapshot = _sanitize_telegram_value(message.to_dict())
+            if isinstance(snapshot, dict):
+                return snapshot
+        except Exception:  # pragma: no cover - defensive serialization fallback
+            logger.debug("Failed to serialize raw Telegram message", exc_info=True)
+
+    return {
+        "id": int(getattr(message, "id", 0) or 0),
+        "message": str(getattr(message, "message", None) or ""),
+        "raw_text": str(getattr(message, "raw_text", None) or ""),
+    }
 
 
-def _extract_message_debug_urls(message: Any) -> Tuple[List[Dict[str, str]], List[str], str | None]:
+def _infer_media_kind(message: Any) -> str | None:
+    media = getattr(message, "media", None)
+    if media is None:
+        return None
+
+    if getattr(media, "webpage", None) is not None:
+        return "webpage"
+
+    return media.__class__.__name__
+
+
+def _build_message_link(channel_username: str, channel_id: int | None, message_id: int) -> str | None:
+    if not message_id:
+        return None
+
+    normalized_username = str(channel_username or "").strip()
+    if normalized_username and not is_invite_link_hash(normalized_username):
+        return f"https://t.me/{normalized_username}/{message_id}"
+    if channel_id:
+        return f"https://t.me/c/{channel_id}/{message_id}"
+    return None
+
+
+def _extract_message_debug_urls(
+    message: Any,
+) -> Tuple[List[Dict[str, str]], List[Dict[str, str | None]], Dict[str, str | None] | None]:
     entity_urls: List[Dict[str, str]] = []
-    button_urls: List[str] = []
+    button_links: List[Dict[str, str | None]] = []
 
     if hasattr(message, "get_entities_text"):
         for entity, text_part in message.get_entities_text():
@@ -111,11 +161,28 @@ def _extract_message_debug_urls(message: Any) -> Tuple[List[Dict[str, str]], Lis
         for row in getattr(reply_markup, "rows", []):
             for button in getattr(row, "buttons", []):
                 if isinstance(button, KeyboardButtonUrl) and getattr(button, "url", None):
-                    button_urls.append(str(button.url))
+                    button_links.append(
+                        {
+                            "text": _normalize_optional_text(getattr(button, "text", None)),
+                            "url": str(button.url),
+                        }
+                    )
 
     media = getattr(message, "media", None)
     webpage = getattr(media, "webpage", None)
-    webpage_url = str(getattr(webpage, "url", "") or "") or None
+    webpage_preview = None
+    if webpage is not None:
+        preview = {
+            "url": _normalize_optional_text(getattr(webpage, "url", None)),
+            "title": _normalize_optional_text(getattr(webpage, "title", None)),
+            "description": _normalize_optional_text(getattr(webpage, "description", None)),
+            "site_name": _normalize_optional_text(getattr(webpage, "site_name", None)),
+            "author": _normalize_optional_text(getattr(webpage, "author", None)),
+            "type": _normalize_optional_text(getattr(webpage, "type", None)),
+            "display_url": _normalize_optional_text(getattr(webpage, "display_url", None)),
+        }
+        if any(value for value in preview.values()):
+            webpage_preview = preview
 
     deduped_entity_urls: List[Dict[str, str]] = []
     seen_entities = set()
@@ -126,8 +193,16 @@ def _extract_message_debug_urls(message: Any) -> Tuple[List[Dict[str, str]], Lis
         seen_entities.add(key)
         deduped_entity_urls.append(item)
 
-    deduped_button_urls = list(dict.fromkeys(url for url in button_urls if url))
-    return deduped_entity_urls, deduped_button_urls, webpage_url
+    deduped_button_links: List[Dict[str, str | None]] = []
+    seen_buttons = set()
+    for item in button_links:
+        key = (item.get("text"), item.get("url"))
+        if not item.get("url") or key in seen_buttons:
+            continue
+        seen_buttons.add(key)
+        deduped_button_links.append(item)
+
+    return deduped_entity_urls, deduped_button_links, webpage_preview
 
 
 async def _build_channel_message_sample(
@@ -135,15 +210,18 @@ async def _build_channel_message_sample(
     *,
     channel_username: str,
     channel_id: int | None,
+    parser_profile: str | None = None,
 ) -> Dict[str, Any]:
+    message_id = int(getattr(message, "id", 0) or 0)
     text = str(getattr(message, "message", None) or getattr(message, "raw_text", None) or "")
     raw_urls = sorted(extract_all_urls(text, message))
-    entity_urls, button_urls, webpage_url = _extract_message_debug_urls(message)
+    entity_urls, button_links, webpage_preview = _extract_message_debug_urls(message)
     parsed_records, diagnostics = await parse_message_records(
         text,
         msg_obj=message,
         channel_name=channel_username,
         channel_id=channel_id,
+        parser_profile=parser_profile,
     )
     extracted_link_count = sum(
         len(link_items)
@@ -152,18 +230,26 @@ async def _build_channel_message_sample(
     )
 
     return {
-        "message_id": int(getattr(message, "id", 0) or 0),
+        "message_id": message_id,
         "timestamp": getattr(message, "date").isoformat() if getattr(message, "date", None) else "",
+        "message_link": _build_message_link(channel_username, channel_id, message_id),
         "text": text,
         "text_length": len(text),
         "has_media": bool(getattr(message, "media", None)),
+        "media_kind": _infer_media_kind(message),
+        "grouped_id": int(getattr(message, "grouped_id", 0) or 0) or None,
+        "post_author": _normalize_optional_text(getattr(message, "post_author", None)),
         "raw_urls": raw_urls,
         "entity_urls": entity_urls,
-        "button_urls": button_urls,
-        "webpage_url": webpage_url,
-        "parsed_records": parsed_records,
-        "diagnostics": asdict(diagnostics),
+        "button_links": button_links,
+        "webpage_preview": webpage_preview,
+        "raw_message": _build_raw_message_snapshot(message),
         "extracted_link_count": extracted_link_count,
+        "parser_debug": {
+            "parsed_records": parsed_records,
+            "diagnostics": asdict(diagnostics),
+            "extracted_link_count": extracted_link_count,
+        },
     }
 
 
@@ -174,6 +260,7 @@ async def fetch_channel_message_samples(
     page: int = 1,
     page_size: int | None = None,
     only_with_links: bool = True,
+    parser_profile: str | None = None,
 ) -> Dict[str, Any]:
     """Fetch recent channel messages plus parser diagnostics for rule tuning."""
     if not ensure_session_file("tg_monitor_session_sample"):
@@ -201,8 +288,10 @@ async def fetch_channel_message_samples(
                 message,
                 channel_username=channel_username,
                 channel_id=getattr(entity, "id", None),
+                parser_profile=parser_profile,
             )
-            has_links = bool(sample["raw_urls"]) or sample["extracted_link_count"] > 0
+            parser_debug = sample.get("parser_debug", {})
+            has_links = bool(sample["raw_urls"]) or bool(parser_debug.get("extracted_link_count"))
             has_content = bool(sample["text"].strip()) or has_links or sample["has_media"]
             if not has_content:
                 continue

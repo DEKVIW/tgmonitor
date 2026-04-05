@@ -26,6 +26,19 @@ class AdminModelsTestCase(unittest.TestCase):
         model = BulkUsernamesRequest(usernames=[" alice ", "bob", "alice", "bob "])
         self.assertEqual(model.usernames, ["alice", "bob"])
 
+    def test_channel_create_accepts_supported_parser_profile(self) -> None:
+        model = ChannelCreate(username="@movie_channel", parser_profile="movie_default")
+        self.assertEqual(model.username, "movie_channel")
+        self.assertEqual(model.parser_profile, "movie_default")
+
+    def test_channel_create_treats_auto_parser_profile_as_none(self) -> None:
+        model = ChannelCreate(username="demo", parser_profile=" auto ")
+        self.assertIsNone(model.parser_profile)
+
+    def test_channel_create_rejects_unknown_parser_profile(self) -> None:
+        with self.assertRaises(ValidationError):
+            ChannelCreate(username="demo", parser_profile="unknown_profile")
+
     def test_link_check_task_create_validates_concurrency(self) -> None:
         with self.assertRaises(ValidationError):
             LinkCheckTaskCreate(period="today", max_concurrent=0)

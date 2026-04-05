@@ -11,7 +11,11 @@ from sqlalchemy.orm import Session
 from app.api.dependencies import get_db, get_optional_current_user
 from app.models.config import settings
 from app.schemas.message import MessageListResponse, MessageResponse, TagStatsResponse
-from app.services.message_service import get_filtered_messages, get_message_by_id, get_tag_stats
+from app.services.message_query_service import (
+    get_filtered_messages,
+    get_message_by_id,
+    get_tag_stats,
+)
 
 router = APIRouter(prefix="/api/messages", tags=["消息"])
 

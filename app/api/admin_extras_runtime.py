@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_admin_user, get_db
-from app.models.models import Channel
+from app.models.models import Channel, ensure_channel_parser_profile_column
 from app.schemas.admin_models import (
     ChannelSampleResponse,
     LinkCheckHistoryBatchDeleteRequest,
@@ -46,6 +46,7 @@ async def get_channel_samples_api(
     del current_user
 
     try:
+        ensure_channel_parser_profile_column()
         channel = db.query(Channel).filter(Channel.id == channel_id).first()
         if channel is None:
             raise HTTPException(
@@ -60,6 +61,7 @@ async def get_channel_samples_api(
             page=page,
             page_size=effective_page_size,
             only_with_links=only_with_links,
+            parser_profile=getattr(channel, "parser_profile", None),
         )
         sample_data["channel_id"] = channel.id
         return ChannelSampleResponse(**sample_data)

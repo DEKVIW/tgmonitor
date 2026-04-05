@@ -1,4 +1,5 @@
-from sqlalchemy import Column, Integer, String, DateTime, JSON, ARRAY, create_engine, Float, Boolean, Text
+import threading
+from sqlalchemy import Column, Integer, String, DateTime, JSON, ARRAY, create_engine, Float, Boolean, Text, inspect, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.declarative import declarative_base
 from datetime import datetime
@@ -39,6 +40,7 @@ class Channel(Base):
     __tablename__ = "channels"
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String, nullable=False)
+    parser_profile = Column(String, nullable=True)
 
 # 新增：链接检测统计表
 class LinkCheckStats(Base):
@@ -88,6 +90,32 @@ engine = create_engine(
     pool_reset_on_return='commit'  # 连接返回时重置
 )
 
+_channel_schema_lock = threading.RLock()
+_channel_schema_checked = False
+
 # 创建所有表
 def create_tables():
     Base.metadata.create_all(bind=engine) 
+    ensure_channel_parser_profile_column()
+
+
+def ensure_channel_parser_profile_column() -> None:
+    global _channel_schema_checked
+    if _channel_schema_checked:
+        return
+
+    with _channel_schema_lock:
+        if _channel_schema_checked:
+            return
+
+        inspector = inspect(engine)
+        try:
+            columns = {column["name"] for column in inspector.get_columns("channels")}
+        except Exception:
+            columns = set()
+
+        if "parser_profile" not in columns:
+            with engine.begin() as connection:
+                connection.execute(text("ALTER TABLE channels ADD COLUMN parser_profile VARCHAR"))
+
+        _channel_schema_checked = True

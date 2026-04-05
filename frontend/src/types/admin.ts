@@ -16,6 +16,8 @@ export interface CredentialCreate {
 export interface ChannelResponse {
   id: number
   username: string
+  parser_profile?: string | null
+  effective_parser_profile: string
   title?: string | null
   telegram_id?: number | null
   channel_type?: string | null
@@ -25,6 +27,7 @@ export interface ChannelResponse {
 
 export interface ChannelCreate {
   username: string
+  parser_profile?: string | null
 }
 
 export interface SystemConfigResponse {
@@ -180,19 +183,48 @@ export interface ParsedMessageRecord {
   bot: string
 }
 
-export interface ChannelMessageSample {
-  message_id: number
-  timestamp: string
-  text: string
-  text_length: number
-  has_media: boolean
-  raw_urls: string[]
-  entity_urls: ChannelSampleEntity[]
-  button_urls: string[]
-  webpage_url?: string | null
+export interface ChannelSampleButtonLink {
+  text?: string | null
+  url: string
+}
+
+export interface ChannelSampleWebpagePreview {
+  url?: string | null
+  title?: string | null
+  description?: string | null
+  site_name?: string | null
+  author?: string | null
+  type?: string | null
+  display_url?: string | null
+}
+
+export interface ChannelSampleParserDebug {
   parsed_records: ParsedMessageRecord[]
   diagnostics: Record<string, any>
   extracted_link_count: number
+}
+
+export interface ChannelMessageSample {
+  message_id: number
+  timestamp: string
+  message_link?: string | null
+  text: string
+  text_length: number
+  has_media: boolean
+  media_kind?: string | null
+  grouped_id?: number | null
+  post_author?: string | null
+  raw_urls: string[]
+  entity_urls: ChannelSampleEntity[]
+  button_links: ChannelSampleButtonLink[]
+  webpage_preview?: ChannelSampleWebpagePreview | null
+  raw_message: Record<string, any>
+  parser_debug: ChannelSampleParserDebug
+  button_urls?: string[]
+  webpage_url?: string | null
+  parsed_records?: ParsedMessageRecord[]
+  diagnostics?: Record<string, any>
+  extracted_link_count?: number
 }
 
 export interface ChannelSampleResponse {

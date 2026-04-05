@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.core.monitor_rules import list_parser_profile_names
 from app.utils.channel_utils import dedupe_preserve_order, normalize_channel_username
 
 
@@ -52,6 +53,8 @@ class CredentialCreate(BaseModel):
 class ChannelResponse(ORMModel):
     id: int
     username: str
+    parser_profile: Optional[str] = None
+    effective_parser_profile: str = "default"
     title: Optional[str] = None
     telegram_id: Optional[int] = None
     channel_type: Optional[str] = None
@@ -61,11 +64,24 @@ class ChannelResponse(ORMModel):
 
 class ChannelCreate(BaseModel):
     username: str = Field(min_length=1, max_length=128)
+    parser_profile: Optional[str] = Field(default=None, max_length=64)
 
     @field_validator("username")
     @classmethod
     def validate_username(cls, value: str) -> str:
         return normalize_channel_username(value)
+
+    @field_validator("parser_profile")
+    @classmethod
+    def validate_parser_profile(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = _normalize_text(value, field_name="parser_profile")
+        if normalized.lower() == "auto":
+            return None
+        if normalized not in set(list_parser_profile_names()):
+            raise ValueError(f"unsupported parser_profile: {normalized}")
+        return normalized
 
 
 class SystemConfigResponse(BaseModel):
@@ -291,19 +307,46 @@ class ChannelMessageSampleEntity(BaseModel):
     text: Optional[str] = None
 
 
-class ChannelMessageSample(BaseModel):
-    message_id: int
-    timestamp: str
-    text: str
-    text_length: int
-    has_media: bool = False
-    raw_urls: List[str] = Field(default_factory=list)
-    entity_urls: List[ChannelMessageSampleEntity] = Field(default_factory=list)
-    button_urls: List[str] = Field(default_factory=list)
-    webpage_url: Optional[str] = None
+class ChannelMessageSampleButton(BaseModel):
+    text: Optional[str] = None
+    url: str
+
+
+class ChannelMessageSampleWebpage(BaseModel):
+    url: Optional[str] = None
+    title: Optional[str] = None
+    description: Optional[str] = None
+    site_name: Optional[str] = None
+    author: Optional[str] = None
+    type: Optional[str] = None
+    display_url: Optional[str] = None
+
+
+class ChannelMessageSampleParserDebug(BaseModel):
     parsed_records: List[Dict[str, Any]] = Field(default_factory=list)
     diagnostics: Dict[str, Any] = Field(default_factory=dict)
     extracted_link_count: int = 0
+
+
+class ChannelMessageSample(BaseModel):
+    message_id: int
+    timestamp: str
+    message_link: Optional[str] = None
+    text: str
+    text_length: int
+    has_media: bool = False
+    media_kind: Optional[str] = None
+    grouped_id: Optional[int] = None
+    post_author: Optional[str] = None
+    raw_urls: List[str] = Field(default_factory=list)
+    entity_urls: List[ChannelMessageSampleEntity] = Field(default_factory=list)
+    button_links: List[ChannelMessageSampleButton] = Field(default_factory=list)
+    webpage_preview: Optional[ChannelMessageSampleWebpage] = None
+    raw_message: Dict[str, Any] = Field(default_factory=dict)
+    extracted_link_count: int = 0
+    parser_debug: ChannelMessageSampleParserDebug = Field(
+        default_factory=ChannelMessageSampleParserDebug
+    )
 
 
 class ChannelSampleResponse(BaseModel):

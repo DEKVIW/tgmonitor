@@ -36,6 +36,12 @@ import {
   testMonitor,
   updateChannel,
 } from '@/api/admin'
+import {
+  getConfiguredParserProfileLabel,
+  getEffectiveParserProfileColor,
+  getEffectiveParserProfileLabel,
+  PARSER_PROFILE_OPTIONS,
+} from '@/components/admin/parserProfileOptions'
 import type {
   ChannelCreate,
   ChannelDiagnosisResult,
@@ -67,6 +73,13 @@ const formatTimestamp = (value: string) => {
   const date = new Date(value)
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN')
 }
+
+const getSampleParserDebug = (sample: ChannelMessageSample) =>
+  sample.parser_debug || {
+    parsed_records: [],
+    diagnostics: {},
+    extracted_link_count: 0,
+  }
 
 const getRecordLinkCount = (record: ParsedMessageRecord) =>
   Object.values(record.links || {}).reduce((total, items) => total + items.length, 0)
@@ -116,13 +129,13 @@ const SampleRecordCard = ({ record, index }: { record: ParsedMessageRecord; inde
   )
 }
 
-const SamplePanelBody = ({ sample }: { sample: ChannelMessageSample }) => (
+export const SamplePanelBody = ({ sample }: { sample: ChannelMessageSample }) => (
   <div className="channel-sample-body">
     <Descriptions size="small" column={2} bordered>
       <Descriptions.Item label="消息 ID">{sample.message_id}</Descriptions.Item>
       <Descriptions.Item label="原始链接数">{sample.raw_urls.length}</Descriptions.Item>
-      <Descriptions.Item label="解析记录数">{sample.parsed_records.length}</Descriptions.Item>
-      <Descriptions.Item label="提取链接数">{sample.extracted_link_count}</Descriptions.Item>
+      <Descriptions.Item label="解析记录数">{(sample.parsed_records ?? []).length}</Descriptions.Item>
+      <Descriptions.Item label="提取链接数">{sample.extracted_link_count ?? 0}</Descriptions.Item>
       <Descriptions.Item label="文本长度">{sample.text_length}</Descriptions.Item>
       <Descriptions.Item label="包含媒体">{sample.has_media ? '是' : '否'}</Descriptions.Item>
       <Descriptions.Item label="网页预览" span={2}>
@@ -164,11 +177,11 @@ const SamplePanelBody = ({ sample }: { sample: ChannelMessageSample }) => (
       </div>
     )}
 
-    {sample.button_urls.length > 0 && (
+    {(sample.button_urls ?? []).length > 0 && (
       <div className="sample-section">
         <Text strong>按钮 URL</Text>
         <div className="sample-entity-list">
-          {sample.button_urls.map((url, index) => (
+          {(sample.button_urls ?? []).map((url, index) => (
             <div key={`${url}-${index}`} className="sample-entity-item">
               <Text>{url}</Text>
             </div>
@@ -179,9 +192,9 @@ const SamplePanelBody = ({ sample }: { sample: ChannelMessageSample }) => (
 
     <div className="sample-section">
       <Text strong>解析结果</Text>
-      {sample.parsed_records.length > 0 ? (
+      {(sample.parsed_records ?? []).length > 0 ? (
         <div className="sample-record-list">
-          {sample.parsed_records.map((record, index) => (
+          {(sample.parsed_records ?? []).map((record, index) => (
             <SampleRecordCard key={`${sample.message_id}-${index}`} record={record} index={index} />
           ))}
         </div>
@@ -192,10 +205,122 @@ const SamplePanelBody = ({ sample }: { sample: ChannelMessageSample }) => (
 
     <div className="sample-section">
       <Text strong>解析诊断</Text>
-      <pre className="sample-json-block">{JSON.stringify(sample.diagnostics, null, 2)}</pre>
+      <pre className="sample-json-block">{JSON.stringify(sample.diagnostics ?? {}, null, 2)}</pre>
     </div>
   </div>
 )
+
+const SamplePanelBodyRaw = ({ sample }: { sample: ChannelMessageSample }) => {
+  const parserDebug = getSampleParserDebug(sample)
+  const preview = sample.webpage_preview
+
+  return (
+    <div className="channel-sample-body">
+      <Descriptions size="small" column={2} bordered>
+        <Descriptions.Item label="消息 ID">{sample.message_id}</Descriptions.Item>
+        <Descriptions.Item label="原始 URL 数">{sample.raw_urls.length}</Descriptions.Item>
+        <Descriptions.Item label="实体链接数">{sample.entity_urls.length}</Descriptions.Item>
+        <Descriptions.Item label="按钮链接数">{sample.button_links.length}</Descriptions.Item>
+        <Descriptions.Item label="文本长度">{sample.text_length}</Descriptions.Item>
+        <Descriptions.Item label="包含媒体">{sample.has_media ? '是' : '否'}</Descriptions.Item>
+        <Descriptions.Item label="媒体类型">{sample.media_kind || '-'}</Descriptions.Item>
+        <Descriptions.Item label="解析调试链接数">{parserDebug.extracted_link_count}</Descriptions.Item>
+        <Descriptions.Item label="消息链接" span={2}>
+          {sample.message_link || '-'}
+        </Descriptions.Item>
+        <Descriptions.Item label="帖子作者">{sample.post_author || '-'}</Descriptions.Item>
+        <Descriptions.Item label="分组 ID">{sample.grouped_id ?? '-'}</Descriptions.Item>
+      </Descriptions>
+
+      <div className="sample-section">
+        <Text strong>原始正文</Text>
+        <Paragraph className="sample-pre-block" copyable={{ text: sample.text || '' }}>
+          {sample.text || '(空文本)'}
+        </Paragraph>
+      </div>
+
+      {preview && (
+        <div className="sample-section">
+          <Text strong>网页预览</Text>
+          <Descriptions size="small" column={1} bordered>
+            <Descriptions.Item label="URL">{preview.url || '-'}</Descriptions.Item>
+            <Descriptions.Item label="标题">{preview.title || '-'}</Descriptions.Item>
+            <Descriptions.Item label="描述">{preview.description || '-'}</Descriptions.Item>
+            <Descriptions.Item label="站点">{preview.site_name || '-'}</Descriptions.Item>
+            <Descriptions.Item label="作者">{preview.author || '-'}</Descriptions.Item>
+            <Descriptions.Item label="类型">{preview.type || '-'}</Descriptions.Item>
+            <Descriptions.Item label="展示地址">{preview.display_url || '-'}</Descriptions.Item>
+          </Descriptions>
+        </div>
+      )}
+
+      {sample.raw_urls.length > 0 && (
+        <div className="sample-section">
+          <Text strong>原始 URL</Text>
+          <div className="sample-tag-row">
+            {sample.raw_urls.map((url) => (
+              <Tag key={url} color="blue">
+                {truncateText(url, 48)}
+              </Tag>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {sample.entity_urls.length > 0 && (
+        <div className="sample-section">
+          <Text strong>实体链接</Text>
+          <div className="sample-entity-list">
+            {sample.entity_urls.map((entity, index) => (
+              <div key={`${entity.url}-${index}`} className="sample-entity-item">
+                <Tag>{entity.type}</Tag>
+                <Text>{entity.url}</Text>
+                {entity.text ? <Text type="secondary">{entity.text}</Text> : null}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {sample.button_links.length > 0 && (
+        <div className="sample-section">
+          <Text strong>按钮链接</Text>
+          <div className="sample-entity-list">
+            {sample.button_links.map((button, index) => (
+              <div key={`${button.url}-${index}`} className="sample-entity-item">
+                {button.text ? <Tag>{button.text}</Tag> : null}
+                <Text>{button.url}</Text>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="sample-section">
+        <Text strong>原始对象快照</Text>
+        <pre className="sample-json-block">{JSON.stringify(sample.raw_message, null, 2)}</pre>
+      </div>
+
+      <div className="sample-section">
+        <Text strong>解析调试（非原始）</Text>
+        {parserDebug.parsed_records.length > 0 ? (
+          <div className="sample-record-list">
+            {parserDebug.parsed_records.map((record, index) => (
+              <SampleRecordCard key={`${sample.message_id}-${index}`} record={record} index={index} />
+            ))}
+          </div>
+        ) : (
+          <Empty description="没有可展示的解析记录" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+        )}
+      </div>
+
+      <div className="sample-section">
+        <Text strong>解析诊断（非原始）</Text>
+        <pre className="sample-json-block">{JSON.stringify(parserDebug.diagnostics, null, 2)}</pre>
+      </div>
+    </div>
+  )
+}
 
 const ChannelManagerEnhanced = () => {
   const [channels, setChannels] = useState<ChannelResponse[]>([])
@@ -248,7 +373,10 @@ const ChannelManagerEnhanced = () => {
 
   const handleEdit = (channel: ChannelResponse) => {
     setEditingChannel(channel)
-    editForm.setFieldsValue({ username: channel.username })
+    editForm.setFieldsValue({
+      username: channel.username,
+      parser_profile: channel.parser_profile ?? 'auto',
+    })
     setEditModalVisible(true)
   }
 
@@ -449,6 +577,24 @@ const ChannelManagerEnhanced = () => {
     },
   ]
 
+  const channelColumnsWithParserProfile: TableProps<ChannelResponse>['columns'] = [
+    ...channelColumns.slice(0, 5),
+    {
+      title: '解析路线',
+      key: 'parser_profile',
+      width: 180,
+      render: (_: unknown, record: ChannelResponse) => (
+        <Space size={4} wrap>
+          <Tag color={getEffectiveParserProfileColor(record.effective_parser_profile)}>
+            {getEffectiveParserProfileLabel(record.effective_parser_profile)}
+          </Tag>
+          <Tag>{record.parser_profile ? '手动' : '自动'}</Tag>
+        </Space>
+      ),
+    },
+    ...channelColumns.slice(5),
+  ]
+
   return (
     <div className="channel-manager">
       <div className="manager-header" style={{ marginBottom: 16 }}>
@@ -481,7 +627,7 @@ const ChannelManagerEnhanced = () => {
       )}
 
       <Table
-        columns={channelColumns}
+        columns={channelColumnsWithParserProfile}
         dataSource={channels}
         rowKey="id"
         loading={loading}
@@ -500,13 +646,26 @@ const ChannelManagerEnhanced = () => {
         }}
         footer={null}
       >
-        <Form form={form} layout="vertical" onFinish={(values) => void handleAdd(values)}>
+        <Form
+          form={form}
+          layout="vertical"
+          initialValues={{ parser_profile: 'auto' }}
+          onFinish={(values) => void handleAdd(values)}
+        >
           <Form.Item
             name="username"
             label="频道用户名或邀请链接"
             rules={[{ required: true, message: '请输入频道用户名或邀请链接' }]}
           >
             <Input placeholder="例如：shareAliyun 或 https://t.me/+xxxx" />
+          </Form.Item>
+
+          <Form.Item
+            name="parser_profile"
+            label="解析路线"
+            extra="自动判断会先走已配置映射，未命中时再回退到默认解析。"
+          >
+            <Select options={PARSER_PROFILE_OPTIONS} />
           </Form.Item>
 
           <Form.Item>
@@ -535,6 +694,18 @@ const ChannelManagerEnhanced = () => {
             rules={[{ required: true, message: '请输入频道用户名或邀请链接' }]}
           >
             <Input placeholder="例如：shareAliyun 或 https://t.me/+xxxx" />
+          </Form.Item>
+
+          <Form.Item
+            name="parser_profile"
+            label="解析路线"
+            extra={
+              editingChannel?.parser_profile
+                ? `当前手动指定为 ${getConfiguredParserProfileLabel(editingChannel.parser_profile)}。`
+                : '当前为自动判断模式。'
+            }
+          >
+            <Select options={PARSER_PROFILE_OPTIONS} />
           </Form.Item>
 
           <Form.Item>
@@ -692,6 +863,9 @@ const ChannelManagerEnhanced = () => {
             <Descriptions.Item label="频道用户名">{sampleChannel.username}</Descriptions.Item>
             <Descriptions.Item label="频道标题">{sampleData?.title || sampleChannel.title || '-'}</Descriptions.Item>
             <Descriptions.Item label="Telegram ID">{sampleData?.telegram_id ?? sampleChannel.telegram_id ?? '-'}</Descriptions.Item>
+            <Descriptions.Item label="解析路线">
+              {getEffectiveParserProfileLabel(sampleChannel.effective_parser_profile)}
+            </Descriptions.Item>
             <Descriptions.Item label="当前页">
               第 {samplePage} 页 / 每页 {samplePageSize} 条
             </Descriptions.Item>
@@ -728,7 +902,7 @@ const ChannelManagerEnhanced = () => {
                       <span className="channel-sample-summary-text">{truncateText(sample.text || '(空文本)', 48)}</span>
                     </div>
                   ),
-                  children: <SamplePanelBody sample={sample} />,
+                  children: <SamplePanelBodyRaw sample={sample} />,
                 }))}
               />
             ) : (

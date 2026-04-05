@@ -1,26 +1,23 @@
 from app.models.models import create_tables, Channel, engine, Base
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-from app.models.config import settings
 import json
 import os
 
 from passlib.context import CryptContext
+from app.services.channel_registry import load_default_channels_from_settings
 
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 def init_channels():
     # 从配置中获取默认频道列表
-    default_channels = settings.DEFAULT_CHANNELS.split(',')
+    default_channels = load_default_channels_from_settings()
     
     # 创建数据库会话
     with Session(engine) as session:
         # 检查每个频道是否已存在
         for username in default_channels:
-            username = username.strip()
-            if not username:
-                continue
                 
             # 检查频道是否已存在
             existing = session.query(Channel).filter_by(username=username).first()

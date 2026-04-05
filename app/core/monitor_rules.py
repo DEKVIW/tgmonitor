@@ -6,7 +6,7 @@ import json
 import threading
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 
 RULES_FILE = Path(__file__).resolve().parents[2] / "data" / "monitor_channel_rules.json"
@@ -264,27 +264,56 @@ def load_monitor_rules(force_reload: bool = False) -> Dict[str, Any]:
         return deepcopy(rules)
 
 
+def list_parser_profile_names(rules: Dict[str, Any] | None = None) -> List[str]:
+    loaded_rules = rules or load_monitor_rules()
+    profiles = loaded_rules.get("profiles", {}) or {}
+    names = list(profiles.keys())
+    if "default" in names:
+        names = ["default", *[name for name in names if name != "default"]]
+    return names
+
+
+def resolve_channel_profile_name(
+    channel_name: str | None,
+    rules: Dict[str, Any] | None = None,
+    channel_id: int | None = None,
+    parser_profile: str | None = None,
+) -> str:
+    loaded_rules = rules or load_monitor_rules()
+    profiles = loaded_rules.get("profiles", {}) or {}
+    if parser_profile and parser_profile in profiles:
+        return parser_profile
+
+    channel_profile_ids = loaded_rules.get("channel_profile_ids", {})
+    if channel_id is not None:
+        profile_name = channel_profile_ids.get(str(channel_id)) or channel_profile_ids.get(channel_id)
+        if profile_name in profiles:
+            return profile_name
+
+    if channel_name:
+        channel_profiles = loaded_rules.get("channel_profiles", {})
+        profile_name = channel_profiles.get(channel_name) or channel_profiles.get(channel_name.lower())
+        if profile_name in profiles:
+            return profile_name
+
+    return "default"
+
+
 def resolve_channel_profile(
     channel_name: str | None,
     rules: Dict[str, Any] | None = None,
     channel_id: int | None = None,
+    parser_profile: str | None = None,
 ) -> Dict[str, Any]:
     loaded_rules = rules or load_monitor_rules()
     default_profile = deepcopy(loaded_rules["profiles"]["default"])
-    channel_profile_ids = loaded_rules.get("channel_profile_ids", {})
-    if channel_id is not None:
-        profile_name = channel_profile_ids.get(str(channel_id)) or channel_profile_ids.get(channel_id)
-        if profile_name:
-            profile_overrides = loaded_rules.get("profiles", {}).get(profile_name, {})
-            return _deep_merge(default_profile, profile_overrides)
-
-    if not channel_name:
+    profile_name = resolve_channel_profile_name(
+        channel_name,
+        loaded_rules,
+        channel_id=channel_id,
+        parser_profile=parser_profile,
+    )
+    if profile_name == "default":
         return default_profile
-
-    channel_profiles = loaded_rules.get("channel_profiles", {})
-    profile_name = channel_profiles.get(channel_name) or channel_profiles.get(channel_name.lower())
-    if not profile_name:
-        return default_profile
-
     profile_overrides = loaded_rules.get("profiles", {}).get(profile_name, {})
     return _deep_merge(default_profile, profile_overrides)

@@ -111,12 +111,13 @@ class AdminApiTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertIn("链接检测记录不存在", context.exception.detail)
 
     async def test_get_channel_samples_api_returns_404_when_channel_missing(self) -> None:
-        with self.assertRaises(HTTPException) as context:
-            await admin_extras.get_channel_samples_api(
-                123,
-                db=_FakeDb(channel=None),
-                current_user={"role": "admin"},
-            )
+        with patch("app.api.admin_extras_runtime.ensure_channel_parser_profile_column"):
+            with self.assertRaises(HTTPException) as context:
+                await admin_extras.get_channel_samples_api(
+                    123,
+                    db=_FakeDb(channel=None),
+                    current_user={"role": "admin"},
+                )
 
         self.assertEqual(context.exception.status_code, 404)
         self.assertIn("频道 123 不存在", context.exception.detail)
@@ -156,7 +157,10 @@ class AdminApiTestCase(unittest.IsolatedAsyncioTestCase):
 
     async def test_get_channel_samples_api_wraps_runtime_error(self) -> None:
         channel = SimpleNamespace(id=9, username="demo_channel")
-        with patch("app.api.admin_extras_runtime.fetch_channel_message_samples", side_effect=RuntimeError("session missing")):
+        with (
+            patch("app.api.admin_extras_runtime.ensure_channel_parser_profile_column"),
+            patch("app.api.admin_extras_runtime.fetch_channel_message_samples", side_effect=RuntimeError("session missing")),
+        ):
             with self.assertRaises(HTTPException) as context:
                 await admin_extras.get_channel_samples_api(
                     9,
