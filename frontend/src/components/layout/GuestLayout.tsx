@@ -4,6 +4,7 @@
 
 import { ReactNode } from 'react'
 import { Layout as AntLayout } from 'antd'
+import BackToTopButton from './BackToTopButton'
 import './Layout.css'
 import './Header.css'
 import './GuestLayout.css'
@@ -28,6 +29,7 @@ const GuestLayout = ({ children, toolbar }: GuestLayoutProps) => {
       <Content className="content-wrapper guest-content-wrapper">
         {children}
       </Content>
+      <BackToTopButton />
     </AntLayout>
   )
 }

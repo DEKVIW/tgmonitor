@@ -9,16 +9,19 @@ import {
   getDailyTrend,
   getDedupStats,
   getNetdiskDistribution,
+  getActivityHeatmap,
 } from '@/api/statistics'
 import StatisticsOverview from '@/components/statistics/StatisticsOverview'
 import TrendChart from '@/components/statistics/TrendChart'
 import DedupChart from '@/components/statistics/DedupChart'
 import NetdiskChart from '@/components/statistics/NetdiskChart'
+import ActivityHeatmap from '@/components/statistics/ActivityHeatmap'
 import {
   StatisticsOverview as StatisticsOverviewType,
   DailyTrendResponse,
   DedupStatsResponse,
   NetdiskDistributionResponse,
+  ActivityHeatmapResponse,
 } from '@/types/statistics'
 import './Statistics.css'
 
@@ -29,23 +32,26 @@ const Statistics = () => {
   const [dailyTrend, setDailyTrend] = useState<DailyTrendResponse | null>(null)
   const [dedupStats, setDedupStats] = useState<DedupStatsResponse | null>(null)
   const [netdiskDist, setNetdiskDist] = useState<NetdiskDistributionResponse | null>(null)
+  const [activityHeatmap, setActivityHeatmap] = useState<ActivityHeatmapResponse | null>(null)
 
   // 加载统计数据
   const loadStatistics = async () => {
     setLoading(true)
     setError(null)
     try {
-      const [overviewData, trendData, dedupData, netdiskData] = await Promise.all([
+      const [overviewData, trendData, dedupData, netdiskData, heatmapData] = await Promise.all([
         getStatisticsOverview(),
         getDailyTrend(10),
         getDedupStats(10),
         getNetdiskDistribution(24),
+        getActivityHeatmap(7),
       ])
 
       setOverview(overviewData)
       setDailyTrend(trendData)
       setDedupStats(dedupData)
       setNetdiskDist(netdiskData)
+      setActivityHeatmap(heatmapData)
     } catch (err: any) {
       setError(err.response?.data?.detail || '加载统计信息失败')
     } finally {
@@ -95,9 +101,15 @@ const Statistics = () => {
           </Col>
 
           {/* 网盘分布 */}
-          <Col xs={24}>
+          <Col xs={24} lg={12}>
             <Card className="chart-card" variant="outlined">
               {netdiskDist && <NetdiskChart data={netdiskDist} />}
+            </Card>
+          </Col>
+
+          <Col xs={24} lg={12}>
+            <Card className="chart-card" variant="outlined">
+              {activityHeatmap && <ActivityHeatmap data={activityHeatmap} />}
             </Card>
           </Col>
         </Row>

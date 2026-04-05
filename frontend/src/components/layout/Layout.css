@@ -2,28 +2,6 @@
   min-height: 100vh;
 }
 
-.app-sidebar {
-  position: fixed;
-  left: 0;
-  top: 64px;
-  bottom: 0;
-  width: 200px;
-  background: #fff;
-  overflow-y: auto;
-  z-index: 99;
-  transition: width 0.2s;
-}
-
-.app-sidebar.collapsed {
-  width: 64px;
-}
-
-.sidebar-menu {
-  height: 100%;
-  border-right: 0;
-  padding-top: 16px;
-}
-
 .layout-content {
   position: relative;
   transition: margin-left var(--transition-base);
@@ -64,7 +42,7 @@
 /* 响应式设计 */
 @media (max-width: 768px) {
   .layout-content {
-    margin-left: 0;
+    transition: margin-left var(--transition-base);
   }
 
   .content-wrapper {

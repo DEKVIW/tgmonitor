@@ -48,3 +48,18 @@ class NetdiskDistributionResponse(BaseModel):
     """最近24小时网盘分布"""
     distribution: List[NetdiskDistributionItem]
 
+
+class ActivityHeatmapCell(BaseModel):
+    """活跃热力图单元格"""
+    date: str  # 格式：YYYY-MM-DD
+    hour: int  # 0-23
+    message_count: int
+
+
+class ActivityHeatmapResponse(BaseModel):
+    """最近N天的活跃热力图"""
+    dates: List[str]
+    hours: List[int]
+    cells: List[ActivityHeatmapCell]
+    max_count: int
+

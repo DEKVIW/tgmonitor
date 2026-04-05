@@ -32,7 +32,7 @@ const { Option } = Select
 
 interface MessageFiltersProps {
   disabled?: boolean
-  layoutVariant?: 'default' | 'guest-header'
+  layoutVariant?: 'default' | 'guest-header' | 'header-strip'
   allowedTimeRanges?: readonly string[]
   fallbackTimeRange?: string
 }
@@ -61,7 +61,11 @@ const MessageFilters = ({
   )
   const toolbarClassName = useMemo(
     () =>
-      ['filters-toolbar', layoutVariant === 'guest-header' ? 'filters-toolbar--guest' : '']
+      [
+        'filters-toolbar',
+        layoutVariant === 'guest-header' ? 'filters-toolbar--guest' : '',
+        layoutVariant === 'header-strip' ? 'filters-toolbar--header-strip' : '',
+      ]
         .filter(Boolean)
         .join(' '),
     [layoutVariant]

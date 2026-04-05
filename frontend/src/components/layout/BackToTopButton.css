@@ -1,0 +1,45 @@
+.back-to-top-button.ant-float-btn {
+  right: 28px;
+  bottom: 28px;
+  width: 48px;
+  height: 48px;
+  border-radius: 18px;
+  box-shadow: 0 16px 32px rgba(25, 52, 79, 0.18);
+}
+
+.back-to-top-button .ant-float-btn-body {
+  background: linear-gradient(135deg, rgba(11, 107, 203, 0.96), rgba(17, 148, 184, 0.92));
+  border-radius: 18px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16);
+}
+
+.back-to-top-button .ant-float-btn-icon {
+  color: #f8fbff;
+  font-size: 18px;
+}
+
+.back-to-top-button.ant-float-btn:hover {
+  transform: translateY(-2px);
+}
+
+.back-to-top-button.ant-float-btn:hover .ant-float-btn-body {
+  background: linear-gradient(135deg, rgba(8, 87, 165, 0.98), rgba(11, 107, 203, 0.96));
+}
+
+@media (max-width: 768px) {
+  .back-to-top-button.ant-float-btn {
+    right: 18px;
+    bottom: 20px;
+    width: 44px;
+    height: 44px;
+    border-radius: 16px;
+  }
+
+  .back-to-top-button .ant-float-btn-body {
+    border-radius: 16px;
+  }
+
+  .back-to-top-button .ant-float-btn-icon {
+    font-size: 16px;
+  }
+}

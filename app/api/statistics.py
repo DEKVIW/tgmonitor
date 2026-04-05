@@ -12,13 +12,16 @@ from app.schemas.statistics import (
     DedupStatsResponse,
     DedupStatsItem,
     NetdiskDistributionResponse,
-    NetdiskDistributionItem
+    NetdiskDistributionItem,
+    ActivityHeatmapResponse,
+    ActivityHeatmapCell,
 )
 from app.services.statistics_service import (
     get_statistics_overview,
     get_daily_trend,
     get_dedup_stats,
-    get_netdisk_distribution
+    get_netdisk_distribution,
+    get_activity_heatmap,
 )
 from app.api.dependencies import get_db, get_current_user, get_optional_current_user
 from app.models.config import settings
@@ -176,5 +179,42 @@ async def get_netdisk_distribution_api(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"获取网盘分布失败: {str(e)}"
+        )
+
+
+@router.get("/activity-heatmap", response_model=ActivityHeatmapResponse, summary="获取活跃热力图")
+async def get_activity_heatmap_api(
+    days: int = Query(7, ge=3, le=14, description="天数（3-14）"),
+    db: Session = Depends(get_db),
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_current_user)
+) -> ActivityHeatmapResponse:
+    """
+    获取最近N天按小时聚合的消息活跃热力图。
+
+    认证：如果启用了游客模式（PUBLIC_DASHBOARD_ENABLED），则无需认证；否则需要 Bearer Token
+    """
+    if not settings.PUBLIC_DASHBOARD_ENABLED and current_user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="需要登录才能访问统计信息",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    is_guest = current_user is None and settings.PUBLIC_DASHBOARD_ENABLED
+    if is_guest:
+        days = min(days, 7)
+
+    try:
+        heatmap_data = get_activity_heatmap(db, days=days)
+        return ActivityHeatmapResponse(
+            dates=heatmap_data["dates"],
+            hours=heatmap_data["hours"],
+            cells=[ActivityHeatmapCell(**item) for item in heatmap_data["cells"]],
+            max_count=heatmap_data["max_count"],
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取活跃热力图失败: {str(e)}"
         )
 

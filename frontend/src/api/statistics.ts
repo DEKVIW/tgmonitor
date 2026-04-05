@@ -8,6 +8,7 @@ import {
   DailyTrendResponse,
   DedupStatsResponse,
   NetdiskDistributionResponse,
+  ActivityHeatmapResponse,
 } from '@/types/statistics'
 
 /**
@@ -39,6 +40,14 @@ export const getDedupStats = async (hours: number = 10): Promise<DedupStatsRespo
  */
 export const getNetdiskDistribution = async (hours: number = 24): Promise<NetdiskDistributionResponse> => {
   const response = await apiClient.get<NetdiskDistributionResponse>(`/statistics/netdisk-distribution?hours=${hours}`)
+  return response.data
+}
+
+/**
+ * 获取活跃热力图
+ */
+export const getActivityHeatmap = async (days: number = 7): Promise<ActivityHeatmapResponse> => {
+  const response = await apiClient.get<ActivityHeatmapResponse>(`/statistics/activity-heatmap?days=${days}`)
   return response.data
 }
 

@@ -333,3 +333,84 @@ def get_netdisk_distribution(db: Session, hours: int = 24) -> List[Dict[str, Any
         logger.error(f"获取网盘分布失败: {e}", exc_info=True)
         return []
 
+
+def get_activity_heatmap(db: Session, days: int = 7) -> Dict[str, Any]:
+    """
+    获取最近N天按小时分布的消息活跃热力图。
+
+    Args:
+        db: 数据库会话
+        days: 天数，默认7天
+
+    Returns:
+        包含 dates、hours、cells、max_count 的字典
+    """
+    try:
+        today = datetime.now().date()
+        start_date = today - timedelta(days=days - 1)
+        start_time = datetime.combine(start_date, datetime.min.time())
+
+        result = db.execute(
+            sql_text(
+                """
+                SELECT
+                    DATE(timestamp) AS date,
+                    EXTRACT(HOUR FROM timestamp) AS hour,
+                    COUNT(*) AS message_count
+                FROM messages
+                WHERE timestamp >= :start_time
+                GROUP BY DATE(timestamp), EXTRACT(HOUR FROM timestamp)
+                ORDER BY DATE(timestamp), EXTRACT(HOUR FROM timestamp)
+                """
+            ),
+            {"start_time": start_time},
+        ).all()
+
+        dates = [(start_date + timedelta(days=i)).isoformat() for i in range(days)]
+        hours = list(range(24))
+
+        count_map: Dict[Tuple[str, int], int] = {}
+        for row in result:
+            row_date = row.date.isoformat() if hasattr(row.date, "isoformat") else str(row.date)
+            row_hour = int(row.hour)
+            count_map[(row_date, row_hour)] = int(row.message_count or 0)
+
+        cells: List[Dict[str, Any]] = []
+        max_count = 0
+        for date in dates:
+            for hour in hours:
+                message_count = count_map.get((date, hour), 0)
+                max_count = max(max_count, message_count)
+                cells.append(
+                    {
+                        "date": date,
+                        "hour": hour,
+                        "message_count": message_count,
+                    }
+                )
+
+        return {
+            "dates": dates,
+            "hours": hours,
+            "cells": cells,
+            "max_count": max_count,
+        }
+    except Exception as e:
+        logger.error(f"获取活跃热力图失败: {e}", exc_info=True)
+        today = datetime.now().date()
+        start_date = today - timedelta(days=days - 1)
+        return {
+            "dates": [(start_date + timedelta(days=i)).isoformat() for i in range(days)],
+            "hours": list(range(24)),
+            "cells": [
+                {
+                    "date": (start_date + timedelta(days=day_offset)).isoformat(),
+                    "hour": hour,
+                    "message_count": 0,
+                }
+                for day_offset in range(days)
+                for hour in range(24)
+            ],
+            "max_count": 0,
+        }
+

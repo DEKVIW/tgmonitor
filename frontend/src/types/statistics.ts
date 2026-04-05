@@ -37,3 +37,16 @@ export interface NetdiskDistributionResponse {
   distribution: NetdiskDistributionItem[]
 }
 
+export interface ActivityHeatmapCell {
+  date: string
+  hour: number
+  message_count: number
+}
+
+export interface ActivityHeatmapResponse {
+  dates: string[]
+  hours: number[]
+  cells: ActivityHeatmapCell[]
+  max_count: number
+}
+

@@ -3,7 +3,9 @@
   left: 0;
   top: var(--header-height);
   bottom: 0;
-  width: 200px;
+  width: 216px;
+  display: flex;
+  flex-direction: column;
   background: rgba(255, 255, 255, 0.82);
   border-right: 1px solid rgba(216, 227, 238, 0.86);
   box-shadow: 14px 0 32px rgba(25, 52, 79, 0.08);
@@ -17,59 +19,150 @@
     box-shadow var(--transition-base);
 }
 
+.app-sidebar.collapsed {
+  width: 80px;
+}
+
 .sidebar-menu {
-  height: 100%;
+  flex: 1 1 auto;
   border-right: 0;
-  padding-top: 16px;
+  padding: 18px 12px 20px;
+  background: transparent;
+}
+
+.sidebar-account-section {
+  flex: 0 0 auto;
+  padding: 0 12px 16px;
+  border-top: 1px solid rgba(216, 227, 238, 0.76);
+}
+
+.sidebar-menu.ant-menu-light,
+.sidebar-menu.ant-menu-inline {
+  background: transparent;
 }
 
 .sidebar-menu .ant-menu-item {
-  margin: 8px 16px;
-  border-radius: 14px;
-  height: 48px;
-  line-height: 48px;
-  font-weight: 500;
+  margin: 8px 0;
+  border-radius: 18px;
+  height: 52px;
+  line-height: 52px;
+  font-weight: 600;
+  color: var(--text-base);
+  transition:
+    background var(--transition-base),
+    color var(--transition-base),
+    box-shadow var(--transition-base),
+    transform var(--transition-base);
+}
+
+.sidebar-menu.ant-menu-inline .ant-menu-item::after {
+  display: none;
+}
+
+.sidebar-menu .sidebar-icon-shell {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 12px;
+  transition:
+    background var(--transition-base),
+    box-shadow var(--transition-base),
+    color var(--transition-base),
+    transform var(--transition-base);
 }
 
 .app-sidebar.collapsed .sidebar-menu .ant-menu-item {
-  margin: 8px 8px;
+  margin: 10px 0;
   padding-inline: 0 !important;
   display: flex;
   align-items: center;
   justify-content: center;
   text-align: center;
+  border-radius: 0;
 }
 
 .app-sidebar.collapsed .sidebar-menu.ant-menu-inline-collapsed > .ant-menu-item .ant-menu-item-icon,
 .app-sidebar.collapsed .sidebar-menu.ant-menu-inline-collapsed > .ant-menu-item .anticon {
   margin-inline-end: 0 !important;
-  font-size: 18px;
+  font-size: 20px;
+}
+
+.app-sidebar.collapsed .sidebar-menu.ant-menu-inline-collapsed {
+  width: 100%;
+  padding-inline: 0;
+}
+
+.app-sidebar.collapsed .sidebar-menu.ant-menu-inline-collapsed > .ant-menu-item {
+  width: 100%;
+  margin-inline: 0;
+  inset-inline-start: 0;
+}
+
+.app-sidebar.collapsed .sidebar-menu.ant-menu-inline-collapsed > .ant-menu-item .sidebar-icon-shell {
+  width: 48px;
+  height: 48px;
+  border-radius: 16px;
 }
 
 .app-sidebar.collapsed .sidebar-menu.ant-menu-inline-collapsed > .ant-menu-item .ant-menu-title-content {
-  width: 0;
-  opacity: 0;
+  display: none;
 }
 
 .sidebar-menu .ant-menu-item-selected {
   background: linear-gradient(135deg, rgba(11, 107, 203, 0.14), rgba(17, 148, 184, 0.1));
-  color: var(--primary);
+  color: var(--primary-strong);
   box-shadow: inset 0 0 0 1px rgba(11, 107, 203, 0.08);
+}
+
+.sidebar-menu .ant-menu-item-selected .sidebar-icon-shell {
+  color: var(--primary-strong);
 }
 
 .sidebar-menu .ant-menu-item:hover {
   background: rgba(244, 248, 251, 0.92);
+  color: var(--text-strong);
+}
+
+.app-sidebar.collapsed .sidebar-menu.ant-menu-inline-collapsed > .ant-menu-item.ant-menu-item-selected {
+  background: transparent;
+  box-shadow: none;
+}
+
+.app-sidebar.collapsed .sidebar-menu.ant-menu-inline-collapsed > .ant-menu-item.ant-menu-item-selected .sidebar-icon-shell {
+  background: linear-gradient(135deg, rgba(11, 107, 203, 0.16), rgba(17, 148, 184, 0.12));
+  box-shadow:
+    inset 0 0 0 1px rgba(11, 107, 203, 0.08),
+    0 12px 18px rgba(11, 107, 203, 0.12);
+}
+
+.app-sidebar.collapsed .sidebar-menu.ant-menu-inline-collapsed > .ant-menu-item:hover {
+  background: transparent;
+}
+
+.app-sidebar.collapsed .sidebar-menu.ant-menu-inline-collapsed > .ant-menu-item:hover .sidebar-icon-shell {
+  background: rgba(244, 248, 251, 0.96);
+  box-shadow: inset 0 0 0 1px rgba(216, 227, 238, 0.9);
 }
 
 /* 响应式设计 */
 @media (max-width: 768px) {
   .app-sidebar {
-    width: 200px;
     transform: translateX(-100%);
     box-shadow: 18px 0 40px rgba(15, 23, 42, 0.16);
   }
 
   .app-sidebar.expanded {
+    width: 216px;
     transform: translateX(0);
+  }
+
+  .app-sidebar.collapsed {
+    width: 216px;
+  }
+
+  .sidebar-account-section {
+    padding-bottom: 14px;
   }
 }

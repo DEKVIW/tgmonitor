@@ -2,7 +2,7 @@
  * 主应用组件
  */
 
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate, Outlet } from 'react-router-dom'
 import Layout from './components/layout/Layout'
 import ProtectedRoute from './components/ProtectedRoute'
 import AdminRoute from './components/AdminRoute'
@@ -32,35 +32,25 @@ function App() {
         />
         {/* 登录用户的dashboard路径 */}
         <Route
-          path="/dashboard"
           element={
             <ProtectedRoute>
               <Layout>
-                <Dashboard />
+                <Outlet />
               </Layout>
             </ProtectedRoute>
           }
-        />
-        <Route
-          path="/statistics"
-          element={
-            <ProtectedRoute>
-              <Layout>
-                <Statistics />
-              </Layout>
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/admin"
-          element={
-            <AdminRoute>
-              <Layout>
+        >
+          <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/statistics" element={<Statistics />} />
+          <Route
+            path="/admin"
+            element={
+              <AdminRoute>
                 <Admin />
-              </Layout>
-            </AdminRoute>
-          }
-        />
+              </AdminRoute>
+            }
+          />
+        </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>

@@ -2,7 +2,6 @@
  * 消息列表页面（主页面）
  */
 
-import MessageFilters from '@/components/messages/MessageFilters'
 import MessageList from '@/components/messages/MessageList'
 import { useAuthStore } from '@/store/authStore'
 import { Spin } from 'antd'
@@ -26,11 +25,6 @@ const Dashboard = () => {
   return (
     <div className={`dashboard-page ${isGuestMode ? 'guest-mode' : ''}`}>
       <div className="dashboard-content">
-        {!isGuestMode && (
-          <div className="filters-bar">
-            <MessageFilters disabled={false} />
-          </div>
-        )}
         <div className="messages-area">
           <MessageList isGuestMode={isGuestMode} />
         </div>
