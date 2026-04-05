@@ -14,9 +14,10 @@ import GuestLayout from './layout/GuestLayout'
 
 interface GuestRouteProps {
   children: ReactNode
+  toolbar?: ReactNode
 }
 
-const GuestRoute = ({ children }: GuestRouteProps) => {
+const GuestRoute = ({ children, toolbar }: GuestRouteProps) => {
   const { isAuthenticated, token, _hasHydrated } = useAuthStore()
   const [loading, setLoading] = useState(true)
   const [publicDashboardEnabled, setPublicDashboardEnabled] = useState(false)
@@ -58,7 +59,7 @@ const GuestRoute = ({ children }: GuestRouteProps) => {
   }
 
   // 游客模式：未登录且游客模式已启用
-  return <GuestLayout>{children}</GuestLayout>
+  return <GuestLayout toolbar={toolbar}>{children}</GuestLayout>
 }
 
 export default GuestRoute

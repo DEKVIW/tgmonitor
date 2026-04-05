@@ -8,6 +8,7 @@ import { getMessages } from '@/api/messages'
 import { useMediaQuery } from '@/hooks/useMediaQuery'
 import { useMessageStore } from '@/store/messageStore'
 import { MessageListResponse } from '@/types/message'
+import { PUBLIC_DASHBOARD_MAX_DAYS } from '@/utils/publicDashboard'
 import MessageItem from './MessageItem'
 import './MessageList.css'
 
@@ -93,7 +94,7 @@ const MessageList = ({ isGuestMode = false }: MessageListProps) => {
     <div className="message-list">
       <div className="message-total-hint">
         共找到 {data.total} 条消息
-        {isGuestMode ? '（最近 24 小时）' : ''}
+        {isGuestMode ? `（公开页面最多显示近 ${PUBLIC_DASHBOARD_MAX_DAYS} 天数据）` : ''}
       </div>
 
       {data.messages.map((message) => (

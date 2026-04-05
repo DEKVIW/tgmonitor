@@ -32,9 +32,17 @@ const { Option } = Select
 
 interface MessageFiltersProps {
   disabled?: boolean
+  layoutVariant?: 'default' | 'guest-header'
+  allowedTimeRanges?: readonly string[]
+  fallbackTimeRange?: string
 }
 
-const MessageFilters = ({ disabled = false }: MessageFiltersProps) => {
+const MessageFilters = ({
+  disabled = false,
+  layoutVariant = 'default',
+  allowedTimeRanges,
+  fallbackTimeRange,
+}: MessageFiltersProps) => {
   const {
     filters,
     setFilters,
@@ -47,6 +55,17 @@ const MessageFilters = ({ disabled = false }: MessageFiltersProps) => {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [searchValue, setSearchValue] = useState(filters.search_query || '')
   const [draft, setDraft] = useState(filters)
+  const allowedTimeRangeSet = useMemo(
+    () => (allowedTimeRanges ? new Set(allowedTimeRanges) : null),
+    [allowedTimeRanges]
+  )
+  const toolbarClassName = useMemo(
+    () =>
+      ['filters-toolbar', layoutVariant === 'guest-header' ? 'filters-toolbar--guest' : '']
+        .filter(Boolean)
+        .join(' '),
+    [layoutVariant]
+  )
 
   // 加载标签选项
   useEffect(() => {
@@ -63,6 +82,16 @@ const MessageFilters = ({ disabled = false }: MessageFiltersProps) => {
   useEffect(() => {
     setSearchValue(filters.search_query || '')
   }, [filters.search_query])
+
+  useEffect(() => {
+    if (!allowedTimeRangeSet || !fallbackTimeRange) {
+      return
+    }
+
+    if (filters.time_range && !allowedTimeRangeSet.has(filters.time_range)) {
+      setFilters({ time_range: fallbackTimeRange })
+    }
+  }, [allowedTimeRangeSet, fallbackTimeRange, filters.time_range, setFilters])
 
   useEffect(() => {
     if ((filters.search_query || '') === searchValue) {
@@ -86,11 +115,15 @@ const MessageFilters = ({ disabled = false }: MessageFiltersProps) => {
   const timeRangeOptions = useMemo(
     () =>
       TIME_RANGES.map((range) => (
-        <Option key={range.value} value={range.value}>
+        <Option
+          key={range.value}
+          value={range.value}
+          disabled={allowedTimeRangeSet ? !allowedTimeRangeSet.has(String(range.value)) : false}
+        >
           {range.label}
         </Option>
       )),
-    []
+    [allowedTimeRangeSet]
   )
 
   const pageSizeOptions = useMemo(
@@ -134,7 +167,7 @@ const MessageFilters = ({ disabled = false }: MessageFiltersProps) => {
   }
 
   return (
-    <div className="filters-toolbar">
+    <div className={toolbarClassName}>
       <div className="filters-left">
         <Search
           className="filters-search"

@@ -63,6 +63,7 @@ def _default_rules() -> Dict[str, Any]:
                 "x.com",
                 "url.cn",
                 "bit.ly",
+                "telegra.ph",
             ],
         },
         "profiles": {

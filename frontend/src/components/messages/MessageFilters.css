@@ -17,6 +17,39 @@
   backdrop-filter: blur(14px);
 }
 
+.filters-toolbar--guest {
+  width: max-content;
+  padding: 0;
+  position: static;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  backdrop-filter: none;
+  gap: 12px;
+}
+
+.filters-toolbar--guest .filters-left {
+  flex: 0 0 300px;
+  min-width: 260px;
+  max-width: none;
+}
+
+.filters-toolbar--guest .filters-right {
+  flex: 0 0 auto;
+  overflow: visible;
+  justify-content: flex-start;
+}
+
+.filters-toolbar--guest .filters-right > .ant-space,
+.filters-toolbar--guest .filters-actions {
+  justify-content: flex-start;
+}
+
+.filters-toolbar--guest .refresh-inline {
+  background: rgba(244, 248, 251, 0.96);
+}
+
 .filters-left {
   flex: 1 1 auto;
   min-width: 280px;
@@ -158,6 +191,24 @@
     width: 100%;
     flex-wrap: wrap;
   }
+
+  .filters-toolbar--guest {
+    flex-wrap: nowrap;
+  }
+
+  .filters-toolbar--guest .filters-left,
+  .filters-toolbar--guest .filters-right {
+    flex: 0 0 auto;
+    min-width: auto;
+    max-width: none;
+  }
+
+  .filters-toolbar--guest .filters-right > .ant-space,
+  .filters-toolbar--guest .filters-actions {
+    width: auto;
+    min-width: max-content;
+    flex-wrap: nowrap;
+  }
 }
 
 @media (max-width: 768px) {
@@ -181,5 +232,29 @@
   .refresh-inline {
     width: 100%;
     justify-content: center;
+  }
+
+  .filters-toolbar--guest {
+    top: auto;
+    padding: 0;
+  }
+
+  .filters-toolbar--guest .filters-left,
+  .filters-toolbar--guest .filters-right {
+    flex-basis: auto;
+  }
+
+  .filters-toolbar--guest .filters-left {
+    min-width: 220px;
+  }
+
+  .filters-toolbar--guest .filters-right > .ant-space,
+  .filters-toolbar--guest .filters-actions {
+    width: auto;
+  }
+
+  .filters-toolbar--guest .refresh-inline {
+    width: auto;
+    justify-content: flex-start;
   }
 }

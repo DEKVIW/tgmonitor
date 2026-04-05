@@ -68,21 +68,6 @@ services:
     networks:
       - tg-network
 
-  # 保留旧的web服务作为备用（已注释）
-  # web:
-  #   image: tgmonitor:latest
-  #   env_file: ../.env
-  #   depends_on:
-  #     - db
-  #   ports:
-  #     - "8501:8501"
-  #   environment:
-  #     - TZ=Asia/Shanghai
-  #   volumes:
-  #     - ../data:/app/data
-  #     - ../users.json:/app/users.json
-  #   command: streamlit run app/web/web.py
-
 networks:
   tg-network:
     driver: bridge

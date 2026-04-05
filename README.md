@@ -1,407 +1,201 @@
-# TG Monitor
+﻿# TG Monitor
 
-基于 Python + Telethon + Streamlit 的 Telegram 频道消息监控与管理系统。
+基于 Python、Telethon、FastAPI、React 和 PostgreSQL 的 Telegram 频道监控系统。
 
-- 自动监听**网盘影视资源分享**类 Telegram 频道，只保存包含网盘链接的消息
-- 支持主流网盘类型：**阿里云盘、百度网盘、夸克网盘、天翼云盘、115 网盘、123 云盘、UC 网盘、迅雷**
-- 推荐/适配频道（可自定义扩展）：
+当前仓库已经完成从旧版 Streamlit 页面到 `FastAPI + React/Vite` 架构的迁移：
 
-| 频道名         | 频道名        | 频道名           | 频道名   |
-| -------------- | ------------- | ---------------- | -------- |
-| BaiduCloudDisk | tianyirigeng  | Aliyun_4K_Movies | NewQuark |
-| XiangxiuNB     | shareAliyun   | bdwpzhpd         | Lsp115   |
-| tyypzhpd       | SharePanBaidu | QuarkFree        | alyp_1   |
-| vip115hot      | QukanMovie    |                  |          |
+- `app/core/monitor.py` 负责监听 Telegram 频道并写库
+- `app/api/main.py` 提供后端 API
+- `frontend/` 提供 React 前端
+- `docker/` 和 `DEPLOY.md` 分别覆盖容器化与非 Docker 部署
 
-- Web 界面可视化浏览和筛选消息，支持频道管理、消息去重、标签修复等维护功能
+旧的 Streamlit 前端已弃用，不再作为当前部署方案的一部分。
 
-## 环境与依赖版本建议
+## 主要功能
 
-- **推荐 Python 版本**：3.10 或 3.11（3.12 也可，优先用 3.10/3.11，兼容性最佳）
-- **推荐 PostgreSQL 版本**：13、14 或 15
-- **依赖安装**：已在 requirements.txt 中声明，`pip install -r requirements.txt` 一键安装。
+- 监听 Telegram 频道消息并自动入库
+- 解析阿里云盘、百度网盘、夸克、天翼、115、123、UC、迅雷等主流网盘链接
+- 提供消息列表、搜索、筛选、分页、统计、后台管理等功能
+- 支持频道管理、链接去重、链接巡检、游客模式等运维能力
 
-## 首次 Telethon 登录
+## 项目结构
 
-**方法一：推荐 - 使用 session 获取脚本**
-
-1. 运行专门的 session 获取脚本：
-
-   ```bash
-   python get_session.py
-   ```
-
-2. 按提示输入 API 凭据：
-
-   - **TELEGRAM_API_ID**：你的 Telegram API ID
-   - **TELEGRAM_API_HASH**：你的 Telegram API Hash
-
-3. 按提示输入手机号、验证码
-
-   - **手机号格式**：`+国家代码手机号`（如：`+8613812345678`）
-
-4. 登录成功后，session 文件会自动保存为 `tg_monitor_session.session`
-
-**方法二：直接运行监控服务登录**
-
-1. 本地运行监控服务进行登录：
-
-   ```bash
-   python -m app.core.monitor
-   ```
-
-2. 按提示输入手机号、验证码
-
-3. 登录成功后，session 文件会自动保存为 `tg_monitor_session.session`
-
-**Session 文件说明**：
-
-- 文件名：`tg_monitor_session.session`
-- 包含 Telegram 登录凭据，无需重复登录
-- 请妥善保管，不要泄露给他人
-- 如果 session 失效，删除文件重新登录即可
-
----
-
-## Docker 部署说明
-
-### 1. 克隆项目
-
-```
-git clone https://github.com/DEKVIW/tgmonitor.git
-cd docker
+```text
+tg/
+├── app/
+│   ├── api/          # FastAPI 路由
+│   ├── core/         # Telegram 监控与解析逻辑
+│   ├── models/       # 数据库模型与配置
+│   ├── schemas/      # API 数据结构
+│   ├── scripts/      # 初始化与管理脚本
+│   └── services/     # 业务服务层
+├── frontend/         # React + TypeScript + Vite 前端
+├── docker/           # Dockerfile 与 docker compose
+├── data/             # 本地数据目录
+├── DEPLOY.md         # 当前推荐的生产部署文档
+└── 网盘资源电报频道监控.md
 ```
 
-### 2. 环境准备
+## 环境要求
 
-.env 环境配置：
+- Python 3.10 或 3.11
+- Node.js 18+
+- PostgreSQL 13 / 14 / 15
 
-```
-TELEGRAM_API_ID=你的API_ID
-TELEGRAM_API_HASH=你的API_HASH
-DATABASE_URL=postgresql://tg_user:password@db:5432/tg_monitor
-DEFAULT_CHANNELS=频道1,频道2
+## 环境变量
+
+根目录 `.env` 至少需要这些配置：
+
+```env
+TELEGRAM_API_ID=你的 Telegram API ID
+TELEGRAM_API_HASH=你的 Telegram API HASH
+DATABASE_URL=postgresql://tg_user:password@127.0.0.1:5432/tg_monitor
+DATABASE_URL_ASYNC=postgresql+asyncpg://tg_user:password@127.0.0.1:5432/tg_monitor
+DEFAULT_CHANNELS=channel_a,channel_b
+SECRET_SALT=请替换成随机长字符串
 LOG_LEVEL=INFO
-SECRET_SALT=your_secret_salt_key_here
+FRONTEND_URL=http://localhost:3000
+PUBLIC_DASHBOARD_ENABLED=false
 ```
 
-**⚠️ 重要提示：**
+说明：
 
-1. **SECRET_SALT 密钥**：用于用户登录验证，建议使用随机生成的强密钥
+- `DATABASE_URL_ASYNC` 不填时，程序会基于 `DATABASE_URL` 自动推导
+- 生产环境如果前端走反代域名，需要把 `FRONTEND_URL` 改成真实访问地址
+- `PUBLIC_DASHBOARD_ENABLED=true` 时可开启游客面板
 
-   - 可以使用项目提供的脚本生成：`python generate_secret.py`
-   - 可以使用在线工具生成：https://www.random.org/strings/
-   - 或使用命令生成：`openssl rand -hex 32`
-   - 示例：`SECRET_SALT=a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef1234`
+## 快速开始
 
-2. **数据库密码包含特殊字符时的转义处理**
-
-如果数据库密码包含特殊字符（如 `#`、`@`、`%`、`&`、`+`、`=`、`!`、`$`、`*`、`(`、`)`、`[`、`]`、`{`、`}`、`|`、`\`、`:`、`;`、`"`、`'`、`<`、`>`、`,`、`/`、`?`），需要进行 URL 编码转义。**在线 URL 编码工具**：[Online URL Encoder](https://www.url-encode-decode.com/)
-
-**示例**：
-
-- 原始密码：`1j7wxLn#ZTlNZ#3tpkwF`
-- 转义后：`1j7wxLn%23ZTlNZ%233tpkwF`（`#` 转义为 `%23`）
-
-**完整示例**：
-
-```
-# 原始密码：1j7wxLn#ZTlNZ#3tpkwF
-DATABASE_URL=postgresql://tg_user:1j7wxLn%23ZTlNZ%233tpkwF@localhost:5432/tg_monitor
-SECRET_SALT=a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef1234
-```
-
-### 3. 构建与初始化数据库
+### 1. 安装后端依赖
 
 ```bash
-cd docker
-docker-compose up -d db
-docker-compose run --rm monitor python -m app.scripts.init_db
-```
-
-**注意**: 此命令会自动创建默认管理员用户（用户名: admin，密码: admin123）
-
-### 4. 用户管理（可选）
-
-如果需要创建其他用户或修改用户信息：
-
-```bash
-# 创建默认用户（如果还没有）
-docker-compose run --rm monitor python -m app.scripts.init_users --create-default
-
-# 添加新用户
-docker-compose run --rm monitor python -m app.scripts.init_users --add-user 用户名 密码 [姓名] [邮箱]
-
-# 修改密码
-docker-compose run --rm monitor python -m app.scripts.init_users --change-password 用户名 新密码
-
-# 修改用户名
-docker-compose run --rm monitor python -m app.scripts.init_users --change-username 旧用户名 新用户名
-
-# 编辑用户信息
-docker-compose run --rm monitor python -m app.scripts.init_users --edit-user 用户名 [姓名] [邮箱]
-
-# 查看所有用户
-docker-compose run --rm monitor python -m app.scripts.init_users --list-users
-
-#删除用户
-docker-compose run --rm monitor python -m app.scripts.init_users --remove-user 用户名
-```
-
-注意操作后服务需要重启：
-
-### 5. 启动服务
-
-```bash
-docker-compose up -d
-```
-
-- 监控服务和 Web 服务会自动启动
-- Web 界面访问：http://localhost:8501
-
-**查看服务状态和日志**：
-
-```bash
-# 查看服务状态
-docker-compose ps
-
-# 查看监控服务日志
-docker-compose logs -f monitor
-
-# 查看Web服务日志
-docker-compose logs -f web
-
-# 查看数据库日志
-docker-compose logs -f db
-```
-
-### 6. 管理脚本用法
-
-```bash
-docker-compose run --rm monitor python -m app.scripts.manage --list-channels #列出频道
-docker-compose run --rm monitor python -m app.scripts.manage --add-channel #添加频道（多个用空格分隔）
-docker-compose run --rm monitor python -m app.scripts.manage --dedup-links #链接去重
-```
-
-### 7. 其它注意事项
-
-- `.env` 文件中的 `DATABASE_URL` 主机名应为 `db`，如：
-  ```
-  DATABASE_URL=postgresql://tg_user:password@db:5432/tg_monitor
-  ```
-- 管理脚本、初始化等操作都建议用 `docker-compose run --rm ...` 方式临时运行
-
-## 快速部署
-
-### 1. 克隆项目
-
-```bash
-git clone https://github.com/DEKVIW/tgmonitor.git
-cd tgmonitor
-```
-
-### 2. 配置数据库（系统环境）
-
-```bash
-sudo apt update
-sudo apt install postgresql postgresql-contrib -y
-sudo -u postgres psql
-# 在 psql 命令行中执行：
-CREATE DATABASE tg_monitor;
-CREATE USER tg_user WITH PASSWORD 'your_password';
-GRANT ALL PRIVILEGES ON DATABASE tg_monitor TO tg_user;
-\q
-```
-
-### 3. 创建虚拟环境并安装依赖
-
-```bash
-python3 -m venv tgmonitor-venv
+python -m venv tgmonitor-venv
 source tgmonitor-venv/bin/activate
+pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-### 4. 配置环境变量
+Windows PowerShell:
 
-编辑 `.env` 文件，示例：
-
-```
-TELEGRAM_API_ID=你的API_ID
-TELEGRAM_API_HASH=你的API_HASH
-DATABASE_URL=postgresql://tg_user:your_password@localhost:5432/tg_monitor
-DEFAULT_CHANNELS=频道1,频道2
-LOG_LEVEL=INFO
-SECRET_SALT=your_secret_salt_key_here
+```powershell
+python -m venv tgmonitor-venv
+.\tgmonitor-venv\Scripts\Activate.ps1
+pip install --upgrade pip
+pip install -r requirements.txt
 ```
 
-### 5. 初始化数据库表
+### 2. 初始化数据库和默认用户
 
 ```bash
 python -m app.scripts.init_db
 ```
 
-**注意**: 此命令会自动创建默认管理员用户（用户名: admin，密码: admin123）
+这一步会：
 
-### 6. 启动服务
+- 创建数据库表
+- 按 `DEFAULT_CHANNELS` 初始化频道
+- 在 `users.json` 不存在时创建默认管理员
 
-**第一步：前台测试运行**
+默认管理员：
 
-先正常启动服务进行测试，确认稳定后再后台运行：
+- 用户名：`admin`
+- 密码：`admin123`
+
+首次登录后请立即修改密码。
+
+### 3. 首次 Telegram 登录
+
+直接运行监控程序完成 Telethon 登录：
 
 ```bash
-# 启动监控服务（前台运行，用于测试）
 python -m app.core.monitor
-
-# 新开一个终端，启动Web服务（前台运行，用于测试）
-streamlit run app/web/web.py
 ```
 
-**测试要点**：
+首次运行会提示输入手机号、验证码，成功后会在项目根目录生成：
 
-- 监控服务：检查是否正常连接 Telegram，是否开始监听频道
-- Web 服务：访问 http://localhost:8501 检查登录和功能是否正常
-- 观察日志输出，确认无错误信息
-
-**第二步：后台稳定运行**
-
-测试稳定后，使用后台运行：
-
-```bash
-# 监控服务（后台运行）
-nohup python -m app.core.monitor > data/monitor.log 2>&1 &
-
-# Web服务（后台运行）
-nohup streamlit run app/web/web.py > data/web.log 2>&1 &
+```text
+tg_monitor_session.session
 ```
 
-**查看运行状态**：
+后续同一环境通常不需要重复登录。
+
+### 4. 启动后端 API
 
 ```bash
-# 查看进程
-ps aux | grep python
-
-# 查看日志
-tail -f data/monitor.log
-tail -f data/web.log
+uvicorn app.api.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-### 7. 管理维护命令
+可访问：
+
+- API 根路径：`http://127.0.0.1:8000/`
+- 健康检查：`http://127.0.0.1:8000/api/health`
+- Swagger：`http://127.0.0.1:8000/api/docs`
+
+### 5. 启动前端
 
 ```bash
-python -m app.scripts.manage --list-channels                # 查看频道列表
-python -m app.scripts.manage --add-channel 频道名           # 添加频道
-python -m app.scripts.manage --del-channel 频道名           # 删除频道
-python -m app.scripts.manage --edit-channel 旧频道名 新频道名  # 修改频道名
-python -m app.scripts.manage --dedup-links                  # 网盘链接去重
-python -m app.scripts.manage --dedup-links-fast [批次大小]   # 快速网盘链接去重
+cd frontend
+npm install
+npm run dev
 ```
 
-**去重功能说明**：
+默认访问地址：
 
-- **`--dedup-links`**: 标准去重，智能判断逻辑
+- 前端：`http://localhost:3000`
 
-  - 相同链接且时间间隔 5 分钟内：优先保留网盘链接数量多的消息
-  - 超过 5 分钟：保留最新的消息
-  - 适合精确去重，但内存占用较大
+Vite 开发环境会把 `/api` 请求代理到本地后端。
 
-- **`--dedup-links-fast [批次大小]`**: 快速去重，分批处理
-  - 默认批次大小：5000 条消息
-  - 可自定义批次：`--dedup-links-fast 1000`
-  - 简单时间比较：保留最新的消息
-  - 内存占用低，适合大数据量处理
-  - 自动清理 10 小时前的去重统计数据
+### 6. 启动监控服务
 
-**用户管理命令**：
+开发阶段建议单独开一个终端运行：
 
 ```bash
-python -m app.scripts.init_users --create-default           # 创建默认用户
-python -m app.scripts.init_users --add-user 用户名 密码     # 添加用户
-python -m app.scripts.init_users --change-password 用户名 新密码  # 修改密码
-python -m app.scripts.init_users --change-username 旧用户名 新用户名  # 修改用户名
-python -m app.scripts.init_users --edit-user 用户名 [姓名] [邮箱]  # 编辑用户信息
-python -m app.scripts.init_users --list-users              # 查看所有用户
-python -m app.scripts.init_users --remove-user 用户名       # 删除用户
+python -m app.core.monitor
 ```
 
-**查看帮助**: `python -m app.scripts.manage --help
+这样可以实时查看频道监听、解析、入库日志。
 
-## 链接检测功能使用说明
-
-链接检测系统可以检测数据库中各种网盘链接的有效性，支持多种检测方式、时间段选择、中断恢复、详细统计报告和数据管理功能。
-
-### 快速上手
+## 常用管理命令
 
 ```bash
-# 1. 首次使用 - 小规模测试
-python -m app.scripts.manage --check-links 1 3
-
-# 2. 扩大范围 - 检测最近24小时
+python -m app.scripts.manage --list-channels
+python -m app.scripts.manage --add-channel channel_a channel_b
+python -m app.scripts.manage --del-channel channel_a
+python -m app.scripts.manage --edit-channel old_name new_name
+python -m app.scripts.manage --dedup-links
+python -m app.scripts.manage --dedup-links-fast
 python -m app.scripts.manage --check-links 24 5
-
-# 3. 查看结果
 python -m app.scripts.manage --link-stats
 python -m app.scripts.manage --show-invalid-links
+python -m app.scripts.manage --help
 ```
 
-### 基础检测命令
+用户管理：
 
 ```bash
-# 检测最近N小时的链接
-python -m app.scripts.manage --check-links                    # 最近24小时 (默认5并发)
-python -m app.scripts.manage --check-links 48                 # 最近48小时
-python -m app.scripts.manage --check-links 24 10              # 最近24小时，10并发
-
-# 检测所有历史链接
-python -m app.scripts.manage --check-all-links                # 默认5并发
-python -m app.scripts.manage --check-all-links 10             # 10并发
+python -m app.scripts.init_users --create-default
+python -m app.scripts.init_users --list-users
+python -m app.scripts.init_users --add-user username password
+python -m app.scripts.init_users --change-password username new_password
+python -m app.scripts.init_users --remove-user username
 ```
 
-### 时间段检测命令
+## 部署说明
 
-```bash
-# 预定义时间段
-python -m app.scripts.manage --check-period today             # 今天
-python -m app.scripts.manage --check-period yesterday         # 昨天
-python -m app.scripts.manage --check-period week              # 最近7天
-python -m app.scripts.manage --check-period month             # 最近30天
-python -m app.scripts.manage --check-period year              # 最近365天
+当前推荐做法：
 
-# 指定时间检测
-python -m app.scripts.manage --check-period 2024-01-15        # 指定日期
-python -m app.scripts.manage --check-period 2024-01           # 指定月份
-python -m app.scripts.manage --check-period 2024              # 指定年份
-python -m app.scripts.manage --check-period 2024-01-15:2024-01-20  # 指定日期范围
+- 非 Docker 生产部署：看 `DEPLOY.md`
+- Docker / Compose：看 `docker/docker-compose.yml`
 
-# 自定义并发数
-python -m app.scripts.manage --check-period today 10          # 今天，10并发
-python -m app.scripts.manage --check-period week 5            # 最近7天，5并发
-```
+`DEPLOY.md` 已按当前项目形态维护，核心是：
 
----
+- FastAPI 后端运行在 `8000`
+- React 前端构建后交给 Nginx 托管
+- 反代统一把 `/api` 指向后端
+- 监控进程与 API 进程分开托管
 
-### 统计查看命令
+## 说明
 
-```bash
-# 查看检测统计
-python -m app.scripts.manage --link-stats
-
-# 查看失效链接详情
-python -m app.scripts.manage --show-invalid-links             # 最近的失效链接
-python -m app.scripts.manage --show-invalid-links "2024-01-15T14:30:00"  # 指定时间
-python -m app.scripts.manage --show-invalid-links 50          # 最近50个
-
-# 查看中断记录
-python -m app.scripts.manage --show-interrupted
-```
-
-### 数据管理命令
-
-```bash
-# 清空所有检测数据 (需要确认)
-python -m app.scripts.manage --clear-link-check-data
-
-# 清空旧数据
-python -m app.scripts.manage --clear-old-link-check-data      # 30天前 (默认)
-python -m app.scripts.manage --clear-old-link-check-data 7    # 7天前
-python -m app.scripts.manage --clear-old-link-check-data 60   # 60天前
-```
+- 根目录 `网盘资源电报频道监控.md` 是中文介绍文档
+- `frontend/README.md` 只负责前端局部说明
+- 如果你在老文章或旧提交里看到 `streamlit run app/web/web.py`，那已经不是当前项目的启动方式

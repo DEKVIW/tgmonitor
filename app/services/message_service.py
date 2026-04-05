@@ -148,7 +148,11 @@ def get_message_by_id(db: Session, message_id: int) -> Optional[Message]:
         return None
 
 
-def get_tag_stats(db: Session, limit: int = 50) -> List[Tuple[str, int]]:
+def get_tag_stats(
+    db: Session,
+    limit: int = 50,
+    since: Optional[datetime] = None,
+) -> List[Tuple[str, int]]:
     """
     获取标签统计（按数量排序）
     
@@ -162,14 +166,36 @@ def get_tag_stats(db: Session, limit: int = 50) -> List[Tuple[str, int]]:
         标签和数量的元组列表
     """
     try:
-        result = db.execute(sql_text("""
-            SELECT unnest(tags) as tag, COUNT(*) as count 
-            FROM messages 
-            WHERE tags IS NOT NULL AND array_length(tags, 1) > 0
-            GROUP BY tag 
-            ORDER BY count DESC
-            LIMIT :limit
-        """), {"limit": limit}).all()
+        if since is None:
+            result = db.execute(
+                sql_text(
+                    """
+                    SELECT unnest(tags) as tag, COUNT(*) as count
+                    FROM messages
+                    WHERE tags IS NOT NULL AND array_length(tags, 1) > 0
+                    GROUP BY tag
+                    ORDER BY count DESC
+                    LIMIT :limit
+                    """
+                ),
+                {"limit": limit},
+            ).all()
+        else:
+            result = db.execute(
+                sql_text(
+                    """
+                    SELECT unnest(tags) as tag, COUNT(*) as count
+                    FROM messages
+                    WHERE tags IS NOT NULL
+                      AND array_length(tags, 1) > 0
+                      AND timestamp >= :since
+                    GROUP BY tag
+                    ORDER BY count DESC
+                    LIMIT :limit
+                    """
+                ),
+                {"limit": limit, "since": since},
+            ).all()
         
         return [(tag, count) for tag, count in result]
     except Exception as e:

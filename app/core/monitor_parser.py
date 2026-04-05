@@ -8,6 +8,7 @@ import asyncio
 import re
 import threading
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import Any, Dict, Iterable, List, Tuple
 from urllib.parse import parse_qsl, unquote, urljoin, urlparse
 
@@ -62,7 +63,16 @@ DEFAULT_NETDISK_HINT_ALIASES: Dict[str, List[str]] = {
 DEFAULT_REDIRECT_RESOLVER_CONFIG: Dict[str, Any] = {
     "max_depth": MAX_URL_RESOLVE_DEPTH,
     "max_redirect_hops": DEFAULT_HTTP_REDIRECT_MAX_HOPS,
-    "force_get_domains": ["t.cn", "weibo.cn", "weibo.com", "t.co", "x.com", "url.cn", "bit.ly"],
+    "force_get_domains": [
+        "t.cn",
+        "weibo.cn",
+        "weibo.com",
+        "t.co",
+        "x.com",
+        "url.cn",
+        "bit.ly",
+        "telegra.ph",
+    ],
 }
 COURSE_LIST_CONTENT_MODE = "course_list"
 MOVIE_CONTENT_MODE = "movie"
@@ -93,7 +103,76 @@ MOVIE_NOISE_PATTERNS = [
     re.compile(r"每日同步更新", re.IGNORECASE),
     re.compile(r"云盘合作播放器", re.IGNORECASE),
     re.compile(r"播放器.*字幕问题", re.IGNORECASE),
+    re.compile(r"版权.*DMCA", re.IGNORECASE),
+    re.compile(r"版权反馈", re.IGNORECASE),
+    re.compile(r"\bDMCA\b", re.IGNORECASE),
+    re.compile(r"频道.*群组.*投稿.*搜索", re.IGNORECASE),
+    re.compile(r"社区.*点击查看", re.IGNORECASE),
+    re.compile(r"资源搜索机器人", re.IGNORECASE),
+    re.compile(r"点击搜索", re.IGNORECASE),
+    re.compile(r"国外影视发布频道", re.IGNORECASE),
+    re.compile(r"此频道只发", re.IGNORECASE),
+    re.compile(r"VidHub", re.IGNORECASE),
+    re.compile(r"播放神器", re.IGNORECASE),
+    re.compile(r"自研后端", re.IGNORECASE),
+    re.compile(r"大带宽", re.IGNORECASE),
 ]
+MOVIE_RESOURCE_FIELD_ALIASES = [
+    "链接",
+    "下载地址",
+    "主链",
+    "备用",
+    "网址",
+    "夸克",
+    "百度",
+    "阿里",
+    "迅雷",
+    "天翼",
+    "115",
+    "123",
+    "UC",
+]
+MOVIE_EXTRA_NOISE_ALIASES = [
+    "来自",
+    "来源",
+    "频道",
+    "群组",
+    "投稿",
+    "投稿人",
+    "搜索",
+    "搜资源",
+    "资源搜索机器人",
+    "社区",
+    "机场",
+    "公费服",
+    "分享",
+    "链接",
+    "下载地址",
+    "网址",
+    "版权",
+]
+MOVIE_FALLBACK_META_ALIASES = [
+    "评分",
+    "TMDB评分",
+    "豆瓣评分",
+    "类型",
+    "地区",
+    "语言",
+    "主演",
+    "导演",
+    "更新",
+    "集数",
+    "片长",
+]
+MOVIE_TECH_LINE_TOKENS = re.compile(
+    r"(?:4K|2160P|1080P|720P|WEB[-\s]?DL|WEBRIP|BLURAY|REMUX|HDR10\+?|HDR|SDR|DV|HQ|NF|EDR|"
+    r"DDP(?:[.\d]+)?|DTS(?:[.\dA-Z+-]+)?|AAC(?:[.\d]+)?|ATMOS|FLAC|MAXPLUS|60FPS|120FPS|"
+    r"S\d{1,2}(?:E\d{1,3}(?:-E?\d{1,3})?)?|全\d+集|\d+集全|更至EP\d+|更新至\s*\d+集|首更\s*\d+集?|"
+    r"高码率|原盘REMUX|杜比视界|杜比全景声|内封简繁英|内封简中|内封中字|内嵌简中|简繁英字幕|简中字幕|"
+    r"中文字幕|中字|双版本|修复版|正式版|完整版|无广告|无台标|国语|英语|国粤双语|双语|HiveWeb)",
+    re.IGNORECASE,
+)
+MOVIE_FIELD_WRAPPER_CHARS = " \t\u3000[]【】()（）<>《》「」『』"
 MOVIE_CATEGORY_HINTS = [
     "电影",
     "剧集",
@@ -681,7 +760,10 @@ def resolve_netdisk_links(
         if not name:
             continue
 
-        label = find_link_label(original_lines, raw_url, resolved_url, valid_labels)
+        label = _sanitize_link_label(
+            find_link_label(original_lines, raw_url, resolved_url, valid_labels),
+            netdisk_name=name,
+        )
         links.setdefault(name, [])
 
         link_item: Dict[str, Any] = {"label": label, "url": link_url}
@@ -841,18 +923,45 @@ def _strip_leading_text_markers(line: str) -> str:
     return cleaned.strip()
 
 
-def _match_prefixed_field(line: str, aliases: List[str]) -> str | None:
+@lru_cache(maxsize=256)
+def _field_prefix_pattern(alias_text: str) -> re.Pattern[str] | None:
+    cleaned_alias = "".join(char for char in str(alias_text or "").strip() if not char.isspace())
+    if not cleaned_alias:
+        return None
+
+    joined_alias = r"[\s\u3000]*".join(re.escape(char) for char in cleaned_alias)
+    wrapper = re.escape(MOVIE_FIELD_WRAPPER_CHARS)
+    return re.compile(
+        rf"^(?:[{wrapper}]*){joined_alias}(?:[{wrapper}]*)"
+        rf"(?:(?:[:：])\s*(?P<value>.*)|(?P<marker>[^\u4e00-\u9fa5A-Za-z0-9]+)?$)",
+        re.IGNORECASE,
+    )
+
+
+def _find_prefixed_alias(line: str, aliases: List[str]) -> Tuple[str | None, str | None]:
     candidate = _strip_leading_text_markers(line)
-    lowered = candidate.casefold()
+    if not candidate:
+        return None, None
+
     for alias in aliases:
         alias_text = str(alias or "").strip()
         if not alias_text:
             continue
-        for separator in (":", "："):
-            prefix = f"{alias_text}{separator}"
-            if lowered.startswith(prefix.casefold()):
-                return candidate[len(prefix) :].strip()
-    return None
+
+        pattern = _field_prefix_pattern(alias_text)
+        if pattern is None:
+            continue
+
+        match = pattern.match(candidate)
+        if match:
+            return alias_text, (match.group("value") or "").strip()
+
+    return None, None
+
+
+def _match_prefixed_field(line: str, aliases: List[str]) -> str | None:
+    _, value = _find_prefixed_alias(line, aliases)
+    return value
 
 
 def _profile_aliases(profile: Dict[str, Any], key: str, default: List[str]) -> List[str]:
@@ -860,6 +969,24 @@ def _profile_aliases(profile: Dict[str, Any], key: str, default: List[str]) -> L
     if not aliases:
         return list(default)
     return [str(alias).strip() for alias in aliases if str(alias).strip()]
+
+
+def _merge_alias_lists(*alias_groups: List[str]) -> List[str]:
+    merged: List[str] = []
+    seen = set()
+
+    for aliases in alias_groups:
+        for alias in aliases:
+            normalized = str(alias or "").strip()
+            if not normalized:
+                continue
+            marker = normalized.casefold()
+            if marker in seen:
+                continue
+            seen.add(marker)
+            merged.append(normalized)
+
+    return merged
 
 
 def _clean_metadata_value(field_name: str, value: str) -> str:
@@ -1000,6 +1127,27 @@ def _normalize_movie_description_line(line: str) -> str:
     return cleaned.strip()
 
 
+def _append_movie_line(lines: List[str], line: str) -> None:
+    normalized = _normalize_movie_description_line(line)
+    if normalized and normalized not in lines:
+        lines.append(normalized)
+
+
+def _is_movie_tech_line(line: str) -> bool:
+    candidate = _normalize_movie_description_line(line)
+    if not candidate or len(candidate) > 120:
+        return False
+
+    matches = MOVIE_TECH_LINE_TOKENS.findall(candidate)
+    if len(matches) < 2:
+        return False
+
+    remainder = MOVIE_TECH_LINE_TOKENS.sub(" ", candidate)
+    remainder = MOVIE_SIZE_PATTERN.sub(" ", remainder)
+    remainder = re.sub(r"[\s\-|:：,，;；·+&/（）()【】\[\].]+", "", remainder)
+    return len(remainder) <= 12
+
+
 def _matches_prefixed_aliases(line: str, *alias_groups: List[str]) -> bool:
     for aliases in alias_groups:
         if aliases and _match_prefixed_field(line, aliases) is not None:
@@ -1042,9 +1190,102 @@ def _find_link_line_index(original_lines: List[str], link_item: Dict[str, Any]) 
     return None
 
 
+def _normalize_netdisk_label_marker(value: str) -> str:
+    cleaned = clean_title_text(value or "")
+    cleaned = re.sub(r"[\s\-_./]+", "", cleaned)
+    cleaned = re.sub(r"(?:网盘|云盘)$", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"盘$", "", cleaned)
+    return cleaned.casefold()
+
+
+def _get_netdisk_label_markers(netdisk_name: str) -> set[str]:
+    aliases = {netdisk_name}
+    aliases.update(DEFAULT_NETDISK_HINT_ALIASES.get(netdisk_name, []))
+
+    base_name = re.sub(r"(?:网盘|云盘)$", "", netdisk_name or "", flags=re.IGNORECASE)
+    if base_name:
+        aliases.add(base_name)
+
+    markers = {
+        _normalize_netdisk_label_marker(alias)
+        for alias in aliases
+        if _normalize_netdisk_label_marker(alias)
+    }
+    return markers
+
+
+def _is_redundant_netdisk_label(label: str, netdisk_name: str | None) -> bool:
+    if not netdisk_name:
+        return False
+    normalized_label = _normalize_netdisk_label_marker(label)
+    if not normalized_label:
+        return True
+    return normalized_label in _get_netdisk_label_markers(netdisk_name)
+
+
+def _looks_like_sentence_link_label(label: str) -> bool:
+    candidate = _normalize_movie_description_line(label)
+    if not candidate:
+        return False
+    if _extract_movie_size(candidate) and len(candidate) <= 24:
+        return False
+    if _is_movie_tech_line(candidate):
+        return False
+    if MOVIE_VARIANT_START_PATTERN.search(candidate):
+        return False
+    if len(candidate) >= 18 and re.search(r"[，。；！？]", candidate):
+        return True
+    if len(candidate) >= 32 and re.search(r"[：:]", candidate):
+        return True
+    return len(candidate) >= 36 and candidate.count("，") >= 1
+
+
+def _sanitize_link_label(
+    label: str | None,
+    *,
+    netdisk_name: str | None = None,
+    noise_aliases: List[str] | None = None,
+    filter_patterns: List[str] | None = None,
+    reject_sentence_like: bool = False,
+) -> str | None:
+    candidate = _normalize_movie_description_line(label or "")
+    if not candidate:
+        return None
+    if netdisk_name and _is_redundant_netdisk_label(candidate, netdisk_name):
+        return None
+    if noise_aliases is not None and _is_movie_noise_line(candidate, noise_aliases, filter_patterns or []):
+        return None
+    if reject_sentence_like and _looks_like_sentence_link_label(candidate):
+        return None
+    return candidate
+
+
+def _filter_movie_description_groups(
+    *,
+    synopsis_lines: List[str],
+    freeform_description_lines: List[str],
+    fallback_description_lines: List[str],
+    noise_aliases: List[str],
+    filter_patterns: List[str],
+) -> List[str]:
+    for group in (synopsis_lines, freeform_description_lines, fallback_description_lines):
+        if not group:
+            continue
+        filtered_lines = [
+            _normalize_movie_description_line(line)
+            for line in group
+            if _normalize_movie_description_line(line)
+            and not _is_movie_noise_line(_normalize_movie_description_line(line), noise_aliases, filter_patterns)
+        ]
+        if filtered_lines:
+            return filtered_lines
+    return []
+
+
 def _derive_movie_link_label(
     original_lines: List[str],
     *,
+    netdisk_name: str,
     title: str,
     title_line_index: int | None,
     link_index: int,
@@ -1052,14 +1293,23 @@ def _derive_movie_link_label(
     tag_aliases: List[str],
     size_aliases: List[str],
     noise_aliases: List[str],
+    filter_patterns: List[str],
 ) -> str | None:
-    link_aliases = ["链接", "下载地址", "主链", "备用"]
+    link_aliases = MOVIE_RESOURCE_FIELD_ALIASES
     line = original_lines[link_index].strip()
     inline_label = None
     if not _matches_prefixed_aliases(line, link_aliases):
         inline_label = _normalize_movie_description_line(remove_urls_from_text(line))
     if inline_label and inline_label not in set(link_aliases):
-        return inline_label
+        sanitized_inline_label = _sanitize_link_label(
+            inline_label,
+            netdisk_name=netdisk_name,
+            noise_aliases=noise_aliases,
+            filter_patterns=filter_patterns,
+            reject_sentence_like=True,
+        )
+        if sanitized_inline_label:
+            return sanitized_inline_label
 
     for offset in (1, 2):
         previous_index = link_index - offset
@@ -1091,7 +1341,15 @@ def _derive_movie_link_label(
             if candidate_title and candidate.startswith(candidate_title):
                 candidate = _normalize_movie_description_line(candidate[len(candidate_title) :].strip())
         if candidate:
-            return candidate
+            sanitized_candidate = _sanitize_link_label(
+                candidate,
+                netdisk_name=netdisk_name,
+                noise_aliases=noise_aliases,
+                filter_patterns=filter_patterns,
+                reject_sentence_like=True,
+            )
+            if sanitized_candidate:
+                return sanitized_candidate
 
     return None
 
@@ -1107,17 +1365,26 @@ def _enrich_movie_links(
     tag_aliases: List[str],
     size_aliases: List[str],
     noise_aliases: List[str],
+    filter_patterns: List[str],
 ) -> None:
     total_links = sum(len(items) for items in links.values())
-    for link_items in links.values():
+    for name, link_items in links.items():
         for link_item in link_items:
-            if link_item.get("label"):
+            existing_label = _sanitize_link_label(
+                link_item.get("label"),
+                netdisk_name=name,
+                noise_aliases=noise_aliases,
+                filter_patterns=filter_patterns,
+            )
+            link_item["label"] = existing_label
+            if existing_label:
                 continue
             link_index = _find_link_line_index(original_lines, link_item)
             if link_index is None:
                 continue
             variant_label = _derive_movie_link_label(
                 original_lines,
+                netdisk_name=name,
                 title=title,
                 title_line_index=title_line_index,
                 link_index=link_index,
@@ -1125,14 +1392,15 @@ def _enrich_movie_links(
                 tag_aliases=tag_aliases,
                 size_aliases=size_aliases,
                 noise_aliases=noise_aliases,
+                filter_patterns=filter_patterns,
             )
             if variant_label:
                 link_item["label"] = variant_label
 
     if total_links == 1 and message_size:
-        for link_items in links.values():
+        for name, link_items in links.items():
             for link_item in link_items:
-                link_item["label"] = message_size
+                link_item["label"] = _sanitize_link_label(message_size, netdisk_name=name) or message_size
 
 
 def _parse_movie_message_fields(
@@ -1141,6 +1409,214 @@ def _parse_movie_message_fields(
     profile: Dict[str, Any],
     links: Dict[str, List[Dict[str, Any]]],
 ) -> Dict[str, Any]:
+    metadata_aliases = profile.get("metadata", {})
+    description_aliases = _merge_alias_lists(
+        _profile_aliases(profile, "movie_description_fields", ["描述", "简介", "剧情", "介绍"]),
+        ["描述", "简介", "剧情", "介绍"],
+    )
+    tag_aliases = _merge_alias_lists(
+        _profile_aliases(profile, "movie_tag_fields", ["标签"]),
+        ["标签"],
+    )
+    size_aliases = _merge_alias_lists(
+        _profile_aliases(profile, "movie_size_fields", ["大小"]),
+        ["大小"],
+    )
+    noise_aliases = _merge_alias_lists(
+        _profile_aliases(
+            profile,
+            "movie_noise_fields",
+            ["来自", "来源", "频道", "群组", "投稿", "投稿人", "搜索", "搜资源", "社区", "机场", "公费服"],
+        ),
+        MOVIE_EXTRA_NOISE_ALIASES,
+    )
+    movie_meta_aliases = _merge_alias_lists(
+        _profile_aliases(
+            profile,
+            "movie_meta_fields",
+            ["评分", "TMDB评分", "豆瓣评分", "类型", "地区", "语言", "画质", "质量", "片长", "主演", "导演", "更新", "集数"],
+        ),
+        MOVIE_FALLBACK_META_ALIASES,
+        ["画质", "质量"],
+    )
+    fallback_meta_aliases = _merge_alias_lists(
+        _profile_aliases(profile, "movie_fallback_meta_fields", MOVIE_FALLBACK_META_ALIASES),
+        MOVIE_FALLBACK_META_ALIASES,
+    )
+    filter_patterns = profile.get("filter_patterns", [])
+
+    title_line_index, raw_title = _find_movie_title_line(
+        original_lines,
+        profile,
+        noise_aliases,
+        description_aliases,
+        tag_aliases,
+        size_aliases,
+    )
+    title, title_fallback_lines, title_tags = _clean_movie_title_candidate(raw_title)
+    if not title and raw_title:
+        title = clean_title_text(raw_title)
+
+    source = ""
+    channel = ""
+    group = ""
+    bot = ""
+    message_size: str | None = None
+    synopsis_lines: List[str] = []
+    freeform_description_lines: List[str] = []
+    fallback_description_lines: List[str] = list(title_fallback_lines)
+    explicit_description_found = False
+    collecting_description = False
+    tags = extract_message_tags(text, {"regions": [], "course_keywords": [], "categories": profile.get("categories", [])})
+    for title_tag in title_tags:
+        append_tag(tags, title_tag)
+
+    for index, raw_line in enumerate(original_lines):
+        line = raw_line.strip()
+        if not line or index == title_line_index:
+            continue
+
+        stripped_line = _strip_leading_text_markers(line)
+        if not stripped_line:
+            continue
+
+        metadata_handled = False
+        for field_name, aliases in metadata_aliases.items():
+            field_value = _match_prefixed_field(stripped_line, aliases)
+            if field_value is None:
+                continue
+            cleaned_value = _clean_metadata_value(field_name, field_value)
+            if field_name == "source":
+                source = cleaned_value
+            elif field_name == "channel":
+                channel = cleaned_value
+            elif field_name == "group":
+                group = cleaned_value
+            elif field_name == "bot":
+                bot = cleaned_value
+            metadata_handled = True
+            break
+        if metadata_handled:
+            continue
+
+        size_value = _match_prefixed_field(stripped_line, size_aliases)
+        if size_value is not None:
+            message_size = _extract_movie_size(size_value) or _extract_movie_size(stripped_line) or message_size
+            collecting_description = False
+            continue
+
+        matched_tag_alias, tag_value = _find_prefixed_alias(stripped_line, tag_aliases)
+        if matched_tag_alias is not None:
+            for tag in _extract_movie_tags_from_line(tag_value or "", title):
+                append_tag(tags, tag)
+            collecting_description = False
+            continue
+
+        if _match_prefixed_field(stripped_line, MOVIE_RESOURCE_FIELD_ALIASES) is not None:
+            collecting_description = False
+            continue
+        if extract_urls_from_text_fragment(stripped_line):
+            collecting_description = False
+            continue
+        if _is_movie_noise_line(stripped_line, noise_aliases, filter_patterns):
+            collecting_description = False
+            continue
+
+        matched_description_alias, description_value = _find_prefixed_alias(stripped_line, description_aliases)
+        if matched_description_alias is not None:
+            explicit_description_found = True
+            collecting_description = True
+            if description_value and not _is_movie_noise_line(description_value, noise_aliases, filter_patterns):
+                cleaned_description = _normalize_movie_description_line(description_value)
+                if cleaned_description and not _is_movie_tech_line(cleaned_description):
+                    if not title or _normalize_movie_identity(cleaned_description) != _normalize_movie_identity(title):
+                        _append_movie_line(synopsis_lines, cleaned_description)
+            continue
+
+        kept_meta_alias, kept_meta_value = _find_prefixed_alias(stripped_line, movie_meta_aliases)
+        if kept_meta_alias is not None:
+            collecting_description = False
+            normalized_value = _normalize_movie_description_line(kept_meta_value or "")
+            if normalized_value:
+                if kept_meta_alias in fallback_meta_aliases:
+                    _append_movie_line(fallback_description_lines, f"{kept_meta_alias}: {normalized_value}")
+                if kept_meta_alias == "类型":
+                    for tag in _extract_movie_category_tags(normalized_value):
+                        append_tag(tags, tag)
+            continue
+
+        if _is_movie_variant_descriptor_line(original_lines, index, title_line_index) or _is_movie_tech_line(stripped_line):
+            collecting_description = False
+            continue
+
+        normalized_line = _normalize_movie_description_line(stripped_line)
+        if not normalized_line:
+            continue
+        if title and _normalize_movie_identity(normalized_line) == _normalize_movie_identity(title):
+            continue
+
+        if collecting_description:
+            _append_movie_line(synopsis_lines, normalized_line)
+            continue
+        if explicit_description_found:
+            continue
+
+        _append_movie_line(freeform_description_lines, normalized_line)
+
+    _enrich_movie_links(
+        links,
+        original_lines=original_lines,
+        title=title,
+        title_line_index=title_line_index,
+        message_size=message_size,
+        description_aliases=description_aliases,
+        tag_aliases=tag_aliases,
+        size_aliases=size_aliases,
+        noise_aliases=noise_aliases,
+        filter_patterns=filter_patterns,
+    )
+
+    filtered_tags: List[str] = []
+    title_identity = _normalize_movie_identity(title)
+    for tag in tags:
+        normalized_tag = normalize_tag_text(tag)
+        if not normalized_tag:
+            continue
+        tag_identity = _normalize_movie_identity(normalized_tag)
+        if title_identity and tag_identity and tag_identity == title_identity:
+            continue
+        append_tag(filtered_tags, normalized_tag)
+
+    description_lines = _filter_movie_description_groups(
+        synopsis_lines=synopsis_lines,
+        freeform_description_lines=freeform_description_lines,
+        fallback_description_lines=fallback_description_lines,
+        noise_aliases=noise_aliases,
+        filter_patterns=filter_patterns,
+    )
+    description = clean_description_text("\n".join(description_lines))
+    add_keyword_tags(filtered_tags, f"{title}\n{description}", profile)
+
+    return {
+        "title": title,
+        "description": description,
+        "links": links,
+        "tags": filtered_tags,
+        "source": source,
+        "channel": channel,
+        "group_name": group,
+        "bot": bot,
+    }
+
+
+def _parse_movie_message_fields_legacy(
+    text: str,
+    original_lines: List[str],
+    profile: Dict[str, Any],
+    links: Dict[str, List[Dict[str, Any]]],
+) -> Dict[str, Any]:
+    return _parse_movie_message_fields(text, original_lines, profile, links)
+
     metadata_aliases = profile.get("metadata", {})
     description_aliases = _profile_aliases(profile, "movie_description_fields", ["描述", "简介", "剧情", "介绍"])
     tag_aliases = _profile_aliases(profile, "movie_tag_fields", ["标签"])
@@ -1273,6 +1749,7 @@ def _parse_movie_message_fields(
         tag_aliases=tag_aliases,
         size_aliases=size_aliases,
         noise_aliases=noise_aliases,
+        filter_patterns=filter_patterns,
     )
 
     filtered_tags: List[str] = []

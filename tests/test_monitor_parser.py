@@ -11,6 +11,7 @@ from app.core.monitor_parser import (
     fetch_redirect_target,
     parse_message_content,
     parse_message_records,
+    resolve_netdisk_url,
 )
 from app.core.monitor_rules import load_monitor_rules
 
@@ -494,6 +495,205 @@ class MonitorParserTestCase(unittest.TestCase):
         self.assertEqual(labels[2], "4K HQ 杜比视界 高码率 全66集 300G")
         self.assertEqual(diagnostics.extracted_link_count, 3)
 
+    def test_parse_movie_message_content_omits_redundant_netdisk_alias_link_labels(self) -> None:
+        message = "\n".join(
+            [
+                "测试影片 (2026)",
+                "百度",
+                "https://pan.baidu.com/s/test123?pwd=abcd",
+                "迅雷",
+                "https://pan.xunlei.com/s/test456#",
+            ]
+        )
+
+        with patch(
+            "app.core.monitor_parser.resolve_message_urls",
+            return_value=(
+                {
+                    "https://pan.baidu.com/s/test123?pwd=abcd": "https://pan.baidu.com/s/test123?pwd=abcd",
+                    "https://pan.xunlei.com/s/test456#": "https://pan.xunlei.com/s/test456#",
+                },
+                0,
+            ),
+        ):
+            parsed, diagnostics = asyncio.run(parse_message_content(message, channel_name="gotopan"))
+
+        self.assertEqual(parsed["links"]["百度网盘"][0]["label"], None)
+        self.assertEqual(parsed["links"]["迅雷"][0]["label"], None)
+        self.assertEqual(diagnostics.extracted_link_count, 2)
+
+    def test_parse_movie_message_content_does_not_use_synopsis_sentence_as_link_label(self) -> None:
+        message = "\n".join(
+            [
+                "名称：最强大脑 第十三季 最强大脑13 (2026)",
+                "",
+                "描述：《最强大脑第十三季》是江苏卫视推出的节目，于2026年1月16日起每周五晚20:20在该台首播。",
+                "节目以“十三启新局，智弈聚锋芒”为主题，围绕计算精准度、推理能力和观察细微度三个维度设计挑战项目，提出“不止挑战极限，更要定义极限”的竞技目标。",
+                "",
+                "链接：https://pan.quark.cn/s/277e22f4db93",
+                "",
+                "🏷 标签：#真人秀 #最强大脑",
+            ]
+        )
+
+        with patch(
+            "app.core.monitor_parser.resolve_message_urls",
+            return_value=({"https://pan.quark.cn/s/277e22f4db93": "https://pan.quark.cn/s/277e22f4db93"}, 0),
+        ):
+            parsed, diagnostics = asyncio.run(
+                parse_message_content(message, channel_name="+eQXY7Ewx-4I4NDFl")
+            )
+
+        self.assertEqual(parsed["links"]["夸克网盘"][0]["label"], None)
+        self.assertEqual(diagnostics.extracted_link_count, 1)
+
+    def test_parse_movie_message_content_keeps_only_synopsis_when_explicit_intro_exists(self) -> None:
+        message = "\n".join(
+            [
+                "🎬 申医生 (2026) 已更新",
+                "",
+                "🎭 类型：日韩剧",
+                "⭐ TMDB评分：10.0/10",
+                "📹 画质：1080p",
+                "📺 质量：friDay WEB-DL AAC.2.0",
+                "📼 集数：共 1 集",
+                "📦 大小：4.75GB",
+                "👤 分享：热心网友",
+                "",
+                "S01 E07 1080P friDay WEB-DL AAC.2.0 内封简繁字幕",
+                "",
+                "📖 简介：",
+                "剧集讲述挑战神之领域的外科医师，爱上因事故而陷入脑昏迷的知名女星，以及她现在所爱的男人之间，交织着爱情与欲望、禁忌与牺牲的奇异爱情惊悚医疗剧。",
+                "",
+                "📢频道：123云盘资源收藏频道",
+                "🚀社区：点击查看",
+                "🏷️标签：#申医生 #日韩剧 #剧情",
+            ]
+        )
+
+        with patch("app.core.monitor_parser.resolve_message_urls", return_value=({}, 0)):
+            parsed, _ = asyncio.run(parse_message_content(message, channel_name="xx123pan"))
+
+        self.assertEqual(
+            parsed["description"],
+            "剧集讲述挑战神之领域的外科医师，爱上因事故而陷入脑昏迷的知名女星，以及她现在所爱的男人之间，交织着爱情与欲望、禁忌与牺牲的奇异爱情惊悚医疗剧。",
+        )
+        self.assertNotIn("类型", parsed["description"])
+        self.assertNotIn("TMDB评分", parsed["description"])
+        self.assertNotIn("社区", parsed["description"])
+
+    def test_parse_movie_message_content_falls_back_to_movie_metadata_when_synopsis_missing(self) -> None:
+        message = "\n".join(
+            [
+                "🎥 过去，如今和之后 (2022)",
+                "",
+                "⭐️ 评分：6.8",
+                "🏷 类型：剧情 / 历史",
+                "👥 主演：Happy Salma / Laura Basuki / Ibnu Jamil",
+                "🔖 标签: #过去如今和之后 #电影",
+                "🤖 投稿：@tpbox_bot",
+                "🔍 搜索：@sougou115",
+                "✈️ 机场：红杏云 | 糖果云",
+                "📺 公费服：蘑菇Emby媒体库",
+            ]
+        )
+
+        with patch("app.core.monitor_parser.resolve_message_urls", return_value=({}, 0)):
+            parsed, _ = asyncio.run(parse_message_content(message, channel_name="Lsp115"))
+
+        self.assertEqual(
+            parsed["description"],
+            "评分: 6.8\n类型: 剧情 / 历史\n主演: Happy Salma / Laura Basuki / Ibnu Jamil",
+        )
+        self.assertNotIn("机场", parsed["description"])
+        self.assertNotIn("公费服", parsed["description"])
+
+    def test_parse_movie_message_content_stops_multiline_intro_before_download_section(self) -> None:
+        message = "\n".join(
+            [
+                "【标题】：【电视剧】猎罪图鉴2-2024年剧情片",
+                "",
+                "【描述】：",
+                "第二季也将承继“绘色显影，画见人心”这一故事内核，在对画像的勾描中使得复杂的人心显影，洞悉幽微人性、照见人间现实。",
+                "在模拟画像师沈翊（檀健次 饰）、刑警队长杜城（金世佳 饰）等人组成的猎罪小分队的共同努力下，第二季的故事将继续拆解人性谜题，围猎罪案真凶。",
+                "",
+                "👇下载地址👇",
+                "https://pan.xunlei.com/s/VObQ-UhSsYKeJvXg9AQx041JA1?pwd=dgwj#",
+                "",
+                "📂 类    型： #影视 #迅雷云盘",
+                "🏷️ 标    签：#剧情 #悬疑 #犯罪",
+                "🙍 来    自： 热心盘友",
+                "📢 频    道： @gotopan",
+                "👥 群    组： @panyouquan",
+                "🤖 搜资源： @kksou_bot",
+            ]
+        )
+
+        with patch(
+            "app.core.monitor_parser.resolve_message_urls",
+            return_value=({"https://pan.xunlei.com/s/VObQ-UhSsYKeJvXg9AQx041JA1?pwd=dgwj#": "https://pan.xunlei.com/s/VObQ-UhSsYKeJvXg9AQx041JA1?pwd=dgwj#"}, 0),
+        ):
+            parsed, _ = asyncio.run(parse_message_content(message, channel_name="gotopan"))
+
+        self.assertEqual(
+            parsed["description"],
+            "第二季也将承继“绘色显影，画见人心”这一故事内核，在对画像的勾描中使得复杂的人心显影，洞悉幽微人性、照见人间现实。\n在模拟画像师沈翊（檀健次 饰）、刑警队长杜城（金世佳 饰）等人组成的猎罪小分队的共同努力下，第二季的故事将继续拆解人性谜题，围猎罪案真凶。",
+        )
+        self.assertNotIn("下载地址", parsed["description"])
+        self.assertNotIn("来 自", parsed["description"])
+
+    def test_parse_movie_message_content_filters_variant_and_promo_tail_from_description(self) -> None:
+        message = "\n".join(
+            [
+                "神与律师事务所 (2026)",
+                "1080p NF S01E01 - E08 内封简中 HiveWeb",
+                "",
+                "简介：「申二朗」律师在旧巫堂开设法律事务所后，开始看得见鬼魂。虽然外表沉稳可靠，但实际上胆小又有些冒失；然而在面对带着冤屈的鬼魂委托人时，却展现出谁也无法动摇的坚定气度。",
+                "",
+                "分享：Pluto",
+                "大小：6GB",
+                "链接：直达链接",
+                "网址：神与律师事务所 (2026)",
+                "",
+                "标签：#剧情 #悬疑",
+                "",
+                "🔥： 阿里云盘播放神器: VidHub",
+            ]
+        )
+
+        with patch("app.core.monitor_parser.resolve_message_urls", return_value=({}, 0)):
+            parsed, _ = asyncio.run(parse_message_content(message, channel_name="bdwpzhpd"))
+
+        self.assertEqual(
+            parsed["description"],
+            "「申二朗」律师在旧巫堂开设法律事务所后，开始看得见鬼魂。虽然外表沉稳可靠，但实际上胆小又有些冒失；然而在面对带着冤屈的鬼魂委托人时，却展现出谁也无法动摇的坚定气度。",
+        )
+        self.assertNotIn("1080p", parsed["description"])
+        self.assertNotIn("VidHub", parsed["description"])
+        self.assertNotIn("直达链接", parsed["description"])
+
+    def test_parse_movie_message_content_filters_dmca_noise_inside_description_block(self) -> None:
+        message = "\n".join(
+            [
+                "名称：测试电影 (2026)",
+                "",
+                "简介：这是第一段剧情简介。",
+                "标签 ⚠️ 版权：版权反馈/DMCA",
+                "链接：https://pan.quark.cn/s/testdmca123",
+                "🏷 标签：#剧情",
+            ]
+        )
+
+        with patch(
+            "app.core.monitor_parser.resolve_message_urls",
+            return_value=({"https://pan.quark.cn/s/testdmca123": "https://pan.quark.cn/s/testdmca123"}, 0),
+        ):
+            parsed, _ = asyncio.run(parse_message_content(message, channel_name="+eQXY7Ewx-4I4NDFl"))
+
+        self.assertEqual(parsed["description"], "这是第一段剧情简介。")
+        self.assertNotIn("DMCA", parsed["description"])
+        self.assertNotIn("版权反馈", parsed["description"])
+
     def test_extract_redirect_urls_from_html_supports_relative_targets_and_anchor_links(self) -> None:
         html = """
         <html>
@@ -542,6 +742,48 @@ class MonitorParserTestCase(unittest.TestCase):
         self.assertEqual(final_url, "https://t.cn/AXInWTJ4")
         self.assertEqual(session.calls[0], "get:https://t.cn/AXInWTJ4:6")
         self.assertIn("https://pan.baidu.com/s/final", html_targets)
+
+    def test_fetch_redirect_target_prefers_get_for_telegra_domain_by_default(self) -> None:
+        session = _FakeSession(
+            head_response=_FakeResponse("https://telegra.ph/sample-page"),
+            get_response=_FakeResponse(
+                "https://telegra.ph/sample-page",
+                headers={"Content-Type": "text/html"},
+                body='<a href="https://115cdn.com/s/sample123?password=abcd">查看链接</a>',
+            ),
+        )
+
+        final_url, html_targets = asyncio.run(
+            fetch_redirect_target(
+                "https://telegra.ph/sample-page",
+                session,
+            )
+        )
+
+        self.assertEqual(final_url, "https://telegra.ph/sample-page")
+        self.assertEqual(session.calls[0], "get:https://telegra.ph/sample-page:8")
+        self.assertIn("https://115cdn.com/s/sample123?password=abcd", html_targets)
+
+    def test_resolve_netdisk_url_extracts_115_link_from_telegra_page(self) -> None:
+        session = _FakeSession(
+            head_response=_FakeResponse("https://telegra.ph/sample-page"),
+            get_response=_FakeResponse(
+                "https://telegra.ph/sample-page",
+                headers={"Content-Type": "text/html"},
+                body='<a href="https://115cdn.com/s/sample123?password=abcd">查看链接</a>',
+            ),
+        )
+
+        resolved_url = asyncio.run(
+            resolve_netdisk_url(
+                "https://telegra.ph/sample-page",
+                [(["115cdn.com", "115.com"], "115网盘")],
+                [],
+                session,
+            )
+        )
+
+        self.assertEqual(resolved_url, "https://115cdn.com/s/sample123?password=abcd")
 
 
 if __name__ == "__main__":

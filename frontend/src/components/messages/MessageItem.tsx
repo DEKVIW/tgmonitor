@@ -12,6 +12,42 @@ import './MessageItem.css'
 
 const { Text, Paragraph } = Typography
 
+const NETDISK_LABEL_ALIASES: Record<string, string[]> = {
+  百度网盘: ['百度网盘', '百度', '百度盘', 'baidu'],
+  夸克网盘: ['夸克网盘', '夸克', 'quark', 'qk'],
+  阿里云盘: ['阿里云盘', '阿里', '阿里云', 'aliyun', 'alipan'],
+  天翼云盘: ['天翼云盘', '天翼', '189', 'ty'],
+  迅雷: ['迅雷', 'xunlei', 'thunder', 'xl'],
+  '115网盘': ['115网盘', '115', '115pan'],
+  '123云盘': ['123云盘', '123', '123pan'],
+  UC网盘: ['UC网盘', 'UC', 'ucdrive', 'ucdisk'],
+  '139云盘': ['139云盘', '139', '139yun', '移动云', 'caiyun'],
+}
+
+const normalizeNetdiskLabel = (value: string) =>
+  value
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '')
+    .replace(/(网盘|云盘)$/g, '')
+    .replace(/盘$/g, '')
+
+const formatLinkText = (name: string, label?: string | null) => {
+  const trimmedLabel = label?.trim()
+  if (!trimmedLabel) {
+    return name
+  }
+
+  const aliasSet = new Set(
+    (NETDISK_LABEL_ALIASES[name] || [name]).map((alias) => normalizeNetdiskLabel(alias))
+  )
+  if (aliasSet.has(normalizeNetdiskLabel(trimmedLabel))) {
+    return name
+  }
+
+  return `${name} ${trimmedLabel}`
+}
+
 interface MessageItemProps {
   message: MessageResponse
 }
@@ -54,7 +90,7 @@ const MessageItem = ({ message }: MessageItemProps) => {
                 rel="noopener noreferrer"
                 className="netdisk-link"
               >
-                {name} {item.label || ''}
+                {formatLinkText(name, item.label)}
               </a>
             )
           }
@@ -80,7 +116,7 @@ const MessageItem = ({ message }: MessageItemProps) => {
             rel="noopener noreferrer"
             className="netdisk-link"
           >
-            {name} {value.label || ''}
+            {formatLinkText(name, value.label)}
           </a>
         )
       }
