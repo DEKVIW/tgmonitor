@@ -8,6 +8,7 @@ import { useLocation } from 'react-router-dom'
 import Header from './Header'
 import Sidebar from './SidebarNavRuntime'
 import BackToTopButton from './BackToTopButton'
+import SiteFooter from './SiteFooter'
 import AuthenticatedDashboardToolbar from '@/components/messages/AuthenticatedDashboardToolbar'
 import './Layout.css'
 
@@ -104,6 +105,7 @@ const Layout = ({ children }: LayoutProps) => {
           >
             {children}
           </Content>
+          <SiteFooter />
         </AntLayout>
       </AntLayout>
       <BackToTopButton />

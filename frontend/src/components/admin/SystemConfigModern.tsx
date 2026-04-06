@@ -4,6 +4,7 @@ import {
   Alert,
   Button,
   Card,
+  Empty,
   Input,
   InputNumber,
   Switch,
@@ -12,9 +13,14 @@ import {
   message,
 } from 'antd'
 import {
+  ArrowDownOutlined,
+  ArrowUpOutlined,
+  DeleteOutlined,
   DeploymentUnitOutlined,
   GlobalOutlined,
+  MailOutlined,
   NotificationOutlined,
+  PlusOutlined,
   ReloadOutlined,
   SaveOutlined,
   SafetyCertificateOutlined,
@@ -22,7 +28,8 @@ import {
 } from '@ant-design/icons'
 import { getSystemConfig, updateSystemConfig } from '@/api/admin'
 import HintTooltip from '@/components/common/HintTooltip'
-import type { SystemConfigResponse, SystemConfigUpdate } from '@/types/admin'
+import SiteFooter from '@/components/layout/SiteFooter'
+import type { FooterBuilderSection, SystemConfigResponse, SystemConfigUpdate } from '@/types/admin'
 import './SystemConfigModern.css'
 
 const { Text, Title } = Typography
@@ -30,6 +37,7 @@ const { TextArea } = Input
 
 const SECTION_ITEMS = [
   { id: 'system-config-brand', label: '站点信息' },
+  { id: 'system-config-footer', label: '页脚布局' },
   { id: 'system-config-access', label: '访问控制' },
   { id: 'system-config-analytics', label: '流量分析' },
   { id: 'system-config-ads', label: '广告位' },
@@ -41,6 +49,15 @@ const SECTION_ITEMS = [
 const scrollToSection = (id: string) => {
   document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
+
+const createFooterSectionId = () => `footer-section-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+
+const createEmptyFooterSection = (): FooterBuilderSection => ({
+  id: createFooterSectionId(),
+  title: '',
+  html: '',
+  span: 3,
+})
 
 const createLabel = (title: string, hint: string) => (
   <div className="system-config-modern-field-label">
@@ -137,6 +154,47 @@ const SystemConfigModern = () => {
     return <Card loading={loading}>加载中...</Card>
   }
 
+  const updateFooterSection = (
+    sectionId: string,
+    key: keyof FooterBuilderSection,
+    value: FooterBuilderSection[keyof FooterBuilderSection]
+  ) => {
+    updateDraft(
+      'footer_builder_sections',
+      draft.footer_builder_sections.map((section) =>
+        section.id === sectionId ? { ...section, [key]: value } : section
+      )
+    )
+  }
+
+  const addFooterSection = () => {
+    updateDraft('footer_builder_sections', [...draft.footer_builder_sections, createEmptyFooterSection()])
+  }
+
+  const removeFooterSection = (sectionId: string) => {
+    updateDraft(
+      'footer_builder_sections',
+      draft.footer_builder_sections.filter((section) => section.id !== sectionId)
+    )
+  }
+
+  const moveFooterSection = (sectionId: string, direction: -1 | 1) => {
+    const currentIndex = draft.footer_builder_sections.findIndex((section) => section.id === sectionId)
+    if (currentIndex < 0) {
+      return
+    }
+
+    const targetIndex = currentIndex + direction
+    if (targetIndex < 0 || targetIndex >= draft.footer_builder_sections.length) {
+      return
+    }
+
+    const nextSections = [...draft.footer_builder_sections]
+    const [current] = nextSections.splice(currentIndex, 1)
+    nextSections.splice(targetIndex, 0, current)
+    updateDraft('footer_builder_sections', nextSections)
+  }
+
   const overviewItems = [
     {
       key: 'branding',
@@ -151,6 +209,13 @@ const SystemConfigModern = () => {
       title: '游客访问',
       value: draft.public_dashboard_enabled ? '已开放' : '已关闭',
       meta: draft.public_ads_enabled ? '广告位已启用' : '广告位未启用',
+    },
+    {
+      key: 'footer',
+      icon: <MailOutlined />,
+      title: '页脚布局',
+      value: draft.footer_builder_enabled ? `${draft.footer_builder_sections.length} 栏` : '未启用',
+      meta: draft.footer_builder_bottom_html.trim() ? '底栏已配置' : '仅栏目区',
     },
     {
       key: 'analytics',
@@ -305,6 +370,143 @@ const SystemConfigModern = () => {
                   disabled={saving}
                 />
               </div>
+            </div>
+          </Card>
+        </section>
+
+        <section id="system-config-footer" className="system-config-modern-section-shell">
+          <Card
+            className="system-config-modern-section-card"
+            title={createSectionTitle(
+              '页脚布局',
+              '按栏目方式配置前台页脚。每栏可自定义标题、HTML 内容和宽度占比，底栏也支持独立 HTML。'
+            )}
+          >
+            <div className="system-config-modern-footer-builder">
+              <div className="system-config-modern-footer-builder-main">
+                <div className="system-config-modern-footer-builder-toolbar">
+                  <div className="system-config-modern-toggle-card system-config-modern-toggle-card--compact">
+                    <div className="system-config-modern-toggle-copy">
+                      {createLabel('启用页脚', '关闭后前台不渲染页脚；已编辑的栏目内容会继续保留在配置里。')}
+                    </div>
+                    <Switch
+                      checked={draft.footer_builder_enabled}
+                      onChange={(checked) => updateDraft('footer_builder_enabled', checked)}
+                      disabled={saving}
+                    />
+                  </div>
+
+                  <Button type="primary" icon={<PlusOutlined />} onClick={addFooterSection} disabled={saving}>
+                    新增栏目
+                  </Button>
+                </div>
+
+                {draft.footer_builder_sections.length ? (
+                  <div className="system-config-modern-footer-section-list">
+                    {draft.footer_builder_sections.map((section, index) => (
+                      <article className="system-config-modern-footer-section-card" key={section.id}>
+                        <div className="system-config-modern-footer-section-head">
+                          <div className="system-config-modern-footer-section-meta">
+                            <Tag color="processing">栏目 {index + 1}</Tag>
+                            <span>{section.span}/12</span>
+                          </div>
+                          <div className="system-config-modern-footer-section-actions">
+                            <Button
+                              type="text"
+                              size="small"
+                              icon={<ArrowUpOutlined />}
+                              onClick={() => moveFooterSection(section.id, -1)}
+                              disabled={saving || index === 0}
+                            />
+                            <Button
+                              type="text"
+                              size="small"
+                              icon={<ArrowDownOutlined />}
+                              onClick={() => moveFooterSection(section.id, 1)}
+                              disabled={saving || index === draft.footer_builder_sections.length - 1}
+                            />
+                            <Button
+                              type="text"
+                              size="small"
+                              danger
+                              icon={<DeleteOutlined />}
+                              onClick={() => removeFooterSection(section.id)}
+                              disabled={saving}
+                            />
+                          </div>
+                        </div>
+
+                        <div className="system-config-modern-footer-section-grid">
+                          <div className="system-config-modern-footer-section-field">
+                            {createLabel('标题', '支持留空。留空时该栏目只显示 HTML 内容。')}
+                            <Input
+                              value={section.title}
+                              onChange={(event) => updateFooterSection(section.id, 'title', event.target.value)}
+                              placeholder="例如：友情链接"
+                              disabled={saving}
+                            />
+                          </div>
+
+                          <div className="system-config-modern-footer-section-field">
+                            {createLabel('宽度占比', '桌面端按 12 栅格布局；移动端会自动改成单列堆叠。')}
+                            <InputNumber
+                              min={1}
+                              max={12}
+                              value={section.span}
+                              onChange={(value) => updateFooterSection(section.id, 'span', Number(value || 3))}
+                              addonAfter="/12"
+                              disabled={saving}
+                            />
+                          </div>
+                        </div>
+
+                        <div className="system-config-modern-footer-section-field">
+                          {createLabel('HTML 内容', '支持标题下的完整 HTML 内容，可放链接、图片、列表、说明等。')}
+                          <TextArea
+                            rows={6}
+                            value={section.html}
+                            onChange={(event) => updateFooterSection(section.id, 'html', event.target.value)}
+                            placeholder='<p><a href="https://example.com">示例链接</a></p>'
+                            className="system-config-modern-textarea"
+                            disabled={saving}
+                          />
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="system-config-modern-footer-empty">
+                    <Empty description="还没有页脚栏目，点击“新增栏目”开始配置" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+                  </div>
+                )}
+
+                <div className="system-config-modern-field-card system-config-modern-field-card--wide">
+                  {createLabel('底栏 HTML', '显示在栏目区下方，适合放版权行、备案、站点地图或补充链接。')}
+                  <TextArea
+                    rows={5}
+                    value={draft.footer_builder_bottom_html}
+                    onChange={(event) => updateDraft('footer_builder_bottom_html', event.target.value)}
+                    placeholder='<p>Copyright © 2026 示例站点</p>'
+                    className="system-config-modern-textarea"
+                    disabled={saving}
+                  />
+                </div>
+              </div>
+
+              <aside className="system-config-modern-footer-preview-panel">
+                <div className="system-config-modern-footer-preview-head">
+                  <div className="system-config-modern-footer-preview-title">
+                    <Text strong>实时预览</Text>
+                    <HintTooltip content="预览区域使用和前台一致的页脚渲染组件，移动端会自动改成纵向堆叠。" />
+                  </div>
+                  <Tag color={draft.footer_builder_enabled ? 'success' : 'default'}>
+                    {draft.footer_builder_enabled ? '已启用' : '未启用'}
+                  </Tag>
+                </div>
+                <div className="system-config-modern-footer-preview">
+                  <SiteFooter config={draft} preview />
+                </div>
+              </aside>
             </div>
           </Card>
         </section>

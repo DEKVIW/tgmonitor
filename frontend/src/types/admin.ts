@@ -30,6 +30,13 @@ export interface ChannelCreate {
   parser_profile?: string | null
 }
 
+export interface FooterBuilderSection {
+  id: string
+  title: string
+  html: string
+  span: number
+}
+
 export interface SystemConfigResponse {
   site_name: string
   site_title: string
@@ -44,6 +51,9 @@ export interface SystemConfigResponse {
   public_feed_inline_ad_html_desktop: string
   public_feed_inline_ad_html_mobile: string
   public_feed_inline_every_n: number
+  footer_builder_enabled: boolean
+  footer_builder_sections: FooterBuilderSection[]
+  footer_builder_bottom_html: string
   umami_enabled: boolean
   umami_script_url: string
   umami_website_id: string
@@ -72,6 +82,9 @@ export interface SystemConfigUpdate {
   public_feed_inline_ad_html_desktop: string
   public_feed_inline_ad_html_mobile: string
   public_feed_inline_every_n: number
+  footer_builder_enabled: boolean
+  footer_builder_sections: FooterBuilderSection[]
+  footer_builder_bottom_html: string
   umami_enabled: boolean
   umami_script_url: string
   umami_website_id: string
@@ -100,6 +113,9 @@ export interface PublicSystemConfigResponse {
   public_feed_inline_ad_html_desktop: string
   public_feed_inline_ad_html_mobile: string
   public_feed_inline_every_n: number
+  footer_builder_enabled: boolean
+  footer_builder_sections: FooterBuilderSection[]
+  footer_builder_bottom_html: string
   umami_enabled: boolean
   umami_script_url: string
   umami_website_id: string

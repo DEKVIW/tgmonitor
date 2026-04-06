@@ -4,6 +4,7 @@ import { Button, Card, Form, Input, message } from 'antd'
 import { LockOutlined, UserOutlined } from '@ant-design/icons'
 
 import { login } from '@/api/auth'
+import SiteFooter from '@/components/layout/SiteFooter'
 import { useAuthStore } from '@/store/authStore'
 import { formatBrandTitle, useSiteBranding } from '@/utils/siteBranding'
 
@@ -31,30 +32,33 @@ const Login = () => {
   }
 
   return (
-    <div className="login-container">
-      <Card className="login-card" title={formatBrandTitle(siteBranding)} variant="borderless">
-        <Form name="login" onFinish={onFinish} autoComplete="off" size="large">
-          <Form.Item
-            name="username"
-            rules={[{ required: true, message: '\u8bf7\u8f93\u5165\u7528\u6237\u540d' }]}
-          >
-            <Input prefix={<UserOutlined />} placeholder="\u7528\u6237\u540d" />
-          </Form.Item>
+    <div className="login-shell">
+      <div className="login-container">
+        <Card className="login-card" title={formatBrandTitle(siteBranding)} variant="borderless">
+          <Form name="login" onFinish={onFinish} autoComplete="off" size="large">
+            <Form.Item
+              name="username"
+              rules={[{ required: true, message: '\u8bf7\u8f93\u5165\u7528\u6237\u540d' }]}
+            >
+              <Input prefix={<UserOutlined />} placeholder="\u7528\u6237\u540d" />
+            </Form.Item>
 
-          <Form.Item
-            name="password"
-            rules={[{ required: true, message: '\u8bf7\u8f93\u5165\u5bc6\u7801' }]}
-          >
-            <Input.Password prefix={<LockOutlined />} placeholder="\u5bc6\u7801" />
-          </Form.Item>
+            <Form.Item
+              name="password"
+              rules={[{ required: true, message: '\u8bf7\u8f93\u5165\u5bc6\u7801' }]}
+            >
+              <Input.Password prefix={<LockOutlined />} placeholder="\u5bc6\u7801" />
+            </Form.Item>
 
-          <Form.Item>
-            <Button type="primary" htmlType="submit" loading={loading} block>
-              {'\u767b\u5f55'}
-            </Button>
-          </Form.Item>
-        </Form>
-      </Card>
+            <Form.Item>
+              <Button type="primary" htmlType="submit" loading={loading} block>
+                {'\u767b\u5f55'}
+              </Button>
+            </Form.Item>
+          </Form>
+        </Card>
+      </div>
+      <SiteFooter />
     </div>
   )
 }

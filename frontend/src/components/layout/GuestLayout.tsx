@@ -4,6 +4,7 @@ import { Layout as AntLayout } from 'antd'
 import { formatBrandTitle, useSiteBranding } from '@/utils/siteBranding'
 
 import BackToTopButton from './BackToTopButton'
+import SiteFooter from './SiteFooter'
 import './Layout.css'
 import './Header.css'
 import './GuestLayout.css'
@@ -28,6 +29,7 @@ const GuestLayout = ({ children, toolbar }: GuestLayoutProps) => {
         {toolbar ? <div className="guest-header-toolbar">{toolbar}</div> : null}
       </header>
       <Content className="content-wrapper guest-content-wrapper">{children}</Content>
+      <SiteFooter />
       <BackToTopButton />
     </AntLayout>
   )

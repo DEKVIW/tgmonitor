@@ -4,15 +4,19 @@
 
 .layout-content {
   position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: calc(100vh - var(--header-height));
   transition: margin-left var(--transition-base);
 }
 
 .content-wrapper {
+  flex: 1 0 auto;
   margin: 0;
   padding: 0;
   background: transparent;
   border-radius: 0;
-  min-height: calc(100vh - var(--header-height));
+  min-height: 0;
 }
 
 /* 覆盖 Ant Design Layout 默认灰色背景，统一为纯白 */

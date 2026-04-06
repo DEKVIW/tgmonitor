@@ -1,4 +1,4 @@
-"""Pydantic models used by admin endpoints."""
+﻿"""Pydantic models used by admin endpoints."""
 
 from __future__ import annotations
 
@@ -29,6 +29,7 @@ def _normalize_optional_asset_url(value: str, *, field_name: str) -> str:
     if normalized and not normalized.startswith(("http://", "https://", "/")):
         raise ValueError(f"{field_name} must start with http://, https:// or /")
     return normalized
+
 
 
 def _normalize_usernames(values: List[str]) -> List[str]:
@@ -98,6 +99,18 @@ class ChannelCreate(BaseModel):
         return normalized
 
 
+class FooterBuilderSection(BaseModel):
+    id: str = Field(min_length=1, max_length=128)
+    title: str = Field(default="", max_length=255)
+    html: str = Field(default="", max_length=20000)
+    span: int = Field(default=3, ge=1, le=12)
+
+    @field_validator("id", "title", "html")
+    @classmethod
+    def validate_footer_section_text(cls, value: str, info) -> str:
+        return _normalize_text(value, allow_empty=info.field_name != "id", field_name=info.field_name)
+
+
 class SystemConfigResponse(BaseModel):
     site_name: str
     site_title: str
@@ -112,6 +125,9 @@ class SystemConfigResponse(BaseModel):
     public_feed_inline_ad_html_desktop: str
     public_feed_inline_ad_html_mobile: str
     public_feed_inline_every_n: int
+    footer_builder_enabled: bool
+    footer_builder_sections: List[FooterBuilderSection]
+    footer_builder_bottom_html: str
     umami_enabled: bool
     umami_script_url: str
     umami_website_id: str
@@ -127,11 +143,11 @@ class SystemConfigResponse(BaseModel):
 
 
 class SystemConfigUpdate(BaseModel):
-    site_name: str = Field(default="TG\u9891\u9053\u76d1\u63a7", max_length=255)
-    site_title: str = Field(default="TG\u9891\u9053\u76d1\u63a7", max_length=255)
-    site_description: str = Field(default="Telegram \u9891\u9053\u7f51\u76d8\u8d44\u6e90\u76d1\u63a7\u4e0e\u68c0\u7d22", max_length=2000)
-    site_keywords: str = Field(default="telegram,\u7f51\u76d8,\u9891\u9053\u76d1\u63a7,\u8d44\u6e90\u641c\u7d22", max_length=2000)
-    brand_icon: str = Field(default="\U0001F4F1", max_length=32)
+    site_name: str = Field(default="TG频道监控", max_length=255)
+    site_title: str = Field(default="TG频道监控", max_length=255)
+    site_description: str = Field(default="Telegram 频道网盘资源监控与检索", max_length=2000)
+    site_keywords: str = Field(default="telegram,网盘,频道监控,资源搜索", max_length=2000)
+    brand_icon: str = Field(default="📱", max_length=32)
     site_favicon_url: str = Field(default="/favicon.svg", max_length=1000)
     public_dashboard_enabled: bool
     public_ads_enabled: bool
@@ -140,6 +156,9 @@ class SystemConfigUpdate(BaseModel):
     public_feed_inline_ad_html_desktop: str = Field(default="", max_length=20000)
     public_feed_inline_ad_html_mobile: str = Field(default="", max_length=20000)
     public_feed_inline_every_n: int = Field(default=8, ge=2, le=999)
+    footer_builder_enabled: bool = False
+    footer_builder_sections: List[FooterBuilderSection] = Field(default_factory=list, max_length=12)
+    footer_builder_bottom_html: str = Field(default="", max_length=20000)
     umami_enabled: bool = False
     umami_script_url: str = Field(default="", max_length=1000)
     umami_website_id: str = Field(default="", max_length=255)
@@ -160,9 +179,10 @@ class SystemConfigUpdate(BaseModel):
         "public_feed_top_ad_html_mobile",
         "public_feed_inline_ad_html_desktop",
         "public_feed_inline_ad_html_mobile",
+        "footer_builder_bottom_html",
     )
     @classmethod
-    def validate_ad_html_fields(cls, value: str) -> str:
+    def validate_system_config_text_fields(cls, value: str) -> str:
         return _normalize_text(value, allow_empty=True)
 
     @field_validator("site_name", "site_title")
@@ -190,6 +210,14 @@ class SystemConfigUpdate(BaseModel):
     def validate_umami_url_fields(cls, value: str, info) -> str:
         return _normalize_optional_url(value, field_name=info.field_name)
 
+    @field_validator("footer_builder_sections")
+    @classmethod
+    def validate_footer_builder_sections(cls, value: List[FooterBuilderSection]) -> List[FooterBuilderSection]:
+        section_ids = [item.id for item in value]
+        if len(section_ids) != len(set(section_ids)):
+            raise ValueError("footer_builder_sections ids must be unique")
+        return value
+
     @model_validator(mode="after")
     def validate_link_check_config(self) -> "SystemConfigUpdate":
         if self.link_check_default_max_concurrent > self.link_check_max_allowed_concurrent:
@@ -200,6 +228,8 @@ class SystemConfigUpdate(BaseModel):
             if not self.umami_website_id:
                 raise ValueError("umami_website_id is required when umami_enabled is true")
         return self
+
+
 class PublicSystemConfigResponse(BaseModel):
     site_name: str
     site_title: str
@@ -214,11 +244,13 @@ class PublicSystemConfigResponse(BaseModel):
     public_feed_inline_ad_html_desktop: str
     public_feed_inline_ad_html_mobile: str
     public_feed_inline_every_n: int
+    footer_builder_enabled: bool
+    footer_builder_sections: List[FooterBuilderSection]
+    footer_builder_bottom_html: str
     umami_enabled: bool
     umami_script_url: str
     umami_website_id: str
     umami_host_url: str
-
 
 class UserResponse(BaseModel):
     username: str
@@ -585,4 +617,5 @@ class LinkCheckHistoryBatchDeleteResult(BaseModel):
     deleted_details: int = 0
     deleted_stats: int = 0
     missing_check_times: List[str] = Field(default_factory=list)
+
 

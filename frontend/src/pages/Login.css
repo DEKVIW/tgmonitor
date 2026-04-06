@@ -1,8 +1,14 @@
+.login-shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
 .login-container {
   display: flex;
   justify-content: center;
   align-items: center;
-  min-height: 100vh;
+  flex: 1 0 auto;
   padding: 24px;
   background:
     radial-gradient(circle at 18% 18%, rgba(11, 107, 203, 0.18), transparent 28%),

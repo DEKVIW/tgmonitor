@@ -63,7 +63,8 @@
 }
 
 .guest-content-wrapper {
-  min-height: calc(100vh - var(--header-height));
+  flex: 1 0 auto;
+  min-height: 0;
 }
 
 @media (max-width: 768px) {
