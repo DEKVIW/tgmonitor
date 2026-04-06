@@ -14,6 +14,7 @@ import Dashboard from './pages/Dashboard'
 import Statistics from './pages/Statistics'
 import Analytics from './pages/AnalyticsDashboardModern'
 import Admin from './pages/AdminRuntime'
+import Backups from './pages/BackupsModern'
 import { LOGIN_PATH } from './utils/routes'
 
 function App() {
@@ -58,6 +59,14 @@ function App() {
             element={
               <AdminRoute>
                 <Admin />
+              </AdminRoute>
+            }
+          />
+          <Route
+            path="/backups"
+            element={
+              <AdminRoute>
+                <Backups />
               </AdminRoute>
             }
           />

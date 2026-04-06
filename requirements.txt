@@ -21,6 +21,7 @@ aiohttp>=3.8.0
 
 # 数据处理（保留，可能用于脚本）
 pandas==2.3.1
+openpyxl>=3.1.0
 validators>=0.20.0
 
 # 注意：已移除 Streamlit 相关依赖

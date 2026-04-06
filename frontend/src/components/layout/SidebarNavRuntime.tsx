@@ -4,6 +4,7 @@ import type { MenuProps } from 'antd'
 import { useLocation, useNavigate } from 'react-router-dom'
 import {
   BarChartOutlined,
+  CloudUploadOutlined,
   DashboardOutlined,
   LineChartOutlined,
   SettingOutlined,
@@ -20,7 +21,7 @@ interface SidebarProps {
 
 const renderMenuIcon = (icon: ReactNode) => <span className="sidebar-icon-shell">{icon}</span>
 
-const SidebarNav = ({ collapsed, onNavigate, showAccountEntry = false }: SidebarProps) => {
+const SidebarNavRuntime = ({ collapsed, onNavigate, showAccountEntry = false }: SidebarProps) => {
   const navigate = useNavigate()
   const location = useLocation()
   const { user } = useAuthStore()
@@ -43,6 +44,11 @@ const SidebarNav = ({ collapsed, onNavigate, showAccountEntry = false }: Sidebar
             key: '/analytics',
             icon: renderMenuIcon(<LineChartOutlined />),
             label: '数据分析',
+          },
+          {
+            key: '/backups',
+            icon: renderMenuIcon(<CloudUploadOutlined />),
+            label: '备份管理',
           },
           {
             key: '/admin',
@@ -83,4 +89,5 @@ const SidebarNav = ({ collapsed, onNavigate, showAccountEntry = false }: Sidebar
   )
 }
 
-export default SidebarNav
+export default SidebarNavRuntime
+

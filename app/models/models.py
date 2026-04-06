@@ -174,6 +174,75 @@ class BackupRecord(Base):
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
 
+class BackupTarget(Base):
+    __tablename__ = "backup_targets"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(255), nullable=False)
+    target_kind = Column(String(32), nullable=False, default="local", index=True)
+    provider = Column(String(64), nullable=False, default="local")
+    is_enabled = Column(Boolean, nullable=False, default=True, index=True)
+    backup_mode = Column(String(32), nullable=False, default="full", index=True)
+    schedule_enabled = Column(Boolean, nullable=False, default=False)
+    schedule_kind = Column(String(32), nullable=False, default="manual")
+    schedule_hour = Column(Integer, nullable=False, default=3)
+    schedule_minute = Column(Integer, nullable=False, default=0)
+    schedule_weekday = Column(Integer, nullable=True)
+    schedule_day = Column(Integer, nullable=True)
+    timezone = Column(String(64), nullable=False, default="Asia/Shanghai")
+    retention_count = Column(Integer, nullable=False, default=10)
+    retention_days = Column(Integer, nullable=False, default=30)
+    local_dir = Column(Text, nullable=False, default="")
+    webdav_base_url = Column(Text, nullable=False, default="")
+    webdav_username = Column(String(255), nullable=False, default="")
+    webdav_password_encrypted = Column(Text, nullable=False, default="")
+    webdav_root_path = Column(Text, nullable=False, default="")
+    webdav_timeout_seconds = Column(Integer, nullable=False, default=60)
+    webdav_verify_ssl = Column(Boolean, nullable=False, default=True)
+    include_database = Column(Boolean, nullable=False, default=True)
+    include_users_json = Column(Boolean, nullable=False, default=True)
+    include_env_file = Column(Boolean, nullable=False, default=False)
+    include_runtime_data = Column(Boolean, nullable=False, default=True)
+    export_range_kind = Column(String(16), nullable=False, default="all")
+    export_range_days = Column(Integer, nullable=True)
+    last_run_at = Column(DateTime, nullable=True)
+    next_run_at = Column(DateTime, nullable=True, index=True)
+    last_status = Column(String(32), nullable=True)
+    last_error_message = Column(Text, nullable=True)
+    extra_json = Column(JSONB, nullable=False, default=dict)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_by = Column(String(128), nullable=True)
+
+
+class BackupRun(Base):
+    __tablename__ = "backup_runs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    target_id = Column(Integer, nullable=True, index=True)
+    target_name = Column(String(255), nullable=False, default="")
+    target_kind = Column(String(32), nullable=False, default="local")
+    provider = Column(String(64), nullable=False, default="local")
+    backup_mode = Column(String(32), nullable=False, default="full")
+    trigger_source = Column(String(32), nullable=False, default="manual")
+    status = Column(String(32), nullable=False, default="pending", index=True)
+    file_name = Column(String(255), nullable=True)
+    file_format = Column(String(32), nullable=True)
+    file_size_bytes = Column(Float, nullable=True)
+    sha256 = Column(String(128), nullable=True)
+    local_path = Column(Text, nullable=True)
+    remote_path = Column(Text, nullable=True)
+    remote_url = Column(Text, nullable=True)
+    item_count = Column(Integer, nullable=True)
+    started_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    finished_at = Column(DateTime, nullable=True)
+    duration_seconds = Column(Float, nullable=True)
+    created_by = Column(String(128), nullable=True)
+    error_message = Column(Text, nullable=True)
+    result_json = Column(JSONB, nullable=False, default=dict)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
 DATABASE_URL = settings.DATABASE_URL
 
 engine = create_engine(
@@ -237,9 +306,12 @@ def ensure_runtime_storage_tables() -> None:
                 SystemSettings.__table__,
                 BackupSettings.__table__,
                 BackupRecord.__table__,
+                BackupTarget.__table__,
+                BackupRun.__table__,
             ],
         )
         _ensure_system_settings_columns()
+        _ensure_backup_management_indexes()
         _runtime_storage_checked = True
 
 
@@ -266,3 +338,24 @@ def _ensure_system_settings_columns() -> None:
             if column_name in columns:
                 continue
             connection.execute(text(sql))
+
+
+def _ensure_backup_management_indexes() -> None:
+    statements = (
+        """
+        CREATE INDEX IF NOT EXISTS ix_backup_targets_enabled_next_run
+        ON backup_targets (is_enabled, next_run_at)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_backup_runs_target_started_at
+        ON backup_runs (target_id, started_at DESC)
+        """,
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_backup_runs_active_target
+        ON backup_runs (target_id)
+        WHERE target_id IS NOT NULL AND status IN ('pending', 'running')
+        """,
+    )
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement))
