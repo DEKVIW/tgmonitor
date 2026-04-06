@@ -7,6 +7,7 @@ import { Button } from 'antd'
 import { MenuFoldOutlined, MenuUnfoldOutlined } from '@ant-design/icons'
 import { useNavigate, useLocation } from 'react-router-dom'
 import UserAccountMenu from './UserAccountMenu'
+import { formatBrandTitle, useSiteBranding } from '@/utils/siteBranding'
 import './Header.css'
 
 interface HeaderProps {
@@ -18,6 +19,7 @@ interface HeaderProps {
 const Header = ({ collapsed, onToggle, toolbar }: HeaderProps) => {
   const navigate = useNavigate()
   const location = useLocation()
+  const siteBranding = useSiteBranding()
 
   const handleTitleClick = () => {
     // 如果当前不在 dashboard，则跳转
@@ -35,7 +37,7 @@ const Header = ({ collapsed, onToggle, toolbar }: HeaderProps) => {
           onClick={onToggle}
         />
         <h1 className="header-title clickable" onClick={handleTitleClick}>
-          📱 TG频道监控
+          {formatBrandTitle(siteBranding)}
         </h1>
       </div>
       {toolbar ? <div className="header-toolbar-slot">{toolbar}</div> : null}

@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.models.config import settings
 from app.api import admin, admin_extras_runtime, auth, messages, statistics
 from app.schemas.admin_models import PublicSystemConfigResponse
+from app.services.system_config_service import get_public_system_config_values
 import logging
 
 # 配置日志
@@ -73,9 +74,7 @@ async def get_public_config():
     
     用于前端判断是否启用游客模式
     """
-    return PublicSystemConfigResponse(
-        public_dashboard_enabled=settings.PUBLIC_DASHBOARD_ENABLED
-    )
+    return PublicSystemConfigResponse(**get_public_system_config_values())
 
 
 if __name__ == "__main__":

@@ -22,9 +22,10 @@ import {
   ClearOutlined,
 } from '@ant-design/icons'
 import { useMessageStore } from '@/store/messageStore'
+import { trackEvent } from '@/utils/analytics'
 import { TIME_RANGES, PAGE_SIZES, NETDISK_TYPES } from '@/utils/constants'
 import { getTagStats } from '@/api/messages'
-import { TagStatsResponse } from '@/types/message'
+import { MessageFilters as MessageFiltersState, TagStatsResponse } from '@/types/message'
 import './MessageFilters.css'
 
 const { Search } = Input
@@ -70,6 +71,17 @@ const MessageFilters = ({
         .join(' '),
     [layoutVariant]
   )
+  const audience = layoutVariant === 'guest-header' ? 'guest' : 'authenticated'
+
+  const buildFilterEventData = (nextFilters: MessageFiltersState) => ({
+    audience,
+    time_range: nextFilters.time_range || '',
+    page_size: nextFilters.page_size || 0,
+    tags_count: nextFilters.selected_tags?.length || 0,
+    netdisk_count: nextFilters.selected_netdisks?.length || 0,
+    has_links_only: nextFilters.has_links_only ? 'true' : 'false',
+    min_content_length: nextFilters.min_content_length || 0,
+  })
 
   // 加载标签选项
   useEffect(() => {
@@ -104,15 +116,31 @@ const MessageFilters = ({
 
     const timer = window.setTimeout(() => {
       setFilters({ search_query: searchValue })
+      const normalizedQuery = searchValue.trim()
+      if (normalizedQuery) {
+        trackEvent('search_submit', {
+          audience,
+          query: normalizedQuery,
+          query_length: normalizedQuery.length,
+        })
+      }
     }, 350)
 
     return () => window.clearTimeout(timer)
-  }, [filters.search_query, searchValue, setFilters])
+  }, [audience, filters.search_query, searchValue, setFilters])
 
   const handleSearch = (value: string) => {
     setSearchValue(value)
     if ((filters.search_query || '') !== value) {
       setFilters({ search_query: value })
+      const normalizedQuery = value.trim()
+      if (normalizedQuery) {
+        trackEvent('search_submit', {
+          audience,
+          query: normalizedQuery,
+          query_length: normalizedQuery.length,
+        })
+      }
     }
   }
 
@@ -162,12 +190,34 @@ const MessageFilters = ({
 
   const applyAdvanced = () => {
     setFilters(draft)
+    trackEvent('filters_apply', buildFilterEventData(draft))
     setDrawerOpen(false)
   }
 
   const resetAdvanced = () => {
     resetFilters()
+    trackEvent('filters_reset', { audience, source: 'drawer' })
     setDrawerOpen(false)
+  }
+
+  const handleToolbarReset = () => {
+    resetFilters()
+    trackEvent('filters_reset', { audience, source: 'toolbar' })
+  }
+
+  const handleReload = () => {
+    triggerReload()
+    trackEvent('feed_refresh', { audience })
+  }
+
+  const handleTimeRangeChange = (value: string) => {
+    setFilters({ time_range: value })
+    trackEvent('filter_change', { audience, control: 'time_range', value })
+  }
+
+  const handlePageSizeChange = (value: number) => {
+    setFilters({ page_size: value })
+    trackEvent('filter_change', { audience, control: 'page_size', value })
   }
 
   return (
@@ -189,7 +239,7 @@ const MessageFilters = ({
           <Select
             className="toolbar-select toolbar-select--time"
             value={filters.time_range}
-            onChange={(value) => setFilters({ time_range: value })}
+            onChange={handleTimeRangeChange}
             style={{ width: 160 }}
             disabled={disabled}
           >
@@ -198,7 +248,7 @@ const MessageFilters = ({
           <Select
             className="toolbar-select toolbar-select--page"
             value={filters.page_size}
-            onChange={(value) => setFilters({ page_size: value })}
+            onChange={handlePageSizeChange}
             style={{ width: 120 }}
             disabled={disabled}
           >
@@ -215,10 +265,15 @@ const MessageFilters = ({
             </Button>
           </Tooltip>
           <Tooltip title="重置筛选">
-            <Button className="toolbar-button" icon={<ClearOutlined />} onClick={resetFilters} disabled={disabled} />
+            <Button
+              className="toolbar-button"
+              icon={<ClearOutlined />}
+              onClick={handleToolbarReset}
+              disabled={disabled}
+            />
           </Tooltip>
           <Tooltip title="刷新数据">
-            <Button className="toolbar-button" icon={<ReloadOutlined />} onClick={triggerReload} disabled={disabled} />
+            <Button className="toolbar-button" icon={<ReloadOutlined />} onClick={handleReload} disabled={disabled} />
           </Tooltip>
           <div className="refresh-inline">
             <span className="refresh-label">自动刷新</span>

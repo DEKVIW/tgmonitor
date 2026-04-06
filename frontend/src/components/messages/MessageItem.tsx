@@ -50,9 +50,10 @@ const formatLinkText = (name: string, label?: string | null) => {
 
 interface MessageItemProps {
   message: MessageResponse
+  audience?: 'guest' | 'authenticated'
 }
 
-const MessageItem = ({ message }: MessageItemProps) => {
+const MessageItem = ({ message, audience = 'authenticated' }: MessageItemProps) => {
   const [expanded, setExpanded] = useState(false)
 
   // 生成网盘标签（用于标题行内联展示）
@@ -82,6 +83,7 @@ const MessageItem = ({ message }: MessageItemProps) => {
       if (Array.isArray(value)) {
         value.forEach((item, idx) => {
           if (typeof item === 'object' && item.url) {
+            const linkText = formatLinkText(name, item.label)
             linkElements.push(
               <a
                 key={`${name}-${idx}`}
@@ -89,8 +91,13 @@ const MessageItem = ({ message }: MessageItemProps) => {
                 target="_blank"
                 rel="noopener noreferrer"
                 className="netdisk-link"
+                data-umami-event="netdisk_click"
+                data-umami-event-provider={name}
+                data-umami-event-link_text={linkText}
+                data-umami-event-message_id={String(message.id)}
+                data-umami-event-audience={audience}
               >
-                {formatLinkText(name, item.label)}
+                {linkText}
               </a>
             )
           }
@@ -103,11 +110,17 @@ const MessageItem = ({ message }: MessageItemProps) => {
             target="_blank"
             rel="noopener noreferrer"
             className="netdisk-link"
+            data-umami-event="netdisk_click"
+            data-umami-event-provider={name}
+            data-umami-event-link_text={name}
+            data-umami-event-message_id={String(message.id)}
+            data-umami-event-audience={audience}
           >
             {name}
           </a>
         )
       } else if (typeof value === 'object' && value.url) {
+        const linkText = formatLinkText(name, value.label)
         linkElements.push(
           <a
             key={name}
@@ -115,8 +128,13 @@ const MessageItem = ({ message }: MessageItemProps) => {
             target="_blank"
             rel="noopener noreferrer"
             className="netdisk-link"
+            data-umami-event="netdisk_click"
+            data-umami-event-provider={name}
+            data-umami-event-link_text={linkText}
+            data-umami-event-message_id={String(message.id)}
+            data-umami-event-audience={audience}
           >
-            {formatLinkText(name, value.label)}
+            {linkText}
           </a>
         )
       }

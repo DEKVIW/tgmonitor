@@ -1,6 +1,4 @@
-"""
-消息相关 API 路由。
-"""
+from __future__ import annotations
 
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
@@ -9,30 +7,26 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_db, get_optional_current_user
-from app.models.config import settings
 from app.schemas.message import MessageListResponse, MessageResponse, TagStatsResponse
 from app.services.message_query_service import (
     get_filtered_messages,
     get_message_by_id,
     get_tag_stats,
 )
+from app.services.system_config_service import is_public_dashboard_enabled
 
 router = APIRouter(prefix="/api/messages", tags=["消息"])
 
-PUBLIC_DASHBOARD_ALLOWED_TIME_RANGES = frozenset({
-    "最近1小时",
-    "最近24小时",
-    "最近7天",
-})
+PUBLIC_DASHBOARD_ALLOWED_TIME_RANGES = frozenset({"最近1小时", "最近24小时", "最近7天"})
 PUBLIC_DASHBOARD_MAX_AGE_DAYS = 7
 
 
 def _is_public_guest(current_user: Optional[Dict[str, Any]]) -> bool:
-    return current_user is None and settings.PUBLIC_DASHBOARD_ENABLED
+    return current_user is None and is_public_dashboard_enabled()
 
 
 def _ensure_public_access_allowed(current_user: Optional[Dict[str, Any]], detail: str) -> None:
-    if not settings.PUBLIC_DASHBOARD_ENABLED and current_user is None:
+    if current_user is None and not is_public_dashboard_enabled():
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=detail,
@@ -54,14 +48,8 @@ def _enforce_public_dashboard_time_range(time_range: str) -> None:
 
 @router.get("", response_model=MessageListResponse, summary="获取消息列表")
 async def get_messages(
-    search_query: Optional[str] = Query(
-        None,
-        description="搜索关键词（支持多关键词，空格分隔）",
-    ),
-    time_range: str = Query(
-        "最近24小时",
-        description="时间范围：最近1小时、最近24小时、最近7天、最近30天、全部",
-    ),
+    search_query: Optional[str] = Query(None, description="搜索关键词（支持多关键词，空格分隔）"),
+    time_range: str = Query("最近24小时", description="时间范围：最近1小时、最近24小时、最近7天、最近30天、全部"),
     selected_tags: Optional[List[str]] = Query(None, description="选中的标签列表"),
     selected_netdisks: Optional[List[str]] = Query(None, description="选中的网盘类型列表"),
     min_content_length: int = Query(0, description="最小内容长度"),
@@ -73,8 +61,7 @@ async def get_messages(
 ) -> MessageListResponse:
     _ensure_public_access_allowed(current_user, "需要登录后才能访问消息列表")
 
-    is_guest = _is_public_guest(current_user)
-    if is_guest:
+    if _is_public_guest(current_user):
         _enforce_public_dashboard_time_range(time_range)
 
     try:

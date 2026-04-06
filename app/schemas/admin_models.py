@@ -17,6 +17,20 @@ def _normalize_text(value: str, *, allow_empty: bool = False, field_name: str = 
     return normalized
 
 
+def _normalize_optional_url(value: str, *, field_name: str) -> str:
+    normalized = _normalize_text(value, allow_empty=True, field_name=field_name)
+    if normalized and not normalized.startswith(("http://", "https://")):
+        raise ValueError(f"{field_name} must start with http:// or https://")
+    return normalized
+
+
+def _normalize_optional_asset_url(value: str, *, field_name: str) -> str:
+    normalized = _normalize_text(value, allow_empty=True, field_name=field_name)
+    if normalized and not normalized.startswith(("http://", "https://", "/")):
+        raise ValueError(f"{field_name} must start with http://, https:// or /")
+    return normalized
+
+
 def _normalize_usernames(values: List[str]) -> List[str]:
     cleaned = []
     for value in values:
@@ -85,7 +99,24 @@ class ChannelCreate(BaseModel):
 
 
 class SystemConfigResponse(BaseModel):
+    site_name: str
+    site_title: str
+    site_description: str
+    site_keywords: str
+    brand_icon: str
+    site_favicon_url: str
     public_dashboard_enabled: bool
+    public_ads_enabled: bool
+    public_feed_top_ad_html_desktop: str
+    public_feed_top_ad_html_mobile: str
+    public_feed_inline_ad_html_desktop: str
+    public_feed_inline_ad_html_mobile: str
+    public_feed_inline_every_n: int
+    umami_enabled: bool
+    umami_script_url: str
+    umami_website_id: str
+    umami_host_url: str
+    umami_share_url: str
     link_check_default_max_concurrent: int
     link_check_max_allowed_concurrent: int
     link_check_max_allowed_links: int
@@ -96,7 +127,24 @@ class SystemConfigResponse(BaseModel):
 
 
 class SystemConfigUpdate(BaseModel):
+    site_name: str = Field(default="TG\u9891\u9053\u76d1\u63a7", max_length=255)
+    site_title: str = Field(default="TG\u9891\u9053\u76d1\u63a7", max_length=255)
+    site_description: str = Field(default="Telegram \u9891\u9053\u7f51\u76d8\u8d44\u6e90\u76d1\u63a7\u4e0e\u68c0\u7d22", max_length=2000)
+    site_keywords: str = Field(default="telegram,\u7f51\u76d8,\u9891\u9053\u76d1\u63a7,\u8d44\u6e90\u641c\u7d22", max_length=2000)
+    brand_icon: str = Field(default="\U0001F4F1", max_length=32)
+    site_favicon_url: str = Field(default="/favicon.svg", max_length=1000)
     public_dashboard_enabled: bool
+    public_ads_enabled: bool
+    public_feed_top_ad_html_desktop: str = Field(default="", max_length=20000)
+    public_feed_top_ad_html_mobile: str = Field(default="", max_length=20000)
+    public_feed_inline_ad_html_desktop: str = Field(default="", max_length=20000)
+    public_feed_inline_ad_html_mobile: str = Field(default="", max_length=20000)
+    public_feed_inline_every_n: int = Field(default=8, ge=2, le=999)
+    umami_enabled: bool = False
+    umami_script_url: str = Field(default="", max_length=1000)
+    umami_website_id: str = Field(default="", max_length=255)
+    umami_host_url: str = Field(default="", max_length=1000)
+    umami_share_url: str = Field(default="", max_length=1000)
     link_check_default_max_concurrent: int = Field(ge=1, le=10)
     link_check_max_allowed_concurrent: int = Field(ge=1, le=10)
     link_check_max_allowed_links: int = Field(ge=100, le=5000)
@@ -105,15 +153,71 @@ class SystemConfigUpdate(BaseModel):
     monitor_db_write_max_retries: int = Field(ge=1, le=10)
     monitor_db_write_retry_delay_seconds: float = Field(ge=0.1, le=30.0)
 
+    @field_validator(
+        "site_description",
+        "site_keywords",
+        "public_feed_top_ad_html_desktop",
+        "public_feed_top_ad_html_mobile",
+        "public_feed_inline_ad_html_desktop",
+        "public_feed_inline_ad_html_mobile",
+    )
+    @classmethod
+    def validate_ad_html_fields(cls, value: str) -> str:
+        return _normalize_text(value, allow_empty=True)
+
+    @field_validator("site_name", "site_title")
+    @classmethod
+    def validate_site_text_fields(cls, value: str, info) -> str:
+        return _normalize_text(value, field_name=info.field_name)
+
+    @field_validator("brand_icon")
+    @classmethod
+    def validate_brand_icon(cls, value: str) -> str:
+        return _normalize_text(value, allow_empty=True, field_name="brand_icon")
+
+    @field_validator("umami_website_id")
+    @classmethod
+    def validate_umami_text_fields(cls, value: str) -> str:
+        return _normalize_text(value, allow_empty=True)
+
+    @field_validator("site_favicon_url")
+    @classmethod
+    def validate_site_favicon_url(cls, value: str) -> str:
+        return _normalize_optional_asset_url(value, field_name="site_favicon_url")
+
+    @field_validator("umami_script_url", "umami_host_url", "umami_share_url")
+    @classmethod
+    def validate_umami_url_fields(cls, value: str, info) -> str:
+        return _normalize_optional_url(value, field_name=info.field_name)
+
     @model_validator(mode="after")
     def validate_link_check_config(self) -> "SystemConfigUpdate":
         if self.link_check_default_max_concurrent > self.link_check_max_allowed_concurrent:
             raise ValueError("link_check_default_max_concurrent cannot exceed link_check_max_allowed_concurrent")
+        if self.umami_enabled:
+            if not self.umami_script_url:
+                raise ValueError("umami_script_url is required when umami_enabled is true")
+            if not self.umami_website_id:
+                raise ValueError("umami_website_id is required when umami_enabled is true")
         return self
-
-
 class PublicSystemConfigResponse(BaseModel):
+    site_name: str
+    site_title: str
+    site_description: str
+    site_keywords: str
+    brand_icon: str
+    site_favicon_url: str
     public_dashboard_enabled: bool
+    public_ads_enabled: bool
+    public_feed_top_ad_html_desktop: str
+    public_feed_top_ad_html_mobile: str
+    public_feed_inline_ad_html_desktop: str
+    public_feed_inline_ad_html_mobile: str
+    public_feed_inline_every_n: int
+    umami_enabled: bool
+    umami_script_url: str
+    umami_website_id: str
+    umami_host_url: str
 
 
 class UserResponse(BaseModel):
@@ -481,3 +585,4 @@ class LinkCheckHistoryBatchDeleteResult(BaseModel):
     deleted_details: int = 0
     deleted_stats: int = 0
     missing_check_times: List[str] = Field(default_factory=list)
+

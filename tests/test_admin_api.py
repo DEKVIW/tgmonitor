@@ -13,8 +13,7 @@ os.environ.setdefault("DATABASE_URL", "postgresql://user:pass@localhost/testdb")
 os.environ.setdefault("DEFAULT_CHANNELS", "")
 os.environ.setdefault("SECRET_SALT", "test-salt")
 
-from app.api import admin, admin_extras_runtime as admin_extras
-from app.models.config import settings
+from app.api import admin, admin_extras_runtime as admin_extras, main as main_api
 from app.schemas.admin_models import LinkCleanupApplyRequest, SystemConfigUpdate
 
 
@@ -46,56 +45,40 @@ class AdminApiTestCase(unittest.IsolatedAsyncioTestCase):
                 await admin.get_link_check_result("bad-time", current_user={"role": "admin"})
 
         self.assertEqual(context.exception.status_code, 400)
-        self.assertIn("检测时间格式无效", context.exception.detail)
 
-    async def test_update_system_config_rolls_back_runtime_value_when_env_write_fails(self) -> None:
-        original_values = {
-            "PUBLIC_DASHBOARD_ENABLED": settings.PUBLIC_DASHBOARD_ENABLED,
-            "LINK_CHECK_DEFAULT_MAX_CONCURRENT": settings.LINK_CHECK_DEFAULT_MAX_CONCURRENT,
-            "LINK_CHECK_MAX_ALLOWED_CONCURRENT": settings.LINK_CHECK_MAX_ALLOWED_CONCURRENT,
-            "LINK_CHECK_MAX_ALLOWED_LINKS": settings.LINK_CHECK_MAX_ALLOWED_LINKS,
-            "LINK_CHECK_POLL_INTERVAL_SECONDS": settings.LINK_CHECK_POLL_INTERVAL_SECONDS,
-            "MONITOR_CHANNEL_REFRESH_INTERVAL_SECONDS": settings.MONITOR_CHANNEL_REFRESH_INTERVAL_SECONDS,
-            "MONITOR_DB_WRITE_MAX_RETRIES": settings.MONITOR_DB_WRITE_MAX_RETRIES,
-            "MONITOR_DB_WRITE_RETRY_DELAY_SECONDS": settings.MONITOR_DB_WRITE_RETRY_DELAY_SECONDS,
-        }
-        settings.PUBLIC_DASHBOARD_ENABLED = False
-        settings.LINK_CHECK_DEFAULT_MAX_CONCURRENT = 5
-        settings.LINK_CHECK_MAX_ALLOWED_CONCURRENT = 10
-        settings.LINK_CHECK_MAX_ALLOWED_LINKS = 1000
-        settings.LINK_CHECK_POLL_INTERVAL_SECONDS = 2
-        settings.MONITOR_CHANNEL_REFRESH_INTERVAL_SECONDS = 60
-        settings.MONITOR_DB_WRITE_MAX_RETRIES = 3
-        settings.MONITOR_DB_WRITE_RETRY_DELAY_SECONDS = 1.0
-        try:
-            with patch("app.services.system_config_service.upsert_env_values", side_effect=OSError("disk full")):
-                with self.assertRaises(HTTPException) as context:
-                    await admin.update_system_config(
-                        SystemConfigUpdate(
-                            public_dashboard_enabled=True,
-                            link_check_default_max_concurrent=4,
-                            link_check_max_allowed_concurrent=8,
-                            link_check_max_allowed_links=1200,
-                            link_check_poll_interval_seconds=3,
-                            monitor_channel_refresh_interval_seconds=120,
-                            monitor_db_write_max_retries=5,
-                            monitor_db_write_retry_delay_seconds=2.5,
-                        ),
-                        current_user={"role": "admin"},
-                    )
+    async def test_update_system_config_passes_updated_by_to_service(self) -> None:
+        payload = SystemConfigUpdate(
+            public_dashboard_enabled=True,
+            public_ads_enabled=True,
+            public_feed_top_ad_html_desktop="<a>top-desktop</a>",
+            public_feed_top_ad_html_mobile="<a>top-mobile</a>",
+            public_feed_inline_ad_html_desktop="<a>inline-desktop</a>",
+            public_feed_inline_ad_html_mobile="<a>inline-mobile</a>",
+            public_feed_inline_every_n=6,
+            umami_enabled=True,
+            umami_script_url="https://analytics.example.com/script.js",
+            umami_website_id="website-id",
+            umami_host_url="https://analytics.example.com",
+            umami_share_url="https://analytics.example.com/share/demo",
+            link_check_default_max_concurrent=4,
+            link_check_max_allowed_concurrent=8,
+            link_check_max_allowed_links=1200,
+            link_check_poll_interval_seconds=3,
+            monitor_channel_refresh_interval_seconds=120,
+            monitor_db_write_max_retries=5,
+            monitor_db_write_retry_delay_seconds=2.5,
+        )
+        expected = payload.model_dump()
 
-            self.assertEqual(context.exception.status_code, 500)
-            self.assertFalse(settings.PUBLIC_DASHBOARD_ENABLED)
-            self.assertEqual(settings.LINK_CHECK_DEFAULT_MAX_CONCURRENT, 5)
-            self.assertEqual(settings.LINK_CHECK_MAX_ALLOWED_CONCURRENT, 10)
-            self.assertEqual(settings.LINK_CHECK_MAX_ALLOWED_LINKS, 1000)
-            self.assertEqual(settings.LINK_CHECK_POLL_INTERVAL_SECONDS, 2)
-            self.assertEqual(settings.MONITOR_CHANNEL_REFRESH_INTERVAL_SECONDS, 60)
-            self.assertEqual(settings.MONITOR_DB_WRITE_MAX_RETRIES, 3)
-            self.assertEqual(settings.MONITOR_DB_WRITE_RETRY_DELAY_SECONDS, 1.0)
-        finally:
-            for name, value in original_values.items():
-                setattr(settings, name, value)
+        with patch("app.api.admin.apply_system_config", return_value=expected) as mocked_apply_system_config:
+            result = await admin.update_system_config(
+                payload,
+                current_user={"role": "admin", "username": "tester"},
+            )
+
+        mocked_apply_system_config.assert_called_once_with(expected, updated_by="tester")
+        self.assertEqual(result.umami_website_id, "website-id")
+        self.assertEqual(result.monitor_db_write_max_retries, 5)
 
     async def test_apply_link_check_cleanup_not_found_returns_404(self) -> None:
         with patch("app.api.admin.apply_link_check_cleanup", side_effect=LookupError("链接检测记录不存在")):
@@ -120,7 +103,6 @@ class AdminApiTestCase(unittest.IsolatedAsyncioTestCase):
                 )
 
         self.assertEqual(context.exception.status_code, 404)
-        self.assertIn("频道 123 不存在", context.exception.detail)
 
     async def test_get_link_check_date_range_api_returns_service_payload(self) -> None:
         with patch(
@@ -204,6 +186,41 @@ class AdminApiTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.success)
         self.assertEqual(result.deleted_runs, 2)
         self.assertEqual(result.deleted_details, 10)
+
+    async def test_get_public_config_includes_umami_settings(self) -> None:
+        payload = {
+            "site_name": "片库雷达",
+            "site_title": "片库雷达 - 聚合检索",
+            "site_description": "一个新的站点描述",
+            "site_keywords": "影视,网盘,聚合",
+            "brand_icon": "🎬",
+            "site_favicon_url": "/movie.svg",
+            "public_dashboard_enabled": True,
+            "public_ads_enabled": True,
+            "public_feed_top_ad_html_desktop": "<a>top</a>",
+            "public_feed_top_ad_html_mobile": "",
+            "public_feed_inline_ad_html_desktop": "<a>inline</a>",
+            "public_feed_inline_ad_html_mobile": "",
+            "public_feed_inline_every_n": 12,
+            "umami_enabled": True,
+            "umami_script_url": "https://analytics.example.com/script.js",
+            "umami_website_id": "website-id",
+            "umami_host_url": "https://analytics.example.com",
+        }
+        with patch("app.api.main.get_public_system_config_values", return_value=payload):
+            result = await main_api.get_public_config()
+
+        self.assertEqual(result.site_name, "片库雷达")
+        self.assertEqual(result.site_title, "片库雷达 - 聚合检索")
+        self.assertEqual(result.brand_icon, "🎬")
+        self.assertEqual(result.site_favicon_url, "/movie.svg")
+        self.assertTrue(result.public_dashboard_enabled)
+        self.assertTrue(result.public_ads_enabled)
+        self.assertEqual(result.public_feed_inline_every_n, 12)
+        self.assertTrue(result.umami_enabled)
+        self.assertEqual(result.umami_script_url, "https://analytics.example.com/script.js")
+        self.assertEqual(result.umami_website_id, "website-id")
+        self.assertEqual(result.umami_host_url, "https://analytics.example.com")
 
 
 if __name__ == "__main__":

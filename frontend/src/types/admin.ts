@@ -31,7 +31,24 @@ export interface ChannelCreate {
 }
 
 export interface SystemConfigResponse {
+  site_name: string
+  site_title: string
+  site_description: string
+  site_keywords: string
+  brand_icon: string
+  site_favicon_url: string
   public_dashboard_enabled: boolean
+  public_ads_enabled: boolean
+  public_feed_top_ad_html_desktop: string
+  public_feed_top_ad_html_mobile: string
+  public_feed_inline_ad_html_desktop: string
+  public_feed_inline_ad_html_mobile: string
+  public_feed_inline_every_n: number
+  umami_enabled: boolean
+  umami_script_url: string
+  umami_website_id: string
+  umami_host_url: string
+  umami_share_url: string
   link_check_default_max_concurrent: number
   link_check_max_allowed_concurrent: number
   link_check_max_allowed_links: number
@@ -42,7 +59,24 @@ export interface SystemConfigResponse {
 }
 
 export interface SystemConfigUpdate {
+  site_name: string
+  site_title: string
+  site_description: string
+  site_keywords: string
+  brand_icon: string
+  site_favicon_url: string
   public_dashboard_enabled: boolean
+  public_ads_enabled: boolean
+  public_feed_top_ad_html_desktop: string
+  public_feed_top_ad_html_mobile: string
+  public_feed_inline_ad_html_desktop: string
+  public_feed_inline_ad_html_mobile: string
+  public_feed_inline_every_n: number
+  umami_enabled: boolean
+  umami_script_url: string
+  umami_website_id: string
+  umami_host_url: string
+  umami_share_url: string
   link_check_default_max_concurrent: number
   link_check_max_allowed_concurrent: number
   link_check_max_allowed_links: number
@@ -53,7 +87,23 @@ export interface SystemConfigUpdate {
 }
 
 export interface PublicSystemConfigResponse {
+  site_name: string
+  site_title: string
+  site_description: string
+  site_keywords: string
+  brand_icon: string
+  site_favicon_url: string
   public_dashboard_enabled: boolean
+  public_ads_enabled: boolean
+  public_feed_top_ad_html_desktop: string
+  public_feed_top_ad_html_mobile: string
+  public_feed_inline_ad_html_desktop: string
+  public_feed_inline_ad_html_mobile: string
+  public_feed_inline_every_n: number
+  umami_enabled: boolean
+  umami_script_url: string
+  umami_website_id: string
+  umami_host_url: string
 }
 
 export interface UserResponse {

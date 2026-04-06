@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import asyncio
 import datetime
@@ -20,6 +20,7 @@ from app.services.channel_registry import (
     get_runtime_channel_parser_profiles,
     get_runtime_channels,
 )
+from app.services.system_config_service import get_monitor_runtime_config
 
 warnings.filterwarnings(
     "ignore",
@@ -30,10 +31,6 @@ logging.basicConfig(level=getattr(logging, settings.LOG_LEVEL, "INFO"))
 logger = logging.getLogger(__name__)
 monitor_metrics = MonitorMetrics(logger)
 
-CHANNEL_REFRESH_INTERVAL_SECONDS = max(
-    10,
-    int(getattr(settings, "MONITOR_CHANNEL_REFRESH_INTERVAL_SECONDS", 60) or 60),
-)
 FAILED_MESSAGES_LOG = Path("data/failed_messages.log")
 ERROR_MESSAGES_LOG = Path("data/error_messages.log")
 
@@ -129,7 +126,12 @@ async def channel_refresh_loop() -> None:
     """定时刷新频道映射。"""
     while True:
         try:
-            await asyncio.sleep(CHANNEL_REFRESH_INTERVAL_SECONDS)
+            monitor_runtime_config = get_monitor_runtime_config()
+            interval_seconds = max(
+                10,
+                int(monitor_runtime_config["monitor_channel_refresh_interval_seconds"] or 60),
+            )
+            await asyncio.sleep(interval_seconds)
             await refresh_channel_mapping()
         except Exception as refresh_error:
             monitor_metrics.record_failure("channel_refresh", error=str(refresh_error))
@@ -273,8 +275,9 @@ async def handler(event: Any) -> None:
                 for netdisk_type in record.get("links", {}).keys()
             }
         )
-        max_retries = max(1, int(getattr(settings, "MONITOR_DB_WRITE_MAX_RETRIES", 3) or 3))
-        retry_delay_seconds = float(getattr(settings, "MONITOR_DB_WRITE_RETRY_DELAY_SECONDS", 1.0) or 1.0)
+        monitor_runtime_config = get_monitor_runtime_config()
+        max_retries = max(1, int(monitor_runtime_config["monitor_db_write_max_retries"] or 3))
+        retry_delay_seconds = float(monitor_runtime_config["monitor_db_write_retry_delay_seconds"] or 1.0)
         for attempt in range(max_retries):
             try:
                 async with async_session() as session:

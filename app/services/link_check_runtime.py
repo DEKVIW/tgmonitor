@@ -17,8 +17,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
-from app.models.config import settings
 from app.models.models import LinkCheckDetails, LinkCheckStats, Message, engine
+from app.services.system_config_service import get_link_check_runtime_config
 
 logger = logging.getLogger(__name__)
 
@@ -128,20 +128,14 @@ def check_safety_limits(url_count: int, max_concurrent: int) -> bool:
 
 
 def get_safety_limit_error(url_count: int, max_concurrent: int) -> Optional[str]:
+    runtime_config = get_link_check_runtime_config()
     max_links_per_task = max(
         100,
-        int(getattr(settings, "LINK_CHECK_MAX_ALLOWED_LINKS", DEFAULT_MAX_LINKS_PER_TASK) or DEFAULT_MAX_LINKS_PER_TASK),
+        int(runtime_config["link_check_max_allowed_links"] or DEFAULT_MAX_LINKS_PER_TASK),
     )
     max_concurrent_per_task = max(
         1,
-        int(
-            getattr(
-                settings,
-                "LINK_CHECK_MAX_ALLOWED_CONCURRENT",
-                DEFAULT_MAX_CONCURRENT_PER_TASK,
-            )
-            or DEFAULT_MAX_CONCURRENT_PER_TASK
-        ),
+        int(runtime_config["link_check_max_allowed_concurrent"] or DEFAULT_MAX_CONCURRENT_PER_TASK),
     )
     violations: List[str] = []
     if url_count > max_links_per_task:

@@ -426,10 +426,13 @@ async def update_system_config(
     
     需要 Bearer Token 认证（管理员权限）
     
-    注意：配置更新会写入 .env 文件，需要重启服务才能完全生效
+    注意：配置更新会写入数据库，前后端会按各自运行路径逐步读取新值
     """
     try:
-        updated_values = apply_system_config(config_data.model_dump())
+        updated_values = apply_system_config(
+            config_data.model_dump(),
+            updated_by=current_user.get("username"),
+        )
         return SystemConfigResponse(**updated_values)
     except Exception as e:
         raise HTTPException(

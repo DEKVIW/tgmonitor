@@ -15,6 +15,61 @@
   font-weight: 600;
 }
 
+.public-ad-slot {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+}
+
+.public-ad-slot-top {
+  margin: 6px 0 14px;
+}
+
+.public-ad-slot-inline {
+  margin: 4px 0 14px;
+}
+
+.public-ad-slot-frame {
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
+  padding: 3px;
+  border: 1px solid rgba(15, 23, 42, 0.04);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.985);
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.045);
+  overflow: hidden;
+}
+
+.public-ad-slot-frame-top {
+  max-width: 100%;
+  padding: 1px;
+  border-radius: 10px;
+}
+
+.public-ad-slot-frame > * {
+  display: inline-flex;
+  justify-content: center;
+  width: fit-content;
+  max-width: 100%;
+}
+
+.public-ad-slot-frame a {
+  display: inline-flex;
+  justify-content: center;
+  width: fit-content;
+  max-width: 100%;
+}
+
+.public-ad-slot-frame img,
+.public-ad-slot-frame iframe {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border: 0;
+  border-radius: 10px;
+}
+
 .message-list-pagination {
   display: flex;
   justify-content: center;
@@ -38,5 +93,26 @@
       margin-top: 8px;
       margin-left: 0;
     }
+  }
+}
+
+@media (max-width: 768px) {
+  .public-ad-slot-top {
+    margin: 6px 0 12px;
+  }
+
+  .public-ad-slot-inline {
+    margin: 2px 0 12px;
+  }
+
+  .public-ad-slot-frame {
+    padding: 2px;
+    border-radius: 10px;
+  }
+
+  .public-ad-slot-frame-top {
+    max-width: 100%;
+    padding: 1px;
+    border-radius: 10px;
   }
 }

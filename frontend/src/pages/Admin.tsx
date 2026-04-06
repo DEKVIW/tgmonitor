@@ -1,7 +1,7 @@
 import { Card, Tabs } from 'antd'
 import CredentialManager from '@/components/admin/CredentialManager'
 import ChannelManager from '@/components/admin/ChannelManagerRefined'
-import SystemConfig from '@/components/admin/SystemConfig'
+import SystemConfig from '@/components/admin/SystemConfigModern'
 import UserManager from '@/components/admin/UserManager'
 import DataMaintenance from '@/components/admin/DataMaintenance'
 import LinkCheckManager from '@/components/admin/LinkCheckManagerRefined'

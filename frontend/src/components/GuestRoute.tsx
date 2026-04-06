@@ -10,6 +10,7 @@ import { Spin } from 'antd'
 import { getPublicConfig } from '@/api/admin'
 import { useAuthStore } from '@/store/authStore'
 import { LOGIN_PATH } from '@/utils/routes'
+import { applySiteBranding } from '@/utils/siteBranding'
 import GuestLayout from './layout/GuestLayout'
 
 interface GuestRouteProps {
@@ -26,6 +27,7 @@ const GuestRoute = ({ children, toolbar }: GuestRouteProps) => {
     const checkConfig = async () => {
       try {
         const config = await getPublicConfig()
+        applySiteBranding(config)
         setPublicDashboardEnabled(config.public_dashboard_enabled)
       } catch (error) {
         console.error('获取系统配置失败:', error)

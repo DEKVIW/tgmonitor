@@ -1,9 +1,8 @@
-/**
- * 游客模式布局组件（无侧边栏）
- */
-
 import { ReactNode } from 'react'
 import { Layout as AntLayout } from 'antd'
+
+import { formatBrandTitle, useSiteBranding } from '@/utils/siteBranding'
+
 import BackToTopButton from './BackToTopButton'
 import './Layout.css'
 import './Header.css'
@@ -17,18 +16,18 @@ interface GuestLayoutProps {
 }
 
 const GuestLayout = ({ children, toolbar }: GuestLayoutProps) => {
+  const siteBranding = useSiteBranding()
+
   return (
     <AntLayout className="app-layout guest-layout">
       <header className="app-header guest-header">
         <div className="guest-brand">
-          <div style={{ fontSize: '18px', fontWeight: 500 }}>TG频道监控</div>
-          <span className="guest-subtitle">公开页面</span>
+          <div style={{ fontSize: '18px', fontWeight: 500 }}>{formatBrandTitle(siteBranding)}</div>
+          <span className="guest-subtitle">{'\u516c\u5f00\u9875\u9762'}</span>
         </div>
         {toolbar ? <div className="guest-header-toolbar">{toolbar}</div> : null}
       </header>
-      <Content className="content-wrapper guest-content-wrapper">
-        {children}
-      </Content>
+      <Content className="content-wrapper guest-content-wrapper">{children}</Content>
       <BackToTopButton />
     </AntLayout>
   )

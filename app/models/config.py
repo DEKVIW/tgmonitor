@@ -27,6 +27,17 @@ class Settings(BaseSettings):
 
     # 新增密钥
     SECRET_SALT: str
+    PUBLIC_ADS_ENABLED: bool = False
+    PUBLIC_FEED_TOP_AD_HTML_DESKTOP: str = ""
+    PUBLIC_FEED_TOP_AD_HTML_MOBILE: str = ""
+    PUBLIC_FEED_INLINE_AD_HTML_DESKTOP: str = ""
+    PUBLIC_FEED_INLINE_AD_HTML_MOBILE: str = ""
+    PUBLIC_FEED_INLINE_EVERY_N: int = 8
+    UMAMI_ENABLED: bool = False
+    UMAMI_SCRIPT_URL: str = ""
+    UMAMI_WEBSITE_ID: str = ""
+    UMAMI_HOST_URL: str = ""
+    UMAMI_SHARE_URL: str = ""
     
     # 前端URL（用于CORS配置）
     FRONTEND_URL: Optional[str] = "http://localhost:3000"

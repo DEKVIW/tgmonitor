@@ -6,6 +6,7 @@ import os
 
 from passlib.context import CryptContext
 from app.services.channel_registry import load_default_channels_from_settings
+from app.services.system_config_service import ensure_runtime_configuration_seeded
 
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -90,6 +91,7 @@ if __name__ == "__main__":
     # 创建所有表（使用JSONB类型）
     print("🏗️ 创建数据库表...")
     create_tables()
+    ensure_runtime_configuration_seeded()
     
     # 验证表结构
     print("🔍 验证表结构...")
