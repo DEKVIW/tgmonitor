@@ -232,14 +232,6 @@ export const getPublicConfig = async (): Promise<PublicSystemConfigResponse> => 
   return response.json() as Promise<PublicSystemConfigResponse>
 }
 
-/**
- * 获取用户列表
- */
-export const getUsers = async (): Promise<UserResponse[]> => {
-  const response = await apiClient.get<UserResponse[]>('/admin/users')
-  return response.data
-}
-
 export const getAccounts = async (params: AccountListQuery = {}): Promise<AccountListResponse> => {
   const search = new URLSearchParams()
   Object.entries(params).forEach(([key, value]) => {
@@ -318,98 +310,6 @@ export const exportAccounts = async (): Promise<UserResponse[]> => {
 
 export const getAccountAvailableRoles = async (): Promise<Record<string, string>> => {
   const response = await apiClient.get<Record<string, string>>('/admin/accounts/roles/available')
-  return response.data
-}
-
-/**
- * 获取用户信息
- */
-export const getUser = async (username: string): Promise<UserResponse> => {
-  const response = await apiClient.get<UserResponse>(`/admin/users/${username}`)
-  return response.data
-}
-
-/**
- * 添加用户
- */
-export const createUser = async (data: UserCreate): Promise<UserResponse> => {
-  const response = await apiClient.post<UserResponse>('/admin/users', data)
-  return response.data
-}
-
-/**
- * 更新用户信息
- */
-export const updateUser = async (username: string, data: UserUpdate): Promise<UserResponse> => {
-  const response = await apiClient.put<UserResponse>(`/admin/users/${username}`, data)
-  return response.data
-}
-
-/**
- * 修改用户密码
- */
-export const changeUserPassword = async (username: string, data: PasswordChange): Promise<void> => {
-  await apiClient.put(`/admin/users/${username}/password`, data)
-}
-
-/**
- * 修改用户名
- */
-export const changeUsername = async (username: string, data: UsernameChange): Promise<void> => {
-  await apiClient.put(`/admin/users/${username}/username`, data)
-}
-
-/**
- * 修改用户角色
- */
-export const changeUserRole = async (username: string, data: RoleChange): Promise<void> => {
-  await apiClient.put(`/admin/users/${username}/role`, data)
-}
-
-/**
- * 删除用户
- */
-export const deleteUser = async (username: string): Promise<void> => {
-  await apiClient.delete(`/admin/users/${username}`)
-}
-
-/**
- * 批量随机创建用户
- */
-export const bulkRandomCreateUsers = async (data: BulkRandomCreateRequest): Promise<BulkCreateResponse> => {
-  const response = await apiClient.post<BulkCreateResponse>('/admin/users/bulk/random-create', data)
-  return response.data
-}
-
-/**
- * 批量删除用户
- */
-export const bulkDeleteUsers = async (data: BulkUsernamesRequest): Promise<BulkSimpleResponse> => {
-  const response = await apiClient.post<BulkSimpleResponse>('/admin/users/bulk/delete', data)
-  return response.data
-}
-
-/**
- * 批量重置密码
- */
-export const bulkResetPasswords = async (data: BulkUsernamesRequest): Promise<BulkResetResponse> => {
-  const response = await apiClient.post<BulkResetResponse>('/admin/users/bulk/reset-password', data)
-  return response.data
-}
-
-/**
- * 导出用户列表（JSON）
- */
-export const exportUsers = async (): Promise<UserResponse[]> => {
-  const response = await apiClient.get<UserResponse[]>('/admin/users/export-all')
-  return response.data
-}
-
-/**
- * 获取可用角色列表
- */
-export const getAvailableRoles = async (): Promise<Record<string, string>> => {
-  const response = await apiClient.get<Record<string, string>>('/admin/users/roles/available')
   return response.data
 }
 

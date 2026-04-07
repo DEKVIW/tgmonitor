@@ -39,6 +39,7 @@ import {
   updateAccount,
   updateAccountRuntimeSettings,
 } from '@/api/admin'
+import HintTooltip from '@/components/common/HintTooltip'
 import type {
   AccountListQuery,
   AccountListResponse,
@@ -90,6 +91,17 @@ const statusColorMap: Record<string, string> = {
   disabled: 'default',
   locked: 'warning',
   expired: 'error',
+}
+
+const validityModeLabels: Record<AccountRuntimeSettings['default_account_validity_mode'], string> = {
+  permanent: '永久',
+  duration: '按时长',
+}
+
+const validityUnitLabels: Record<AccountRuntimeSettings['default_account_validity_unit'], string> = {
+  day: '天',
+  month: '月',
+  year: '年',
 }
 
 const formatDateTime = (value?: string | null) => (value ? dayjs(value).format('YYYY-MM-DD HH:mm') : '—')
@@ -208,10 +220,29 @@ const UserManagerRuntime = () => {
     if (!settingsDraft) {
       return ''
     }
-    return settingsDraft.concurrent_session_limit_enabled
-      ? `默认同在线 ${settingsDraft.max_concurrent_sessions_per_account} 台，在线窗口 ${settingsDraft.session_online_window_minutes} 分钟`
+    const sessionSummary = settingsDraft.concurrent_session_limit_enabled
+      ? `默认同在线 ${settingsDraft.max_concurrent_sessions_per_account} 台，在线窗口 ${settingsDraft.session_online_window_minutes} 分钟，会话最长 ${settingsDraft.session_absolute_ttl_days} 天`
       : '当前未限制同时在线设备数'
+    const validitySummary = settingsDraft.default_account_validity_mode === 'permanent'
+      ? '新账号默认永久有效'
+      : `新账号默认 ${settingsDraft.default_account_validity_value}${validityUnitLabels[settingsDraft.default_account_validity_unit]}有效`
+    const adminSummary = settingsDraft.admin_exempt_from_session_limit ? '管理员豁免' : '管理员计入'
+    return `${sessionSummary}，${adminSummary}，${validitySummary}`
   }, [settingsDraft])
+
+  const updateSettingsDraft = <K extends keyof AccountRuntimeSettings>(
+    key: K,
+    value: AccountRuntimeSettings[K]
+  ) => {
+    if (!settingsDraft) {
+      return
+    }
+    setSettingsDraft({
+      ...settingsDraft,
+      [key]: value,
+    })
+    setSettingsDirty(true)
+  }
 
   const saveSettings = async () => {
     if (!settingsDraft) {
@@ -471,15 +502,226 @@ const UserManagerRuntime = () => {
           </Button>
         </div>
         {settingsDraft ? (
-          <div className="account-manager-settings-grid">
-            <label><span>限制同时在线</span><Switch checked={settingsDraft.concurrent_session_limit_enabled} onChange={(checked) => { setSettingsDraft({ ...settingsDraft, concurrent_session_limit_enabled: checked }); setSettingsDirty(true) }} /></label>
-            <label><span>默认上限</span><InputNumber min={1} max={32} value={settingsDraft.max_concurrent_sessions_per_account} onChange={(value) => { setSettingsDraft({ ...settingsDraft, max_concurrent_sessions_per_account: Number(value || 1) }); setSettingsDirty(true) }} /></label>
-            <label><span>在线窗口</span><InputNumber min={1} max={1440} value={settingsDraft.session_online_window_minutes} onChange={(value) => { setSettingsDraft({ ...settingsDraft, session_online_window_minutes: Number(value || 1) }); setSettingsDirty(true) }} addonAfter="分钟" /></label>
-            <label><span>绝对有效期</span><InputNumber min={1} max={3650} value={settingsDraft.session_absolute_ttl_days} onChange={(value) => { setSettingsDraft({ ...settingsDraft, session_absolute_ttl_days: Number(value || 1) }); setSettingsDirty(true) }} addonAfter="天" /></label>
-            <label><span>管理员豁免</span><Switch checked={settingsDraft.admin_exempt_from_session_limit} onChange={(checked) => { setSettingsDraft({ ...settingsDraft, admin_exempt_from_session_limit: checked }); setSettingsDirty(true) }} /></label>
-            <label><span>默认有效期</span><Select value={settingsDraft.default_account_validity_mode} onChange={(value) => { setSettingsDraft({ ...settingsDraft, default_account_validity_mode: value }); setSettingsDirty(true) }} options={[{ value: 'permanent', label: '永久' }, { value: 'duration', label: '时长' }]} /></label>
-            <label><span>默认单位</span><Select value={settingsDraft.default_account_validity_unit} onChange={(value) => { setSettingsDraft({ ...settingsDraft, default_account_validity_unit: value }); setSettingsDirty(true) }} options={[{ value: 'day', label: '天' }, { value: 'month', label: '月' }, { value: 'year', label: '年' }]} /></label>
-            <label><span>默认时长</span><InputNumber min={1} max={3650} value={settingsDraft.default_account_validity_value} onChange={(value) => { setSettingsDraft({ ...settingsDraft, default_account_validity_value: Number(value || 1) }); setSettingsDirty(true) }} /></label>
+          <div className="account-manager-policy-layout">
+            <section className="account-manager-policy-section">
+              <div className="account-manager-policy-head">
+                <div className="account-manager-policy-heading">
+                  <div className="account-manager-policy-title-row">
+                    <Text strong>同时在线策略</Text>
+                    <HintTooltip content="控制普通账号最多保留多少个活跃会话，以及系统按多久的活跃窗口判断设备仍在线。" />
+                  </div>
+                  <div className="account-manager-policy-copy">
+                    {settingsDraft.concurrent_session_limit_enabled
+                      ? `当前按照最近 ${settingsDraft.session_online_window_minutes} 分钟活跃记录统计在线设备，超出上限后会回收更早的旧会话。`
+                      : '当前不限制普通账号的同时在线设备数，关闭后旧会话不会因为设备超限而被挤掉。'}
+                  </div>
+                </div>
+
+                <div className="account-manager-policy-switch">
+                  <span
+                    className={`account-manager-policy-switch-state ${
+                      settingsDraft.concurrent_session_limit_enabled ? 'is-active' : 'is-inactive'
+                    }`}
+                  >
+                    {settingsDraft.concurrent_session_limit_enabled ? '已开启' : '已关闭'}
+                  </span>
+                  <Switch
+                    size="small"
+                    checked={settingsDraft.concurrent_session_limit_enabled}
+                    onChange={(checked) => updateSettingsDraft('concurrent_session_limit_enabled', checked)}
+                  />
+                </div>
+              </div>
+
+              <div className="account-manager-policy-chip-row">
+                <span className="account-manager-policy-chip">
+                  最多 {settingsDraft.max_concurrent_sessions_per_account} 台
+                </span>
+                <span className="account-manager-policy-chip">
+                  活跃窗口 {settingsDraft.session_online_window_minutes} 分钟
+                </span>
+                <span className="account-manager-policy-chip">
+                  会话最长 {settingsDraft.session_absolute_ttl_days} 天
+                </span>
+                <span
+                  className={`account-manager-policy-chip ${
+                    settingsDraft.admin_exempt_from_session_limit ? 'is-accent' : 'is-muted'
+                  }`}
+                >
+                  {settingsDraft.admin_exempt_from_session_limit ? '管理员豁免' : '管理员计入'}
+                </span>
+              </div>
+
+              {settingsDraft.concurrent_session_limit_enabled ? (
+                <div className="account-manager-policy-fields">
+                  <div className="account-manager-policy-field">
+                    <div className="account-manager-policy-field-label">
+                      <span>设备上限</span>
+                      <HintTooltip content="每个普通账号允许同时保留的活跃会话数量，超过后会自动淘汰更早的旧会话。" />
+                    </div>
+                    <div className="account-manager-policy-control">
+                      <InputNumber
+                        min={1}
+                        max={32}
+                        value={settingsDraft.max_concurrent_sessions_per_account}
+                        onChange={(value) =>
+                          updateSettingsDraft('max_concurrent_sessions_per_account', Number(value || 1))
+                        }
+                        style={{ width: 104 }}
+                      />
+                      <span className="account-manager-policy-unit">台</span>
+                    </div>
+                  </div>
+
+                  <div className="account-manager-policy-field">
+                    <div className="account-manager-policy-field-label">
+                      <span>在线窗口</span>
+                      <HintTooltip content="系统按最近多久的活跃记录判断设备仍在线。窗口越短，用户切设备时越容易腾出旧会话。" />
+                    </div>
+                    <div className="account-manager-policy-control">
+                      <InputNumber
+                        min={1}
+                        max={1440}
+                        value={settingsDraft.session_online_window_minutes}
+                        onChange={(value) => updateSettingsDraft('session_online_window_minutes', Number(value || 1))}
+                        style={{ width: 104 }}
+                      />
+                      <span className="account-manager-policy-unit">分钟</span>
+                    </div>
+                  </div>
+
+                  <div className="account-manager-policy-field">
+                    <div className="account-manager-policy-field-label">
+                      <span>绝对有效期</span>
+                      <HintTooltip content="单个登录会话最长可保留多久。即使一直活跃，超过这个时长后也要重新登录。" />
+                    </div>
+                    <div className="account-manager-policy-control">
+                      <InputNumber
+                        min={1}
+                        max={3650}
+                        value={settingsDraft.session_absolute_ttl_days}
+                        onChange={(value) => updateSettingsDraft('session_absolute_ttl_days', Number(value || 1))}
+                        style={{ width: 104 }}
+                      />
+                      <span className="account-manager-policy-unit">天</span>
+                    </div>
+                  </div>
+
+                  <div className="account-manager-policy-field account-manager-policy-field--switch">
+                    <div className="account-manager-policy-field-label">
+                      <span>管理员豁免</span>
+                      <HintTooltip content="开启后管理员账号不受同时在线上限影响；关闭后管理员也会计入限制。" />
+                    </div>
+                    <div className="account-manager-policy-inline-switch">
+                      <Switch
+                        size="small"
+                        checked={settingsDraft.admin_exempt_from_session_limit}
+                        onChange={(checked) => updateSettingsDraft('admin_exempt_from_session_limit', checked)}
+                      />
+                      <span>{settingsDraft.admin_exempt_from_session_limit ? '不受上限影响' : '和普通账号一致'}</span>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="account-manager-policy-note">
+                  关闭后，系统不会因为设备数超限而回收旧会话；如果后续重新开启，将按当前上限和活跃窗口重新计算。
+                </div>
+              )}
+            </section>
+
+            <section className="account-manager-policy-section">
+              <div className="account-manager-policy-head">
+                <div className="account-manager-policy-heading">
+                  <div className="account-manager-policy-title-row">
+                    <Text strong>新账号默认有效期</Text>
+                    <HintTooltip content="这里控制后台新建账号和批量创建账号时默认带上的有效期策略，单个账号后续仍可单独覆盖。" />
+                  </div>
+                  <div className="account-manager-policy-copy">
+                    {settingsDraft.default_account_validity_mode === 'permanent'
+                      ? '当前默认创建长期账号，适合后续人工单独设置到期时间。'
+                      : `当前默认按 ${settingsDraft.default_account_validity_value}${validityUnitLabels[settingsDraft.default_account_validity_unit]} 创建新账号，适合批量发放。`}
+                  </div>
+                </div>
+              </div>
+
+              <div className="account-manager-policy-chip-row">
+                <span className="account-manager-policy-chip">
+                  {validityModeLabels[settingsDraft.default_account_validity_mode]}
+                </span>
+                {settingsDraft.default_account_validity_mode === 'duration' ? (
+                  <span className="account-manager-policy-chip is-accent">
+                    默认 {settingsDraft.default_account_validity_value}
+                    {validityUnitLabels[settingsDraft.default_account_validity_unit]}
+                  </span>
+                ) : (
+                  <span className="account-manager-policy-chip is-muted">创建后不自动过期</span>
+                )}
+              </div>
+
+              <div className="account-manager-policy-fields account-manager-policy-fields--compact">
+                <div className="account-manager-policy-field">
+                  <div className="account-manager-policy-field-label">
+                    <span>默认模式</span>
+                    <HintTooltip content="永久表示新账号默认没有到期时间；按时长表示创建时自动算出过期时间。" />
+                  </div>
+                  <Select
+                    value={settingsDraft.default_account_validity_mode}
+                    onChange={(value) => updateSettingsDraft('default_account_validity_mode', value)}
+                    options={[
+                      { value: 'permanent', label: '永久' },
+                      { value: 'duration', label: '按时长' },
+                    ]}
+                    style={{ width: 148 }}
+                  />
+                </div>
+
+                {settingsDraft.default_account_validity_mode === 'duration' ? (
+                  <>
+                    <div className="account-manager-policy-field">
+                      <div className="account-manager-policy-field-label">
+                        <span>默认单位</span>
+                        <HintTooltip content="决定默认有效期使用天、月还是年作为单位。" />
+                      </div>
+                      <Select
+                        value={settingsDraft.default_account_validity_unit}
+                        onChange={(value) => updateSettingsDraft('default_account_validity_unit', value)}
+                        options={[
+                          { value: 'day', label: '天' },
+                          { value: 'month', label: '月' },
+                          { value: 'year', label: '年' },
+                        ]}
+                        style={{ width: 112 }}
+                      />
+                    </div>
+
+                    <div className="account-manager-policy-field">
+                      <div className="account-manager-policy-field-label">
+                        <span>默认时长</span>
+                        <HintTooltip content="创建账号时默认写入的有效期数值，例如 30 天、1 月、2 年。" />
+                      </div>
+                      <div className="account-manager-policy-control">
+                        <InputNumber
+                          min={1}
+                          max={3650}
+                          value={settingsDraft.default_account_validity_value}
+                          onChange={(value) => updateSettingsDraft('default_account_validity_value', Number(value || 1))}
+                          style={{ width: 104 }}
+                        />
+                        <span className="account-manager-policy-unit">
+                          {validityUnitLabels[settingsDraft.default_account_validity_unit]}
+                        </span>
+                      </div>
+                    </div>
+                  </>
+                ) : null}
+              </div>
+
+              {settingsDraft.default_account_validity_mode === 'permanent' ? (
+                <div className="account-manager-policy-note account-manager-policy-note--inline">
+                  如需临时账号，可在新增账号或批量创建时单独指定有效期，不会受这里的永久默认值限制。
+                </div>
+              ) : null}
+            </section>
           </div>
         ) : null}
       </Card>

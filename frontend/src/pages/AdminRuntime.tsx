@@ -4,7 +4,7 @@ import CredentialManager from '@/components/admin/CredentialManager'
 import ChannelManager from '@/components/admin/ChannelManagerEnhanced'
 import SecurityConfig from '@/components/admin/SecurityConfig'
 import SystemConfig from '@/components/admin/SystemConfigModern'
-import UserManager from '@/components/admin/UserManagerRuntime'
+import UserManagerRuntime from '@/components/admin/UserManagerRuntime'
 import DataMaintenance from '@/components/admin/DataMaintenance'
 import LinkCheckManager from '@/components/admin/LinkCheckManagerEnhanced'
 import './Admin.css'
@@ -32,7 +32,7 @@ const AdminRuntime = () => {
     {
       key: 'users',
       label: '用户管理',
-      children: <UserManager />,
+      children: <UserManagerRuntime />,
     },
     {
       key: 'credentials',

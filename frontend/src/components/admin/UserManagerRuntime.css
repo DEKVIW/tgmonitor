@@ -22,21 +22,179 @@
   margin-top: 6px;
   color: rgba(15, 23, 42, 0.62);
   font-size: 13px;
+  line-height: 1.65;
+  max-width: 900px;
 }
 
-.account-manager-settings-grid {
+.account-manager-policy-layout {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 14px 18px;
+  grid-template-columns: minmax(0, 1.45fr) minmax(280px, 1fr);
+  gap: 16px;
   margin-top: 18px;
 }
 
-.account-manager-settings-grid label {
+.account-manager-policy-section {
+  padding: 20px 22px;
+  border-radius: 22px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background:
+    radial-gradient(circle at top right, rgba(11, 107, 203, 0.08), transparent 38%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(248, 250, 252, 0.96));
+}
+
+.account-manager-policy-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.account-manager-policy-heading {
+  flex: 1 1 320px;
+  min-width: 0;
+}
+
+.account-manager-policy-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.account-manager-policy-copy {
+  margin-top: 8px;
+  color: rgba(15, 23, 42, 0.62);
+  font-size: 13px;
+  line-height: 1.7;
+  max-width: 58ch;
+}
+
+.account-manager-policy-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(255, 255, 255, 0.86);
+  box-shadow: 0 10px 22px rgba(15, 23, 42, 0.04);
+}
+
+.account-manager-policy-switch-state {
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.account-manager-policy-switch-state.is-active {
+  color: #0b6bcb;
+}
+
+.account-manager-policy-switch-state.is-inactive {
+  color: rgba(15, 23, 42, 0.52);
+}
+
+.account-manager-policy-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.account-manager-policy-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.05);
+  color: rgba(15, 23, 42, 0.72);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.account-manager-policy-chip.is-accent {
+  background: rgba(11, 107, 203, 0.1);
+  color: var(--primary-strong, #0b6bcb);
+}
+
+.account-manager-policy-chip.is-muted {
+  background: rgba(148, 163, 184, 0.16);
+  color: rgba(15, 23, 42, 0.56);
+}
+
+.account-manager-policy-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.account-manager-policy-field {
   display: flex;
   flex-direction: column;
+  gap: 10px;
+  min-width: 156px;
+  padding: 14px;
+  border-radius: 18px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.75);
+}
+
+.account-manager-policy-fields--compact .account-manager-policy-field {
+  min-width: 148px;
+}
+
+.account-manager-policy-field--switch {
+  min-width: 220px;
+}
+
+.account-manager-policy-field-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: rgba(15, 23, 42, 0.68);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.account-manager-policy-control {
+  display: inline-flex;
+  align-items: center;
   gap: 8px;
+}
+
+.account-manager-policy-unit {
+  color: rgba(15, 23, 42, 0.52);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.account-manager-policy-inline-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 32px;
   color: rgba(15, 23, 42, 0.72);
   font-size: 13px;
+}
+
+.account-manager-policy-note {
+  margin-top: 16px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px dashed rgba(148, 163, 184, 0.35);
+  background: rgba(248, 250, 252, 0.9);
+  color: rgba(15, 23, 42, 0.62);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.account-manager-policy-note--inline {
+  margin-top: 14px;
 }
 
 .account-manager-form-grid {
@@ -56,6 +214,12 @@
   word-break: break-all;
 }
 
+@media (max-width: 1120px) {
+  .account-manager-policy-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (max-width: 768px) {
   .account-manager-page {
     gap: 16px;
@@ -64,5 +228,25 @@
   .account-manager-settings-card,
   .account-manager-table-card {
     border-radius: 18px;
+  }
+
+  .account-manager-policy-section {
+    padding: 16px;
+    border-radius: 18px;
+  }
+
+  .account-manager-policy-switch {
+    padding: 6px 10px;
+  }
+
+  .account-manager-policy-field,
+  .account-manager-policy-fields--compact .account-manager-policy-field,
+  .account-manager-policy-field--switch {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .account-manager-policy-control {
+    flex-wrap: wrap;
   }
 }
