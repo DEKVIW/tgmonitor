@@ -20,8 +20,6 @@ const AnalyticsBootstrap = () => {
       } catch {
         if (!cancelled) {
           configureAnalytics(null)
-          applySiteBranding(null)
-          applySiteFooterConfig(null)
         }
       }
     }

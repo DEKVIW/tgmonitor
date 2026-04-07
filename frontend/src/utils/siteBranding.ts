@@ -12,6 +12,8 @@ export interface SiteBrandingState {
   site_favicon_url: string
 }
 
+const SITE_BRANDING_STORAGE_KEY = 'tg-site-branding-cache'
+
 const DEFAULT_SITE_BRANDING: SiteBrandingState = {
   site_name: 'TG\u9891\u9053\u76d1\u63a7',
   site_title: 'TG\u9891\u9053\u76d1\u63a7',
@@ -21,7 +23,37 @@ const DEFAULT_SITE_BRANDING: SiteBrandingState = {
   site_favicon_url: '/favicon.svg',
 }
 
-let siteBrandingSnapshot: SiteBrandingState = DEFAULT_SITE_BRANDING
+const isBrowser = typeof window !== 'undefined'
+
+const readSiteBrandingCache = (): SiteBrandingState | null => {
+  if (!isBrowser) {
+    return null
+  }
+
+  try {
+    const rawValue = window.localStorage.getItem(SITE_BRANDING_STORAGE_KEY)
+    if (!rawValue) {
+      return null
+    }
+    return extractSiteBranding(JSON.parse(rawValue))
+  } catch {
+    return null
+  }
+}
+
+const persistSiteBrandingCache = (branding: SiteBrandingState) => {
+  if (!isBrowser) {
+    return
+  }
+
+  try {
+    window.localStorage.setItem(SITE_BRANDING_STORAGE_KEY, JSON.stringify(branding))
+  } catch {
+    // ignore storage errors
+  }
+}
+
+let siteBrandingSnapshot: SiteBrandingState = readSiteBrandingCache() || DEFAULT_SITE_BRANDING
 
 const SITE_BRANDING_EVENT = 'tg-site-branding-updated'
 
@@ -56,8 +88,11 @@ export const extractSiteBranding = (payload?: SiteBrandingPayload): SiteBranding
 
 export const getSiteBrandingSnapshot = () => siteBrandingSnapshot
 
+export const hasCachedSiteBranding = () => Boolean(readSiteBrandingCache())
+
 export const applySiteBranding = (payload?: SiteBrandingPayload): SiteBrandingState => {
   siteBrandingSnapshot = extractSiteBranding(payload)
+  persistSiteBrandingCache(siteBrandingSnapshot)
 
   if (typeof document !== 'undefined') {
     document.title = siteBrandingSnapshot.site_title

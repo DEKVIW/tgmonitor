@@ -59,11 +59,55 @@
 }
 
 .system-config-modern-overview-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
   padding: 18px;
   border-radius: 22px;
   border: 1px solid rgba(216, 227, 238, 0.9);
   background: rgba(255, 255, 255, 0.92);
   box-shadow: var(--shadow-soft);
+  transition:
+    transform 0.18s ease,
+    box-shadow 0.18s ease,
+    border-color 0.18s ease;
+}
+
+.system-config-modern-overview-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(11, 107, 203, 0.2);
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.1);
+}
+
+.system-config-modern-overview-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.system-config-modern-overview-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.system-config-modern-overview-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  flex: 0 0 auto;
+}
+
+.system-config-modern-overview-dot.is-live {
+  background: #22c55e;
+  box-shadow: 0 0 0 5px rgba(34, 197, 94, 0.12);
+  animation: system-config-modern-pulse 2.8s ease-in-out infinite;
+}
+
+.system-config-modern-overview-dot.is-idle {
+  background: #94a3b8;
+  box-shadow: 0 0 0 5px rgba(148, 163, 184, 0.12);
 }
 
 .system-config-modern-overview-icon {
@@ -76,26 +120,77 @@
   background: rgba(11, 107, 203, 0.1);
   color: var(--primary-strong);
   font-size: 18px;
+  transition:
+    transform 0.18s ease,
+    box-shadow 0.18s ease,
+    background-color 0.18s ease;
+}
+
+.system-config-modern-overview-card:hover .system-config-modern-overview-icon {
+  transform: translateY(-2px);
+  background: rgba(11, 107, 203, 0.14);
+  box-shadow: 0 12px 24px rgba(11, 107, 203, 0.12);
 }
 
 .system-config-modern-overview-title {
-  margin-top: 12px;
   color: var(--text-secondary);
   font-size: 13px;
+  font-weight: 600;
 }
 
-.system-config-modern-overview-value {
-  margin-top: 8px;
+.system-config-modern-overview-status {
   font-size: 18px;
   font-weight: 700;
   color: var(--text-primary);
-  line-height: 1.45;
+  line-height: 1.35;
 }
 
-.system-config-modern-overview-meta {
-  margin-top: 8px;
-  color: var(--text-tertiary);
-  font-size: 13px;
+.system-config-modern-overview-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.system-config-modern-overview-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.system-config-modern-overview-chip.is-accent {
+  background: rgba(11, 107, 203, 0.1);
+  color: var(--primary-strong);
+}
+
+.system-config-modern-overview-chip.is-success {
+  background: rgba(34, 197, 94, 0.12);
+  color: #15803d;
+}
+
+.system-config-modern-overview-chip.is-warning {
+  background: rgba(245, 158, 11, 0.14);
+  color: #b45309;
+}
+
+.system-config-modern-overview-chip.is-neutral {
+  background: rgba(148, 163, 184, 0.14);
+  color: #475569;
+}
+
+@keyframes system-config-modern-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 5px rgba(34, 197, 94, 0.12);
+  }
+
+  50% {
+    box-shadow: 0 0 0 9px rgba(34, 197, 94, 0.08);
+  }
 }
 
 .system-config-modern-quick-nav {
@@ -249,9 +344,10 @@
 
 .system-config-modern-ad-card-head {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 18px;
+  min-height: 52px;
 }
 
 .system-config-modern-ad-card-head-copy {
@@ -259,15 +355,41 @@
   min-width: 0;
 }
 
-.system-config-modern-ad-inline-setting {
-  flex: 0 0 220px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+.system-config-modern-ad-card-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 30px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  background: rgba(11, 107, 203, 0.1);
+  color: var(--primary-strong);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
 }
 
-.system-config-modern-ad-inline-setting .ant-input-number {
-  width: 100%;
+.system-config-modern-ad-inline-setting {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex: 0 0 auto;
+  min-height: 36px;
+}
+
+.system-config-modern-ad-inline-copy {
+  color: var(--text-secondary);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.system-config-modern-ad-inline-input {
+  width: 108px;
+}
+
+.system-config-modern-ad-inline-input.ant-input-number {
+  width: 108px;
 }
 
 .system-config-modern-footer-builder {
@@ -443,7 +565,8 @@
   }
 
   .system-config-modern-ad-inline-setting {
-    flex-basis: auto;
+    justify-content: flex-start;
+    flex-wrap: wrap;
   }
 
   .system-config-modern-footer-preview-panel {

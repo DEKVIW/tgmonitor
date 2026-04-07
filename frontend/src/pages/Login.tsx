@@ -5,7 +5,7 @@ import { LockOutlined, UserOutlined } from '@ant-design/icons'
 
 import { login } from '@/api/auth'
 import { useAuthStore } from '@/store/authStore'
-import { formatBrandTitle, useSiteBranding } from '@/utils/siteBranding'
+import { formatBrandTitle, hasCachedSiteBranding, useSiteBranding } from '@/utils/siteBranding'
 
 import './Login.css'
 
@@ -14,6 +14,7 @@ const Login = () => {
   const { setToken, setUser } = useAuthStore()
   const siteBranding = useSiteBranding()
   const [loading, setLoading] = useState(false)
+  const hasBrandingSnapshot = hasCachedSiteBranding() || siteBranding.site_name !== 'TG频道监控'
 
   const onFinish = async (values: { username: string; password: string }) => {
     setLoading(true)
@@ -33,7 +34,17 @@ const Login = () => {
   return (
     <div className="login-shell">
       <div className="login-container">
-        <Card className="login-card" title={formatBrandTitle(siteBranding)} variant="borderless">
+        <Card
+          className="login-card"
+          title={
+            hasBrandingSnapshot ? (
+              formatBrandTitle(siteBranding)
+            ) : (
+              <span className="login-card-title-placeholder" aria-hidden="true" />
+            )
+          }
+          variant="borderless"
+        >
           <Form name="login" onFinish={onFinish} autoComplete="off" size="large">
             <Form.Item
               name="username"

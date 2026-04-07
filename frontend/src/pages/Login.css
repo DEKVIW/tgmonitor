@@ -40,6 +40,27 @@
   color: var(--text-strong);
 }
 
+.login-card-title-placeholder {
+  display: block;
+  width: min(220px, 70%);
+  height: 32px;
+  margin: 0 auto;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(221, 230, 239, 0.55), rgba(240, 245, 250, 0.95), rgba(221, 230, 239, 0.55));
+  background-size: 220% 100%;
+  animation: login-title-shimmer 1.4s linear infinite;
+}
+
+@keyframes login-title-shimmer {
+  from {
+    background-position: 200% 0;
+  }
+
+  to {
+    background-position: -20% 0;
+  }
+}
+
 .login-card .ant-form-item {
   margin-bottom: 20px;
 }

@@ -40,6 +40,7 @@ const Layout = ({ children }: LayoutProps) => {
   const [isMobile, setIsMobile] = useState(getIsMobileViewport)
   const showDashboardToolbar =
     location.pathname === '/dashboard' || location.pathname.startsWith('/dashboard/')
+  const showAuthenticatedFooter = showDashboardToolbar
 
   useEffect(() => {
     const handleResize = () => {
@@ -105,7 +106,7 @@ const Layout = ({ children }: LayoutProps) => {
           >
             {children}
           </Content>
-          <SiteFooter />
+          {showAuthenticatedFooter ? <SiteFooter /> : null}
         </AntLayout>
       </AntLayout>
       <BackToTopButton />

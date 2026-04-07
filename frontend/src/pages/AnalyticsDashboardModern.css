@@ -272,3 +272,244 @@
     padding: 16px;
   }
 }
+
+.analytics-modern-hero-header {
+  align-items: flex-start;
+  gap: 20px;
+}
+
+.analytics-modern-hero-copy {
+  min-width: 0;
+}
+
+.analytics-modern-hero-subtitle {
+  margin: 10px 0 0;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.analytics-modern-status-row,
+.analytics-modern-chip-row,
+.analytics-modern-access-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.analytics-modern-content-stack,
+.analytics-modern-overview-stack,
+.analytics-modern-dashboard-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.analytics-modern-top-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.65fr) minmax(300px, 0.95fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.analytics-modern-fact-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px;
+}
+
+.analytics-modern-fact-card,
+.analytics-modern-health-card,
+.analytics-modern-dashboard-link-box {
+  border-radius: 20px;
+  border: 1px solid rgba(15, 23, 42, 0.07);
+  background: linear-gradient(180deg, rgba(248, 250, 252, 0.92), rgba(255, 255, 255, 0.96));
+}
+
+.analytics-modern-fact-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px;
+  min-height: 168px;
+}
+
+.analytics-modern-fact-card.is-emphasis {
+  border-color: rgba(245, 158, 11, 0.28);
+  background: linear-gradient(180deg, rgba(255, 251, 235, 0.96), rgba(255, 255, 255, 0.98));
+}
+
+.analytics-modern-fact-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.analytics-modern-fact-label-row,
+.analytics-modern-health-title-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.analytics-modern-fact-label {
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.analytics-modern-fact-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 14px;
+  background: rgba(11, 107, 203, 0.1);
+  color: var(--primary-strong);
+  font-size: 18px;
+  flex: 0 0 auto;
+}
+
+.analytics-modern-fact-value {
+  font-size: clamp(24px, 2.4vw, 30px);
+  font-weight: 700;
+  line-height: 1.15;
+  color: var(--text-primary);
+  word-break: break-word;
+}
+
+.analytics-modern-fact-value--mono {
+  font-family: Consolas, 'SFMono-Regular', Menlo, Monaco, 'Liberation Mono', monospace;
+  font-size: clamp(18px, 2vw, 22px);
+}
+
+.analytics-modern-fact-foot {
+  margin-top: auto;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.analytics-modern-fact-meta {
+  color: var(--text-tertiary);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.analytics-modern-inline-alert {
+  border-radius: 18px;
+}
+
+.analytics-modern-health-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px;
+}
+
+.analytics-modern-health-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 18px;
+}
+
+.analytics-modern-health-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.analytics-modern-health-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  margin-top: 4px;
+  box-shadow: 0 0 0 4px rgba(148, 163, 184, 0.12);
+  flex: 0 0 auto;
+}
+
+.analytics-modern-health-dot.is-ready {
+  background: #16a34a;
+  box-shadow: 0 0 0 4px rgba(22, 163, 74, 0.14);
+}
+
+.analytics-modern-health-dot.is-pending {
+  background: #94a3b8;
+}
+
+.analytics-modern-health-title {
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.analytics-modern-health-detail {
+  margin: 0;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.analytics-modern-dashboard-link-box {
+  padding: 14px 16px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  word-break: break-all;
+}
+
+.analytics-modern-dashboard-actions {
+  display: flex;
+}
+
+.analytics-modern-access-note {
+  color: var(--text-tertiary);
+  line-height: 1.6;
+}
+
+.analytics-modern-embed-card .ant-card-head-wrapper {
+  align-items: flex-start;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.analytics-modern-embed-extra {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 1180px) {
+  .analytics-modern-top-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 992px) {
+  .analytics-modern-hero-header,
+  .analytics-modern-health-top {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
+@media (max-width: 768px) {
+  .analytics-modern-fact-grid,
+  .analytics-modern-health-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .analytics-modern-embed-extra {
+    justify-content: flex-start;
+  }
+
+  .analytics-modern-fact-card,
+  .analytics-modern-health-card,
+  .analytics-modern-dashboard-link-box,
+  .analytics-modern-inline-alert {
+    border-radius: 18px;
+  }
+}

@@ -82,6 +82,22 @@ const createSectionTitle = (title: string, hint: string, extra?: ReactNode) => (
   </div>
 )
 
+type OverviewChipTone = 'accent' | 'success' | 'neutral' | 'warning'
+
+type OverviewChip = {
+  label: string
+  tone: OverviewChipTone
+}
+
+type OverviewItem = {
+  key: string
+  icon: ReactNode
+  title: string
+  status: string
+  live: boolean
+  chips: OverviewChip[]
+}
+
 const SystemConfigModern = () => {
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -216,48 +232,73 @@ const SystemConfigModern = () => {
     updateDraft('footer_builder_sections', nextSections)
   }
 
-  const overviewItems = [
+  const overviewItems: OverviewItem[] = [
     {
       key: 'branding',
       icon: <GlobalOutlined />,
       title: '站点品牌',
-      value: `${draft.brand_icon || '•'} ${draft.site_name}`,
-      meta: draft.site_favicon_url ? 'Favicon 已配置' : 'Favicon 待配置',
+      status: draft.site_name.trim() || '未命名',
+      live: Boolean(draft.site_name.trim()),
+      chips: [
+        { label: draft.site_favicon_url ? 'favicon' : '无 favicon', tone: draft.site_favicon_url ? 'success' : 'neutral' },
+        { label: draft.brand_icon.trim() ? '标题图标' : '无图标', tone: draft.brand_icon.trim() ? 'accent' : 'neutral' },
+      ],
     },
     {
       key: 'public',
       icon: <SafetyCertificateOutlined />,
       title: '游客访问',
-      value: draft.public_dashboard_enabled ? '已开放' : '已关闭',
-      meta: draft.public_ads_enabled ? '广告位已启用' : '广告位未启用',
+      status: draft.public_dashboard_enabled ? '已开放' : '已关闭',
+      live: draft.public_dashboard_enabled,
+      chips: [
+        { label: draft.public_dashboard_enabled ? '游客访问' : '仅登录', tone: draft.public_dashboard_enabled ? 'accent' : 'neutral' },
+        { label: draft.public_ads_enabled ? '广告开启' : '广告关闭', tone: draft.public_ads_enabled ? 'success' : 'neutral' },
+      ],
     },
     {
       key: 'footer',
       icon: <MailOutlined />,
       title: '页脚布局',
-      value: draft.footer_builder_enabled ? `${draft.footer_builder_sections.length} 栏` : '未启用',
-      meta: draft.footer_builder_bottom_html.trim() ? '底栏已配置' : '仅栏目区',
+      status: draft.footer_builder_enabled ? `${draft.footer_builder_sections.length} 栏` : '已关闭',
+      live: draft.footer_builder_enabled,
+      chips: [
+        { label: draft.footer_builder_enabled ? 'HTML 布局' : '未启用', tone: draft.footer_builder_enabled ? 'accent' : 'neutral' },
+        { label: draft.footer_builder_bottom_html.trim() ? '底栏' : '仅栏目', tone: draft.footer_builder_bottom_html.trim() ? 'success' : 'neutral' },
+      ],
     },
     {
       key: 'analytics',
       icon: <NotificationOutlined />,
       title: '流量分析',
-      value: draft.umami_enabled ? 'Umami 已启用' : '未启用',
-      meta: draft.umami_share_url ? '看板链接已配置' : '看板链接未配置',
+      status: draft.umami_enabled ? 'Umami' : '未启用',
+      live: draft.umami_enabled,
+      chips: [
+        { label: draft.umami_script_url.trim() ? '脚本' : '脚本待填', tone: draft.umami_script_url.trim() ? 'success' : 'neutral' },
+        { label: draft.umami_website_id.trim() ? 'ID' : 'ID 待填', tone: draft.umami_website_id.trim() ? 'success' : 'warning' },
+        { label: draft.umami_share_url.trim() ? '看板' : '无看板', tone: draft.umami_share_url.trim() ? 'accent' : 'neutral' },
+      ],
     },
     {
       key: 'link-check',
       icon: <ThunderboltOutlined />,
       title: '链接检测',
-      value: `${draft.link_check_default_max_concurrent}/${draft.link_check_max_allowed_concurrent}`,
-      meta: `最大 ${draft.link_check_max_allowed_links} 链接`,
+      status: `${draft.link_check_default_max_concurrent}/${draft.link_check_max_allowed_concurrent}`,
+      live: !hasConcurrencyError,
+      chips: [
+        { label: `${draft.link_check_max_allowed_links} 链接`, tone: 'accent' },
+        { label: `${draft.link_check_poll_interval_seconds}s 轮询`, tone: 'neutral' },
+      ],
     },
     {
       key: 'monitor',
       icon: <DeploymentUnitOutlined />,
       title: '监控运行',
-      value: `${draft.monitor_channel_refresh_interval_seconds} 秒`,
-      meta: `${draft.monitor_db_write_max_retries} 次重试 / ${draft.monitor_db_write_retry_delay_seconds} 秒`,
+      status: `${draft.monitor_channel_refresh_interval_seconds} 秒`,
+      live: true,
+      chips: [
+        { label: `${draft.monitor_db_write_max_retries} 次重试`, tone: 'accent' },
+        { label: `${draft.monitor_db_write_retry_delay_seconds}s 间隔`, tone: 'neutral' },
+      ],
     },
   ]
 
@@ -298,11 +339,28 @@ const SystemConfigModern = () => {
 
       <section className="system-config-modern-overview-grid">
         {overviewItems.map((item) => (
-          <article className="system-config-modern-overview-card" key={item.key}>
-            <div className="system-config-modern-overview-icon">{item.icon}</div>
-            <div className="system-config-modern-overview-title">{item.title}</div>
-            <div className="system-config-modern-overview-value">{item.value}</div>
-            <div className="system-config-modern-overview-meta">{item.meta}</div>
+          <article
+            className={`system-config-modern-overview-card ${item.live ? 'is-live' : 'is-idle'}`}
+            key={item.key}
+          >
+            <div className="system-config-modern-overview-top">
+              <div className="system-config-modern-overview-title-row">
+                <span className={`system-config-modern-overview-dot ${item.live ? 'is-live' : 'is-idle'}`} />
+                <div className="system-config-modern-overview-title">{item.title}</div>
+              </div>
+              <div className="system-config-modern-overview-icon">{item.icon}</div>
+            </div>
+            <div className="system-config-modern-overview-status">{item.status}</div>
+            <div className="system-config-modern-overview-chip-row">
+              {item.chips.map((chip) => (
+                <span
+                  className={`system-config-modern-overview-chip is-${chip.tone}`}
+                  key={`${item.key}-${chip.label}`}
+                >
+                  {chip.label}
+                </span>
+              ))}
+            </div>
           </article>
         ))}
       </section>
@@ -638,7 +696,12 @@ const SystemConfigModern = () => {
               </div>
 
               <div className="system-config-modern-ad-card">
-                {createLabel('顶部广告', '显示在消息总数提示下方，适合横幅类素材。')}
+                <div className="system-config-modern-ad-card-head">
+                  <div className="system-config-modern-ad-card-head-copy">
+                    {createLabel('顶部广告', '显示在消息总数提示下方，适合横幅类素材。')}
+                  </div>
+                  <span className="system-config-modern-ad-card-badge">横幅位</span>
+                </div>
                 <div className="system-config-modern-ad-code-group">
                   {createLabel('桌面端 HTML', '桌面端优先使用的广告 HTML 代码，留空时会回退到移动端代码。')}
                   <TextArea
@@ -671,8 +734,9 @@ const SystemConfigModern = () => {
                     {createLabel('信息流插播广告', '插入在消息卡片之间，适合中矩形或紧凑型素材。')}
                   </div>
                   <div className="system-config-modern-ad-inline-setting">
-                    {createLabel('插播间隔', '每展示 N 条消息后插入 1 条广告。数值越小，广告出现越频繁。')}
+                    <span className="system-config-modern-ad-inline-copy">每</span>
                     <InputNumber
+                      className="system-config-modern-ad-inline-input"
                       min={2}
                       max={999}
                       value={draft.public_feed_inline_every_n}
@@ -682,9 +746,10 @@ const SystemConfigModern = () => {
                         }
                         updateDraft('public_feed_inline_every_n', value)
                       }}
-                      addonAfter="条"
                       disabled={saving}
                     />
+                    <span className="system-config-modern-ad-inline-copy">条插入 1 条</span>
+                    <HintTooltip content="每展示 N 条消息后插入 1 条广告。数值越小，广告出现越频繁。" />
                   </div>
                 </div>
                 <div className="system-config-modern-ad-code-group">
