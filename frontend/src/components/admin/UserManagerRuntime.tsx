@@ -104,7 +104,19 @@ const validityUnitLabels: Record<AccountRuntimeSettings['default_account_validit
   year: '年',
 }
 
-const formatDateTime = (value?: string | null) => (value ? dayjs(value).format('YYYY-MM-DD HH:mm') : '—')
+const parseBackendUtcDateTime = (value?: string | null) => {
+  const normalized = value?.trim()
+  if (!normalized) {
+    return null
+  }
+  const hasTimezoneSuffix = /([zZ]|[+-]\d{2}:\d{2})$/.test(normalized)
+  return dayjs(hasTimezoneSuffix ? normalized : `${normalized}Z`)
+}
+
+const formatDateTime = (value?: string | null) => {
+  const parsed = parseBackendUtcDateTime(value)
+  return parsed ? parsed.format('YYYY-MM-DD HH:mm') : '—'
+}
 
 const formatExpiry = (record: UserResponse) => {
   if (!record.expires_at) {
@@ -113,7 +125,8 @@ const formatExpiry = (record: UserResponse) => {
   if ((record.remaining_days ?? 0) <= 0) {
     return '已过期'
   }
-  return dayjs(record.expires_at).format('YYYY-MM-DD HH:mm')
+  const parsed = parseBackendUtcDateTime(record.expires_at)
+  return parsed ? parsed.format('YYYY-MM-DD HH:mm') : '—'
 }
 
 const formatRemaining = (record: UserResponse) => {
@@ -211,7 +224,7 @@ const UserManagerRuntime = () => {
       validity_mode: user?.expires_at ? 'fixed_at' : defaults?.default_account_validity_mode || 'permanent',
       validity_unit: defaults?.default_account_validity_unit || 'month',
       validity_value: defaults?.default_account_validity_value || 1,
-      fixed_expires_at: user?.expires_at ? dayjs(user.expires_at) : null,
+      fixed_expires_at: parseBackendUtcDateTime(user?.expires_at),
       session_limit_override: user?.session_limit_override ?? null,
     })
   }
