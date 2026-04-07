@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.models.config import settings
 from app.api import admin, admin_backups, admin_extras_runtime, auth, messages, statistics
+from app.api import admin_security, security
 from app.schemas.admin_models import PublicSystemConfigResponse
 from app.services.backup_scheduler import start_backup_scheduler, stop_backup_scheduler
 from app.services.system_config_service import get_public_system_config_values
@@ -48,8 +49,10 @@ app.include_router(auth.router)
 app.include_router(messages.router)
 app.include_router(statistics.router)
 app.include_router(admin.router)
+app.include_router(admin_security.router)
 app.include_router(admin_backups.router)
 app.include_router(admin_extras_runtime.router)
+app.include_router(security.router)
 
 
 @app.on_event("startup")

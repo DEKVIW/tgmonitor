@@ -4,6 +4,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import {
+  Alert,
   Input,
   Button,
   Space,
@@ -12,6 +13,7 @@ import {
   Switch,
   InputNumber,
   Divider,
+  Modal,
   Tag,
   Tooltip,
 } from 'antd'
@@ -22,10 +24,20 @@ import {
   ClearOutlined,
 } from '@ant-design/icons'
 import { useMessageStore } from '@/store/messageStore'
+import { useAuthStore } from '@/store/authStore'
+import TurnstileWidget from '@/components/security/TurnstileWidget'
+import { verifySearchTurnstile } from '@/api/security'
 import { trackEvent } from '@/utils/analytics'
 import { TIME_RANGES, PAGE_SIZES, NETDISK_TYPES } from '@/utils/constants'
 import { getTagStats } from '@/api/messages'
 import { MessageFilters as MessageFiltersState, TagStatsResponse } from '@/types/message'
+import {
+  clearSearchChallengeClearance,
+  isSearchChallengeRequiredForAudience,
+  readSearchChallengeClearance,
+  usePublicSecurityConfig,
+  writeSearchChallengeClearance,
+} from '@/utils/securityConfig'
 import './MessageFilters.css'
 
 const { Search } = Input
@@ -44,6 +56,8 @@ const MessageFilters = ({
   allowedTimeRanges,
   fallbackTimeRange,
 }: MessageFiltersProps) => {
+  const { user } = useAuthStore()
+  const securityConfig = usePublicSecurityConfig()
   const {
     filters,
     setFilters,
@@ -54,8 +68,14 @@ const MessageFilters = ({
   } = useMessageStore()
   const [tagOptions, setTagOptions] = useState<TagStatsResponse[]>([])
   const [drawerOpen, setDrawerOpen] = useState(false)
+  const [challengeOpen, setChallengeOpen] = useState(false)
+  const [challengeError, setChallengeError] = useState('')
+  const [challengeBusy, setChallengeBusy] = useState(false)
+  const [challengeResetKey, setChallengeResetKey] = useState(0)
+  const [pendingSearchValue, setPendingSearchValue] = useState<string | null>(null)
   const [searchValue, setSearchValue] = useState(filters.search_query || '')
   const [draft, setDraft] = useState(filters)
+  const [searchChallengeVersion, setSearchChallengeVersion] = useState(0)
   const allowedTimeRangeSet = useMemo(
     () => (allowedTimeRanges ? new Set(allowedTimeRanges) : null),
     [allowedTimeRanges]
@@ -72,6 +92,13 @@ const MessageFilters = ({
     [layoutVariant]
   )
   const audience = layoutVariant === 'guest-header' ? 'guest' : 'authenticated'
+  const searchChallengeRequired = isSearchChallengeRequiredForAudience(securityConfig, user)
+  const searchChallengeClearance = useMemo(
+    () => readSearchChallengeClearance(user),
+    [searchChallengeVersion, user?.username]
+  )
+
+  const hasSearchChallengeClearance = Boolean(searchChallengeClearance)
 
   const buildFilterEventData = (nextFilters: MessageFiltersState) => ({
     audience,
@@ -82,6 +109,36 @@ const MessageFilters = ({
     has_links_only: nextFilters.has_links_only ? 'true' : 'false',
     min_content_length: nextFilters.min_content_length || 0,
   })
+
+  const applySearch = (value: string) => {
+    setFilters({ search_query: value })
+    const normalizedQuery = value.trim()
+    if (normalizedQuery) {
+      trackEvent('search_submit', {
+        audience,
+        query: normalizedQuery,
+        query_length: normalizedQuery.length,
+      })
+    }
+  }
+
+  const ensureSearchChallenge = (value: string) => {
+    const normalizedQuery = value.trim()
+    if (!normalizedQuery) {
+      return false
+    }
+    if (!searchChallengeRequired) {
+      return false
+    }
+    if (hasSearchChallengeClearance) {
+      return false
+    }
+
+    setPendingSearchValue(value)
+    setChallengeError('')
+    setChallengeOpen(true)
+    return true
+  }
 
   // 加载标签选项
   useEffect(() => {
@@ -115,33 +172,34 @@ const MessageFilters = ({
     }
 
     const timer = window.setTimeout(() => {
-      setFilters({ search_query: searchValue })
-      const normalizedQuery = searchValue.trim()
-      if (normalizedQuery) {
-        trackEvent('search_submit', {
-          audience,
-          query: normalizedQuery,
-          query_length: normalizedQuery.length,
-        })
+      if (searchValue.trim() && searchChallengeRequired && !hasSearchChallengeClearance) {
+        return
       }
+
+      applySearch(searchValue)
     }, 350)
 
     return () => window.clearTimeout(timer)
-  }, [audience, filters.search_query, searchValue, setFilters])
+  }, [
+    audience,
+    filters.search_query,
+    hasSearchChallengeClearance,
+    searchChallengeRequired,
+    searchValue,
+    setFilters,
+  ])
 
   const handleSearch = (value: string) => {
     setSearchValue(value)
-    if ((filters.search_query || '') !== value) {
-      setFilters({ search_query: value })
-      const normalizedQuery = value.trim()
-      if (normalizedQuery) {
-        trackEvent('search_submit', {
-          audience,
-          query: normalizedQuery,
-          query_length: normalizedQuery.length,
-        })
-      }
+    if ((filters.search_query || '') === value) {
+      return
     }
+
+    if (ensureSearchChallenge(value)) {
+      return
+    }
+
+    applySearch(value)
   }
 
   const timeRangeOptions = useMemo(
@@ -220,6 +278,39 @@ const MessageFilters = ({
     trackEvent('filter_change', { audience, control: 'page_size', value })
   }
 
+  const handleSearchChallengeClose = () => {
+    setChallengeOpen(false)
+    setChallengeError('')
+    setPendingSearchValue(null)
+  }
+
+  const handleSearchChallengeVerify = async (token: string) => {
+    setChallengeBusy(true)
+    setChallengeError('')
+
+    try {
+      const response = await verifySearchTurnstile({
+        action: 'search',
+        turnstile_token: token,
+      })
+      writeSearchChallengeClearance(user, response)
+      setSearchChallengeVersion((current) => current + 1)
+      setChallengeOpen(false)
+      const nextSearchValue = pendingSearchValue ?? searchValue
+      if (nextSearchValue.trim()) {
+        applySearch(nextSearchValue)
+      }
+      setPendingSearchValue(null)
+    } catch (error: any) {
+      clearSearchChallengeClearance(user)
+      setSearchChallengeVersion((current) => current + 1)
+      setChallengeResetKey((current) => current + 1)
+      setChallengeError(error.response?.data?.detail || '人机验证失败，请稍后重试')
+    } finally {
+      setChallengeBusy(false)
+    }
+  }
+
   return (
     <div className={toolbarClassName}>
       <div className="filters-left">
@@ -292,6 +383,34 @@ const MessageFilters = ({
           </div>
         </Space>
       </div>
+
+      <Modal
+        title="搜索验证"
+        open={challengeOpen}
+        onCancel={handleSearchChallengeClose}
+        footer={null}
+        destroyOnClose
+        width={420}
+      >
+        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+          <Alert
+            type="info"
+            showIcon
+            message="搜索前需要先完成人机验证"
+            description="验证通过后，当前身份会在一段时间内保持搜索权限。"
+          />
+          {challengeError ? <Alert type="error" showIcon message={challengeError} /> : null}
+          <TurnstileWidget
+            key={challengeResetKey}
+            siteKey={securityConfig.turnstile_site_key}
+            action="search"
+            onVerify={handleSearchChallengeVerify}
+            onExpire={() => undefined}
+            onError={(messageText) => setChallengeError(messageText)}
+          />
+          {challengeBusy ? <Tag color="processing">正在校验中</Tag> : null}
+        </Space>
+      </Modal>
 
       <Drawer
         title="高级筛选"

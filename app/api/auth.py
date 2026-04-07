@@ -2,19 +2,26 @@
 认证相关 API 路由
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.security import HTTPBearer
-from app.schemas.auth import LoginRequest, LoginResponse, UserInfo, ChangePasswordRequest
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from app.schemas.auth import LoginResponse, UserInfo, ChangePasswordRequest
+from pydantic import BaseModel
 from app.services.auth_service import authenticate_user, create_access_token, verify_password, get_user_by_username, load_users
 from app.services.user_service import change_password
+from app.services.security_service import ensure_login_challenge_passed
 from app.api.dependencies import get_current_user
-from typing import Dict, Any
+from typing import Dict, Any, Optional
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+    turnstile_token: Optional[str] = None
 
 router = APIRouter(prefix="/api/auth", tags=["认证"])
 
 
 @router.post("/login", response_model=LoginResponse, summary="用户登录")
-async def login(login_data: LoginRequest) -> LoginResponse:
+async def login(login_data: LoginRequest, request: Request) -> LoginResponse:
     """
     用户登录接口
     
@@ -22,6 +29,17 @@ async def login(login_data: LoginRequest) -> LoginResponse:
     - 返回 JWT token 和用户信息
     - 兼容现有的 users.json 和 bcrypt 密码哈希
     """
+    try:
+        ensure_login_challenge_passed(
+            login_data.turnstile_token,
+            remote_ip=request.client.host if request.client else None,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
     user = authenticate_user(login_data.username, login_data.password)
     
     if not user:

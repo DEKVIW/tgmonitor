@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Card, Tabs } from 'antd'
 import CredentialManager from '@/components/admin/CredentialManager'
 import ChannelManager from '@/components/admin/ChannelManagerEnhanced'
+import SecurityConfig from '@/components/admin/SecurityConfig'
 import SystemConfig from '@/components/admin/SystemConfigModern'
 import UserManager from '@/components/admin/UserManager'
 import DataMaintenance from '@/components/admin/DataMaintenance'
@@ -22,6 +23,11 @@ const AdminRuntime = () => {
       key: 'system',
       label: '系统配置',
       children: <SystemConfig />,
+    },
+    {
+      key: 'security',
+      label: '安全防护',
+      children: <SecurityConfig />,
     },
     {
       key: 'users',

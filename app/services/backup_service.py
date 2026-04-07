@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import base64
 import calendar
-import hashlib
 import http.client
 import json
 import logging
@@ -19,13 +17,13 @@ from typing import Any
 from urllib.parse import quote, urlsplit, urlunsplit
 from zoneinfo import ZoneInfo
 
-from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.config import settings
 from app.models.models import BackupRun, BackupTarget, Message, engine, ensure_runtime_storage_tables
+from app.services.secret_codec import decrypt_secret, encrypt_secret
 
 
 logger = logging.getLogger(__name__)
@@ -83,30 +81,12 @@ def _project_relative_or_absolute(path_value: str) -> Path:
     return (PROJECT_ROOT / raw_path).resolve()
 
 
-def _build_fernet() -> Fernet:
-    digest = hashlib.sha256(settings.SECRET_SALT.encode("utf-8")).digest()
-    key = base64.urlsafe_b64encode(digest)
-    return Fernet(key)
-
-
 def _encrypt_secret(value: str) -> str:
-    normalized = (value or "").strip()
-    if not normalized:
-        return ""
-    token = _build_fernet().encrypt(normalized.encode("utf-8")).decode("utf-8")
-    return f"v1:{token}"
+    return encrypt_secret(value)
 
 
 def _decrypt_secret(value: str) -> str:
-    normalized = (value or "").strip()
-    if not normalized:
-        return ""
-    if not normalized.startswith("v1:"):
-        return normalized
-    try:
-        return _build_fernet().decrypt(normalized[3:].encode("utf-8")).decode("utf-8")
-    except InvalidToken as exc:
-        raise ValueError("Unable to decrypt WebDAV password; please verify SECRET_SALT") from exc
+    return decrypt_secret(value, error_message="Unable to decrypt WebDAV password; please verify SECRET_SALT")
 
 
 def _quote_webdav_path(path_value: str) -> str:

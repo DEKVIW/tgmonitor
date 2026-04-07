@@ -1,9 +1,11 @@
 import { useEffect } from 'react'
 import { getPublicConfig } from '@/api/admin'
+import { getPublicSecurityConfig } from '@/api/security'
 import type { SystemConfigResponse } from '@/types/admin'
 import { configureAnalytics } from '@/utils/analytics'
 import { applySiteBranding } from '@/utils/siteBranding'
 import { applySiteFooterConfig } from '@/utils/siteFooter'
+import { applyPublicSecurityConfig } from '@/utils/securityConfig'
 
 const AnalyticsBootstrap = () => {
   useEffect(() => {
@@ -24,6 +26,19 @@ const AnalyticsBootstrap = () => {
       }
     }
 
+    const loadPublicSecurityConfig = async () => {
+      try {
+        const config = await getPublicSecurityConfig()
+        if (!cancelled) {
+          applyPublicSecurityConfig(config)
+        }
+      } catch {
+        if (!cancelled) {
+          applyPublicSecurityConfig(null)
+        }
+      }
+    }
+
     const handleConfigUpdated = (event: Event) => {
       const detail = (event as CustomEvent<SystemConfigResponse>).detail
       configureAnalytics(detail)
@@ -32,6 +47,7 @@ const AnalyticsBootstrap = () => {
     }
 
     void loadPublicConfig()
+    void loadPublicSecurityConfig()
     window.addEventListener('tg-system-config-updated', handleConfigUpdated)
 
     return () => {

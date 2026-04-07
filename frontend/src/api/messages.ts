@@ -5,6 +5,8 @@
 import apiClient from '@/utils/api'
 import { MessageListResponse, MessageResponse, TagStatsResponse } from '@/types/message'
 import { MessageFilters } from '@/types/message'
+import { useAuthStore } from '@/store/authStore'
+import { readSearchChallengeClearance } from '@/utils/securityConfig'
 
 /**
  * 获取消息列表
@@ -25,7 +27,10 @@ export const getMessages = async (filters: MessageFilters): Promise<MessageListR
   params.append('page', (filters.page || 1).toString())
   params.append('page_size', (filters.page_size || 100).toString())
 
-  const response = await apiClient.get<MessageListResponse>(`/messages?${params.toString()}`)
+  const clearance = readSearchChallengeClearance(useAuthStore.getState().user)
+  const response = await apiClient.get<MessageListResponse>(`/messages?${params.toString()}`, {
+    headers: clearance ? { 'X-TG-Search-Challenge': clearance.clearance_token } : undefined,
+  })
   return response.data
 }
 

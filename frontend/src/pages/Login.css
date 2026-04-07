@@ -65,6 +65,10 @@
   margin-bottom: 20px;
 }
 
+.login-turnstile-slot {
+  margin-bottom: 20px;
+}
+
 .login-card .ant-input-affix-wrapper,
 .login-card .ant-input-password {
   border-radius: 8px;

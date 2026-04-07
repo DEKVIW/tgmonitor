@@ -1,0 +1,19 @@
+.turnstile-widget-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.turnstile-widget-container {
+  min-height: 70px;
+}
+
+.turnstile-widget-status {
+  color: rgba(27, 39, 60, 0.72);
+  font-size: 13px;
+}
+
+.turnstile-widget-error {
+  color: #c53d35;
+  font-size: 13px;
+}

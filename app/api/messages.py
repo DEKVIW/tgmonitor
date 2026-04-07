@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_db, get_optional_current_user
@@ -13,6 +13,7 @@ from app.services.message_query_service import (
     get_message_by_id,
     get_tag_stats,
 )
+from app.services.security_service import SEARCH_CLEARANCE_HEADER, ensure_search_challenge_clearance
 from app.services.system_config_service import is_public_dashboard_enabled
 
 router = APIRouter(prefix="/api/messages", tags=["消息"])
@@ -48,6 +49,7 @@ def _enforce_public_dashboard_time_range(time_range: str) -> None:
 
 @router.get("", response_model=MessageListResponse, summary="获取消息列表")
 async def get_messages(
+    request: Request,
     search_query: Optional[str] = Query(None, description="搜索关键词（支持多关键词，空格分隔）"),
     time_range: str = Query("最近24小时", description="时间范围：最近1小时、最近24小时、最近7天、最近30天、全部"),
     selected_tags: Optional[List[str]] = Query(None, description="选中的标签列表"),
@@ -63,6 +65,18 @@ async def get_messages(
 
     if _is_public_guest(current_user):
         _enforce_public_dashboard_time_range(time_range)
+
+    try:
+        ensure_search_challenge_clearance(
+            search_query,
+            current_user,
+            clearance_token=request.headers.get(SEARCH_CLEARANCE_HEADER) if request else None,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(exc),
+        ) from exc
 
     try:
         messages, total, max_page = get_filtered_messages(
