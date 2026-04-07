@@ -5,11 +5,13 @@
 import { ReactNode, useEffect, useMemo, useState } from 'react'
 import { Layout as AntLayout } from 'antd'
 import { useLocation } from 'react-router-dom'
+import { pingCurrentSession } from '@/api/auth'
 import Header from './Header'
 import Sidebar from './SidebarNavRuntime'
 import BackToTopButton from './BackToTopButton'
 import SiteFooter from './SiteFooter'
 import AuthenticatedDashboardToolbar from '@/components/messages/AuthenticatedDashboardToolbar'
+import { useAuthStore } from '@/store/authStore'
 import './Layout.css'
 
 const { Content } = AntLayout
@@ -36,6 +38,7 @@ const getInitialCollapsedState = () => {
 
 const Layout = ({ children }: LayoutProps) => {
   const location = useLocation()
+  const { token, setUser } = useAuthStore()
   const [collapsed, setCollapsed] = useState(getInitialCollapsedState)
   const [isMobile, setIsMobile] = useState(getIsMobileViewport)
   const showDashboardToolbar =
@@ -64,6 +67,20 @@ const Layout = ({ children }: LayoutProps) => {
       window.localStorage.setItem(SIDEBAR_COLLAPSE_STORAGE_KEY, String(collapsed))
     }
   }, [collapsed, isMobile])
+
+  useEffect(() => {
+    if (!token) {
+      return undefined
+    }
+
+    const intervalId = window.setInterval(() => {
+      void pingCurrentSession()
+        .then((user) => setUser(user))
+        .catch(() => undefined)
+    }, 60_000)
+
+    return () => window.clearInterval(intervalId)
+  }, [setUser, token])
 
   const contentMarginLeft = useMemo(() => {
     if (isMobile) return 0

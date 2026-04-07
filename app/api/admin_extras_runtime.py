@@ -5,7 +5,7 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from app.api.dependencies import get_admin_user, get_db
+from app.api.dependencies_runtime import get_admin_user, get_db
 from app.models.models import Channel, ensure_channel_parser_profile_column
 from app.schemas.admin_models import (
     ChannelSampleResponse,

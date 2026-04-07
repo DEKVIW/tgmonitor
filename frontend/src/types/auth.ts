@@ -26,3 +26,7 @@ export interface ChangePasswordRequest {
   new_password: string
 }
 
+export interface ChangeUsernameRequest {
+  new_username: string
+}
+

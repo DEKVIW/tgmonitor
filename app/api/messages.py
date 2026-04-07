@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
-from app.api.dependencies import get_db, get_optional_current_user
+from app.api.dependencies_runtime import get_db, get_optional_current_user
 from app.schemas.message import MessageListResponse, MessageResponse, TagStatsResponse
 from app.services.message_query_service import (
     get_filtered_messages,

@@ -5,9 +5,10 @@ FastAPI 应用主入口
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.models.config import settings
-from app.api import admin, admin_backups, admin_extras_runtime, auth, messages, statistics
+from app.api import admin, admin_accounts_runtime, admin_backups, admin_extras_runtime, auth_runtime, messages, statistics
 from app.api import admin_security, security
 from app.schemas.admin_models import PublicSystemConfigResponse
+from app.services.account_service import bootstrap_account_storage
 from app.services.backup_scheduler import start_backup_scheduler, stop_backup_scheduler
 from app.services.system_config_service import get_public_system_config_values
 import logging
@@ -45,10 +46,11 @@ app.add_middleware(
 )
 
 # 注册路由
-app.include_router(auth.router)
+app.include_router(auth_runtime.router)
 app.include_router(messages.router)
 app.include_router(statistics.router)
 app.include_router(admin.router)
+app.include_router(admin_accounts_runtime.router)
 app.include_router(admin_security.router)
 app.include_router(admin_backups.router)
 app.include_router(admin_extras_runtime.router)
@@ -57,6 +59,7 @@ app.include_router(security.router)
 
 @app.on_event("startup")
 async def startup_runtime_services() -> None:
+    bootstrap_account_storage()
     start_backup_scheduler()
 
 

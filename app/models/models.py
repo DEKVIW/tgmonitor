@@ -1,7 +1,7 @@
 ﻿import threading
 from datetime import datetime
 
-from sqlalchemy import ARRAY, JSON, Boolean, Column, DateTime, Float, Integer, String, Text, create_engine, inspect, text
+from sqlalchemy import ARRAY, JSON, Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine, inspect, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.declarative import declarative_base
 
@@ -244,6 +244,92 @@ class BackupRun(Base):
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
 
+class AccountBatch(Base):
+    __tablename__ = "account_batches"
+
+    id = Column(Integer, primary_key=True, index=True)
+    batch_name = Column(String(128), nullable=False)
+    batch_code = Column(String(64), nullable=False, unique=True, index=True)
+    source_type = Column(String(32), nullable=False, default="admin_bulk", index=True)
+    provider_scope = Column(String(32), nullable=False, default="local")
+    default_role = Column(String(32), nullable=False, default="user")
+    validity_mode = Column(String(32), nullable=False, default="duration")
+    validity_unit = Column(String(16), nullable=True)
+    validity_value = Column(Integer, nullable=True)
+    fixed_expires_at = Column(DateTime, nullable=True)
+    default_session_limit_override = Column(Integer, nullable=True)
+    is_enabled = Column(Boolean, nullable=False, default=True, index=True)
+    starts_at = Column(DateTime, nullable=True)
+    ends_at = Column(DateTime, nullable=True)
+    max_accounts = Column(Integer, nullable=True)
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_by = Column(String(128), nullable=True)
+
+
+class UserAccount(Base):
+    __tablename__ = "user_accounts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String(64), nullable=False, unique=True, index=True)
+    display_name = Column(String(128), nullable=False, default="")
+    email = Column(String(255), nullable=True, default="")
+    role = Column(String(32), nullable=False, default="user", index=True)
+    status = Column(String(32), nullable=False, default="active", index=True)
+    account_source = Column(String(32), nullable=False, default="local", index=True)
+    source_batch_id = Column(Integer, ForeignKey("account_batches.id"), nullable=True, index=True)
+    expires_at = Column(DateTime, nullable=True, index=True)
+    must_change_password = Column(Boolean, nullable=False, default=False)
+    session_limit_override = Column(Integer, nullable=True)
+    is_admin_exempt = Column(Boolean, nullable=True)
+    last_login_at = Column(DateTime, nullable=True, index=True)
+    last_seen_at = Column(DateTime, nullable=True, index=True)
+    status_reason = Column(Text, nullable=True)
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_by = Column(String(128), nullable=True)
+    updated_by = Column(String(128), nullable=True)
+
+
+class AuthIdentity(Base):
+    __tablename__ = "auth_identities"
+    __table_args__ = (
+        UniqueConstraint("provider", "provider_user_id", name="ux_auth_identities_provider_user"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    account_id = Column(Integer, ForeignKey("user_accounts.id"), nullable=False, index=True)
+    provider = Column(String(32), nullable=False, index=True)
+    provider_user_id = Column(String(255), nullable=False, index=True)
+    login_name = Column(String(255), nullable=True)
+    password_hash = Column(Text, nullable=True)
+    identity_status = Column(String(32), nullable=False, default="active", index=True)
+    linked_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    last_login_at = Column(DateTime, nullable=True, index=True)
+    extra_json = Column(JSONB, nullable=False, default=dict)
+
+
+class AuthSession(Base):
+    __tablename__ = "auth_sessions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(String(128), nullable=False, unique=True, index=True)
+    account_id = Column(Integer, ForeignKey("user_accounts.id"), nullable=False, index=True)
+    identity_id = Column(Integer, ForeignKey("auth_identities.id"), nullable=True, index=True)
+    client_instance_hash = Column(String(128), nullable=True, index=True)
+    login_provider = Column(String(32), nullable=False, default="local", index=True)
+    user_agent = Column(Text, nullable=True)
+    ip_address = Column(String(64), nullable=True)
+    device_label = Column(String(255), nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    last_seen_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    expires_at = Column(DateTime, nullable=False, index=True)
+    revoked_at = Column(DateTime, nullable=True, index=True)
+    revoke_reason = Column(String(64), nullable=True)
+    extra_json = Column(JSONB, nullable=False, default=dict)
+
+
 DATABASE_URL = settings.DATABASE_URL
 
 engine = create_engine(
@@ -309,6 +395,10 @@ def ensure_runtime_storage_tables() -> None:
                 BackupRecord.__table__,
                 BackupTarget.__table__,
                 BackupRun.__table__,
+                AccountBatch.__table__,
+                UserAccount.__table__,
+                AuthIdentity.__table__,
+                AuthSession.__table__,
             ],
         )
         _ensure_system_settings_columns()

@@ -123,10 +123,28 @@ export interface PublicSystemConfigResponse {
 }
 
 export interface UserResponse {
+  id?: number
   username: string
   name: string
   email: string
   role: string
+  display_name?: string | null
+  status?: string
+  effective_status?: string
+  account_source?: string
+  expires_at?: string | null
+  remaining_days?: number | null
+  session_limit?: number | null
+  session_limit_override?: number | null
+  active_session_count?: number
+  must_change_password?: boolean
+  last_login_at?: string | null
+  last_seen_at?: string | null
+  created_at?: string | null
+  updated_at?: string | null
+  source_batch_id?: number | null
+  status_reason?: string | null
+  identity_status?: string | null
 }
 
 export interface UserCreate {
@@ -135,12 +153,24 @@ export interface UserCreate {
   name?: string
   email?: string
   role?: string
+  status?: string
+  validity_mode?: 'permanent' | 'duration' | 'fixed_at' | null
+  validity_unit?: 'day' | 'month' | 'year' | null
+  validity_value?: number | null
+  fixed_expires_at?: string | null
+  session_limit_override?: number | null
 }
 
 export interface UserUpdate {
   name?: string
   email?: string
   role?: string
+  status?: string
+  validity_mode?: 'permanent' | 'duration' | 'fixed_at' | null
+  validity_unit?: 'day' | 'month' | 'year' | null
+  validity_value?: number | null
+  fixed_expires_at?: string | null
+  session_limit_override?: number | null
 }
 
 export interface PasswordChange {
@@ -161,6 +191,10 @@ export interface BulkRandomCreateRequest {
   start_index?: number
   role?: string
   password_length?: number
+  validity_mode?: 'permanent' | 'duration' | 'fixed_at' | null
+  validity_unit?: 'day' | 'month' | 'year' | null
+  validity_value?: number | null
+  fixed_expires_at?: string | null
 }
 
 export interface BulkRandomCreateResult {
@@ -192,6 +226,37 @@ export interface BulkSimpleResponse {
 export interface BulkResetResponse {
   successes: { username: string; password: string }[]
   failures: BulkFailure[]
+}
+
+export interface AccountRuntimeSettings {
+  concurrent_session_limit_enabled: boolean
+  max_concurrent_sessions_per_account: number
+  session_online_window_minutes: number
+  session_absolute_ttl_days: number
+  admin_exempt_from_session_limit: boolean
+  auto_disable_expired_accounts: boolean
+  default_account_validity_mode: 'permanent' | 'duration'
+  default_account_validity_unit: 'day' | 'month' | 'year'
+  default_account_validity_value: number
+}
+
+export interface AccountListResponse {
+  items: UserResponse[]
+  total: number
+  page: number
+  page_size: number
+  runtime_settings: AccountRuntimeSettings
+}
+
+export interface AccountListQuery {
+  page?: number
+  page_size?: number
+  keyword?: string
+  role?: string
+  effective_status?: string
+  account_source?: string
+  sort_by?: string
+  sort_order?: 'asc' | 'desc'
 }
 
 export interface MaintenanceResult {

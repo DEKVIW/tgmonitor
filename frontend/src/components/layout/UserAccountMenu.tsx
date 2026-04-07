@@ -4,12 +4,12 @@
 
 import { useState } from 'react'
 import { Button, Dropdown, Form, Input, Modal, Space, message } from 'antd'
-import { KeyOutlined, LogoutOutlined, UserOutlined } from '@ant-design/icons'
+import { EditOutlined, KeyOutlined, LogoutOutlined, UserOutlined } from '@ant-design/icons'
 import type { MenuProps } from 'antd'
 import { useNavigate } from 'react-router-dom'
 import { useAuthStore } from '@/store/authStore'
-import { logout, changePassword } from '@/api/auth'
-import { ChangePasswordRequest } from '@/types/auth'
+import { changePassword, changeUsername, logout } from '@/api/auth'
+import { ChangePasswordRequest, ChangeUsernameRequest } from '@/types/auth'
 import { LOGIN_PATH } from '@/utils/routes'
 
 interface UserAccountMenuProps {
@@ -22,8 +22,10 @@ const UserAccountMenu = ({
   collapsed = false,
 }: UserAccountMenuProps) => {
   const navigate = useNavigate()
-  const { user, logout: logoutStore } = useAuthStore()
+  const { user, logout: logoutStore, setUser } = useAuthStore()
+  const [usernameModalVisible, setUsernameModalVisible] = useState(false)
   const [passwordModalVisible, setPasswordModalVisible] = useState(false)
+  const [usernameForm] = Form.useForm()
   const [passwordForm] = Form.useForm()
 
   const handleLogout = async () => {
@@ -51,6 +53,23 @@ const UserAccountMenu = ({
     }
   }
 
+  const handleChangeUsername = async (values: ChangeUsernameRequest) => {
+    try {
+      await changeUsername(values)
+      setUser({
+        username: values.new_username,
+        name: user?.name || values.new_username,
+        email: user?.email,
+        role: user?.role || 'user',
+      })
+      message.success('用户名修改成功')
+      setUsernameModalVisible(false)
+      usernameForm.resetFields()
+    } catch (error: any) {
+      message.error(error.response?.data?.detail || '用户名修改失败')
+    }
+  }
+
   const menuItems: MenuProps['items'] = [
     {
       key: 'user',
@@ -61,6 +80,18 @@ const UserAccountMenu = ({
         </div>
       ),
       disabled: true,
+    },
+    {
+      type: 'divider',
+    },
+    {
+      key: 'change-username',
+      label: '修改用户名',
+      icon: <EditOutlined />,
+      onClick: () => {
+        usernameForm.setFieldsValue({ new_username: user?.username || '' })
+        setUsernameModalVisible(true)
+      },
     },
     {
       type: 'divider',
@@ -106,6 +137,49 @@ const UserAccountMenu = ({
           ) : null}
         </Button>
       </Dropdown>
+
+      <Modal
+        title="修改用户名"
+        open={usernameModalVisible}
+        rootClassName="responsive-modal-root"
+        onCancel={() => {
+          setUsernameModalVisible(false)
+          usernameForm.resetFields()
+        }}
+        footer={null}
+      >
+        <Form
+          form={usernameForm}
+          layout="vertical"
+          onFinish={handleChangeUsername}
+        >
+          <Form.Item
+            name="new_username"
+            label="新用户名"
+            rules={[
+              { required: true, message: '请输入新用户名' },
+              { pattern: /^\S+$/, message: '用户名不能包含空格' },
+            ]}
+          >
+            <Input placeholder="请输入新用户名" />
+          </Form.Item>
+          <Form.Item>
+            <Space>
+              <Button type="primary" htmlType="submit">
+                确定
+              </Button>
+              <Button
+                onClick={() => {
+                  setUsernameModalVisible(false)
+                  usernameForm.resetFields()
+                }}
+              >
+                取消
+              </Button>
+            </Space>
+          </Form.Item>
+        </Form>
+      </Modal>
 
       <Modal
         title="修改密码"

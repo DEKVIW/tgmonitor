@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -253,10 +254,28 @@ class PublicSystemConfigResponse(BaseModel):
     umami_host_url: str
 
 class UserResponse(BaseModel):
+    id: Optional[int] = None
     username: str
     name: str
     email: str
     role: str
+    display_name: Optional[str] = None
+    status: str = "active"
+    effective_status: str = "active"
+    account_source: str = "local"
+    expires_at: Optional[datetime] = None
+    remaining_days: Optional[int] = None
+    session_limit: Optional[int] = None
+    session_limit_override: Optional[int] = None
+    active_session_count: int = 0
+    must_change_password: bool = False
+    last_login_at: Optional[datetime] = None
+    last_seen_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    source_batch_id: Optional[int] = None
+    status_reason: Optional[str] = None
+    identity_status: Optional[str] = None
 
 
 class UserCreate(BaseModel):
@@ -265,6 +284,12 @@ class UserCreate(BaseModel):
     name: str = Field(default="", max_length=128)
     email: str = Field(default="", max_length=255)
     role: str = Field(default="user")
+    status: str = Field(default="active")
+    validity_mode: Optional[str] = Field(default=None)
+    validity_unit: Optional[str] = Field(default=None)
+    validity_value: Optional[int] = Field(default=None, ge=1, le=3650)
+    fixed_expires_at: Optional[datetime] = None
+    session_limit_override: Optional[int] = Field(default=None, ge=1, le=32)
 
     @field_validator("username")
     @classmethod
@@ -292,11 +317,45 @@ class UserCreate(BaseModel):
             raise ValueError("role must be admin or user")
         return role
 
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, value: str) -> str:
+        status_value = _normalize_text(value, field_name="status").lower()
+        if status_value not in {"active", "disabled", "locked"}:
+            raise ValueError("status must be active, disabled or locked")
+        return status_value
+
+    @field_validator("validity_mode")
+    @classmethod
+    def validate_validity_mode(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = _normalize_text(value, field_name="validity_mode").lower()
+        if normalized not in {"permanent", "duration", "fixed_at"}:
+            raise ValueError("validity_mode must be permanent, duration or fixed_at")
+        return normalized
+
+    @field_validator("validity_unit")
+    @classmethod
+    def validate_validity_unit(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = _normalize_text(value, field_name="validity_unit").lower()
+        if normalized not in {"day", "month", "year"}:
+            raise ValueError("validity_unit must be day, month or year")
+        return normalized
+
 
 class UserUpdate(BaseModel):
     name: Optional[str] = Field(default=None, max_length=128)
     email: Optional[str] = Field(default=None, max_length=255)
     role: Optional[str] = None
+    status: Optional[str] = None
+    validity_mode: Optional[str] = Field(default=None)
+    validity_unit: Optional[str] = Field(default=None)
+    validity_value: Optional[int] = Field(default=None, ge=1, le=3650)
+    fixed_expires_at: Optional[datetime] = None
+    session_limit_override: Optional[int] = Field(default=None, ge=1, le=32)
 
     @field_validator("name", "email")
     @classmethod
@@ -314,6 +373,74 @@ class UserUpdate(BaseModel):
         if role not in {"admin", "user"}:
             raise ValueError("role must be admin or user")
         return role
+
+    @field_validator("status")
+    @classmethod
+    def validate_update_status(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = _normalize_text(value, field_name="status").lower()
+        if normalized not in {"active", "disabled", "locked"}:
+            raise ValueError("status must be active, disabled or locked")
+        return normalized
+
+    @field_validator("validity_mode")
+    @classmethod
+    def validate_update_validity_mode(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = _normalize_text(value, field_name="validity_mode").lower()
+        if normalized not in {"permanent", "duration", "fixed_at"}:
+            raise ValueError("validity_mode must be permanent, duration or fixed_at")
+        return normalized
+
+    @field_validator("validity_unit")
+    @classmethod
+    def validate_update_validity_unit(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = _normalize_text(value, field_name="validity_unit").lower()
+        if normalized not in {"day", "month", "year"}:
+            raise ValueError("validity_unit must be day, month or year")
+        return normalized
+
+
+class AccountRuntimeSettingsResponse(BaseModel):
+    concurrent_session_limit_enabled: bool
+    max_concurrent_sessions_per_account: int
+    session_online_window_minutes: int
+    session_absolute_ttl_days: int
+    admin_exempt_from_session_limit: bool
+    auto_disable_expired_accounts: bool
+    default_account_validity_mode: str
+    default_account_validity_unit: str
+    default_account_validity_value: int
+
+
+class AccountRuntimeSettingsUpdate(AccountRuntimeSettingsResponse):
+    @field_validator("default_account_validity_mode")
+    @classmethod
+    def validate_runtime_validity_mode(cls, value: str) -> str:
+        normalized = _normalize_text(value, field_name="default_account_validity_mode").lower()
+        if normalized not in {"permanent", "duration"}:
+            raise ValueError("default_account_validity_mode must be permanent or duration")
+        return normalized
+
+    @field_validator("default_account_validity_unit")
+    @classmethod
+    def validate_runtime_validity_unit(cls, value: str) -> str:
+        normalized = _normalize_text(value, field_name="default_account_validity_unit").lower()
+        if normalized not in {"day", "month", "year"}:
+            raise ValueError("default_account_validity_unit must be day, month or year")
+        return normalized
+
+
+class AccountListResponse(BaseModel):
+    items: List[UserResponse]
+    total: int
+    page: int
+    page_size: int
+    runtime_settings: AccountRuntimeSettingsResponse
 
 
 class PasswordChange(BaseModel):
@@ -355,6 +482,10 @@ class BulkRandomCreateRequest(BaseModel):
     start_index: int = Field(default=1, ge=1)
     role: str = Field(default="user")
     password_length: int = Field(default=12, ge=6, le=32)
+    validity_mode: Optional[str] = Field(default=None)
+    validity_unit: Optional[str] = Field(default=None)
+    validity_value: Optional[int] = Field(default=None, ge=1, le=3650)
+    fixed_expires_at: Optional[datetime] = None
 
     @field_validator("prefix")
     @classmethod
@@ -371,6 +502,26 @@ class BulkRandomCreateRequest(BaseModel):
         if role not in {"admin", "user"}:
             raise ValueError("role must be admin or user")
         return role
+
+    @field_validator("validity_mode")
+    @classmethod
+    def validate_bulk_validity_mode(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = _normalize_text(value, field_name="validity_mode").lower()
+        if normalized not in {"permanent", "duration", "fixed_at"}:
+            raise ValueError("validity_mode must be permanent, duration or fixed_at")
+        return normalized
+
+    @field_validator("validity_unit")
+    @classmethod
+    def validate_bulk_validity_unit(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = _normalize_text(value, field_name="validity_unit").lower()
+        if normalized not in {"day", "month", "year"}:
+            raise ValueError("validity_unit must be day, month or year")
+        return normalized
 
 
 class BulkRandomCreateResult(BaseModel):

@@ -12,6 +12,9 @@ import {
   PublicSystemConfigResponse,
   SystemConfigResponse,
   SystemConfigUpdate,
+  AccountListQuery,
+  AccountListResponse,
+  AccountRuntimeSettings,
   UserResponse,
   UserCreate,
   UserUpdate,
@@ -234,6 +237,87 @@ export const getPublicConfig = async (): Promise<PublicSystemConfigResponse> => 
  */
 export const getUsers = async (): Promise<UserResponse[]> => {
   const response = await apiClient.get<UserResponse[]>('/admin/users')
+  return response.data
+}
+
+export const getAccounts = async (params: AccountListQuery = {}): Promise<AccountListResponse> => {
+  const search = new URLSearchParams()
+  Object.entries(params).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === '') {
+      return
+    }
+    search.set(key, String(value))
+  })
+  const query = search.toString()
+  const response = await apiClient.get<AccountListResponse>(`/admin/accounts${query ? `?${query}` : ''}`)
+  return response.data
+}
+
+export const getAccountRuntimeSettings = async (): Promise<AccountRuntimeSettings> => {
+  const response = await apiClient.get<AccountRuntimeSettings>('/admin/accounts/settings')
+  return response.data
+}
+
+export const updateAccountRuntimeSettings = async (
+  data: AccountRuntimeSettings
+): Promise<AccountRuntimeSettings> => {
+  const response = await apiClient.put<AccountRuntimeSettings>('/admin/accounts/settings', data)
+  return response.data
+}
+
+export const getAccount = async (username: string): Promise<UserResponse> => {
+  const response = await apiClient.get<UserResponse>(`/admin/accounts/${username}`)
+  return response.data
+}
+
+export const createAccount = async (data: UserCreate): Promise<UserResponse> => {
+  const response = await apiClient.post<UserResponse>('/admin/accounts', data)
+  return response.data
+}
+
+export const updateAccount = async (username: string, data: UserUpdate): Promise<UserResponse> => {
+  const response = await apiClient.put<UserResponse>(`/admin/accounts/${username}`, data)
+  return response.data
+}
+
+export const changeAccountPassword = async (username: string, data: PasswordChange): Promise<void> => {
+  await apiClient.put(`/admin/accounts/${username}/password`, data)
+}
+
+export const changeAccountUsername = async (username: string, data: UsernameChange): Promise<void> => {
+  await apiClient.put(`/admin/accounts/${username}/username`, data)
+}
+
+export const changeAccountRole = async (username: string, data: RoleChange): Promise<void> => {
+  await apiClient.put(`/admin/accounts/${username}/role`, data)
+}
+
+export const deleteAccount = async (username: string): Promise<void> => {
+  await apiClient.delete(`/admin/accounts/${username}`)
+}
+
+export const bulkRandomCreateAccounts = async (data: BulkRandomCreateRequest): Promise<BulkCreateResponse> => {
+  const response = await apiClient.post<BulkCreateResponse>('/admin/accounts/bulk/random-create', data)
+  return response.data
+}
+
+export const bulkDeleteAccounts = async (data: BulkUsernamesRequest): Promise<BulkSimpleResponse> => {
+  const response = await apiClient.post<BulkSimpleResponse>('/admin/accounts/bulk/delete', data)
+  return response.data
+}
+
+export const bulkResetAccountPasswords = async (data: BulkUsernamesRequest): Promise<BulkResetResponse> => {
+  const response = await apiClient.post<BulkResetResponse>('/admin/accounts/bulk/reset-password', data)
+  return response.data
+}
+
+export const exportAccounts = async (): Promise<UserResponse[]> => {
+  const response = await apiClient.get<UserResponse[]>('/admin/accounts/export')
+  return response.data
+}
+
+export const getAccountAvailableRoles = async (): Promise<Record<string, string>> => {
+  const response = await apiClient.get<Record<string, string>>('/admin/accounts/roles/available')
   return response.data
 }
 

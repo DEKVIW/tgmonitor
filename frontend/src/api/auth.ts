@@ -3,7 +3,7 @@
  */
 
 import apiClient from '@/utils/api'
-import { LoginRequest, LoginResponse, UserInfo, ChangePasswordRequest } from '@/types/auth'
+import { LoginRequest, LoginResponse, UserInfo, ChangePasswordRequest, ChangeUsernameRequest } from '@/types/auth'
 
 /**
  * 登录
@@ -21,6 +21,11 @@ export const getCurrentUser = async (): Promise<UserInfo> => {
   return response.data
 }
 
+export const pingCurrentSession = async (): Promise<UserInfo> => {
+  const response = await apiClient.post<UserInfo>('/auth/ping')
+  return response.data
+}
+
 /**
  * 登出
  */
@@ -33,5 +38,9 @@ export const logout = async (): Promise<void> => {
  */
 export const changePassword = async (data: ChangePasswordRequest): Promise<void> => {
   await apiClient.post('/auth/me/password', data)
+}
+
+export const changeUsername = async (data: ChangeUsernameRequest): Promise<void> => {
+  await apiClient.post('/auth/me/username', data)
 }
 
