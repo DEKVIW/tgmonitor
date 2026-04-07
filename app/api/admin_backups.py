@@ -6,6 +6,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.api.dependencies import get_admin_user
 from app.schemas.backup_models import (
+    BackupRunDeleteRequest,
+    BackupRunDeleteResponse,
     BackupRunResponse,
     BackupTargetCreate,
     BackupTargetResponse,
@@ -14,6 +16,7 @@ from app.schemas.backup_models import (
 )
 from app.services.backup_service import (
     create_backup_target,
+    delete_backup_runs,
     delete_backup_target,
     list_backup_runs,
     list_backup_targets,
@@ -118,3 +121,15 @@ async def get_backup_runs(
     del current_user
     return [BackupRunResponse(**item) for item in list_backup_runs(limit=limit, target_id=target_id)]
 
+
+@router.post("/runs/delete", response_model=BackupRunDeleteResponse, summary="Delete backup runs")
+async def delete_backup_runs_api(
+    payload: BackupRunDeleteRequest,
+    current_user: Dict[str, Any] = Depends(get_admin_user),
+) -> BackupRunDeleteResponse:
+    del current_user
+    try:
+        return BackupRunDeleteResponse(**delete_backup_runs(payload.ids))
+    except Exception as exc:
+        _raise_backup_error(exc)
+        raise

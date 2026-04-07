@@ -20,7 +20,7 @@ import {
   Typography,
   message,
 } from 'antd'
-import type { CollapseProps } from 'antd'
+import type { CollapseProps, TableProps } from 'antd'
 import {
   CheckCircleOutlined,
   ClockCircleOutlined,
@@ -40,6 +40,7 @@ import {
 } from '@ant-design/icons'
 import {
   createBackupTarget,
+  deleteBackupRuns,
   deleteBackupTarget,
   getBackupRuns,
   getBackupTargets,
@@ -55,14 +56,6 @@ const { Text, Title } = Typography
 
 type BackupTargetFormValues = Omit<BackupTargetPayload, 'schedule_hour' | 'schedule_minute'> & {
   schedule_time: Dayjs
-}
-
-type QuickTemplate = {
-  key: string
-  title: string
-  description: string
-  badge: string
-  values: Partial<BackupTargetFormValues>
 }
 
 const PROVIDER_OPTIONS = [
@@ -100,6 +93,7 @@ const createDefaultValues = (): BackupTargetFormValues => ({
   timezone: 'Asia/Shanghai',
   retention_count: 10,
   retention_days: 30,
+  run_log_retention_days: 0,
   local_dir: 'data/backups',
   webdav_base_url: '',
   webdav_username: '',
@@ -112,64 +106,9 @@ const createDefaultValues = (): BackupTargetFormValues => ({
   include_users_json: true,
   include_env_file: false,
   include_runtime_data: true,
-  export_range_kind: 'all',
-  export_range_days: 30,
+  export_range_kind: 'days',
+  export_range_days: 7,
 })
-
-const QUICK_TEMPLATES: QuickTemplate[] = [
-  {
-    key: 'local-full',
-    title: '本地完整备份',
-    description: '适合先把数据库和运行文件沉淀到服务器本地目录。',
-    badge: '本地',
-    values: {
-      target_kind: 'local',
-      provider: 'local',
-      backup_mode: 'full',
-      local_dir: 'data/backups',
-      schedule_enabled: false,
-      schedule_kind: 'manual',
-      include_database: true,
-      include_users_json: true,
-      include_runtime_data: true,
-      include_env_file: false,
-    },
-  },
-  {
-    key: 'webdav-full',
-    title: 'WebDAV 完整备份',
-    description: '适合把完整归档同步到坚果云、NAS 或通用 WebDAV。',
-    badge: 'WebDAV',
-    values: {
-      target_kind: 'webdav',
-      provider: 'generic_webdav',
-      backup_mode: 'full',
-      schedule_enabled: true,
-      schedule_kind: 'daily',
-      schedule_time: dayjs().hour(3).minute(0).second(0),
-      include_database: true,
-      include_users_json: true,
-      include_runtime_data: true,
-      include_env_file: false,
-    },
-  },
-  {
-    key: 'webdav-export',
-    title: 'WebDAV 影视导出',
-    description: '适合定期生成资源 Excel 表格并推到云盘目录。',
-    badge: '导出',
-    values: {
-      target_kind: 'webdav',
-      provider: 'generic_webdav',
-      backup_mode: 'media_export',
-      schedule_enabled: true,
-      schedule_kind: 'daily',
-      schedule_time: dayjs().hour(6).minute(0).second(0),
-      export_range_kind: 'days',
-      export_range_days: 30,
-    },
-  },
-]
 
 const createLabel = (title: string, hint: string) => (
   <div className="backup-modern-label">
@@ -187,6 +126,13 @@ const createSectionTitle = (step: string, title: string, hint: string) => (
         <HintTooltip content={hint} />
       </div>
     </div>
+  </div>
+)
+
+const createChoiceSectionTitle = (title: string, hint: string) => (
+  <div className="backup-modern-choice-section-heading">
+    <span className="backup-modern-choice-section-title">{title}</span>
+    <HintTooltip content={hint} />
   </div>
 )
 
@@ -211,6 +157,10 @@ const formatMode = (value: BackupTarget['backup_mode'] | BackupRun['backup_mode'
 
 const formatTargetKind = (value: BackupTarget['target_kind'] | BackupRun['target_kind']) =>
   value === 'webdav' ? 'WebDAV' : '本地'
+
+const formatRunLogRetention = (days?: number | null) => (!days || days <= 0 ? '不自动清理' : `${days} 天前记录`)
+
+const isRunActive = (run: BackupRun) => ['pending', 'running'].includes((run.status || '').toLowerCase())
 
 const formatSchedule = (target: BackupTarget) => {
   if (!target.schedule_enabled) {
@@ -240,6 +190,7 @@ const statusTag = (status?: string | null) => {
 
 const toPayload = (values: BackupTargetFormValues): BackupTargetPayload => ({
   ...values,
+  provider: values.target_kind === 'local' ? 'local' : values.provider === 'local' ? 'generic_webdav' : values.provider,
   schedule_hour: values.schedule_time.hour(),
   schedule_minute: values.schedule_time.minute(),
 })
@@ -258,6 +209,7 @@ const toFormValues = (target: BackupTarget): BackupTargetFormValues => ({
   timezone: target.timezone,
   retention_count: target.retention_count,
   retention_days: target.retention_days,
+  run_log_retention_days: target.run_log_retention_days ?? 0,
   local_dir: target.local_dir,
   webdav_base_url: target.webdav_base_url,
   webdav_username: target.webdav_username,
@@ -271,11 +223,8 @@ const toFormValues = (target: BackupTarget): BackupTargetFormValues => ({
   include_env_file: target.include_env_file,
   include_runtime_data: target.include_runtime_data,
   export_range_kind: target.export_range_kind,
-  export_range_days: target.export_range_days ?? 30,
+  export_range_days: target.export_range_days ?? 7,
 })
-
-const templateMatches = (template: QuickTemplate, values: BackupTargetFormValues) =>
-  template.values.target_kind === values.target_kind && template.values.backup_mode === values.backup_mode
 
 const buildSummaryChecks = (values: BackupTargetFormValues) => {
   const issues: string[] = []
@@ -407,9 +356,11 @@ const BackupsModern = () => {
   const [runs, setRuns] = useState<BackupRun[]>([])
   const [loading, setLoading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  const [deletingRuns, setDeletingRuns] = useState(false)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [editingTarget, setEditingTarget] = useState<BackupTarget | null>(null)
   const [draftValues, setDraftValues] = useState<BackupTargetFormValues>(createDefaultValues())
+  const [selectedRunIds, setSelectedRunIds] = useState<number[]>([])
 
   const currentValues = useMemo(
     () => ({
@@ -425,10 +376,6 @@ const BackupsModern = () => {
   )
 
   const summaryChecks = useMemo(() => buildSummaryChecks(currentValues), [currentValues])
-  const activeTemplateKey = useMemo(
-    () => QUICK_TEMPLATES.find((item) => templateMatches(item, currentValues))?.key ?? null,
-    [currentValues],
-  )
 
   const loadPageData = async (silent = false) => {
     if (!silent) {
@@ -438,6 +385,7 @@ const BackupsModern = () => {
       const [targetList, runList] = await Promise.all([getBackupTargets(), getBackupRuns({ limit: 30 })])
       setTargets(targetList)
       setRuns(runList)
+      setSelectedRunIds((previous) => previous.filter((runId) => runList.some((run) => run.id === runId)))
     } catch (error: any) {
       message.error(error.response?.data?.detail || '加载备份管理失败')
     } finally {
@@ -495,38 +443,31 @@ const BackupsModern = () => {
     setDraftValues(defaults)
   }
 
-  const applyTemplate = (template: QuickTemplate) => {
-    const nextValues: BackupTargetFormValues = {
-      ...currentValues,
-      ...template.values,
-      name: currentValues.name,
-      provider:
-        template.values.target_kind === 'local'
-          ? 'local'
-          : currentValues.provider === 'local'
-            ? String(template.values.provider || 'generic_webdav')
-            : currentValues.provider,
-      schedule_kind:
-        template.values.schedule_enabled === false
-          ? 'manual'
-          : (String(template.values.schedule_kind || currentValues.schedule_kind || 'daily') as BackupTargetFormValues['schedule_kind']),
-    }
-    syncDraft(nextValues)
-  }
-
   const handleTargetKindChange = (targetKind: BackupTargetFormValues['target_kind']) => {
+    if (targetKind === currentValues.target_kind) {
+      return
+    }
+
     updateValues({
       target_kind: targetKind,
-      provider: targetKind === 'local' ? 'local' : currentValues.provider === 'local' ? 'generic_webdav' : currentValues.provider,
+      provider: targetKind === 'webdav' && currentValues.provider === 'local' ? 'generic_webdav' : currentValues.provider,
     })
   }
 
   const handleBackupModeChange = (backupMode: BackupTargetFormValues['backup_mode']) => {
-    updateValues({
+    if (backupMode === currentValues.backup_mode) {
+      return
+    }
+
+    const nextValues: Partial<BackupTargetFormValues> = {
       backup_mode: backupMode,
-      export_range_kind: backupMode === 'media_export' ? currentValues.export_range_kind : 'all',
-      export_range_days: backupMode === 'media_export' ? currentValues.export_range_days : null,
-    })
+    }
+
+    if (backupMode === 'media_export' && !currentValues.export_range_days) {
+      nextValues.export_range_days = 7
+    }
+
+    updateValues(nextValues)
   }
 
   const handleScheduleEnabledChange = (checked: boolean) => {
@@ -591,6 +532,42 @@ const BackupsModern = () => {
     } catch (error: any) {
       message.error(error.response?.data?.detail || '删除备份目标失败')
     }
+  }
+
+  const handleDeleteSelectedRuns = async () => {
+    if (selectedRunIds.length === 0) {
+      return
+    }
+
+    try {
+      setDeletingRuns(true)
+      const result = await deleteBackupRuns(selectedRunIds)
+      setSelectedRunIds([])
+
+      const messageParts = [`已删除 ${result.deleted_count} 条记录`]
+      if (result.skipped_active_count > 0) {
+        messageParts.push(`${result.skipped_active_count} 条运行中记录已跳过`)
+      }
+      if (result.skipped_missing_count > 0) {
+        messageParts.push(`${result.skipped_missing_count} 条记录不存在`)
+      }
+      message.success(messageParts.join('，'))
+      await loadPageData(true)
+    } catch (error: any) {
+      message.error(error.response?.data?.detail || '删除运行记录失败')
+    } finally {
+      setDeletingRuns(false)
+    }
+  }
+
+  const runRowSelection: TableProps<BackupRun>['rowSelection'] = {
+    selectedRowKeys: selectedRunIds,
+    onChange: (selectedRowKeys) => {
+      setSelectedRunIds(selectedRowKeys.map((value) => Number(value)).filter((value) => Number.isFinite(value)))
+    },
+    getCheckboxProps: (record: BackupRun) => ({
+      disabled: isRunActive(record),
+    }),
   }
 
   const runColumns = [
@@ -693,8 +670,8 @@ const BackupsModern = () => {
               loading={loading}
               title={
                 <div className="backup-modern-target-card-title">
-                  <span>{target.name}</span>
-                  <Space size={8}>
+                  <span className="backup-modern-target-name">{target.name}</span>
+                  <Space size={8} wrap>
                     {statusTag(target.active_run_status || target.last_status)}
                     <Tag>{formatTargetKind(target.target_kind)}</Tag>
                     <Tag color="blue">{formatMode(target.backup_mode)}</Tag>
@@ -702,7 +679,7 @@ const BackupsModern = () => {
                 </div>
               }
               extra={
-                <Space wrap>
+                <div className="backup-modern-target-actions">
                   <Button icon={<PlayCircleOutlined />} size="small" onClick={() => void handleRun(target)} disabled={target.has_active_run}>
                     立即执行
                   </Button>
@@ -717,7 +694,7 @@ const BackupsModern = () => {
                       删除
                     </Button>
                   </Popconfirm>
-                </Space>
+                </div>
               }
             >
               <div className="backup-modern-target-meta">
@@ -726,7 +703,9 @@ const BackupsModern = () => {
                     <FolderOpenOutlined /> 位置
                   </span>
                   <span className="backup-modern-target-meta-value">
-                    {target.target_kind === 'local' ? target.local_dir : target.webdav_root_path || '/'}
+                    {target.target_kind === 'local'
+                      ? target.local_dir
+                      : target.webdav_root_path || target.extra_json?.destination_summary || '/'}
                   </span>
                 </div>
                 <div className="backup-modern-target-meta-row">
@@ -745,6 +724,12 @@ const BackupsModern = () => {
                 </div>
                 <div className="backup-modern-target-meta-row">
                   <span className="backup-modern-target-meta-key">
+                    <DeleteOutlined /> 记录
+                  </span>
+                  <span className="backup-modern-target-meta-value">{formatRunLogRetention(target.run_log_retention_days)}</span>
+                </div>
+                <div className="backup-modern-target-meta-row">
+                  <span className="backup-modern-target-meta-key">
                     <LinkOutlined /> 最近
                   </span>
                   <span className="backup-modern-target-meta-value">{formatDateTime(target.last_run_at)}</span>
@@ -760,11 +745,31 @@ const BackupsModern = () => {
       )}
 
       <section className="backup-modern-run-section">
-        <Card title="最近运行记录" extra={<Text type="secondary">{runs.length} 条</Text>} loading={loading}>
+        <Card
+          title="最近运行记录"
+          extra={
+            <Space wrap>
+              <Text type="secondary">{runs.length} 条</Text>
+              <Text type="secondary">{selectedRunIds.length > 0 ? `已选 ${selectedRunIds.length} 条` : '可勾选批量删除'}</Text>
+              <Popconfirm
+                title={`确认删除选中的 ${selectedRunIds.length} 条运行记录？`}
+                description="这里只会删除运行记录，不会删除已生成的备份文件。"
+                onConfirm={() => void handleDeleteSelectedRuns()}
+                disabled={selectedRunIds.length === 0}
+              >
+                <Button danger disabled={selectedRunIds.length === 0} loading={deletingRuns}>
+                  批量删除
+                </Button>
+              </Popconfirm>
+            </Space>
+          }
+          loading={loading}
+        >
           <Table
             rowKey="id"
             dataSource={runs}
             columns={runColumns}
+            rowSelection={runRowSelection}
             pagination={false}
             locale={{ emptyText: '暂无运行记录' }}
             scroll={{ x: 960 }}
@@ -793,34 +798,16 @@ const BackupsModern = () => {
           layout="vertical"
           initialValues={createDefaultValues()}
           onValuesChange={(_, allValues) => {
-            setDraftValues({
-              ...createDefaultValues(),
+            setDraftValues((previousValues) => ({
+              ...previousValues,
               ...allValues,
-            } as BackupTargetFormValues)
+            }) as BackupTargetFormValues)
           }}
         >
           <div className="backup-modern-editor-layout">
             <div className="backup-modern-editor-main">
               <section className="backup-modern-panel">
-                {createSectionTitle('00', editingTarget ? '快速调整' : '快速开始', '先选一个最接近的模板，再补关键字段，能明显减少第一次配置的负担。')}
-                <div className="backup-modern-template-grid">
-                  {QUICK_TEMPLATES.map((template) => (
-                    <button
-                      type="button"
-                      key={template.key}
-                      className={`backup-modern-template-card ${activeTemplateKey === template.key ? 'is-active' : ''}`}
-                      onClick={() => applyTemplate(template)}
-                    >
-                      <span className="backup-modern-template-badge">{template.badge}</span>
-                      <span className="backup-modern-template-title">{template.title}</span>
-                      <span className="backup-modern-template-description">{template.description}</span>
-                    </button>
-                  ))}
-                </div>
-              </section>
-
-              <section className="backup-modern-panel">
-                {createSectionTitle('01', '基础方式', '先确定备份放到哪里，以及这条目标是完整备份还是影视导出。')}
+                {createSectionTitle('01', '备份模式', '先选择一个备份位置，再选择一种备份数据，四张卡片可以自由组合。')}
                 <div className="backup-modern-grid backup-modern-grid--two">
                   <div className="backup-modern-field-card">
                     {createLabel('目标名称', '给这条目标一个清晰名字，后续在列表里能快速定位。')}
@@ -836,51 +823,59 @@ const BackupsModern = () => {
                   </div>
                 </div>
 
-                <div className="backup-modern-choice-grid">
-                  <button
-                    type="button"
-                    className={`backup-modern-choice-card ${currentValues.target_kind === 'local' ? 'is-active' : ''}`}
-                    onClick={() => handleTargetKindChange('local')}
-                  >
-                    <FolderOpenOutlined className="backup-modern-choice-icon" />
-                    <span className="backup-modern-choice-title">本地目录</span>
-                    <span className="backup-modern-choice-description">直接写入服务器目录，适合先快速落地。</span>
-                  </button>
-                  <button
-                    type="button"
-                    className={`backup-modern-choice-card ${currentValues.target_kind === 'webdav' ? 'is-active' : ''}`}
-                    onClick={() => handleTargetKindChange('webdav')}
-                  >
-                    <CloudUploadOutlined className="backup-modern-choice-icon" />
-                    <span className="backup-modern-choice-title">WebDAV</span>
-                    <span className="backup-modern-choice-description">上传到坚果云、NAS 或其他兼容 WebDAV 的远端。</span>
-                  </button>
-                </div>
+                <div className="backup-modern-choice-stack">
+                  <div className="backup-modern-choice-section">
+                    {createChoiceSectionTitle('备份位置', '至少选择一个目标位置，后续再补充该位置的连接细节。')}
+                    <div className="backup-modern-choice-grid">
+                      <button
+                        type="button"
+                        className={`backup-modern-choice-card ${currentValues.target_kind === 'local' ? 'is-active' : ''}`}
+                        onClick={() => handleTargetKindChange('local')}
+                      >
+                        <FolderOpenOutlined className="backup-modern-choice-icon" />
+                        <span className="backup-modern-choice-title">本地目录</span>
+                        <span className="backup-modern-choice-description">直接写入服务器目录，适合先快速落地。</span>
+                      </button>
+                      <button
+                        type="button"
+                        className={`backup-modern-choice-card ${currentValues.target_kind === 'webdav' ? 'is-active' : ''}`}
+                        onClick={() => handleTargetKindChange('webdav')}
+                      >
+                        <CloudUploadOutlined className="backup-modern-choice-icon" />
+                        <span className="backup-modern-choice-title">WebDAV</span>
+                        <span className="backup-modern-choice-description">上传到坚果云、NAS 或其他兼容 WebDAV 的远端。</span>
+                      </button>
+                    </div>
+                  </div>
 
-                <div className="backup-modern-choice-grid">
-                  <button
-                    type="button"
-                    className={`backup-modern-choice-card ${currentValues.backup_mode === 'full' ? 'is-active' : ''}`}
-                    onClick={() => handleBackupModeChange('full')}
-                  >
-                    <DatabaseOutlined className="backup-modern-choice-icon" />
-                    <span className="backup-modern-choice-title">完整备份</span>
-                    <span className="backup-modern-choice-description">归档数据库、运行数据和用户文件，适合恢复与保全。</span>
-                  </button>
-                  <button
-                    type="button"
-                    className={`backup-modern-choice-card ${currentValues.backup_mode === 'media_export' ? 'is-active' : ''}`}
-                    onClick={() => handleBackupModeChange('media_export')}
-                  >
-                    <FileExcelOutlined className="backup-modern-choice-icon" />
-                    <span className="backup-modern-choice-title">影视数据导出</span>
-                    <span className="backup-modern-choice-description">生成 Excel，只保留影视名字、描述、标签和网盘链接。</span>
-                  </button>
+                  <div className="backup-modern-choice-section">
+                    {createChoiceSectionTitle('备份数据', '至少选择一种数据模式，默认会给出可继续调整的安全起点。')}
+                    <div className="backup-modern-choice-grid">
+                      <button
+                        type="button"
+                        className={`backup-modern-choice-card ${currentValues.backup_mode === 'full' ? 'is-active' : ''}`}
+                        onClick={() => handleBackupModeChange('full')}
+                      >
+                        <DatabaseOutlined className="backup-modern-choice-icon" />
+                        <span className="backup-modern-choice-title">完整备份</span>
+                        <span className="backup-modern-choice-description">归档数据库、运行数据和用户文件，适合恢复与保全。</span>
+                      </button>
+                      <button
+                        type="button"
+                        className={`backup-modern-choice-card ${currentValues.backup_mode === 'media_export' ? 'is-active' : ''}`}
+                        onClick={() => handleBackupModeChange('media_export')}
+                      >
+                        <FileExcelOutlined className="backup-modern-choice-icon" />
+                        <span className="backup-modern-choice-title">影视数据导出</span>
+                        <span className="backup-modern-choice-description">生成 Excel，只保留影视名字、描述、标签和网盘链接。</span>
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </section>
 
               <section className="backup-modern-panel">
-                {createSectionTitle('02', '连接配置', '只展示当前目标真正需要填写的连接字段，减少无关干扰。')}
+                {createSectionTitle('02', '连接配置', '当前选择哪个备份位置，这里就只展示对应的位置配置。')}
                 {currentValues.target_kind === 'local' ? (
                   <div className="backup-modern-grid">
                     <div className="backup-modern-field-card">
@@ -1063,7 +1058,7 @@ const BackupsModern = () => {
                   </div>
                 ) : null}
 
-                <div className="backup-modern-grid backup-modern-grid--two">
+                <div className="backup-modern-grid backup-modern-grid--three">
                   <div className="backup-modern-field-card">
                     {createLabel('保留份数', '超过该份数的历史备份会自动清理；填 0 表示不限份数。')}
                     <Form.Item name="retention_count" noStyle>
@@ -1073,6 +1068,12 @@ const BackupsModern = () => {
                   <div className="backup-modern-field-card">
                     {createLabel('保留天数', '超过该天数的历史备份会自动清理；填 0 表示不限天数。')}
                     <Form.Item name="retention_days" noStyle>
+                      <InputNumber min={0} max={3650} style={{ width: '100%' }} />
+                    </Form.Item>
+                  </div>
+                  <div className="backup-modern-field-card">
+                    {createLabel('运行记录天数', '自动清理多少天前的运行记录；只删记录，不删备份文件，填 0 表示不自动清理。')}
+                    <Form.Item name="run_log_retention_days" noStyle>
                       <InputNumber min={0} max={3650} style={{ width: '100%' }} />
                     </Form.Item>
                   </div>
@@ -1111,7 +1112,7 @@ const BackupsModern = () => {
                   <div className="backup-modern-summary-row">
                     <span>保留策略</span>
                     <strong>
-                      {currentValues.retention_count > 0 ? `${currentValues.retention_count} 份` : '不限份数'} / {currentValues.retention_days > 0 ? `${currentValues.retention_days} 天` : '不限天数'}
+                      {currentValues.retention_count > 0 ? `${currentValues.retention_count} 份` : '不限份数'} / {currentValues.retention_days > 0 ? `${currentValues.retention_days} 天` : '不限天数'} / {formatRunLogRetention(currentValues.run_log_retention_days)}
                     </strong>
                   </div>
                 </div>

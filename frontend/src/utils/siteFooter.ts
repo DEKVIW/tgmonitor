@@ -4,12 +4,14 @@ import type { FooterBuilderSection, PublicSystemConfigResponse, SystemConfigResp
 type SiteFooterPayload = Partial<PublicSystemConfigResponse & SystemConfigResponse> | null | undefined
 
 export interface SiteFooterState {
+  site_name: string
   footer_builder_enabled: boolean
   footer_builder_sections: FooterBuilderSection[]
   footer_builder_bottom_html: string
 }
 
 const DEFAULT_SITE_FOOTER: SiteFooterState = {
+  site_name: 'TG频道监控',
   footer_builder_enabled: false,
   footer_builder_sections: [],
   footer_builder_bottom_html: '',
@@ -18,6 +20,8 @@ const DEFAULT_SITE_FOOTER: SiteFooterState = {
 const SITE_FOOTER_EVENT = 'tg-site-footer-updated'
 
 const normalizeText = (value: unknown) => String(value ?? '').trim()
+const hasFooterSectionContent = (section: Pick<FooterBuilderSection, 'title' | 'html'>) =>
+  normalizeText(section.title) || String(section.html ?? '').trim()
 
 const normalizeFooterSections = (sections: unknown): FooterBuilderSection[] => {
   if (!Array.isArray(sections)) {
@@ -37,9 +41,11 @@ const normalizeFooterSections = (sections: unknown): FooterBuilderSection[] => {
         span,
       }
     })
+    .filter(hasFooterSectionContent)
 }
 
 export const extractSiteFooterConfig = (payload?: SiteFooterPayload): SiteFooterState => ({
+  site_name: String(payload?.site_name ?? '').trim() || DEFAULT_SITE_FOOTER.site_name,
   footer_builder_enabled:
     typeof payload?.footer_builder_enabled === 'boolean'
       ? payload.footer_builder_enabled

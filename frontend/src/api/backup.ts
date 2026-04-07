@@ -1,5 +1,5 @@
 import apiClient from '@/utils/api'
-import type { BackupRun, BackupTarget, BackupTargetPayload, BackupTargetTestResult } from '@/types/backup'
+import type { BackupRun, BackupRunDeleteResult, BackupTarget, BackupTargetPayload, BackupTargetTestResult } from '@/types/backup'
 
 export const getBackupTargets = async (): Promise<BackupTarget[]> => {
   const response = await apiClient.get<BackupTarget[]>('/admin/backups/targets')
@@ -43,3 +43,7 @@ export const getBackupRuns = async (params: { limit?: number; target_id?: number
   return response.data
 }
 
+export const deleteBackupRuns = async (ids: number[]): Promise<BackupRunDeleteResult> => {
+  const response = await apiClient.post<BackupRunDeleteResult>('/admin/backups/runs/delete', { ids })
+  return response.data
+}

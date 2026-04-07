@@ -207,6 +207,7 @@ def _serialize_backup_target(target: BackupTarget, active_runs: dict[int, Backup
         "timezone": target.timezone,
         "retention_count": target.retention_count,
         "retention_days": target.retention_days,
+        "run_log_retention_days": target.run_log_retention_days,
         "local_dir": target.local_dir,
         "webdav_base_url": target.webdav_base_url,
         "webdav_username": target.webdav_username,
@@ -335,6 +336,7 @@ def _apply_target_payload(target: BackupTarget, values: dict[str, Any], *, is_up
     target.timezone = values["timezone"]
     target.retention_count = int(values["retention_count"])
     target.retention_days = int(values["retention_days"])
+    target.run_log_retention_days = int(values.get("run_log_retention_days") or 0)
     target.local_dir = values.get("local_dir") or LOCAL_DEFAULT_DIR
     target.webdav_base_url = (values.get("webdav_base_url") or "").strip()
     target.webdav_username = (values.get("webdav_username") or "").strip()
@@ -427,6 +429,77 @@ def list_backup_runs(*, limit: int = 40, target_id: int | None = None) -> list[d
             query = query.filter(BackupRun.target_id == target_id)
         runs = query.order_by(BackupRun.started_at.desc(), BackupRun.id.desc()).limit(safe_limit).all()
         return [_serialize_backup_run(run) for run in runs]
+
+
+def delete_backup_runs(run_ids: list[int]) -> dict[str, Any]:
+    ensure_runtime_storage_tables()
+    normalized_ids = [run_id for run_id in dict.fromkeys(int(value) for value in run_ids if int(value) > 0)]
+    if not normalized_ids:
+        raise ValueError("No backup runs selected")
+
+    deleted_ids: list[int] = []
+    skipped_active_count = 0
+    skipped_missing_count = 0
+
+    with Session(engine) as session:
+        runs = session.query(BackupRun).filter(BackupRun.id.in_(normalized_ids)).all()
+        run_map = {run.id: run for run in runs}
+
+        for run_id in normalized_ids:
+            run = run_map.get(run_id)
+            if run is None:
+                skipped_missing_count += 1
+                continue
+            if run.status in ACTIVE_RUN_STATUSES:
+                skipped_active_count += 1
+                continue
+
+            session.delete(run)
+            deleted_ids.append(run_id)
+
+        session.commit()
+
+    return {
+        "deleted_count": len(deleted_ids),
+        "skipped_active_count": skipped_active_count,
+        "skipped_missing_count": skipped_missing_count,
+        "deleted_ids": deleted_ids,
+    }
+
+
+def cleanup_expired_backup_run_logs() -> dict[str, Any]:
+    ensure_runtime_storage_tables()
+    deleted_ids: list[int] = []
+    now_utc = _utc_now()
+
+    with Session(engine) as session:
+        targets = (
+            session.query(BackupTarget.id, BackupTarget.run_log_retention_days)
+            .filter(BackupTarget.run_log_retention_days > 0)
+            .all()
+        )
+
+        for target_id, retention_days in targets:
+            cutoff = now_utc - timedelta(days=int(retention_days))
+            stale_runs = (
+                session.query(BackupRun)
+                .filter(
+                    BackupRun.target_id == target_id,
+                    BackupRun.status.notin_(ACTIVE_RUN_STATUSES),
+                    BackupRun.started_at < cutoff,
+                )
+                .all()
+            )
+            for run in stale_runs:
+                deleted_ids.append(run.id)
+                session.delete(run)
+
+        session.commit()
+
+    return {
+        "deleted_count": len(deleted_ids),
+        "deleted_ids": deleted_ids,
+    }
 
 
 def _build_run_from_target(target: BackupTarget, *, trigger_source: str, created_by: str | None) -> BackupRun:
@@ -1031,6 +1104,7 @@ def _clone_target(target: BackupTarget) -> BackupTarget:
         "timezone",
         "retention_count",
         "retention_days",
+        "run_log_retention_days",
         "local_dir",
         "webdav_base_url",
         "webdav_username",

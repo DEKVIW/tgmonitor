@@ -192,6 +192,7 @@ class BackupTarget(Base):
     timezone = Column(String(64), nullable=False, default="Asia/Shanghai")
     retention_count = Column(Integer, nullable=False, default=10)
     retention_days = Column(Integer, nullable=False, default=30)
+    run_log_retention_days = Column(Integer, nullable=False, default=0)
     local_dir = Column(Text, nullable=False, default="")
     webdav_base_url = Column(Text, nullable=False, default="")
     webdav_username = Column(String(255), nullable=False, default="")
@@ -311,6 +312,7 @@ def ensure_runtime_storage_tables() -> None:
             ],
         )
         _ensure_system_settings_columns()
+        _ensure_backup_target_columns()
         _ensure_backup_management_indexes()
         _runtime_storage_checked = True
 
@@ -332,6 +334,26 @@ def _ensure_system_settings_columns() -> None:
         "site_keywords": "ALTER TABLE system_settings ADD COLUMN site_keywords TEXT NOT NULL DEFAULT 'telegram,缃戠洏,棰戦亾鐩戞帶,璧勬簮鎼滅储'",
         "brand_icon": "ALTER TABLE system_settings ADD COLUMN brand_icon VARCHAR(32) NOT NULL DEFAULT '馃摫'",
         "site_favicon_url": "ALTER TABLE system_settings ADD COLUMN site_favicon_url TEXT NOT NULL DEFAULT '/favicon.svg'",
+    }
+    with engine.begin() as connection:
+        for column_name, sql in pending_alters.items():
+            if column_name in columns:
+                continue
+            connection.execute(text(sql))
+
+
+def _ensure_backup_target_columns() -> None:
+    inspector = inspect(engine)
+    try:
+        columns = {column["name"] for column in inspector.get_columns("backup_targets")}
+    except Exception:
+        columns = set()
+
+    if not columns:
+        return
+
+    pending_alters = {
+        "run_log_retention_days": "ALTER TABLE backup_targets ADD COLUMN run_log_retention_days INTEGER NOT NULL DEFAULT 0",
     }
     with engine.begin() as connection:
         for column_name, sql in pending_alters.items():

@@ -59,6 +59,12 @@ const createEmptyFooterSection = (): FooterBuilderSection => ({
   span: 3,
 })
 
+const hasFooterSectionContent = (section: FooterBuilderSection) =>
+  section.title.trim() || section.html.trim()
+
+const normalizeFooterSectionsForEditor = (sections: FooterBuilderSection[]) =>
+  sections.filter(hasFooterSectionContent)
+
 const createLabel = (title: string, hint: string) => (
   <div className="system-config-modern-field-label">
     <Text strong>{title}</Text>
@@ -90,8 +96,12 @@ const SystemConfigModern = () => {
     setLoading(true)
     try {
       const data = await getSystemConfig()
-      setConfig(data)
-      setDraft({ ...data })
+      const normalizedData = {
+        ...data,
+        footer_builder_sections: normalizeFooterSectionsForEditor(data.footer_builder_sections),
+      }
+      setConfig(normalizedData)
+      setDraft(normalizedData)
     } catch (error: any) {
       message.error(error.response?.data?.detail || '加载系统配置失败')
     } finally {
@@ -120,7 +130,10 @@ const SystemConfigModern = () => {
     if (!config) {
       return
     }
-    setDraft({ ...config })
+    setDraft({
+      ...config,
+      footer_builder_sections: normalizeFooterSectionsForEditor(config.footer_builder_sections),
+    })
   }
 
   const handleSave = async () => {
@@ -138,10 +151,18 @@ const SystemConfigModern = () => {
 
     setSaving(true)
     try {
-      const updated = await updateSystemConfig(draft)
-      setConfig(updated)
-      setDraft({ ...updated })
-      window.dispatchEvent(new CustomEvent<SystemConfigResponse>('tg-system-config-updated', { detail: updated }))
+      const normalizedDraft = {
+        ...draft,
+        footer_builder_sections: normalizeFooterSectionsForEditor(draft.footer_builder_sections),
+      }
+      const updated = await updateSystemConfig(normalizedDraft)
+      const normalizedUpdated = {
+        ...updated,
+        footer_builder_sections: normalizeFooterSectionsForEditor(updated.footer_builder_sections),
+      }
+      setConfig(normalizedUpdated)
+      setDraft(normalizedUpdated)
+      window.dispatchEvent(new CustomEvent<SystemConfigResponse>('tg-system-config-updated', { detail: normalizedUpdated }))
       message.success('系统配置已保存')
     } catch (error: any) {
       message.error(error.response?.data?.detail || '更新系统配置失败')
@@ -461,7 +482,7 @@ const SystemConfigModern = () => {
                         </div>
 
                         <div className="system-config-modern-footer-section-field">
-                          {createLabel('HTML 内容', '支持标题下的完整 HTML 内容，可放链接、图片、列表、说明等。')}
+                          {createLabel('HTML 内容', '支持完整 HTML，也支持 {{current_year}}、{{site_name}} 这类变量。')}
                           <TextArea
                             rows={6}
                             value={section.html}
@@ -481,7 +502,7 @@ const SystemConfigModern = () => {
                 )}
 
                 <div className="system-config-modern-field-card system-config-modern-field-card--wide">
-                  {createLabel('底栏 HTML', '显示在栏目区下方，适合放版权行、备案、站点地图或补充链接。')}
+                  {createLabel('底栏 HTML', '显示在栏目区下方，支持 HTML，也支持 {{current_year}}、{{site_name}} 变量。')}
                   <TextArea
                     rows={5}
                     value={draft.footer_builder_bottom_html}
@@ -616,23 +637,6 @@ const SystemConfigModern = () => {
                 </div>
               </div>
 
-              <div className="system-config-modern-field-card">
-                {createLabel('插播间隔', '每展示 N 条消息后插入 1 条广告。数值越小，广告出现越频繁。')}
-                <InputNumber
-                  min={2}
-                  max={999}
-                  value={draft.public_feed_inline_every_n}
-                  onChange={(value) => {
-                    if (typeof value !== 'number' || Number.isNaN(value)) {
-                      return
-                    }
-                    updateDraft('public_feed_inline_every_n', value)
-                  }}
-                  addonAfter="条"
-                  disabled={saving}
-                />
-              </div>
-
               <div className="system-config-modern-ad-card">
                 {createLabel('顶部广告', '显示在消息总数提示下方，适合横幅类素材。')}
                 <div className="system-config-modern-ad-code-group">
@@ -662,7 +666,27 @@ const SystemConfigModern = () => {
               </div>
 
               <div className="system-config-modern-ad-card">
-                {createLabel('信息流插播广告', '插入在消息卡片之间，适合中矩形或紧凑型素材。')}
+                <div className="system-config-modern-ad-card-head">
+                  <div className="system-config-modern-ad-card-head-copy">
+                    {createLabel('信息流插播广告', '插入在消息卡片之间，适合中矩形或紧凑型素材。')}
+                  </div>
+                  <div className="system-config-modern-ad-inline-setting">
+                    {createLabel('插播间隔', '每展示 N 条消息后插入 1 条广告。数值越小，广告出现越频繁。')}
+                    <InputNumber
+                      min={2}
+                      max={999}
+                      value={draft.public_feed_inline_every_n}
+                      onChange={(value) => {
+                        if (typeof value !== 'number' || Number.isNaN(value)) {
+                          return
+                        }
+                        updateDraft('public_feed_inline_every_n', value)
+                      }}
+                      addonAfter="条"
+                      disabled={saving}
+                    />
+                  </div>
+                </div>
                 <div className="system-config-modern-ad-code-group">
                   {createLabel('桌面端 HTML', '桌面端插播广告代码。')}
                   <TextArea

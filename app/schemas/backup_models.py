@@ -33,6 +33,7 @@ class BackupTargetBase(BaseModel):
     timezone: str = Field(default="Asia/Shanghai", max_length=64)
     retention_count: int = Field(default=10, ge=0, le=3650)
     retention_days: int = Field(default=30, ge=0, le=3650)
+    run_log_retention_days: int = Field(default=0, ge=0, le=3650)
     local_dir: str = Field(default="", max_length=2000)
     webdav_base_url: str = Field(default="", max_length=2000)
     webdav_username: str = Field(default="", max_length=255)
@@ -180,6 +181,7 @@ class BackupTargetResponse(BaseModel):
     timezone: str
     retention_count: int
     retention_days: int
+    run_log_retention_days: int
     local_dir: str
     webdav_base_url: str
     webdav_username: str
@@ -240,3 +242,13 @@ class BackupTargetTestResult(BaseModel):
     resolved_path: Optional[str] = None
     remote_path: Optional[str] = None
 
+
+class BackupRunDeleteRequest(BaseModel):
+    ids: list[int] = Field(default_factory=list, min_length=1, max_length=200)
+
+
+class BackupRunDeleteResponse(BaseModel):
+    deleted_count: int
+    skipped_active_count: int = 0
+    skipped_missing_count: int = 0
+    deleted_ids: list[int] = Field(default_factory=list)

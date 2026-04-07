@@ -12,29 +12,45 @@ interface SiteFooterProps {
   preview?: boolean
 }
 
+const resolveFooterTemplate = (template: string, variables: Record<string, string>) =>
+  template.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_, rawKey: string) => variables[rawKey] ?? '')
+
 const SiteFooter = ({ config, preview = false }: SiteFooterProps) => {
   const liveFooterConfig = useSiteFooterConfig()
   const footerConfig = config ? extractSiteFooterConfig(config) : liveFooterConfig
+  const templateVariables = useMemo(
+    () => ({
+      current_year: String(new Date().getFullYear()),
+      site_name: footerConfig.site_name,
+    }),
+    [footerConfig.site_name]
+  )
 
   const sections = useMemo(
     () =>
       footerConfig.footer_builder_sections.map((section) => ({
         ...section,
-        sanitizedHtml: sanitizeHtml(section.html),
+        resolvedTitle: resolveFooterTemplate(section.title, templateVariables),
+        sanitizedHtml: sanitizeHtml(resolveFooterTemplate(section.html, templateVariables)),
       })),
-    [footerConfig.footer_builder_sections]
+    [footerConfig.footer_builder_sections, templateVariables]
+  )
+
+  const visibleSections = useMemo(
+    () => sections.filter((section) => section.resolvedTitle || section.sanitizedHtml.trim()),
+    [sections]
   )
 
   const bottomHtml = useMemo(
-    () => sanitizeHtml(footerConfig.footer_builder_bottom_html),
-    [footerConfig.footer_builder_bottom_html]
+    () => sanitizeHtml(resolveFooterTemplate(footerConfig.footer_builder_bottom_html, templateVariables)),
+    [footerConfig.footer_builder_bottom_html, templateVariables]
   )
 
   if (!footerConfig.footer_builder_enabled && !preview) {
     return null
   }
 
-  const hasVisibleContent = sections.some((section) => section.title || section.sanitizedHtml.trim()) || bottomHtml.trim()
+  const hasVisibleContent = visibleSections.length > 0 || bottomHtml.trim()
 
   if (!hasVisibleContent && !preview) {
     return null
@@ -47,22 +63,20 @@ const SiteFooter = ({ config, preview = false }: SiteFooterProps) => {
 
         {hasVisibleContent ? (
           <>
-            {sections.length ? (
+            {visibleSections.length ? (
               <div className="site-footer__grid">
-                {sections.map((section) => (
+                {visibleSections.map((section) => (
                   <section
                     key={section.id}
                     className="site-footer__column"
                     style={{ '--footer-span': String(section.span) } as CSSProperties}
                   >
-                    {section.title ? <h3 className="site-footer__title">{section.title}</h3> : null}
+                    {section.resolvedTitle ? <h3 className="site-footer__title">{section.resolvedTitle}</h3> : null}
                     {section.sanitizedHtml.trim() ? (
                       <div
                         className="site-footer__html"
                         dangerouslySetInnerHTML={{ __html: section.sanitizedHtml }}
                       />
-                    ) : preview ? (
-                      <div className="site-footer__empty">此栏目还没有内容</div>
                     ) : null}
                   </section>
                 ))}
