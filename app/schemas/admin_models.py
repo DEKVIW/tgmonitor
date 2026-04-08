@@ -652,13 +652,109 @@ class ChannelSampleResponse(BaseModel):
 
 
 class LinkCheckTaskCreate(BaseModel):
-    period: str = Field(min_length=1, max_length=128)
+    selection_mode: str = Field(default="smart_count", max_length=32)
+    period: Optional[str] = Field(default=None, min_length=1, max_length=128)
+    range_start: Optional[str] = Field(default=None, max_length=32)
+    range_end: Optional[str] = Field(default=None, max_length=32)
+    target_link_count: Optional[int] = Field(default=None, ge=1, le=5000)
+    direction: str = Field(default="newest_first", max_length=32)
     max_concurrent: int = Field(default=5, ge=1, le=10)
 
-    @field_validator("period")
+    @field_validator("selection_mode")
     @classmethod
-    def validate_period(cls, value: str) -> str:
-        return _normalize_text(value, field_name="period")
+    def validate_selection_mode(cls, value: str) -> str:
+        normalized = _normalize_text(value, field_name="selection_mode").lower()
+        if normalized not in {"smart_count", "time_range"}:
+            raise ValueError("selection_mode must be smart_count or time_range")
+        return normalized
+
+    @field_validator("direction")
+    @classmethod
+    def validate_direction(cls, value: str) -> str:
+        normalized = _normalize_text(value, field_name="direction").lower()
+        if normalized not in {"newest_first", "oldest_first"}:
+            raise ValueError("direction must be newest_first or oldest_first")
+        return normalized
+
+    @model_validator(mode="after")
+    def normalize_task_scope(self) -> "LinkCheckTaskCreate":
+        if self.period:
+            self.period = _normalize_text(self.period, field_name="period")
+            if ":" in self.period and (not self.range_start or not self.range_end):
+                start_str, end_str = [part.strip() for part in self.period.split(":", 1)]
+                if start_str and end_str:
+                    self.range_start = start_str
+                    self.range_end = end_str
+                    self.selection_mode = "time_range"
+
+        if self.period and self.range_start is None and self.range_end is None and self.target_link_count is None:
+            return self
+
+        if self.selection_mode == "time_range":
+            if not self.range_start or not self.range_end:
+                raise ValueError("range_start and range_end are required for time_range mode")
+            self.range_start = _normalize_text(self.range_start, field_name="range_start")
+            self.range_end = _normalize_text(self.range_end, field_name="range_end")
+        else:
+            if self.target_link_count is None:
+                raise ValueError("target_link_count is required for smart_count mode")
+
+        return self
+
+
+class LinkCheckPreviewRequest(BaseModel):
+    selection_mode: str = Field(default="smart_count", max_length=32)
+    range_start: Optional[str] = Field(default=None, max_length=32)
+    range_end: Optional[str] = Field(default=None, max_length=32)
+    target_link_count: Optional[int] = Field(default=None, ge=1, le=5000)
+    direction: str = Field(default="newest_first", max_length=32)
+
+    @field_validator("selection_mode")
+    @classmethod
+    def validate_selection_mode(cls, value: str) -> str:
+        normalized = _normalize_text(value, field_name="selection_mode").lower()
+        if normalized not in {"smart_count", "time_range"}:
+            raise ValueError("selection_mode must be smart_count or time_range")
+        return normalized
+
+    @field_validator("direction")
+    @classmethod
+    def validate_direction(cls, value: str) -> str:
+        normalized = _normalize_text(value, field_name="direction").lower()
+        if normalized not in {"newest_first", "oldest_first"}:
+            raise ValueError("direction must be newest_first or oldest_first")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_scope(self) -> "LinkCheckPreviewRequest":
+        if self.selection_mode == "time_range":
+            if not self.range_start or not self.range_end:
+                raise ValueError("range_start and range_end are required for time_range mode")
+            self.range_start = _normalize_text(self.range_start, field_name="range_start")
+            self.range_end = _normalize_text(self.range_end, field_name="range_end")
+        elif self.target_link_count is None:
+            raise ValueError("target_link_count is required for smart_count mode")
+        return self
+
+
+class LinkCheckPreviewResponse(BaseModel):
+    selection_mode: str
+    direction: Optional[str] = None
+    scope_label: str
+    estimated_messages: int
+    estimated_links: int
+    range_start: Optional[str] = None
+    range_end: Optional[str] = None
+    first_message_time: Optional[str] = None
+    last_message_time: Optional[str] = None
+    requested_target_link_count: Optional[int] = None
+    effective_target_link_count: Optional[int] = None
+    task_link_limit: int
+    recommended_batch_count: int = 0
+    recommended_target_link_count: int = 0
+    can_start: bool = False
+    exceeds_task_limit: bool = False
+    warnings: List[str] = Field(default_factory=list)
 
 
 class LinkCheckTaskStatus(BaseModel):
@@ -666,6 +762,9 @@ class LinkCheckTaskStatus(BaseModel):
     status: str
     progress: int
     period_desc: Optional[str] = None
+    scope_label: Optional[str] = None
+    trigger_source: Optional[str] = None
+    task_mode: Optional[str] = None
     total_messages: Optional[int] = None
     total_links: Optional[int] = None
     checked_links: Optional[int] = None
@@ -695,6 +794,9 @@ class LinkCheckTaskHistory(BaseModel):
     deleted_messages: Optional[int] = None
     status: str
     duration: Optional[float] = None
+    trigger_source: Optional[str] = None
+    task_mode: Optional[str] = None
+    scope_label: Optional[str] = None
 
 
 class LinkCheckTaskResult(BaseModel):
@@ -706,6 +808,87 @@ class LinkCheckDateRange(BaseModel):
     min_date: Optional[str] = None
     max_date: str
     latest_message_date: Optional[str] = None
+
+
+class LinkCheckPlanOverview(BaseModel):
+    total_messages_with_links: int = 0
+    total_links: int = 0
+    first_message_time: Optional[str] = None
+    last_message_time: Optional[str] = None
+    estimated_links_per_run: int = 0
+    estimated_batches_per_cycle: int = 0
+    estimated_days_to_complete_cycle: float = 0
+    can_finish_within_cycle: bool = True
+    warnings: List[str] = Field(default_factory=list)
+    summary: str = ""
+    next_run_at: Optional[str] = None
+    last_run_at: Optional[str] = None
+    cursor_message_id: Optional[int] = None
+    cycle_started_at: Optional[str] = None
+    cycle_completed_at: Optional[str] = None
+    task_link_limit: int = 0
+    task_concurrency_limit: int = 0
+    generated_at: Optional[str] = None
+    stale: bool = False
+    refreshing: bool = False
+
+
+class LinkCheckPlanUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, max_length=128)
+    is_enabled: bool = False
+    schedule_hour: int = Field(default=1, ge=0, le=23)
+    schedule_minute: int = Field(default=0, ge=0, le=59)
+    timezone: str = Field(default="Asia/Shanghai", max_length=64)
+    cycle_days: int = Field(default=7, ge=1, le=90)
+    batch_link_target: int = Field(default=900, ge=100, le=5000)
+    max_batches_per_run: int = Field(default=3, ge=1, le=12)
+    max_concurrent: int = Field(default=5, ge=1, le=10)
+    traversal_order: str = Field(default="newest_first", max_length=32)
+    cleanup_mode: str = Field(default="none", max_length=32)
+    cleanup_min_consecutive_invalid_runs: int = Field(default=2, ge=1, le=10)
+
+    @field_validator("traversal_order")
+    @classmethod
+    def validate_traversal_order(cls, value: str) -> str:
+        normalized = _normalize_text(value, field_name="traversal_order").lower()
+        if normalized not in {"newest_first", "oldest_first"}:
+            raise ValueError("traversal_order must be newest_first or oldest_first")
+        return normalized
+
+    @field_validator("cleanup_mode")
+    @classmethod
+    def validate_cleanup_mode(cls, value: str) -> str:
+        normalized = _normalize_text(value, field_name="cleanup_mode").lower()
+        if normalized not in {"none", "remove_invalid_links", "delete_message_if_empty"}:
+            raise ValueError("cleanup_mode must be none, remove_invalid_links or delete_message_if_empty")
+        return normalized
+
+
+class LinkCheckPlanResponse(BaseModel):
+    id: int
+    name: str
+    is_enabled: bool
+    schedule_hour: int
+    schedule_minute: int
+    timezone: str
+    cycle_days: int
+    batch_link_target: int
+    max_batches_per_run: int
+    max_concurrent: int
+    traversal_order: str
+    cleanup_mode: str
+    cleanup_min_consecutive_invalid_runs: int
+    next_run_at: Optional[str] = None
+    last_run_at: Optional[str] = None
+    last_status: Optional[str] = None
+    last_error_message: Optional[str] = None
+    cursor_message_id: Optional[int] = None
+    cycle_started_at: Optional[str] = None
+    cycle_completed_at: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    updated_by: Optional[str] = None
+    overview: LinkCheckPlanOverview
 
 
 class LinkCleanupApplyRequest(BaseModel):

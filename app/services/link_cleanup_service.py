@@ -110,16 +110,46 @@ def _is_cleanup_candidate(detail: LinkCheckDetails) -> bool:
     )
 
 
+def _has_invalid_streak(
+    db: Session,
+    normalized_url: str,
+    *,
+    min_consecutive_invalid_runs: int,
+) -> bool:
+    rows = (
+        db.query(LinkCheckDetails.check_time, LinkCheckDetails.is_valid, LinkCheckDetails.action_taken)
+        .filter(LinkCheckDetails.normalized_url == normalized_url)
+        .order_by(LinkCheckDetails.check_time.desc(), LinkCheckDetails.id.desc())
+        .all()
+    )
+
+    seen_check_times: set[datetime] = set()
+    streak_count = 0
+    for check_time, is_valid, action_taken in rows:
+        if check_time in seen_check_times:
+            continue
+        seen_check_times.add(check_time)
+        if bool(is_valid) or _normalize_status(action_taken) not in _CLEANUP_ELIGIBLE_STATUSES:
+            return False
+        streak_count += 1
+        if streak_count >= min_consecutive_invalid_runs:
+            return True
+    return False
+
+
 def apply_link_check_cleanup(
     db: Session,
     check_time_str: str,
     *,
     mode: str = CLEANUP_MODE_REMOVE_INVALID_LINKS,
     dry_run: bool = False,
+    min_consecutive_invalid_runs: int = 1,
 ) -> Dict[str, Any]:
     normalized_mode = (mode or "").strip().lower()
     if normalized_mode not in SUPPORTED_CLEANUP_MODES:
         raise ValueError(f"Unsupported cleanup mode: {mode}")
+    if int(min_consecutive_invalid_runs or 1) < 1:
+        raise ValueError("min_consecutive_invalid_runs must be at least 1")
 
     check_time = datetime.fromisoformat(check_time_str)
     stats = db.query(LinkCheckStats).filter(LinkCheckStats.check_time == check_time).first()
@@ -139,6 +169,12 @@ def apply_link_check_cleanup(
             continue
         normalized_url = _normalize_url_key(detail.url)
         if not normalized_url:
+            continue
+        if int(min_consecutive_invalid_runs or 1) > 1 and not _has_invalid_streak(
+            db,
+            normalized_url,
+            min_consecutive_invalid_runs=int(min_consecutive_invalid_runs or 1),
+        ):
             continue
         message_invalid_urls.setdefault(int(detail.message_id), set()).add(normalized_url)
         cleanup_candidates += 1
@@ -210,6 +246,13 @@ def apply_link_check_cleanup(
             stats.updated_messages = int(stats.updated_messages or 0) + updated_messages
             stats.deleted_messages = int(stats.deleted_messages or 0) + deleted_messages
             db.commit()
+            if (updated_messages or deleted_messages) and hasattr(db, "get_bind") and db.get_bind() is not None:
+                try:
+                    from app.services.link_check_plan_service import mark_link_check_plan_overview_stale
+
+                    mark_link_check_plan_overview_stale(getattr(stats, "plan_id", None))
+                except Exception:
+                    logger.exception("failed to mark link check plan overview stale after cleanup")
         else:
             db.rollback()
     except Exception as exc:

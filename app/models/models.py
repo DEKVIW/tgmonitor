@@ -66,6 +66,10 @@ class LinkCheckStats(Base):
     netdisk_stats = Column(JSON)
     check_duration = Column(Float)
     status = Column(String(50), default="completed")
+    trigger_source = Column(String(32), nullable=False, default="manual", index=True)
+    task_mode = Column(String(32), nullable=False, default="time_range", index=True)
+    scope_label = Column(String(255), nullable=True)
+    plan_id = Column(Integer, ForeignKey("link_check_plans.id"), nullable=True, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
@@ -77,11 +81,41 @@ class LinkCheckDetails(Base):
     message_id = Column(Integer, nullable=False, index=True)
     netdisk_type = Column(String(50), index=True)
     url = Column(Text)
+    normalized_url = Column(Text, nullable=True, index=True)
     is_valid = Column(Boolean, nullable=False)
     response_time = Column(Float)
     error_reason = Column(String(200))
     action_taken = Column(String(50), default="none")
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class LinkCheckPlan(Base):
+    __tablename__ = "link_check_plans"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(128), nullable=False, default="默认巡检")
+    is_enabled = Column(Boolean, nullable=False, default=False, index=True)
+    schedule_hour = Column(Integer, nullable=False, default=1)
+    schedule_minute = Column(Integer, nullable=False, default=0)
+    timezone = Column(String(64), nullable=False, default="Asia/Shanghai")
+    cycle_days = Column(Integer, nullable=False, default=7)
+    batch_link_target = Column(Integer, nullable=False, default=900)
+    max_batches_per_run = Column(Integer, nullable=False, default=3)
+    max_concurrent = Column(Integer, nullable=False, default=5)
+    traversal_order = Column(String(16), nullable=False, default="newest_first")
+    cleanup_mode = Column(String(32), nullable=False, default="none")
+    cleanup_min_consecutive_invalid_runs = Column(Integer, nullable=False, default=2)
+    next_run_at = Column(DateTime, nullable=True, index=True)
+    last_run_at = Column(DateTime, nullable=True)
+    last_status = Column(String(32), nullable=True)
+    last_error_message = Column(Text, nullable=True)
+    cursor_message_id = Column(Integer, nullable=True)
+    cycle_started_at = Column(DateTime, nullable=True)
+    cycle_completed_at = Column(DateTime, nullable=True)
+    extra_json = Column(JSONB, nullable=False, default=dict)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_by = Column(String(128), nullable=True)
 
 
 class SystemSettings(Base):
@@ -391,6 +425,7 @@ def ensure_runtime_storage_tables() -> None:
             bind=engine,
             tables=[
                 SystemSettings.__table__,
+                LinkCheckPlan.__table__,
                 BackupSettings.__table__,
                 BackupRecord.__table__,
                 BackupTarget.__table__,
@@ -402,8 +437,10 @@ def ensure_runtime_storage_tables() -> None:
             ],
         )
         _ensure_system_settings_columns()
+        _ensure_link_check_columns()
         _ensure_backup_target_columns()
         _ensure_backup_management_indexes()
+        _ensure_link_check_indexes()
         _runtime_storage_checked = True
 
 
@@ -450,6 +487,59 @@ def _ensure_backup_target_columns() -> None:
             if column_name in columns:
                 continue
             connection.execute(text(sql))
+
+
+def _ensure_link_check_columns() -> None:
+    inspector = inspect(engine)
+    try:
+        stats_columns = {column["name"] for column in inspector.get_columns("link_check_stats")}
+    except Exception:
+        stats_columns = set()
+
+    try:
+        detail_columns = {column["name"] for column in inspector.get_columns("link_check_details")}
+    except Exception:
+        detail_columns = set()
+
+    with engine.begin() as connection:
+        stats_pending_alters = {
+            "trigger_source": "ALTER TABLE link_check_stats ADD COLUMN trigger_source VARCHAR(32) NOT NULL DEFAULT 'manual'",
+            "task_mode": "ALTER TABLE link_check_stats ADD COLUMN task_mode VARCHAR(32) NOT NULL DEFAULT 'time_range'",
+            "scope_label": "ALTER TABLE link_check_stats ADD COLUMN scope_label VARCHAR(255)",
+            "plan_id": "ALTER TABLE link_check_stats ADD COLUMN plan_id INTEGER",
+        }
+        for column_name, sql in stats_pending_alters.items():
+            if column_name in stats_columns:
+                continue
+            connection.execute(text(sql))
+
+        detail_pending_alters = {
+            "normalized_url": "ALTER TABLE link_check_details ADD COLUMN normalized_url TEXT",
+        }
+        for column_name, sql in detail_pending_alters.items():
+            if column_name in detail_columns:
+                continue
+            connection.execute(text(sql))
+
+
+def _ensure_link_check_indexes() -> None:
+    statements = (
+        """
+        CREATE INDEX IF NOT EXISTS ix_link_check_details_normalized_url_check_time
+        ON link_check_details (normalized_url, check_time DESC)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_link_check_stats_trigger_source_check_time
+        ON link_check_stats (trigger_source, check_time DESC)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_link_check_plans_enabled_next_run
+        ON link_check_plans (is_enabled, next_run_at)
+        """,
+    )
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement))
 
 
 def _ensure_backup_management_indexes() -> None:

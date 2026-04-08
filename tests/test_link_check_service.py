@@ -12,7 +12,6 @@ os.environ.setdefault("DATABASE_URL", "postgresql://user:pass@localhost/testdb")
 os.environ.setdefault("DEFAULT_CHANNELS", "")
 os.environ.setdefault("SECRET_SALT", "test-salt")
 
-from app.services import link_check_service
 from app.services import link_check_runtime
 
 
@@ -26,14 +25,14 @@ class LinkCheckServiceTestCase(unittest.TestCase):
                 Path(temp_dir) / "_active_task.json",
             ):
                 link_check_runtime._task_status.clear()
-                link_check_service.init_task_status(task_id, "today", 3)
+                link_check_runtime.init_task_status(task_id, "today", 3)
 
-                status = link_check_service.get_task_status(task_id)
+                status = link_check_runtime.get_task_status(task_id)
                 self.assertIsNotNone(status)
                 original_logs = list(status["logs"])
 
                 status["logs"].append("mutated")
-                latest_status = link_check_service.get_task_status(task_id)
+                latest_status = link_check_runtime.get_task_status(task_id)
                 self.assertEqual(latest_status["logs"], original_logs)
 
         link_check_runtime._task_status.clear()
@@ -49,7 +48,7 @@ class LinkCheckServiceTestCase(unittest.TestCase):
             },
         }
 
-        urls = link_check_service.extract_urls(payload)
+        urls = link_check_runtime.extract_urls(payload)
         self.assertIn("https://pan.baidu.com/s/abc", urls)
         self.assertIn("https://pan.quark.cn/s/def", urls)
         self.assertIn("https://pan.quark.cn/s/ghi", urls)
@@ -64,10 +63,10 @@ class LinkCheckServiceTestCase(unittest.TestCase):
                 Path(temp_dir) / "_active_task.json",
             ):
                 link_check_runtime._task_status.clear()
-                link_check_service.init_task_status(task_id, "today", 2)
+                link_check_runtime.init_task_status(task_id, "today", 2)
                 link_check_runtime._task_status.clear()
 
-                status = link_check_service.get_task_status(task_id)
+                status = link_check_runtime.get_task_status(task_id)
 
                 self.assertIsNotNone(status)
                 self.assertEqual(status["status"], "running")
@@ -83,8 +82,8 @@ class LinkCheckServiceTestCase(unittest.TestCase):
                 Path(temp_dir) / "_active_task.json",
             ):
                 link_check_runtime._task_status.clear()
-                first_task_id, _, created = link_check_service.start_or_reuse_task("today", 2)
-                second_task_id, second_status, created_again = link_check_service.start_or_reuse_task("week", 5)
+                first_task_id, _, created = link_check_runtime.start_or_reuse_task("today", 2)
+                second_task_id, second_status, created_again = link_check_runtime.start_or_reuse_task("week", 5)
 
                 self.assertTrue(created)
                 self.assertFalse(created_again)
@@ -101,9 +100,9 @@ class LinkCheckServiceTestCase(unittest.TestCase):
                 "link_check_poll_interval_seconds": 2,
             },
         ):
-            self.assertTrue(link_check_service.check_safety_limits(200, 4))
-            self.assertFalse(link_check_service.check_safety_limits(201, 4))
-            self.assertFalse(link_check_service.check_safety_limits(200, 5))
+            self.assertTrue(link_check_runtime.check_safety_limits(200, 4))
+            self.assertFalse(link_check_runtime.check_safety_limits(201, 4))
+            self.assertFalse(link_check_runtime.check_safety_limits(200, 5))
 
 
 if __name__ == "__main__":

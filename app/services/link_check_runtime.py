@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
+from app.core.monitor_parser import normalize_url
 from app.models.models import LinkCheckDetails, LinkCheckStats, Message, engine
 from app.services.system_config_service import get_link_check_runtime_config
 
@@ -33,6 +34,8 @@ FINAL_TASK_STATUSES = {"completed", "failed", "stopped"}
 
 _task_status: Dict[str, Dict[str, Any]] = {}
 _task_status_lock = threading.RLock()
+_dispatch_lock = threading.RLock()
+_active_task_threads: set[str] = set()
 
 try:
     from app.services.link_check.validator import LinkCheckStopped, LinkValidator
@@ -211,12 +214,20 @@ def _format_link_result_log(event: Dict[str, Any]) -> str:
     return f"[{source_label}] {checked}/{total} {platform} {url} -> {verdict}{response_text}{reason_text}"
 
 
-def _build_task_status(period_desc: str, max_concurrent: int) -> Dict[str, Any]:
+def _build_task_status(
+    period_desc: str,
+    max_concurrent: int,
+    task_metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     now_iso = _now_iso()
+    metadata = dict(task_metadata or {})
     return {
         "status": "running",
         "progress": 0,
         "period_desc": period_desc,
+        "scope_label": str(metadata.get("scope_label") or period_desc),
+        "trigger_source": str(metadata.get("trigger_source") or "manual"),
+        "task_mode": str(metadata.get("task_mode") or "time_range"),
         "max_concurrent": max_concurrent,
         "total_messages": 0,
         "total_links": 0,
@@ -306,12 +317,16 @@ def _normalize_logs(logs: Optional[List[str]]) -> List[str]:
     return normalized
 
 
-def _ensure_task_status(task_id: str, period_str: str, max_concurrent: int) -> Dict[str, Any]:
+def _ensure_task_status(
+    task_id: str,
+    period_str: str,
+    max_concurrent: int,
+    task_metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     with _task_status_lock:
         status = _task_status.get(task_id) or _load_persisted_task_status(task_id)
         if status is None:
-            _, _, period_desc = parse_time_period(period_str)
-            status = _build_task_status(period_desc, max_concurrent)
+            status = _build_task_status(period_str, max_concurrent, task_metadata=task_metadata)
             _task_status[task_id] = status
             _persist_task_status(task_id, status)
         elif task_id not in _task_status:
@@ -335,9 +350,13 @@ def _update_task_status(task_id: str, append_log: Optional[str] = None, **fields
         return snapshot
 
 
-def init_task_status(task_id: str, period_str: str, max_concurrent: int) -> Dict[str, Any]:
-    _, _, period_desc = parse_time_period(period_str)
-    status = _build_task_status(period_desc, max_concurrent)
+def init_task_status(
+    task_id: str,
+    period_str: str,
+    max_concurrent: int,
+    task_metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    status = _build_task_status(period_str, max_concurrent, task_metadata=task_metadata)
     with _task_status_lock:
         _task_status[task_id] = status
         snapshot = _clone_task_status(status)
@@ -345,7 +364,11 @@ def init_task_status(task_id: str, period_str: str, max_concurrent: int) -> Dict
         return snapshot
 
 
-def start_or_reuse_task(period_str: str, max_concurrent: int) -> Tuple[str, Dict[str, Any], bool]:
+def start_or_reuse_task(
+    period_str: str,
+    max_concurrent: int,
+    task_metadata: Optional[Dict[str, Any]] = None,
+) -> Tuple[str, Dict[str, Any], bool]:
     active_snapshot = get_active_task_snapshot()
     if active_snapshot is not None:
         task_id, status = active_snapshot
@@ -353,9 +376,36 @@ def start_or_reuse_task(period_str: str, max_concurrent: int) -> Tuple[str, Dict
         return task_id, status, False
 
     task_id = str(uuid.uuid4())
-    initial_status = init_task_status(task_id, period_str, max_concurrent)
+    initial_status = init_task_status(task_id, period_str, max_concurrent, task_metadata=task_metadata)
     _persist_active_task(task_id)
     return task_id, initial_status, True
+
+
+def dispatch_task(task_id: str, task_payload: Any, max_concurrent: int) -> bool:
+    with _dispatch_lock:
+        if task_id in _active_task_threads:
+            return False
+        _active_task_threads.add(task_id)
+
+    worker = threading.Thread(
+        target=_run_task_thread,
+        args=(task_id, task_payload, max_concurrent),
+        daemon=True,
+        name=f"link-check-{task_id[:8]}",
+    )
+    worker.start()
+    return True
+
+
+def _run_task_thread(task_id: str, task_payload: Any, max_concurrent: int) -> None:
+    try:
+        if isinstance(task_payload, dict):
+            asyncio.run(run_link_check_payload_task(task_id, task_payload, max_concurrent))
+        else:
+            asyncio.run(run_link_check_task(task_id, task_payload, max_concurrent))
+    finally:
+        with _dispatch_lock:
+            _active_task_threads.discard(task_id)
 
 
 def get_active_task_snapshot() -> Optional[Tuple[str, Dict[str, Any]]]:
@@ -487,6 +537,282 @@ def _platform_counts(urls: List[str], validator: LinkValidator) -> Dict[str, int
 def _format_platform_counts(counts: Dict[str, int]) -> str:
     ordered = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
     return "，".join(f"{platform} {count}" for platform, count in ordered)
+
+
+def _save_link_check_rows(
+    *,
+    check_time: datetime,
+    message_count: int,
+    link_records: List[Dict[str, Any]],
+    results: List[Dict[str, Any]],
+    summary: Dict[str, Any],
+    check_duration: float,
+    status: str,
+    trigger_source: str,
+    task_mode: str,
+    scope_label: str,
+    plan_id: Optional[int] = None,
+) -> None:
+    with Session(engine) as session:
+        stats = LinkCheckStats(
+            check_time=check_time,
+            total_messages=message_count,
+            total_links=len(link_records),
+            valid_links=summary["valid_links"],
+            invalid_links=summary["invalid_links"],
+            netdisk_stats=summary["netdisk_stats"],
+            check_duration=check_duration,
+            status=status,
+            trigger_source=trigger_source,
+            task_mode=task_mode,
+            scope_label=scope_label,
+            plan_id=plan_id,
+        )
+        session.add(stats)
+        session.commit()
+
+        for record, result in zip(link_records, results):
+            result_url = str(result.get("url", record["url"]) or record["url"]).strip()
+            session.add(
+                LinkCheckDetails(
+                    check_time=check_time,
+                    message_id=int(record["message_id"]),
+                    netdisk_type=result.get("netdisk_type", "unknown"),
+                    url=result_url,
+                    normalized_url=normalize_url(result_url) or None,
+                    is_valid=bool(result.get("is_valid", False)),
+                    response_time=result.get("response_time", 0),
+                    error_reason=result.get("error") or result.get("reason"),
+                    action_taken=result.get("status", "none"),
+                )
+            )
+        session.commit()
+
+
+async def run_link_check_payload_task(task_id: str, task_request: Dict[str, Any], max_concurrent: int) -> None:
+    scope_label = str(task_request.get("scope_label") or task_request.get("period_desc") or "自定义检测")
+    trigger_source = str(task_request.get("trigger_source") or "manual")
+    task_mode = str(task_request.get("task_mode") or task_request.get("selection_mode") or "smart_count")
+    plan_id = int(task_request["plan_id"]) if task_request.get("plan_id") is not None else None
+    link_records = [
+        {
+            "message_id": int(record["message_id"]),
+            "url": str(record["url"]).strip(),
+        }
+        for record in list(task_request.get("link_records") or [])
+        if str(record.get("url") or "").strip()
+    ]
+    message_count = int(task_request.get("total_messages") or len({record["message_id"] for record in link_records}))
+
+    _ensure_task_status(
+        task_id,
+        scope_label,
+        max_concurrent,
+        task_metadata={
+            "scope_label": scope_label,
+            "trigger_source": trigger_source,
+            "task_mode": task_mode,
+        },
+    )
+
+    if not LINK_VALIDATOR_AVAILABLE:
+        _update_task_status(
+            task_id,
+            status="failed",
+            progress=0,
+            current_phase="failed",
+            error="链接检测组件不可用",
+            append_log="链接检测组件加载失败",
+        )
+        _clear_active_task(task_id)
+        return
+
+    try:
+        _persist_active_task(task_id)
+        _update_task_status(
+            task_id,
+            status="running",
+            period_desc=scope_label,
+            scope_label=scope_label,
+            trigger_source=trigger_source,
+            task_mode=task_mode,
+            start_time=task_request.get("start_time"),
+            end_time=task_request.get("end_time"),
+            max_concurrent=max_concurrent,
+            current_phase="loading_messages",
+            error=None,
+            append_log=f"开始检测，范围：{scope_label}，并发：{max_concurrent}",
+        )
+
+        if should_stop_task(task_id):
+            raise LinkCheckStopped("任务已停止")
+
+        if not link_records:
+            _update_task_status(
+                task_id,
+                status="completed",
+                progress=100,
+                current_phase="completed",
+                total_messages=message_count,
+                total_links=0,
+                checked_links=0,
+                valid_links=0,
+                invalid_links=0,
+                error="当前范围内没有可检测的网盘链接",
+                append_log="没有找到可检测的网盘链接，任务结束",
+            )
+            _clear_active_task(task_id)
+            return
+
+        all_urls = [record["url"] for record in link_records]
+        safety_limit_error = get_safety_limit_error(len(all_urls), max_concurrent)
+        if safety_limit_error is not None:
+            _update_task_status(
+                task_id,
+                status="failed",
+                progress=0,
+                current_phase="failed",
+                error=safety_limit_error,
+                append_log=f"任务被安全阈值阻止：{safety_limit_error}",
+            )
+            _clear_active_task(task_id)
+            return
+
+        validator = LinkValidator()
+        validator.result_cache.clear()
+        platform_counts = _platform_counts(all_urls, validator)
+        _update_task_status(
+            task_id,
+            total_messages=message_count,
+            total_links=len(all_urls),
+            current_phase="checking_links",
+            append_log=f"已命中 {message_count} 条消息，共提取 {len(all_urls)} 个链接",
+        )
+        if platform_counts:
+            _update_task_status(task_id, append_log=f"平台分布：{_format_platform_counts(platform_counts)}")
+
+        check_started_at = time.time()
+        last_logged_checked = 0
+        total_links = len(all_urls)
+
+        async def result_callback(event: Dict[str, Any]) -> None:
+            if should_stop_task(task_id):
+                raise LinkCheckStopped("任务已停止")
+            _update_task_status(
+                task_id,
+                current_phase="checking_links",
+                current_platform=str(event.get("platform") or "未知平台"),
+                append_log=_format_link_result_log(event),
+            )
+
+        async def progress_callback(checked: int, total: int, valid: int, invalid: int) -> None:
+            nonlocal last_logged_checked
+            if should_stop_task(task_id):
+                raise LinkCheckStopped("任务已停止")
+
+            progress = int((checked / total) * 100) if total > 0 else 0
+            append_log = None
+            if checked == total:
+                append_log = f"检测完成，已处理 {checked}/{total} 个链接"
+            elif checked - last_logged_checked >= max(10, total_links // 10):
+                last_logged_checked = checked
+                append_log = f"进度 {checked}/{total}，有效 {valid}，失效 {invalid}"
+
+            _update_task_status(
+                task_id,
+                append_log=append_log,
+                progress=progress,
+                checked_links=checked,
+                valid_links=valid,
+                invalid_links=invalid,
+                current_phase="checking_links",
+            )
+
+        results = await validator.check_multiple_links_with_progress(
+            all_urls,
+            max_concurrent=max_concurrent,
+            progress_callback=progress_callback,
+            result_callback=result_callback,
+            should_stop=lambda: should_stop_task(task_id),
+        )
+
+        if should_stop_task(task_id):
+            raise LinkCheckStopped("任务已停止")
+
+        summary = validator.get_summary(results)
+        check_duration = time.time() - check_started_at
+        check_time = datetime.now()
+        status_counts = summary.get("status_counts") or {}
+        top_errors = Counter(
+            (result.get("error") or result.get("reason") or "EMPTY")
+            for result in results
+            if not result.get("is_valid")
+        ).most_common(8)
+
+        _update_task_status(
+            task_id,
+            current_phase="saving_results",
+            status_counts=status_counts,
+            append_log=f"状态分布：{', '.join(f'{key}={value}' for key, value in sorted(status_counts.items())) or '无'}",
+        )
+        if top_errors:
+            _update_task_status(
+                task_id,
+                append_log="主要失败原因：" + "，".join(f"{reason} x{count}" for reason, count in top_errors),
+            )
+
+        _save_link_check_rows(
+            check_time=check_time,
+            message_count=message_count,
+            link_records=link_records,
+            results=results,
+            summary=summary,
+            check_duration=check_duration,
+            status="completed",
+            trigger_source=trigger_source,
+            task_mode=task_mode,
+            scope_label=scope_label,
+            plan_id=plan_id,
+        )
+
+        _update_task_status(
+            task_id,
+            status="completed",
+            progress=100,
+            current_phase="completed",
+            checked_links=len(all_urls),
+            valid_links=summary["valid_links"],
+            invalid_links=summary["invalid_links"],
+            check_time=check_time.isoformat(),
+            duration=check_duration,
+            status_counts=status_counts,
+            append_log=f"任务完成，有效 {summary['valid_links']}，失效 {summary['invalid_links']}，耗时 {check_duration:.1f} 秒",
+        )
+    except LinkCheckStopped as exc:
+        current_status = get_task_status(task_id) or {}
+        _update_task_status(
+            task_id,
+            status="stopped",
+            current_phase="stopped",
+            error=str(exc),
+            progress=current_status.get("progress", 0),
+            append_log="任务已停止，未继续写入检测结果",
+        )
+    except Exception as exc:
+        logger.error("custom link check task %s failed: %s", task_id, exc, exc_info=True)
+        current_status = get_task_status(task_id) or {}
+        _update_task_status(
+            task_id,
+            status="failed",
+            current_phase="failed",
+            error=str(exc),
+            progress=current_status.get("progress", 0),
+            append_log=f"任务失败：{exc}",
+        )
+    finally:
+        final_status = get_task_status(task_id) or {}
+        if final_status.get("status") in FINAL_TASK_STATUSES:
+            _clear_active_task(task_id)
 
 
 async def run_link_check_task(task_id: str, period_str: str, max_concurrent: int) -> None:
@@ -778,6 +1104,9 @@ def get_task_history(limit: int = 20) -> List[Dict[str, Any]]:
                 "deleted_messages": stat.deleted_messages,
                 "status": stat.status,
                 "duration": stat.check_duration,
+                "trigger_source": stat.trigger_source,
+                "task_mode": stat.task_mode,
+                "scope_label": stat.scope_label,
             }
             for stat in stats
         ]
@@ -822,6 +1151,10 @@ def get_task_result(check_time_str: str) -> Dict[str, Any]:
             "netdisk_stats": stats.netdisk_stats,
             "duration": stats.check_duration,
             "status": stats.status,
+            "trigger_source": stats.trigger_source,
+            "task_mode": stats.task_mode,
+            "scope_label": stats.scope_label,
+            "plan_id": stats.plan_id,
         },
         "details": [
             {

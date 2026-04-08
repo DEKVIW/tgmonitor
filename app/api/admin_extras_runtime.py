@@ -12,17 +12,24 @@ from app.schemas.admin_models import (
     LinkCheckHistoryBatchDeleteRequest,
     LinkCheckHistoryBatchDeleteResult,
     LinkCheckDateRange,
+    LinkCheckPlanResponse,
+    LinkCheckPlanUpdate,
+    LinkCheckPreviewRequest,
+    LinkCheckPreviewResponse,
     LinkCheckHistoryDeleteResult,
     LinkCheckTaskStatus,
 )
 from app.services.channel_service import fetch_channel_message_samples
-from app.services.link_check_service import (
+from app.services.link_check_plan_service import get_link_check_plan, update_link_check_plan
+from app.services.link_check_selection_service import build_manual_selection_preview
+from app.services.link_check_runtime import (
     delete_task_history_entries,
     delete_task_history_entry,
     get_active_task_snapshot,
     get_link_check_date_range,
     request_task_stop,
 )
+from app.services.system_config_service import get_link_check_runtime_config
 from app.utils.channel_utils import normalize_channel_username
 
 
@@ -100,6 +107,84 @@ async def get_link_check_date_range_api(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"获取链接检测日期范围失败: {exc}",
+        ) from exc
+
+
+@router.post(
+    "/link-check/preview",
+    response_model=LinkCheckPreviewResponse,
+    summary="预估手动检测范围",
+)
+async def preview_link_check_task_api(
+    request: LinkCheckPreviewRequest,
+    db: Session = Depends(get_db),
+    current_user: Dict[str, Any] = Depends(get_admin_user),
+) -> LinkCheckPreviewResponse:
+    del current_user
+
+    try:
+        runtime_config = get_link_check_runtime_config()
+        preview = build_manual_selection_preview(
+            db,
+            selection_mode=request.selection_mode,
+            task_link_limit=int(runtime_config["link_check_max_allowed_links"]),
+            range_start=request.range_start,
+            range_end=request.range_end,
+            target_link_count=request.target_link_count,
+            direction=request.direction,
+        )
+        return LinkCheckPreviewResponse(**preview)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"预估链接检测范围失败: {exc}",
+        ) from exc
+
+
+@router.get(
+    "/link-check/plan",
+    response_model=LinkCheckPlanResponse,
+    summary="获取自动巡检计划",
+)
+async def get_link_check_plan_api(
+    current_user: Dict[str, Any] = Depends(get_admin_user),
+) -> LinkCheckPlanResponse:
+    del current_user
+
+    try:
+        return LinkCheckPlanResponse(**get_link_check_plan())
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取自动巡检计划失败: {exc}",
+        ) from exc
+
+
+@router.put(
+    "/link-check/plan",
+    response_model=LinkCheckPlanResponse,
+    summary="更新自动巡检计划",
+)
+async def update_link_check_plan_api(
+    request: LinkCheckPlanUpdate,
+    current_user: Dict[str, Any] = Depends(get_admin_user),
+) -> LinkCheckPlanResponse:
+    try:
+        return LinkCheckPlanResponse(**update_link_check_plan(request.model_dump(), updated_by=current_user.get("username")))
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"更新自动巡检计划失败: {exc}",
         ) from exc
 
 

@@ -6,7 +6,7 @@ import SecurityConfig from '@/components/admin/SecurityConfig'
 import SystemConfig from '@/components/admin/SystemConfigModern'
 import UserManagerRuntime from '@/components/admin/UserManagerRuntime'
 import DataMaintenance from '@/components/admin/DataMaintenance'
-import LinkCheckManager from '@/components/admin/LinkCheckManagerEnhanced'
+import LinkCheckManager from '@/components/admin/LinkCheckManagerRuntime'
 import './Admin.css'
 
 const ADMIN_TAB_STORAGE_KEY = 'tg-admin-active-tab'

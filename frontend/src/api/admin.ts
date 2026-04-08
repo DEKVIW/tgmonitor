@@ -31,6 +31,10 @@ import {
   ChannelDiagnosisResult,
   MonitorTestResult,
   LinkCheckDateRange,
+  LinkCheckPlanResponse,
+  LinkCheckPlanUpdate,
+  LinkCheckPreviewRequest,
+  LinkCheckPreviewResponse,
   LinkCheckTaskCreate,
   LinkCheckTaskStatus,
   LinkCheckTaskHistory,
@@ -146,8 +150,27 @@ export const startLinkCheckTask = async (data: LinkCheckTaskCreate): Promise<Lin
   return response.data
 }
 
+export const previewLinkCheckTask = async (
+  data: LinkCheckPreviewRequest
+): Promise<LinkCheckPreviewResponse> => {
+  const response = await apiClient.post<LinkCheckPreviewResponse>('/admin/link-check/preview', data)
+  return response.data
+}
+
 export const getLinkCheckDateRange = async (): Promise<LinkCheckDateRange> => {
   const response = await apiClient.get<LinkCheckDateRange>('/admin/link-check/date-range')
+  return response.data
+}
+
+export const getLinkCheckPlan = async (): Promise<LinkCheckPlanResponse> => {
+  const response = await apiClient.get<LinkCheckPlanResponse>('/admin/link-check/plan')
+  return response.data
+}
+
+export const updateLinkCheckPlan = async (
+  data: LinkCheckPlanUpdate
+): Promise<LinkCheckPlanResponse> => {
+  const response = await apiClient.put<LinkCheckPlanResponse>('/admin/link-check/plan', data)
   return response.data
 }
 

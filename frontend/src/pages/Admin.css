@@ -185,114 +185,7 @@
   gap: 6px;
 }
 
-.link-check-task-form {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: end;
-  gap: 16px;
-}
 
-.link-check-date-range {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.link-check-date-range .ant-picker {
-  flex: 1 1 180px;
-  min-width: 0;
-}
-
-.link-check-date-separator {
-  color: #6b7280;
-  font-size: 13px;
-  white-space: nowrap;
-}
-
-.link-check-form-field {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  min-width: 140px;
-}
-
-.link-check-form-field-wide {
-  flex: 1 1 460px;
-  min-width: min(100%, 420px);
-}
-
-.link-check-form-actions {
-  display: flex;
-  align-items: end;
-  padding-top: 28px;
-  margin-left: auto;
-}
-
-.link-check-helper-text {
-  display: block;
-}
-
-.link-check-log-console {
-  border: 1px solid rgba(16, 40, 78, 0.12);
-  border-radius: 18px;
-  background:
-    radial-gradient(circle at top right, rgba(59, 130, 246, 0.08), transparent 38%),
-    linear-gradient(180deg, rgba(15, 23, 42, 0.94), rgba(16, 24, 39, 0.98));
-  color: rgba(241, 245, 249, 0.94);
-  padding: 14px 16px;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
-}
-
-.link-check-log-console-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 12px;
-}
-
-.link-check-log-console-header .ant-typography {
-  color: rgba(248, 250, 252, 0.95);
-}
-
-.link-check-log-console .ant-list {
-  max-height: 260px;
-  overflow: auto;
-}
-
-.link-check-log-lines {
-  max-height: 320px;
-  overflow: auto;
-  padding-right: 4px;
-}
-
-.link-check-log-line {
-  padding: 6px 0;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
-  color: rgba(226, 232, 240, 0.95);
-  font-family: 'Consolas', 'SFMono-Regular', 'Cascadia Mono', monospace;
-  font-size: 12px;
-  line-height: 1.65;
-  white-space: pre-wrap;
-  word-break: break-all;
-}
-
-.link-check-log-line:last-child {
-  border-bottom: 0;
-}
-
-.link-check-history-table .ant-table-cell {
-  white-space: nowrap;
-}
-
-.link-check-history-table .ant-table-tbody .ant-space {
-  flex-wrap: nowrap;
-}
-
-.link-check-history-table .ant-table-tbody .ant-btn {
-  padding-inline: 4px;
-}
 
 /* 移动端适配 */
 @media (max-width: 768px) {
@@ -448,13 +341,6 @@
   }
 
   /* LinkCheckManager 组件在移动端优化 */
-  .link-check-manager .ant-space {
-    width: 100%;
-  }
-
-  .link-check-manager .ant-space-item {
-    width: 100%;
-  }
 
   .channel-sample-toolbar {
     align-items: stretch;
@@ -464,35 +350,10 @@
     width: 100%;
   }
 
-  .link-check-task-form {
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .link-check-form-field,
-  .link-check-form-field-wide,
-  .link-check-form-actions {
-    width: 100%;
-    min-width: 0;
-    padding-top: 0;
-    margin-left: 0;
-  }
-
-  .link-check-form-field-wide .ant-picker,
-  .link-check-date-range .ant-picker,
-  .link-check-form-actions .ant-btn,
   .channel-sample-toolbar .ant-input-number,
   .channel-sample-toolbar .ant-btn {
     width: 100%;
     max-width: none;
-  }
-
-  .link-check-date-range {
-    align-items: stretch;
-  }
-
-  .link-check-date-separator {
-    display: none;
   }
 
   /* 表格操作列在移动端优化 */

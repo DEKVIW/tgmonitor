@@ -1,0 +1,494 @@
+.link-check-runtime {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.link-check-runtime-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px;
+}
+
+.link-check-runtime-overview-card,
+.link-check-runtime-card {
+  border-radius: 24px;
+  border: 1px solid rgba(216, 227, 238, 0.92);
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: var(--shadow-soft);
+}
+
+.link-check-runtime-overview-card {
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr);
+  gap: 14px;
+  align-items: center;
+  min-height: 128px;
+  padding: 18px;
+}
+
+.link-check-runtime-overview-icon-shell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100%;
+}
+
+.link-check-runtime-overview-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgba(11, 107, 203, 0.12), rgba(11, 107, 203, 0.08));
+  color: var(--primary-strong);
+  font-size: 19px;
+}
+
+.link-check-runtime-overview-content {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.link-check-runtime-overview-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.link-check-runtime-overview-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  flex: 0 0 auto;
+}
+
+.link-check-runtime-overview-dot.is-live {
+  background: #22c55e;
+  box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.12);
+  animation: link-check-runtime-pulse 2.8s ease-in-out infinite;
+}
+
+.link-check-runtime-overview-dot.is-idle {
+  background: #94a3b8;
+  box-shadow: 0 0 0 4px rgba(148, 163, 184, 0.12);
+}
+
+.link-check-runtime-overview-title {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.link-check-runtime-overview-status {
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.2;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.link-check-runtime-overview-meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+}
+
+.link-check-runtime-overview-meta {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+.link-check-runtime-overview-meta.is-accent {
+  background: rgba(11, 107, 203, 0.1);
+  color: var(--primary-strong);
+}
+
+.link-check-runtime-overview-meta.is-success {
+  background: rgba(34, 197, 94, 0.12);
+  color: #15803d;
+}
+
+.link-check-runtime-overview-meta.is-warning {
+  background: rgba(245, 158, 11, 0.14);
+  color: #b45309;
+}
+
+.link-check-runtime-overview-meta.is-neutral {
+  background: rgba(148, 163, 184, 0.14);
+  color: #475569;
+}
+
+.link-check-runtime-card .ant-card-head {
+  min-height: auto;
+  padding: 18px 22px 0;
+  border-bottom: 0;
+}
+
+.link-check-runtime-card .ant-card-body {
+  padding: 18px 22px 22px;
+}
+
+.link-check-runtime-card-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.link-check-runtime-card-heading-main {
+  display: grid;
+  gap: 6px;
+}
+
+.link-check-runtime-card-title {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.link-check-runtime-main-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.04fr) minmax(0, 0.96fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.link-check-runtime-section {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.link-check-runtime-segmented-row,
+.link-check-runtime-panel-heading,
+.link-check-runtime-inline-actions,
+.link-check-runtime-inline-switch,
+.link-check-runtime-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.link-check-runtime-field-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 14px 16px;
+}
+
+.link-check-runtime-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.link-check-runtime-field.is-wide {
+  grid-column: 1 / -1;
+}
+
+.link-check-runtime-field-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.link-check-runtime-compact-control {
+  width: min(100%, 180px);
+}
+
+.link-check-runtime-range-control {
+  width: min(100%, 460px);
+}
+
+.link-check-runtime-helper-text {
+  display: block;
+}
+
+.link-check-runtime-inline-grid {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.link-check-runtime-preview-panel,
+.link-check-runtime-summary-card,
+.link-check-runtime-metric-card,
+.link-check-runtime-result-card {
+  border: 1px solid rgba(216, 227, 238, 0.9);
+  border-radius: 20px;
+  background: rgba(247, 250, 252, 0.96);
+}
+
+.link-check-runtime-preview-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px 18px;
+}
+
+.link-check-runtime-panel-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.link-check-runtime-preview-scope {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.link-check-runtime-metric-grid,
+.link-check-runtime-summary-grid,
+.link-check-runtime-result-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+}
+
+.link-check-runtime-metric-card,
+.link-check-runtime-summary-card,
+.link-check-runtime-result-card {
+  display: grid;
+  gap: 6px;
+  padding: 14px 16px;
+}
+
+.link-check-runtime-metric-label,
+.link-check-runtime-summary-label,
+.link-check-runtime-result-label,
+.link-check-runtime-task-metric-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.link-check-runtime-metric-value,
+.link-check-runtime-summary-value,
+.link-check-runtime-result-value,
+.link-check-runtime-task-metric-value {
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.2;
+  color: var(--text-primary);
+}
+
+.link-check-runtime-summary-meta {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.link-check-runtime-task-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.link-check-runtime-task-summary {
+  display: grid;
+  gap: 10px;
+}
+
+.link-check-runtime-task-title-row,
+.link-check-runtime-task-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.link-check-runtime-task-meta,
+.link-check-runtime-history-scope {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: rgba(241, 245, 249, 0.96);
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.link-check-runtime-task-metrics {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.link-check-runtime-task-metric {
+  min-width: 144px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(216, 227, 238, 0.9);
+  background: rgba(248, 250, 252, 0.98);
+}
+
+.link-check-runtime-progress-block {
+  display: grid;
+  gap: 12px;
+}
+
+.link-check-runtime-log-console {
+  border: 1px solid rgba(16, 40, 78, 0.12);
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at top right, rgba(59, 130, 246, 0.08), transparent 38%),
+    linear-gradient(180deg, rgba(15, 23, 42, 0.94), rgba(16, 24, 39, 0.98));
+  color: rgba(241, 245, 249, 0.94);
+  padding: 14px 16px;
+}
+
+.link-check-runtime-log-console-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.link-check-runtime-log-console-header .ant-typography {
+  color: rgba(248, 250, 252, 0.96);
+}
+
+.link-check-runtime-log-lines {
+  max-height: 320px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.link-check-runtime-log-line {
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+  color: rgba(226, 232, 240, 0.95);
+  font-family: 'Consolas', 'SFMono-Regular', 'Cascadia Mono', monospace;
+  font-size: 12px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.link-check-runtime-log-line:last-child {
+  border-bottom: 0;
+}
+
+.link-check-runtime-history-table .ant-table-cell {
+  white-space: nowrap;
+}
+
+.link-check-runtime-history-scope {
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.link-check-runtime-empty-state,
+.link-check-runtime-modal-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  min-height: 160px;
+  text-align: center;
+}
+
+.link-check-runtime-empty-icon {
+  font-size: 24px;
+  color: var(--primary-strong);
+}
+
+.link-check-runtime-result-view {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.link-check-runtime-cleanup-card {
+  border-radius: 20px;
+}
+
+@keyframes link-check-runtime-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.12);
+  }
+
+  50% {
+    box-shadow: 0 0 0 8px rgba(34, 197, 94, 0.08);
+  }
+}
+
+@media (max-width: 1200px) {
+  .link-check-runtime-main-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 768px) {
+  .link-check-runtime-overview-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .link-check-runtime-card .ant-card-head,
+  .link-check-runtime-card .ant-card-body {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  .link-check-runtime-card .ant-card-head {
+    padding-top: 16px;
+  }
+
+  .link-check-runtime-card .ant-card-body {
+    padding-bottom: 16px;
+  }
+
+  .link-check-runtime-field-grid,
+  .link-check-runtime-metric-grid,
+  .link-check-runtime-summary-grid,
+  .link-check-runtime-result-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .link-check-runtime-compact-control,
+  .link-check-runtime-range-control {
+    width: 100%;
+    max-width: none;
+  }
+
+  .link-check-runtime-task-header,
+  .link-check-runtime-task-metrics {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .link-check-runtime-task-metric {
+    min-width: 0;
+  }
+
+  .link-check-runtime-history-scope {
+    max-width: 220px;
+  }
+}

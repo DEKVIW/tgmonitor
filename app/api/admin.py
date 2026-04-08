@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.dependencies_runtime import get_admin_user, get_db
@@ -42,13 +42,14 @@ from app.schemas.admin_models import (
 )
 from app.services.channel_service import diagnose_channels, resolve_channel_runtime_details, test_monitor
 from app.services.link_cleanup_service import apply_link_check_cleanup
-from app.services.link_check_service import (
+from app.services.link_check_selection_service import build_manual_selection_snapshot
+from app.services.link_check_runtime import (
+    dispatch_task,
     get_task_history,
     get_task_result,
     get_task_status,
     parse_time_period,
     start_or_reuse_task,
-    run_link_check_task,
 )
 from app.services.maintenance_service import (
     clear_link_check_data,
@@ -56,7 +57,7 @@ from app.services.maintenance_service import (
     dedup_links,
     fix_tags,
 )
-from app.services.system_config_service import apply_system_config, get_system_config_values
+from app.services.system_config_service import apply_system_config, get_link_check_runtime_config, get_system_config_values
 from app.services.user_service import (
     add_user,
     bulk_create_random_users,
@@ -961,7 +962,7 @@ async def test_monitor_api(
 @router.post("/link-check/start", response_model=LinkCheckTaskStatus, summary="开始链接检测任务")
 async def start_link_check_task(
     task_data: LinkCheckTaskCreate,
-    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
     current_user: Dict[str, Any] = Depends(get_admin_user)
 ) -> LinkCheckTaskStatus:
     """
@@ -978,34 +979,61 @@ async def start_link_check_task(
     - 2024-01-15: 指定日期
     - 2024-01-15:2024-01-20: 日期范围
     """
+    del current_user
+
     try:
-        try:
-            parse_time_period(task_data.period)
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=str(exc),
-            ) from exc
+        if task_data.period and task_data.range_start is None and task_data.range_end is None and task_data.target_link_count is None:
+            try:
+                parse_time_period(task_data.period)
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=str(exc),
+                ) from exc
 
-        task_id, initial_status, created = start_or_reuse_task(
-            task_data.period,
-            task_data.max_concurrent,
-        )
-
-        if created:
-            background_tasks.add_task(
-                run_link_check_task,
-                task_id,
+            task_id, initial_status, created = start_or_reuse_task(
                 task_data.period,
-                task_data.max_concurrent
+                task_data.max_concurrent,
             )
+            if created:
+                dispatch_task(task_id, task_data.period, task_data.max_concurrent)
         else:
+            runtime_config = get_link_check_runtime_config()
+            preview = build_manual_selection_snapshot(
+                db,
+                selection_mode=task_data.selection_mode,
+                task_link_limit=int(runtime_config["link_check_max_allowed_links"]),
+                range_start=task_data.range_start,
+                range_end=task_data.range_end,
+                target_link_count=task_data.target_link_count,
+                direction=task_data.direction,
+            )
+            task_id, initial_status, created = start_or_reuse_task(
+                preview["scope_label"],
+                task_data.max_concurrent,
+                task_metadata={
+                    "scope_label": preview["scope_label"],
+                    "trigger_source": "manual",
+                    "task_mode": task_data.selection_mode,
+                },
+            )
+            if created:
+                dispatch_task(
+                    task_id,
+                    {
+                        **preview,
+                        "scope_label": preview["scope_label"],
+                        "selection_mode": task_data.selection_mode,
+                        "task_mode": task_data.selection_mode,
+                        "trigger_source": "manual",
+                    },
+                    task_data.max_concurrent,
+                )
+
+        if not created:
             initial_status["reused_existing"] = True
 
-        return LinkCheckTaskStatus(
-            task_id=task_id,
-            **initial_status
-        )
+        return LinkCheckTaskStatus(task_id=task_id, **initial_status)
     except HTTPException:
         raise
     except Exception as e:

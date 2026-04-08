@@ -374,8 +374,41 @@ export interface ChannelSampleResponse {
 }
 
 export interface LinkCheckTaskCreate {
-  period: string
+  selection_mode: 'smart_count' | 'time_range'
+  period?: string | null
+  range_start?: string | null
+  range_end?: string | null
+  target_link_count?: number | null
+  direction: 'newest_first' | 'oldest_first'
   max_concurrent: number
+}
+
+export interface LinkCheckPreviewRequest {
+  selection_mode: 'smart_count' | 'time_range'
+  range_start?: string | null
+  range_end?: string | null
+  target_link_count?: number | null
+  direction: 'newest_first' | 'oldest_first'
+}
+
+export interface LinkCheckPreviewResponse {
+  selection_mode: 'smart_count' | 'time_range'
+  direction?: 'newest_first' | 'oldest_first' | null
+  scope_label: string
+  estimated_messages: number
+  estimated_links: number
+  range_start?: string | null
+  range_end?: string | null
+  first_message_time?: string | null
+  last_message_time?: string | null
+  requested_target_link_count?: number | null
+  effective_target_link_count?: number | null
+  task_link_limit: number
+  recommended_batch_count: number
+  recommended_target_link_count: number
+  can_start: boolean
+  exceeds_task_limit: boolean
+  warnings: string[]
 }
 
 export interface LinkCheckDateRange {
@@ -389,6 +422,9 @@ export interface LinkCheckTaskStatus {
   status: string
   progress: number
   period_desc?: string
+  scope_label?: string
+  trigger_source?: 'manual' | 'scheduled' | string
+  task_mode?: string
   total_messages?: number
   total_links?: number
   checked_links?: number
@@ -418,6 +454,9 @@ export interface LinkCheckTaskHistory {
   deleted_messages?: number
   status: string
   duration?: number
+  trigger_source?: 'manual' | 'scheduled' | string
+  task_mode?: string
+  scope_label?: string
 }
 
 export interface LinkCheckTaskResult {
@@ -432,6 +471,10 @@ export interface LinkCheckTaskResult {
     netdisk_stats?: Record<string, any>
     duration?: number
     status: string
+    trigger_source?: 'manual' | 'scheduled' | string
+    task_mode?: string
+    scope_label?: string
+    plan_id?: number | null
   }
   details: Array<{
     url: string
@@ -441,6 +484,71 @@ export interface LinkCheckTaskResult {
     error_reason?: string
     status?: string
   }>
+}
+
+export interface LinkCheckPlanOverview {
+  total_messages_with_links: number
+  total_links: number
+  first_message_time?: string | null
+  last_message_time?: string | null
+  estimated_links_per_run: number
+  estimated_batches_per_cycle: number
+  estimated_days_to_complete_cycle: number
+  can_finish_within_cycle: boolean
+  warnings: string[]
+  summary: string
+  next_run_at?: string | null
+  last_run_at?: string | null
+  cursor_message_id?: number | null
+  cycle_started_at?: string | null
+  cycle_completed_at?: string | null
+  task_link_limit: number
+  task_concurrency_limit: number
+  generated_at?: string | null
+  stale?: boolean
+  refreshing?: boolean
+}
+
+export interface LinkCheckPlanUpdate {
+  name?: string | null
+  is_enabled: boolean
+  schedule_hour: number
+  schedule_minute: number
+  timezone: string
+  cycle_days: number
+  batch_link_target: number
+  max_batches_per_run: number
+  max_concurrent: number
+  traversal_order: 'newest_first' | 'oldest_first'
+  cleanup_mode: 'none' | 'remove_invalid_links' | 'delete_message_if_empty'
+  cleanup_min_consecutive_invalid_runs: number
+}
+
+export interface LinkCheckPlanResponse {
+  id: number
+  name: string
+  is_enabled: boolean
+  schedule_hour: number
+  schedule_minute: number
+  timezone: string
+  cycle_days: number
+  batch_link_target: number
+  max_batches_per_run: number
+  max_concurrent: number
+  traversal_order: 'newest_first' | 'oldest_first'
+  cleanup_mode: 'none' | 'remove_invalid_links' | 'delete_message_if_empty'
+  cleanup_min_consecutive_invalid_runs: number
+  next_run_at?: string | null
+  last_run_at?: string | null
+  last_status?: string | null
+  last_error_message?: string | null
+  cursor_message_id?: number | null
+  cycle_started_at?: string | null
+  cycle_completed_at?: string | null
+  created_at?: string | null
+  updated_at?: string | null
+  updated_by?: string | null
+  overview: LinkCheckPlanOverview
 }
 
 export interface LinkCleanupApplyRequest {
