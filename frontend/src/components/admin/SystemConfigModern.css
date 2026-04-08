@@ -59,11 +59,13 @@
 }
 
 .system-config-modern-overview-card {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: 50px minmax(0, 1fr);
+  align-items: center;
   gap: 14px;
-  padding: 18px;
-  border-radius: 22px;
+  min-height: 118px;
+  padding: 16px 18px;
+  border-radius: 20px;
   border: 1px solid rgba(216, 227, 238, 0.9);
   background: rgba(255, 255, 255, 0.92);
   box-shadow: var(--shadow-soft);
@@ -79,47 +81,53 @@
   box-shadow: 0 18px 40px rgba(15, 23, 42, 0.1);
 }
 
-.system-config-modern-overview-top {
+.system-config-modern-overview-icon-shell {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
+  align-items: center;
+  justify-content: center;
+  min-height: 100%;
 }
 
 .system-config-modern-overview-title-row {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
 }
 
 .system-config-modern-overview-dot {
-  width: 10px;
-  height: 10px;
+  width: 8px;
+  height: 8px;
   border-radius: 999px;
   flex: 0 0 auto;
 }
 
 .system-config-modern-overview-dot.is-live {
   background: #22c55e;
-  box-shadow: 0 0 0 5px rgba(34, 197, 94, 0.12);
+  box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.12);
   animation: system-config-modern-pulse 2.8s ease-in-out infinite;
 }
 
 .system-config-modern-overview-dot.is-idle {
   background: #94a3b8;
-  box-shadow: 0 0 0 5px rgba(148, 163, 184, 0.12);
+  box-shadow: 0 0 0 4px rgba(148, 163, 184, 0.12);
+}
+
+.system-config-modern-overview-content {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
 }
 
 .system-config-modern-overview-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 42px;
-  height: 42px;
+  width: 44px;
+  height: 44px;
   border-radius: 14px;
-  background: rgba(11, 107, 203, 0.1);
+  background: linear-gradient(180deg, rgba(11, 107, 203, 0.12), rgba(11, 107, 203, 0.08));
   color: var(--primary-strong);
-  font-size: 18px;
+  font-size: 19px;
   transition:
     transform 0.18s ease,
     box-shadow 0.18s ease,
@@ -134,50 +142,63 @@
 
 .system-config-modern-overview-title {
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.system-config-modern-overview-status-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
 }
 
 .system-config-modern-overview-status {
-  font-size: 18px;
+  font-size: 19px;
   font-weight: 700;
   color: var(--text-primary);
-  line-height: 1.35;
+  line-height: 1.2;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.system-config-modern-overview-chip-row {
+.system-config-modern-overview-meta-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px 8px;
+  min-height: 24px;
 }
 
-.system-config-modern-overview-chip {
+.system-config-modern-overview-meta {
   display: inline-flex;
   align-items: center;
-  min-height: 28px;
-  padding: 4px 10px;
+  min-height: 24px;
+  padding: 2px 8px;
   border-radius: 999px;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
-  line-height: 1;
+  line-height: 1.1;
+  white-space: nowrap;
 }
 
-.system-config-modern-overview-chip.is-accent {
+.system-config-modern-overview-meta.is-accent {
   background: rgba(11, 107, 203, 0.1);
   color: var(--primary-strong);
 }
 
-.system-config-modern-overview-chip.is-success {
+.system-config-modern-overview-meta.is-success {
   background: rgba(34, 197, 94, 0.12);
   color: #15803d;
 }
 
-.system-config-modern-overview-chip.is-warning {
+.system-config-modern-overview-meta.is-warning {
   background: rgba(245, 158, 11, 0.14);
   color: #b45309;
 }
 
-.system-config-modern-overview-chip.is-neutral {
+.system-config-modern-overview-meta.is-neutral {
   background: rgba(148, 163, 184, 0.14);
   color: #475569;
 }
@@ -185,11 +206,11 @@
 @keyframes system-config-modern-pulse {
   0%,
   100% {
-    box-shadow: 0 0 0 5px rgba(34, 197, 94, 0.12);
+    box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.12);
   }
 
   50% {
-    box-shadow: 0 0 0 9px rgba(34, 197, 94, 0.08);
+    box-shadow: 0 0 0 8px rgba(34, 197, 94, 0.08);
   }
 }
 
@@ -600,6 +621,10 @@
 
   .system-config-modern-overview-grid {
     grid-template-columns: 1fr;
+  }
+
+  .system-config-modern-overview-card {
+    min-height: unset;
   }
 
   .system-config-modern-footer-section-grid {

@@ -15,16 +15,16 @@ import {
 import {
   ArrowDownOutlined,
   ArrowUpOutlined,
+  BarChartOutlined,
   DeleteOutlined,
   DeploymentUnitOutlined,
   GlobalOutlined,
-  MailOutlined,
-  NotificationOutlined,
+  LayoutOutlined,
+  LinkOutlined,
   PlusOutlined,
   ReloadOutlined,
   SaveOutlined,
-  SafetyCertificateOutlined,
-  ThunderboltOutlined,
+  TeamOutlined,
 } from '@ant-design/icons'
 import { getSystemConfig, updateSystemConfig } from '@/api/admin'
 import HintTooltip from '@/components/common/HintTooltip'
@@ -95,7 +95,7 @@ type OverviewItem = {
   title: string
   status: string
   live: boolean
-  chips: OverviewChip[]
+  meta: OverviewChip[]
 }
 
 const SystemConfigModern = () => {
@@ -236,55 +236,55 @@ const SystemConfigModern = () => {
     {
       key: 'branding',
       icon: <GlobalOutlined />,
-      title: '站点品牌',
+      title: '站点',
       status: draft.site_name.trim() || '未命名',
       live: Boolean(draft.site_name.trim()),
-      chips: [
+      meta: [
         { label: draft.site_favicon_url ? 'favicon' : '无 favicon', tone: draft.site_favicon_url ? 'success' : 'neutral' },
         { label: draft.brand_icon.trim() ? '标题图标' : '无图标', tone: draft.brand_icon.trim() ? 'accent' : 'neutral' },
       ],
     },
     {
       key: 'public',
-      icon: <SafetyCertificateOutlined />,
-      title: '游客访问',
+      icon: <TeamOutlined />,
+      title: '游客',
       status: draft.public_dashboard_enabled ? '已开放' : '已关闭',
       live: draft.public_dashboard_enabled,
-      chips: [
-        { label: draft.public_dashboard_enabled ? '游客访问' : '仅登录', tone: draft.public_dashboard_enabled ? 'accent' : 'neutral' },
+      meta: [
+        { label: draft.public_dashboard_enabled ? '游客可见' : '仅登录', tone: draft.public_dashboard_enabled ? 'accent' : 'neutral' },
         { label: draft.public_ads_enabled ? '广告开启' : '广告关闭', tone: draft.public_ads_enabled ? 'success' : 'neutral' },
       ],
     },
     {
       key: 'footer',
-      icon: <MailOutlined />,
-      title: '页脚布局',
+      icon: <LayoutOutlined />,
+      title: '页脚',
       status: draft.footer_builder_enabled ? `${draft.footer_builder_sections.length} 栏` : '已关闭',
       live: draft.footer_builder_enabled,
-      chips: [
+      meta: [
         { label: draft.footer_builder_enabled ? 'HTML 布局' : '未启用', tone: draft.footer_builder_enabled ? 'accent' : 'neutral' },
-        { label: draft.footer_builder_bottom_html.trim() ? '底栏' : '仅栏目', tone: draft.footer_builder_bottom_html.trim() ? 'success' : 'neutral' },
+        { label: draft.footer_builder_bottom_html.trim() ? '含底栏' : '仅栏目', tone: draft.footer_builder_bottom_html.trim() ? 'success' : 'neutral' },
       ],
     },
     {
       key: 'analytics',
-      icon: <NotificationOutlined />,
-      title: '流量分析',
+      icon: <BarChartOutlined />,
+      title: '流量',
       status: draft.umami_enabled ? 'Umami' : '未启用',
       live: draft.umami_enabled,
-      chips: [
-        { label: draft.umami_script_url.trim() ? '脚本' : '脚本待填', tone: draft.umami_script_url.trim() ? 'success' : 'neutral' },
-        { label: draft.umami_website_id.trim() ? 'ID' : 'ID 待填', tone: draft.umami_website_id.trim() ? 'success' : 'warning' },
+      meta: [
+        { label: draft.umami_script_url.trim() ? '脚本' : '缺脚本', tone: draft.umami_script_url.trim() ? 'success' : 'neutral' },
+        { label: draft.umami_website_id.trim() ? 'Website ID' : '缺 ID', tone: draft.umami_website_id.trim() ? 'success' : 'warning' },
         { label: draft.umami_share_url.trim() ? '看板' : '无看板', tone: draft.umami_share_url.trim() ? 'accent' : 'neutral' },
       ],
     },
     {
       key: 'link-check',
-      icon: <ThunderboltOutlined />,
-      title: '链接检测',
+      icon: <LinkOutlined />,
+      title: '检测',
       status: `${draft.link_check_default_max_concurrent}/${draft.link_check_max_allowed_concurrent}`,
       live: !hasConcurrencyError,
-      chips: [
+      meta: [
         { label: `${draft.link_check_max_allowed_links} 链接`, tone: 'accent' },
         { label: `${draft.link_check_poll_interval_seconds}s 轮询`, tone: 'neutral' },
       ],
@@ -292,10 +292,10 @@ const SystemConfigModern = () => {
     {
       key: 'monitor',
       icon: <DeploymentUnitOutlined />,
-      title: '监控运行',
+      title: '监控',
       status: `${draft.monitor_channel_refresh_interval_seconds} 秒`,
       live: true,
-      chips: [
+      meta: [
         { label: `${draft.monitor_db_write_max_retries} 次重试`, tone: 'accent' },
         { label: `${draft.monitor_db_write_retry_delay_seconds}s 间隔`, tone: 'neutral' },
       ],
@@ -343,23 +343,27 @@ const SystemConfigModern = () => {
             className={`system-config-modern-overview-card ${item.live ? 'is-live' : 'is-idle'}`}
             key={item.key}
           >
-            <div className="system-config-modern-overview-top">
+            <div className="system-config-modern-overview-icon-shell">
+              <div className="system-config-modern-overview-icon">{item.icon}</div>
+            </div>
+            <div className="system-config-modern-overview-content">
               <div className="system-config-modern-overview-title-row">
                 <span className={`system-config-modern-overview-dot ${item.live ? 'is-live' : 'is-idle'}`} />
                 <div className="system-config-modern-overview-title">{item.title}</div>
               </div>
-              <div className="system-config-modern-overview-icon">{item.icon}</div>
-            </div>
-            <div className="system-config-modern-overview-status">{item.status}</div>
-            <div className="system-config-modern-overview-chip-row">
-              {item.chips.map((chip) => (
-                <span
-                  className={`system-config-modern-overview-chip is-${chip.tone}`}
-                  key={`${item.key}-${chip.label}`}
-                >
-                  {chip.label}
-                </span>
-              ))}
+              <div className="system-config-modern-overview-status-row">
+                <div className="system-config-modern-overview-status">{item.status}</div>
+              </div>
+              <div className="system-config-modern-overview-meta-row">
+                {item.meta.map((chip) => (
+                  <span
+                    className={`system-config-modern-overview-meta is-${chip.tone}`}
+                    key={`${item.key}-${chip.label}`}
+                  >
+                    {chip.label}
+                  </span>
+                ))}
+              </div>
             </div>
           </article>
         ))}
