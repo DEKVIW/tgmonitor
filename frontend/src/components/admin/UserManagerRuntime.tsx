@@ -40,6 +40,7 @@ import {
   updateAccountRuntimeSettings,
 } from '@/api/admin'
 import HintTooltip from '@/components/common/HintTooltip'
+import LinuxDoAccessPanel from '@/components/admin/LinuxDoAccessPanel'
 import type {
   AccountListQuery,
   AccountListResponse,
@@ -85,6 +86,8 @@ const sourceLabels: Record<string, string> = {
   local: '本地',
   admin_bulk: '批量创建',
 }
+
+sourceLabels.linuxdo = 'LinuxDo'
 
 const statusColorMap: Record<string, string> = {
   active: 'success',
@@ -179,6 +182,13 @@ const UserManagerRuntime = () => {
   const [form] = Form.useForm<UserFormValues>()
   const [passwordForm] = Form.useForm<PasswordChange>()
   const [bulkForm] = Form.useForm<BulkFormValues>()
+  const selectedUsers = useMemo(
+    () => (data?.items || []).filter((item) => selectedRowKeys.includes(item.username)),
+    [data?.items, selectedRowKeys]
+  )
+  const selectedHasNonLocalAccount = selectedUsers.some(
+    (item) => item.account_source && item.account_source !== 'local'
+  )
 
   const loadRoles = async () => {
     try {
@@ -357,6 +367,10 @@ const UserManagerRuntime = () => {
       message.info('请先勾选账号')
       return
     }
+    if (selectedHasNonLocalAccount) {
+      message.error('批量重置密码仅支持本地账号，请先取消选中第三方登录账号')
+      return
+    }
     try {
       const result = await bulkResetAccountPasswords({ usernames: selectedRowKeys as string[] })
       setResetResult(result)
@@ -475,7 +489,11 @@ const UserManagerRuntime = () => {
           <Button
             type="link"
             icon={<KeyOutlined />}
+            disabled={record.account_source !== 'local'}
             onClick={() => {
+              if (record.account_source !== 'local') {
+                return
+              }
               setPasswordTarget(record)
               passwordForm.resetFields()
               setPasswordOpen(true)
@@ -739,6 +757,8 @@ const UserManagerRuntime = () => {
         ) : null}
       </Card>
 
+      <LinuxDoAccessPanel />
+
       <Card className="account-manager-table-card" variant="borderless">
         <div className="account-manager-toolbar">
           <Space wrap>
@@ -751,7 +771,9 @@ const UserManagerRuntime = () => {
             <Button icon={<ReloadOutlined />} onClick={() => void loadAccounts()} loading={loading}>刷新</Button>
             <Button type="primary" icon={<PlusOutlined />} onClick={() => { setEditingUser(null); resetUserForm(null); setEditingOpen(true) }}>新增账号</Button>
             <Button onClick={() => { bulkForm.setFieldsValue({ count: 10, prefix: 'user', start_index: 1, role: 'user', password_length: 12, validity_mode: settingsDraft?.default_account_validity_mode || 'permanent', validity_unit: settingsDraft?.default_account_validity_unit || 'month', validity_value: settingsDraft?.default_account_validity_value || 1, fixed_expires_at: null }); setBulkResult(null); setBulkOpen(true) }}>批量创建</Button>
-            <Button onClick={() => void handleBulkReset()} disabled={!selectedRowKeys.length}>批量重置密码</Button>
+            <Button onClick={() => void handleBulkReset()} disabled={!selectedRowKeys.length || selectedHasNonLocalAccount}>
+              批量重置密码
+            </Button>
             <Button danger onClick={() => void handleBulkDelete()} disabled={!selectedRowKeys.length}>批量删除</Button>
             <Button icon={<ExportOutlined />} onClick={() => void handleExport()}>导出</Button>
           </Space>

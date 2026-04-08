@@ -3,13 +3,40 @@
  */
 
 import apiClient from '@/utils/api'
-import { LoginRequest, LoginResponse, UserInfo, ChangePasswordRequest, ChangeUsernameRequest } from '@/types/auth'
+import {
+  ChangePasswordRequest,
+  ChangeUsernameRequest,
+  LinuxDoLoginExchangeRequest,
+  LinuxDoLoginStartRequest,
+  LinuxDoLoginStartResponse,
+  LoginRequest,
+  LoginResponse,
+  PublicAuthProvidersResponse,
+  UserInfo,
+} from '@/types/auth'
 
 /**
  * 登录
  */
 export const login = async (data: LoginRequest): Promise<LoginResponse> => {
   const response = await apiClient.post<LoginResponse>('/auth/login', data)
+  return response.data
+}
+
+export const getPublicAuthProviders = async (): Promise<PublicAuthProvidersResponse> => {
+  const response = await apiClient.get<PublicAuthProvidersResponse>('/auth/providers/public')
+  return response.data
+}
+
+export const startLinuxDoLogin = async (
+  data: LinuxDoLoginStartRequest
+): Promise<LinuxDoLoginStartResponse> => {
+  const response = await apiClient.post<LinuxDoLoginStartResponse>('/auth/linuxdo/start', data)
+  return response.data
+}
+
+export const exchangeLinuxDoLogin = async (data: LinuxDoLoginExchangeRequest): Promise<LoginResponse> => {
+  const response = await apiClient.post<LoginResponse>('/auth/linuxdo/exchange', data)
   return response.data
 }
 

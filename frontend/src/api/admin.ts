@@ -15,6 +15,9 @@ import {
   AccountListQuery,
   AccountListResponse,
   AccountRuntimeSettings,
+  LinuxDoBatchUpsert,
+  LinuxDoConfigResponse,
+  LinuxDoConfigUpdate,
   UserResponse,
   UserCreate,
   UserUpdate,
@@ -277,6 +280,29 @@ export const updateAccountRuntimeSettings = async (
   data: AccountRuntimeSettings
 ): Promise<AccountRuntimeSettings> => {
   const response = await apiClient.put<AccountRuntimeSettings>('/admin/accounts/settings', data)
+  return response.data
+}
+
+export const getLinuxDoConfig = async (): Promise<LinuxDoConfigResponse> => {
+  const response = await apiClient.get<LinuxDoConfigResponse>('/admin/accounts/linuxdo')
+  return response.data
+}
+
+export const updateLinuxDoConfig = async (data: LinuxDoConfigUpdate): Promise<LinuxDoConfigResponse> => {
+  const response = await apiClient.put<LinuxDoConfigResponse>('/admin/accounts/linuxdo', data)
+  return response.data
+}
+
+export const createLinuxDoBatch = async (data: LinuxDoBatchUpsert): Promise<LinuxDoConfigResponse> => {
+  const response = await apiClient.post<LinuxDoConfigResponse>('/admin/accounts/linuxdo/batches', data)
+  return response.data
+}
+
+export const updateLinuxDoBatch = async (
+  batchId: number,
+  data: LinuxDoBatchUpsert
+): Promise<LinuxDoConfigResponse> => {
+  const response = await apiClient.put<LinuxDoConfigResponse>(`/admin/accounts/linuxdo/batches/${batchId}`, data)
   return response.data
 }
 

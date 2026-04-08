@@ -240,6 +240,63 @@ export interface AccountRuntimeSettings {
   default_account_validity_value: number
 }
 
+export interface LinuxDoBatchResponse {
+  id: number
+  batch_name: string
+  batch_code: string
+  is_enabled: boolean
+  default_role: 'admin' | 'user'
+  validity_mode: 'permanent' | 'duration' | 'fixed_at'
+  validity_unit?: 'day' | 'month' | 'year' | null
+  validity_value?: number | null
+  fixed_expires_at?: string | null
+  starts_at?: string | null
+  ends_at?: string | null
+  max_accounts?: number | null
+  allocated_accounts: number
+  remaining_accounts?: number | null
+  admission_open: boolean
+  status: string
+  notes: string
+  created_at?: string | null
+  created_by?: string | null
+}
+
+export interface LinuxDoConfigResponse {
+  enabled: boolean
+  allow_new_accounts: boolean
+  client_id: string
+  client_secret_configured: boolean
+  configured: boolean
+  login_mode: 'hidden' | 'existing_only' | 'open'
+  status_summary: string
+  bound_account_count: number
+  current_batch?: LinuxDoBatchResponse | null
+  recent_batches: LinuxDoBatchResponse[]
+}
+
+export interface LinuxDoConfigUpdate {
+  enabled: boolean
+  allow_new_accounts: boolean
+  client_id: string
+  client_secret: string
+  clear_client_secret: boolean
+}
+
+export interface LinuxDoBatchUpsert {
+  batch_name: string
+  is_enabled: boolean
+  max_accounts: number
+  default_role: 'admin' | 'user'
+  validity_mode: 'permanent' | 'duration' | 'fixed_at'
+  validity_unit?: 'day' | 'month' | 'year' | null
+  validity_value?: number | null
+  fixed_expires_at?: string | null
+  starts_at?: string | null
+  ends_at?: string | null
+  notes?: string
+}
+
 export interface AccountListResponse {
   items: UserResponse[]
   total: number

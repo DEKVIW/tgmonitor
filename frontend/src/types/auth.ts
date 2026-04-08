@@ -14,6 +14,18 @@ export interface LoginResponse {
   user: UserInfo
 }
 
+export interface LinuxDoPublicAuthConfig {
+  visible: boolean
+  mode: 'hidden' | 'existing_only' | 'open'
+  status_summary: string
+  batch_name?: string | null
+  remaining_accounts?: number | null
+}
+
+export interface PublicAuthProvidersResponse {
+  linuxdo: LinuxDoPublicAuthConfig
+}
+
 export interface UserInfo {
   username: string
   name: string
@@ -28,5 +40,20 @@ export interface ChangePasswordRequest {
 
 export interface ChangeUsernameRequest {
   new_username: string
+}
+
+export interface LinuxDoLoginStartRequest {
+  redirect_uri: string
+  turnstile_token?: string
+}
+
+export interface LinuxDoLoginStartResponse {
+  authorize_url: string
+}
+
+export interface LinuxDoLoginExchangeRequest {
+  code: string
+  state: string
+  redirect_uri: string
 }
 

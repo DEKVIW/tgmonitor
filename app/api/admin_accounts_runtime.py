@@ -5,7 +5,7 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from app.api.dependencies_runtime import get_admin_user
+from app.api.dependencies_runtime_v2 import get_admin_user
 from app.schemas.admin_models import (
     AccountListResponse,
     AccountRuntimeSettingsResponse,
@@ -14,6 +14,10 @@ from app.schemas.admin_models import (
     BulkRandomCreateRequest,
     BulkSimpleResponse,
     BulkUsernamesRequest,
+    LinuxDoBatchResponse,
+    LinuxDoBatchUpsert,
+    LinuxDoConfigResponse,
+    LinuxDoConfigUpdate,
     PasswordChange,
     RoleChange,
     UserCreate,
@@ -37,6 +41,7 @@ from app.services.account_service import (
     list_user_accounts,
     update_user_account,
 )
+from app.services.linuxdo_auth_service import apply_linuxdo_config, create_linuxdo_batch, get_linuxdo_admin_state, update_linuxdo_batch
 
 router = APIRouter(prefix="/api/admin/accounts", tags=["后台用户"])
 
@@ -95,6 +100,57 @@ async def update_account_runtime_settings_api(
 ) -> AccountRuntimeSettingsResponse:
     updated = apply_user_runtime_settings(payload.model_dump(), updated_by=current_user.get("username"))
     return AccountRuntimeSettingsResponse(**updated)
+
+
+def _build_linuxdo_config_response(data: Dict[str, Any]) -> LinuxDoConfigResponse:
+    return LinuxDoConfigResponse(
+        **{
+            **data,
+            "current_batch": LinuxDoBatchResponse(**data["current_batch"]) if data.get("current_batch") else None,
+            "recent_batches": [LinuxDoBatchResponse(**item) for item in data.get("recent_batches", [])],
+        }
+    )
+
+
+@router.get("/linuxdo", response_model=LinuxDoConfigResponse, summary="Get LinuxDo login config")
+async def get_linuxdo_config_api(
+    current_user: Dict[str, Any] = Depends(get_admin_user),
+) -> LinuxDoConfigResponse:
+    del current_user
+    return _build_linuxdo_config_response(get_linuxdo_admin_state())
+
+
+@router.put("/linuxdo", response_model=LinuxDoConfigResponse, summary="Update LinuxDo login config")
+async def update_linuxdo_config_api(
+    payload: LinuxDoConfigUpdate,
+    current_user: Dict[str, Any] = Depends(get_admin_user),
+) -> LinuxDoConfigResponse:
+    return _build_linuxdo_config_response(
+        apply_linuxdo_config(payload.model_dump(), updated_by=current_user.get("username"))
+    )
+
+
+@router.post("/linuxdo/batches", response_model=LinuxDoConfigResponse, summary="Create LinuxDo admission batch")
+async def create_linuxdo_batch_api(
+    payload: LinuxDoBatchUpsert,
+    current_user: Dict[str, Any] = Depends(get_admin_user),
+) -> LinuxDoConfigResponse:
+    return _build_linuxdo_config_response(
+        create_linuxdo_batch(payload.model_dump(), created_by=current_user.get("username"))
+    )
+
+
+@router.put("/linuxdo/batches/{batch_id}", response_model=LinuxDoConfigResponse, summary="Update LinuxDo admission batch")
+async def update_linuxdo_batch_api(
+    batch_id: int,
+    payload: LinuxDoBatchUpsert,
+    current_user: Dict[str, Any] = Depends(get_admin_user),
+) -> LinuxDoConfigResponse:
+    try:
+        data = update_linuxdo_batch(batch_id, payload.model_dump(), updated_by=current_user.get("username"))
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return _build_linuxdo_config_response(data)
 
 
 @router.get("/roles/available", summary="获取可用角色")

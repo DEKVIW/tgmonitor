@@ -5,7 +5,7 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from app.api.dependencies_runtime import get_db, get_optional_current_user
+from app.api.dependencies_runtime_v2 import get_db, get_optional_current_user
 from app.schemas.statistics import (
     ActivityHeatmapCell,
     ActivityHeatmapResponse,

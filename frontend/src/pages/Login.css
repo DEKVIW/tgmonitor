@@ -69,6 +69,43 @@
   margin-bottom: 20px;
 }
 
+.login-provider-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 6px;
+}
+
+.login-provider-note {
+  color: rgba(15, 23, 42, 0.58);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.login-provider-divider {
+  position: relative;
+  margin: 2px 0;
+  text-align: center;
+}
+
+.login-provider-divider::before {
+  content: '';
+  position: absolute;
+  inset: 50% 0 auto;
+  border-top: 1px solid rgba(216, 227, 238, 0.92);
+}
+
+.login-provider-divider span {
+  position: relative;
+  display: inline-block;
+  padding: 0 12px;
+  background: rgba(255, 255, 255, 0.95);
+  color: rgba(15, 23, 42, 0.42);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
 .login-card .ant-input-affix-wrapper,
 .login-card .ant-input-password {
   border-radius: 8px;
@@ -79,6 +116,30 @@
   height: 46px;
   font-size: 16px;
   font-weight: 600;
+}
+
+.login-provider-button {
+  width: 100%;
+  height: 46px;
+  border-radius: 14px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.login-callback-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 0 8px;
+  color: rgba(15, 23, 42, 0.66);
+  text-align: center;
+}
+
+.login-callback-state p {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.7;
 }
 
 @media (max-width: 768px) {

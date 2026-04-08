@@ -24,6 +24,8 @@ export const LOGIN_PATH = RESERVED_LOGIN_PATHS.has(configuredLoginPath)
   ? DEFAULT_LOGIN_PATH
   : configuredLoginPath
 
+export const LOGIN_LINUXDO_CALLBACK_PATH = `${LOGIN_PATH}/linuxdo/callback`
+
 const stripTrailingSlash = (path: string): string => {
   return path.length > 1 ? path.replace(/\/+$/, '') : path
 }

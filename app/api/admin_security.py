@@ -4,7 +4,7 @@ from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from app.api.dependencies_runtime import get_admin_user
+from app.api.dependencies_runtime_v2 import get_admin_user
 from app.schemas.security_models import DomainChallengeSyncResponse, SecurityConfigResponse, SecurityConfigUpdate
 from app.services.security_service import (
     SecuritySyncError,

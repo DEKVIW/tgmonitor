@@ -75,6 +75,21 @@ def _find_identity_for_login(session: Session, username: str) -> tuple[UserAccou
     return account, identity
 
 
+def _find_identity_by_provider(session: Session, provider: str, provider_user_id: str) -> tuple[UserAccount | None, AuthIdentity | None]:
+    identity = (
+        session.query(AuthIdentity)
+        .filter(
+            AuthIdentity.provider == provider,
+            AuthIdentity.provider_user_id == provider_user_id,
+        )
+        .first()
+    )
+    if identity is None:
+        return None, None
+    account = session.get(UserAccount, identity.account_id)
+    return account, identity
+
+
 def _get_active_sessions_for_limit(
     session: Session,
     *,
@@ -173,6 +188,98 @@ def create_login_session(
             identity_id=identity.id,
             client_instance_hash=client_hash,
             login_provider=LOCAL_AUTH_PROVIDER,
+            user_agent=(user_agent or "")[:4000] or None,
+            ip_address=(ip_address or "")[:64] or None,
+            created_at=current_time,
+            last_seen_at=current_time,
+            expires_at=current_time + expires_delta,
+        )
+        account.last_login_at = current_time
+        account.last_seen_at = current_time
+        identity.last_login_at = current_time
+        session.add(db_session)
+        session.add(account)
+        session.add(identity)
+        session.commit()
+
+        user = load_account_for_session(account.id)
+        if user is None:
+            return None
+        return {
+            "access_token": create_access_token(
+                {
+                    "sub": account.username,
+                    "sid": session_id,
+                    "aid": account.id,
+                    "role": account.role,
+                },
+                expires_delta=expires_delta,
+            ),
+            "token_type": "bearer",
+            "user": user,
+            "session_id": session_id,
+        }
+
+
+def create_provider_login_session(
+    *,
+    provider: str,
+    provider_user_id: str,
+    client_instance_id: str | None,
+    user_agent: str | None = None,
+    ip_address: str | None = None,
+) -> dict[str, Any] | None:
+    ensure_runtime_storage_tables()
+    bootstrap_account_storage()
+    runtime_settings = get_user_runtime_settings()
+    current_time = _utcnow()
+
+    with Session(engine) as session:
+        account, identity = _find_identity_by_provider(session, provider, provider_user_id)
+        if account is None or identity is None:
+            return None
+        if identity.identity_status != "active":
+            return None
+        if get_effective_status(account, now=current_time) != "active":
+            return None
+
+        client_hash = hash_client_instance_id(client_instance_id)
+        if client_hash:
+            duplicate_sessions = (
+                session.query(AuthSession)
+                .filter(
+                    AuthSession.account_id == account.id,
+                    AuthSession.client_instance_hash == client_hash,
+                    AuthSession.revoked_at.is_(None),
+                )
+                .all()
+            )
+            for existing in duplicate_sessions:
+                existing.revoked_at = current_time
+                existing.revoke_reason = "session_replaced"
+                session.add(existing)
+
+        active_limit = resolve_account_session_limit(account, runtime_settings)
+        if active_limit is not None:
+            active_sessions = _get_active_sessions_for_limit(
+                session,
+                account_id=account.id,
+                online_window_minutes=int(runtime_settings["session_online_window_minutes"]),
+            )
+            while len(active_sessions) >= int(active_limit):
+                oldest = active_sessions.pop(0)
+                oldest.revoked_at = current_time
+                oldest.revoke_reason = "session_limit_replaced"
+                session.add(oldest)
+
+        session_id = secrets.token_urlsafe(32)
+        expires_delta = timedelta(days=int(runtime_settings["session_absolute_ttl_days"]))
+        db_session = AuthSession(
+            session_id=session_id,
+            account_id=account.id,
+            identity_id=identity.id,
+            client_instance_hash=client_hash,
+            login_provider=provider,
             user_agent=(user_agent or "")[:4000] or None,
             ip_address=(ip_address or "")[:64] or None,
             created_at=current_time,

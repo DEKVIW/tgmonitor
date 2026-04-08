@@ -435,6 +435,107 @@ class AccountRuntimeSettingsUpdate(AccountRuntimeSettingsResponse):
         return normalized
 
 
+class LinuxDoBatchResponse(BaseModel):
+    id: int
+    batch_name: str
+    batch_code: str
+    is_enabled: bool
+    default_role: str
+    validity_mode: str
+    validity_unit: Optional[str] = None
+    validity_value: Optional[int] = None
+    fixed_expires_at: Optional[datetime] = None
+    starts_at: Optional[datetime] = None
+    ends_at: Optional[datetime] = None
+    max_accounts: Optional[int] = None
+    allocated_accounts: int = 0
+    remaining_accounts: Optional[int] = None
+    admission_open: bool = False
+    status: str
+    notes: str = ""
+    created_at: Optional[datetime] = None
+    created_by: Optional[str] = None
+
+
+class LinuxDoConfigResponse(BaseModel):
+    enabled: bool
+    allow_new_accounts: bool
+    client_id: str
+    client_secret_configured: bool
+    configured: bool
+    login_mode: str
+    status_summary: str
+    bound_account_count: int = 0
+    current_batch: Optional[LinuxDoBatchResponse] = None
+    recent_batches: List[LinuxDoBatchResponse] = Field(default_factory=list)
+
+
+class LinuxDoConfigUpdate(BaseModel):
+    enabled: bool
+    allow_new_accounts: bool
+    client_id: str = Field(default="", max_length=512)
+    client_secret: str = Field(default="", max_length=4000)
+    clear_client_secret: bool = False
+
+    @field_validator("client_id", "client_secret")
+    @classmethod
+    def validate_linuxdo_config_text(cls, value: str) -> str:
+        return _normalize_text(value, allow_empty=True)
+
+
+class LinuxDoBatchUpsert(BaseModel):
+    batch_name: str = Field(min_length=1, max_length=128)
+    is_enabled: bool = True
+    max_accounts: int = Field(ge=1, le=100000)
+    default_role: str = Field(default="user")
+    validity_mode: str = Field(default="duration")
+    validity_unit: Optional[str] = Field(default="month")
+    validity_value: Optional[int] = Field(default=1, ge=1, le=3650)
+    fixed_expires_at: Optional[datetime] = None
+    starts_at: Optional[datetime] = None
+    ends_at: Optional[datetime] = None
+    notes: str = Field(default="", max_length=2000)
+
+    @field_validator("batch_name", "notes")
+    @classmethod
+    def validate_linuxdo_batch_text(cls, value: str, info) -> str:
+        return _normalize_text(value, allow_empty=info.field_name == "notes", field_name=info.field_name)
+
+    @field_validator("default_role")
+    @classmethod
+    def validate_linuxdo_batch_role(cls, value: str) -> str:
+        role = _normalize_text(value, field_name="default_role").lower()
+        if role not in {"admin", "user"}:
+            raise ValueError("default_role must be admin or user")
+        return role
+
+    @field_validator("validity_mode")
+    @classmethod
+    def validate_linuxdo_batch_validity_mode(cls, value: str) -> str:
+        normalized = _normalize_text(value, field_name="validity_mode").lower()
+        if normalized not in {"permanent", "duration", "fixed_at"}:
+            raise ValueError("validity_mode must be permanent, duration or fixed_at")
+        return normalized
+
+    @field_validator("validity_unit")
+    @classmethod
+    def validate_linuxdo_batch_validity_unit(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = _normalize_text(value, field_name="validity_unit").lower()
+        if normalized not in {"day", "month", "year"}:
+            raise ValueError("validity_unit must be day, month or year")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_linuxdo_batch_window(self) -> "LinuxDoBatchUpsert":
+        if self.validity_mode == "fixed_at" and self.fixed_expires_at is None:
+            raise ValueError("fixed_expires_at is required when validity_mode is fixed_at")
+        if self.starts_at is not None and self.ends_at is not None and self.ends_at <= self.starts_at:
+            raise ValueError("ends_at must be later than starts_at")
+        return self
+
+
 class AccountListResponse(BaseModel):
     items: List[UserResponse]
     total: int

@@ -4,7 +4,7 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
-from app.api.dependencies_runtime import get_optional_current_user
+from app.api.dependencies_runtime_v2 import get_optional_current_user
 from app.schemas.security_models import (
     PublicSecurityConfigResponse,
     SecurityChallengeVerifyRequest,

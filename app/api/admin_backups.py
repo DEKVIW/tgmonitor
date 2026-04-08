@@ -4,7 +4,7 @@ from typing import Any, Dict, List
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from app.api.dependencies_runtime import get_admin_user
+from app.api.dependencies_runtime_v2 import get_admin_user
 from app.schemas.backup_models import (
     BackupRemoteFileDeleteResponse,
     BackupRemoteFileResponse,
