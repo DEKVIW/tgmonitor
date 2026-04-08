@@ -122,6 +122,37 @@
   color: rgba(15, 23, 42, 0.86);
 }
 
+.linuxdo-access-editing-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(11, 107, 203, 0.18);
+  background: linear-gradient(180deg, rgba(11, 107, 203, 0.08), rgba(255, 255, 255, 0.92));
+}
+
+.linuxdo-access-editing-copy {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  color: rgba(15, 23, 42, 0.78);
+  min-width: 0;
+}
+
+.linuxdo-access-editing-copy strong {
+  color: rgba(15, 23, 42, 0.92);
+}
+
+.linuxdo-access-editing-copy small {
+  color: rgba(15, 23, 42, 0.46);
+  font-size: 12px;
+}
+
 .linuxdo-access-batch-name {
   display: flex;
   flex-direction: column;
@@ -137,6 +168,10 @@
 .linuxdo-access-batch-name small {
   color: rgba(15, 23, 42, 0.46);
   font-size: 12px;
+}
+
+.linuxdo-access-row-active > td {
+  background: rgba(11, 107, 203, 0.06) !important;
 }
 
 @media (max-width: 1180px) {

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import dayjs, { type Dayjs } from 'dayjs'
 import {
   Button,
@@ -132,6 +132,7 @@ const LinuxDoAccessPanel = () => {
   const [editingBatch, setEditingBatch] = useState<LinuxDoBatchResponse | null>(null)
   const [configForm] = Form.useForm<ConfigFormValues>()
   const [batchForm] = Form.useForm<BatchFormValues>()
+  const batchEditorRef = useRef<HTMLDivElement | null>(null)
 
   const loadConfig = async () => {
     setLoading(true)
@@ -214,6 +215,9 @@ const LinuxDoAccessPanel = () => {
   const handleEditBatch = (batch: LinuxDoBatchResponse) => {
     setEditingBatch(batch)
     batchForm.setFieldsValue(buildBatchFormValues(batch))
+    window.requestAnimationFrame(() => {
+      batchEditorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    })
   }
 
   const handleResetBatch = () => {
@@ -407,12 +411,26 @@ const LinuxDoAccessPanel = () => {
         </section>
 
         <section className="linuxdo-access-section">
+          <div ref={batchEditorRef} />
           <div className="linuxdo-access-section-head">
             <Text strong>{editingBatch ? '编辑接入批次' : '新建接入批次'}</Text>
             <span className="linuxdo-access-section-copy">
               同时只启用一个批次。当前批次名额满后，系统会自动退回“仅已绑定可登录”。
             </span>
           </div>
+
+          {editingBatch ? (
+            <div className="linuxdo-access-editing-banner">
+              <div className="linuxdo-access-editing-copy">
+                <strong>正在编辑：</strong>
+                <span>{editingBatch.batch_name}</span>
+                <small>{editingBatch.batch_code}</small>
+              </div>
+              <Button icon={<PlusOutlined />} onClick={handleResetBatch}>
+                取消编辑
+              </Button>
+            </div>
+          ) : null}
 
           <Form<BatchFormValues>
             form={batchForm}
@@ -510,6 +528,7 @@ const LinuxDoAccessPanel = () => {
           pagination={false}
           tableLayout="auto"
           scroll={{ x: 'max-content' }}
+          rowClassName={(record) => (editingBatch?.id === record.id ? 'linuxdo-access-row-active' : '')}
         />
       </section>
     </Card>
