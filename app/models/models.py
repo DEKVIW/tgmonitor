@@ -221,6 +221,7 @@ class BackupTarget(Base):
     schedule_kind = Column(String(32), nullable=False, default="manual")
     schedule_hour = Column(Integer, nullable=False, default=3)
     schedule_minute = Column(Integer, nullable=False, default=0)
+    schedule_priority = Column(Integer, nullable=False, default=100)
     schedule_weekday = Column(Integer, nullable=True)
     schedule_day = Column(Integer, nullable=True)
     timezone = Column(String(64), nullable=False, default="Asia/Shanghai")
@@ -481,6 +482,7 @@ def _ensure_backup_target_columns() -> None:
 
     pending_alters = {
         "run_log_retention_days": "ALTER TABLE backup_targets ADD COLUMN run_log_retention_days INTEGER NOT NULL DEFAULT 0",
+        "schedule_priority": "ALTER TABLE backup_targets ADD COLUMN schedule_priority INTEGER NOT NULL DEFAULT 100",
     }
     with engine.begin() as connection:
         for column_name, sql in pending_alters.items():
@@ -549,8 +551,16 @@ def _ensure_backup_management_indexes() -> None:
         ON backup_targets (is_enabled, next_run_at)
         """,
         """
+        CREATE INDEX IF NOT EXISTS ix_backup_targets_enabled_next_run_priority
+        ON backup_targets (is_enabled, next_run_at, schedule_priority)
+        """,
+        """
         CREATE INDEX IF NOT EXISTS ix_backup_runs_target_started_at
         ON backup_runs (target_id, started_at DESC)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_backup_runs_status_created_at
+        ON backup_runs (status, created_at, id)
         """,
         """
         CREATE UNIQUE INDEX IF NOT EXISTS ux_backup_runs_active_target

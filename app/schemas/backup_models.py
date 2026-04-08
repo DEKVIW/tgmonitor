@@ -28,12 +28,11 @@ class BackupTargetBase(BaseModel):
     schedule_kind: str = Field(default="manual", max_length=32)
     schedule_hour: int = Field(default=3, ge=0, le=23)
     schedule_minute: int = Field(default=0, ge=0, le=59)
+    schedule_priority: int = Field(default=100, ge=1, le=9999)
     schedule_weekday: Optional[int] = Field(default=None, ge=0, le=6)
     schedule_day: Optional[int] = Field(default=None, ge=1, le=31)
     timezone: str = Field(default="Asia/Shanghai", max_length=64)
     retention_count: int = Field(default=10, ge=0, le=3650)
-    retention_days: int = Field(default=30, ge=0, le=3650)
-    run_log_retention_days: int = Field(default=0, ge=0, le=3650)
     local_dir: str = Field(default="", max_length=2000)
     webdav_base_url: str = Field(default="", max_length=2000)
     webdav_username: str = Field(default="", max_length=255)
@@ -42,8 +41,6 @@ class BackupTargetBase(BaseModel):
     webdav_root_path: str = Field(default="", max_length=2000)
     webdav_timeout_seconds: int = Field(default=60, ge=5, le=600)
     webdav_verify_ssl: bool = True
-    include_database: bool = True
-    include_users_json: bool = True
     include_env_file: bool = False
     include_runtime_data: bool = True
     export_range_kind: str = Field(default="all", max_length=16)
@@ -130,15 +127,6 @@ class BackupTargetBase(BaseModel):
             self.schedule_day = None
 
         if self.backup_mode == "full":
-            if not any(
-                (
-                    self.include_database,
-                    self.include_users_json,
-                    self.include_env_file,
-                    self.include_runtime_data,
-                )
-            ):
-                raise ValueError("at least one full-backup source must be enabled")
             self.export_range_kind = "all"
             self.export_range_days = None
         else:
@@ -146,10 +134,6 @@ class BackupTargetBase(BaseModel):
                 raise ValueError("export_range_days is required when export_range_kind is days")
             if self.export_range_kind == "all":
                 self.export_range_days = None
-            self.include_database = True
-            self.include_users_json = True
-            self.include_env_file = False
-            self.include_runtime_data = True
 
         if self.clear_webdav_password:
             self.webdav_password = ""
@@ -176,12 +160,11 @@ class BackupTargetResponse(BaseModel):
     schedule_kind: str
     schedule_hour: int
     schedule_minute: int
+    schedule_priority: int
     schedule_weekday: Optional[int] = None
     schedule_day: Optional[int] = None
     timezone: str
     retention_count: int
-    retention_days: int
-    run_log_retention_days: int
     local_dir: str
     webdav_base_url: str
     webdav_username: str
@@ -189,8 +172,6 @@ class BackupTargetResponse(BaseModel):
     webdav_timeout_seconds: int
     webdav_verify_ssl: bool
     webdav_password_configured: bool
-    include_database: bool
-    include_users_json: bool
     include_env_file: bool
     include_runtime_data: bool
     export_range_kind: str
@@ -241,6 +222,23 @@ class BackupTargetTestResult(BaseModel):
     message: str
     resolved_path: Optional[str] = None
     remote_path: Optional[str] = None
+
+
+class BackupRemoteFileResponse(BaseModel):
+    name: str
+    remote_path: str
+    remote_url: Optional[str] = None
+    size_bytes: Optional[float] = None
+    modified_at: Optional[str] = None
+    backup_time: Optional[str] = None
+    backup_mode: Optional[str] = None
+    range_label: Optional[str] = None
+    file_format: Optional[str] = None
+
+
+class BackupRemoteFileDeleteResponse(BaseModel):
+    success: bool
+    remote_path: str
 
 
 class BackupRunDeleteRequest(BaseModel):

@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import threading
 
-from app.services.backup_service import claim_due_backup_runs, cleanup_expired_backup_run_logs
+from app.services.backup_service import claim_due_backup_runs
 
 
 logger = logging.getLogger(__name__)
@@ -16,8 +16,7 @@ _scheduler_thread: threading.Thread | None = None
 def _scheduler_loop() -> None:
     while not _scheduler_stop_event.is_set():
         try:
-            cleanup_expired_backup_run_logs()
-            claim_due_backup_runs(limit=3)
+            claim_due_backup_runs()
         except Exception:
             logger.exception("Backup scheduler tick failed")
         _scheduler_stop_event.wait(30)

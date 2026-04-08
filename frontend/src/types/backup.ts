@@ -13,12 +13,11 @@ export interface BackupTargetPayload {
   schedule_kind: BackupScheduleKind
   schedule_hour: number
   schedule_minute: number
+  schedule_priority: number
   schedule_weekday?: number | null
   schedule_day?: number | null
   timezone: string
   retention_count: number
-  retention_days: number
-  run_log_retention_days: number
   local_dir: string
   webdav_base_url: string
   webdav_username: string
@@ -27,8 +26,6 @@ export interface BackupTargetPayload {
   webdav_root_path: string
   webdav_timeout_seconds: number
   webdav_verify_ssl: boolean
-  include_database: boolean
-  include_users_json: boolean
   include_env_file: boolean
   include_runtime_data: boolean
   export_range_kind: BackupExportRangeKind
@@ -86,9 +83,19 @@ export interface BackupTargetTestResult {
   remote_path?: string | null
 }
 
-export interface BackupRunDeleteResult {
-  deleted_count: number
-  skipped_active_count: number
-  skipped_missing_count: number
-  deleted_ids: number[]
+export interface BackupRemoteFile {
+  name: string
+  remote_path: string
+  remote_url?: string | null
+  size_bytes?: number | null
+  modified_at?: string | null
+  backup_time?: string | null
+  backup_mode?: BackupMode | null
+  range_label?: string | null
+  file_format?: string | null
+}
+
+export interface BackupRemoteFileDeleteResult {
+  success: boolean
+  remote_path: string
 }

@@ -14,7 +14,7 @@ import Dashboard from './pages/Dashboard'
 import Statistics from './pages/Statistics'
 import Analytics from './pages/AnalyticsDashboardModern'
 import Admin from './pages/AdminRuntime'
-import Backups from './pages/BackupsModern'
+import Backups from './pages/BackupsRuntime'
 import { LOGIN_PATH } from './utils/routes'
 
 function App() {

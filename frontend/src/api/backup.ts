@@ -1,5 +1,12 @@
 import apiClient from '@/utils/api'
-import type { BackupRun, BackupRunDeleteResult, BackupTarget, BackupTargetPayload, BackupTargetTestResult } from '@/types/backup'
+import type {
+  BackupRemoteFile,
+  BackupRemoteFileDeleteResult,
+  BackupRun,
+  BackupTarget,
+  BackupTargetPayload,
+  BackupTargetTestResult,
+} from '@/types/backup'
 
 export const getBackupTargets = async (): Promise<BackupTarget[]> => {
   const response = await apiClient.get<BackupTarget[]>('/admin/backups/targets')
@@ -30,20 +37,19 @@ export const testBackupTarget = async (targetId: number): Promise<BackupTargetTe
   return response.data
 }
 
-export const getBackupRuns = async (params: { limit?: number; target_id?: number } = {}): Promise<BackupRun[]> => {
-  const search = new URLSearchParams()
-  if (params.limit !== undefined) {
-    search.set('limit', String(params.limit))
-  }
-  if (params.target_id !== undefined) {
-    search.set('target_id', String(params.target_id))
-  }
-  const query = search.toString()
-  const response = await apiClient.get<BackupRun[]>(`/admin/backups/runs${query ? `?${query}` : ''}`)
+export const getBackupTargetRemoteFiles = async (targetId: number): Promise<BackupRemoteFile[]> => {
+  const response = await apiClient.get<BackupRemoteFile[]>(`/admin/backups/targets/${targetId}/remote-files`)
   return response.data
 }
 
-export const deleteBackupRuns = async (ids: number[]): Promise<BackupRunDeleteResult> => {
-  const response = await apiClient.post<BackupRunDeleteResult>('/admin/backups/runs/delete', { ids })
+export const deleteBackupTargetRemoteFile = async (
+  targetId: number,
+  remotePath: string,
+): Promise<BackupRemoteFileDeleteResult> => {
+  const response = await apiClient.delete<BackupRemoteFileDeleteResult>(`/admin/backups/targets/${targetId}/remote-files`, {
+    params: {
+      remote_path: remotePath,
+    },
+  })
   return response.data
 }

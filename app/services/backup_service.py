@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import base64
 import calendar
+import hashlib
 import http.client
 import json
 import logging
 import os
+import re
 import shutil
 import ssl
 import subprocess
@@ -14,7 +17,8 @@ import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote, urlsplit, urlunsplit
+from urllib.parse import quote, unquote, urljoin, urlsplit, urlunsplit
+from xml.etree import ElementTree as ET
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.engine import make_url
@@ -34,6 +38,7 @@ FULL_BACKUP_PREFIX = "tg-backup"
 EXPORT_BACKUP_PREFIX = "movie-data"
 WEBDAV_DEFAULT_PROVIDER = "generic_webdav"
 LOCAL_DEFAULT_DIR = "data/backups"
+BACKUP_QUEUE_LOCK_KEY = 90217041
 EXPORT_XLSX_COLUMNS = [
     "\u5f71\u89c6\u540d\u5b57",
     "\u63cf\u8ff0",
@@ -43,7 +48,7 @@ EXPORT_XLSX_COLUMNS = [
 EXPORT_XLSX_SHEET_NAME = "\u5f71\u89c6\u8d44\u6e90"
 
 _dispatch_lock = threading.RLock()
-_active_run_threads: set[int] = set()
+_queue_worker_thread: threading.Thread | None = None
 
 
 def _utc_now() -> datetime:
@@ -120,6 +125,11 @@ def _build_remote_file_path(target: BackupTarget | dict[str, Any], file_name: st
     return f"{normalized_root}/{file_name}" if normalized_root else file_name
 
 
+def _normalize_remote_path(path_value: str) -> str:
+    parts = [part for part in str(path_value or "").strip().split("/") if part not in {"", ".", ".."}]
+    return "/".join(parts)
+
+
 def _get_target_timezone(target: BackupTarget | dict[str, Any]) -> ZoneInfo:
     timezone_name = target.timezone if isinstance(target, BackupTarget) else str(target.get("timezone") or "Asia/Shanghai")
     try:
@@ -148,6 +158,38 @@ def _build_file_name(target: BackupTarget | dict[str, Any]) -> tuple[str, str]:
         return file_name, "xlsx"
     file_name = f"{FULL_BACKUP_PREFIX}-{slug}-{timestamp}.zip"
     return file_name, "zip"
+
+
+def _parse_backup_file_name(file_name: str, *, target: BackupTarget | dict[str, Any]) -> dict[str, Any]:
+    parsed: dict[str, Any] = {
+        "backup_time": None,
+        "backup_mode": None,
+        "range_label": None,
+        "file_format": Path(file_name).suffix.lstrip(".").lower() or None,
+    }
+
+    local_tz = _get_target_timezone(target)
+    full_match = re.match(rf"^{FULL_BACKUP_PREFIX}-.+-(\d{{8}}-\d{{6}})\.zip$", file_name)
+    export_match = re.match(rf"^{EXPORT_BACKUP_PREFIX}-.+-(all|\d+d)-(\d{{8}}-\d{{6}})\.xlsx$", file_name)
+
+    timestamp_label: str | None = None
+    if full_match:
+        parsed["backup_mode"] = "full"
+        timestamp_label = full_match.group(1)
+    elif export_match:
+        parsed["backup_mode"] = "media_export"
+        range_token = export_match.group(1)
+        parsed["range_label"] = "全部数据" if range_token == "all" else f"最近 {range_token[:-1]} 天"
+        timestamp_label = export_match.group(2)
+
+    if timestamp_label:
+        try:
+            parsed_dt = datetime.strptime(timestamp_label, "%Y%m%d-%H%M%S").replace(tzinfo=local_tz)
+            parsed["backup_time"] = parsed_dt.isoformat()
+        except ValueError:
+            parsed["backup_time"] = None
+
+    return parsed
 
 
 def _format_schedule_summary(target: BackupTarget) -> str:
@@ -182,12 +224,11 @@ def _serialize_backup_target(target: BackupTarget, active_runs: dict[int, Backup
         "schedule_kind": target.schedule_kind,
         "schedule_hour": target.schedule_hour,
         "schedule_minute": target.schedule_minute,
+        "schedule_priority": target.schedule_priority or 100,
         "schedule_weekday": target.schedule_weekday,
         "schedule_day": target.schedule_day,
         "timezone": target.timezone,
         "retention_count": target.retention_count,
-        "retention_days": target.retention_days,
-        "run_log_retention_days": target.run_log_retention_days,
         "local_dir": target.local_dir,
         "webdav_base_url": target.webdav_base_url,
         "webdav_username": target.webdav_username,
@@ -195,8 +236,6 @@ def _serialize_backup_target(target: BackupTarget, active_runs: dict[int, Backup
         "webdav_timeout_seconds": target.webdav_timeout_seconds,
         "webdav_verify_ssl": bool(target.webdav_verify_ssl),
         "webdav_password_configured": bool(target.webdav_password_encrypted),
-        "include_database": bool(target.include_database),
-        "include_users_json": bool(target.include_users_json),
         "include_env_file": bool(target.include_env_file),
         "include_runtime_data": bool(target.include_runtime_data),
         "export_range_kind": target.export_range_kind,
@@ -311,20 +350,21 @@ def _apply_target_payload(target: BackupTarget, values: dict[str, Any], *, is_up
     target.schedule_kind = values["schedule_kind"]
     target.schedule_hour = int(values["schedule_hour"])
     target.schedule_minute = int(values["schedule_minute"])
+    target.schedule_priority = max(1, int(values.get("schedule_priority") or 100))
     target.schedule_weekday = values.get("schedule_weekday")
     target.schedule_day = values.get("schedule_day")
     target.timezone = values["timezone"]
     target.retention_count = int(values["retention_count"])
-    target.retention_days = int(values["retention_days"])
-    target.run_log_retention_days = int(values.get("run_log_retention_days") or 0)
+    target.retention_days = 0
+    target.run_log_retention_days = 0
     target.local_dir = values.get("local_dir") or LOCAL_DEFAULT_DIR
     target.webdav_base_url = (values.get("webdav_base_url") or "").strip()
     target.webdav_username = (values.get("webdav_username") or "").strip()
     target.webdav_root_path = _normalize_webdav_root_path(values.get("webdav_root_path") or "")
     target.webdav_timeout_seconds = int(values["webdav_timeout_seconds"])
     target.webdav_verify_ssl = bool(values["webdav_verify_ssl"])
-    target.include_database = bool(values["include_database"])
-    target.include_users_json = bool(values["include_users_json"])
+    target.include_database = True
+    target.include_users_json = False
     target.include_env_file = bool(values["include_env_file"])
     target.include_runtime_data = bool(values["include_runtime_data"])
     target.export_range_kind = values["export_range_kind"]
@@ -400,6 +440,54 @@ def delete_backup_target(target_id: int) -> None:
         session.commit()
 
 
+def list_backup_target_remote_files(target_id: int) -> list[dict[str, Any]]:
+    ensure_runtime_storage_tables()
+    with Session(engine) as session:
+        target = session.get(BackupTarget, target_id)
+        if target is None:
+            raise LookupError("Backup target not found")
+        if target.target_kind != "webdav":
+            raise ValueError("Only WebDAV targets support remote file browsing")
+        target_snapshot = _clone_target(target)
+
+    return _list_webdav_files(target_snapshot)
+
+
+def delete_backup_target_remote_file(target_id: int, remote_path: str) -> dict[str, Any]:
+    ensure_runtime_storage_tables()
+    with Session(engine) as session:
+        target = session.get(BackupTarget, target_id)
+        if target is None:
+            raise LookupError("Backup target not found")
+        if target.target_kind != "webdav":
+            raise ValueError("Only WebDAV targets support remote file deletion")
+        target_snapshot = _clone_target(target)
+
+    normalized_path = _validate_remote_file_path(target_snapshot, remote_path)
+    deleted = _delete_webdav_file(target_snapshot, normalized_path)
+
+    with Session(engine) as session:
+        runs = (
+            session.query(BackupRun)
+            .filter(BackupRun.target_id == target_id, BackupRun.remote_path == normalized_path)
+            .all()
+        )
+        for run in runs:
+            run.remote_path = None
+            run.remote_url = None
+            run.result_json = {
+                **(run.result_json or {}),
+                "remote_file_deleted": True,
+            }
+            session.add(run)
+        session.commit()
+
+    return {
+        "success": bool(deleted),
+        "remote_path": normalized_path,
+    }
+
+
 def list_backup_runs(*, limit: int = 40, target_id: int | None = None) -> list[dict[str, Any]]:
     ensure_runtime_storage_tables()
     safe_limit = max(1, min(limit, 200))
@@ -448,37 +536,9 @@ def delete_backup_runs(run_ids: list[int]) -> dict[str, Any]:
 
 
 def cleanup_expired_backup_run_logs() -> dict[str, Any]:
-    ensure_runtime_storage_tables()
-    deleted_ids: list[int] = []
-    now_utc = _utc_now()
-
-    with Session(engine) as session:
-        targets = (
-            session.query(BackupTarget.id, BackupTarget.run_log_retention_days)
-            .filter(BackupTarget.run_log_retention_days > 0)
-            .all()
-        )
-
-        for target_id, retention_days in targets:
-            cutoff = now_utc - timedelta(days=int(retention_days))
-            stale_runs = (
-                session.query(BackupRun)
-                .filter(
-                    BackupRun.target_id == target_id,
-                    BackupRun.status.notin_(ACTIVE_RUN_STATUSES),
-                    BackupRun.started_at < cutoff,
-                )
-                .all()
-            )
-            for run in stale_runs:
-                deleted_ids.append(run.id)
-                session.delete(run)
-
-        session.commit()
-
     return {
-        "deleted_count": len(deleted_ids),
-        "deleted_ids": deleted_ids,
+        "deleted_count": 0,
+        "deleted_ids": [],
     }
 
 
@@ -538,17 +598,17 @@ def start_backup_run(target_id: int, *, trigger_source: str = "manual", created_
 
         session.refresh(run)
 
-    dispatch_backup_run(run.id)
+    dispatch_pending_backup_runs()
     return _serialize_backup_run(run)
 
 
-def claim_due_backup_runs(*, limit: int = 3) -> int:
+def claim_due_backup_runs(*, limit: int | None = None) -> int:
     ensure_runtime_storage_tables()
     now_utc = _utc_now()
-    created_run_ids: list[int] = []
+    created_run_count = 0
 
     with Session(engine) as session:
-        due_targets = (
+        query = (
             session.query(BackupTarget)
             .filter(
                 BackupTarget.is_enabled.is_(True),
@@ -556,11 +616,12 @@ def claim_due_backup_runs(*, limit: int = 3) -> int:
                 BackupTarget.next_run_at.isnot(None),
                 BackupTarget.next_run_at <= now_utc,
             )
-            .order_by(BackupTarget.next_run_at.asc(), BackupTarget.id.asc())
+            .order_by(BackupTarget.next_run_at.asc(), BackupTarget.schedule_priority.asc(), BackupTarget.id.asc())
             .with_for_update(skip_locked=True)
-            .limit(max(1, limit))
-            .all()
         )
+        if limit is not None:
+            query = query.limit(max(1, min(int(limit), 500)))
+        due_targets = query.all()
 
         for target in due_targets:
             active_run = (
@@ -576,34 +637,106 @@ def claim_due_backup_runs(*, limit: int = 3) -> int:
             target.last_status = "pending"
             target.last_error_message = None
             session.add(run)
-            session.flush()
-            created_run_ids.append(run.id)
+            created_run_count += 1
 
         session.commit()
 
-    for run_id in created_run_ids:
-        dispatch_backup_run(run_id)
+    if created_run_count > 0:
+        dispatch_pending_backup_runs()
 
-    return len(created_run_ids)
+    return created_run_count
 
 
-def dispatch_backup_run(run_id: int) -> bool:
+def dispatch_pending_backup_runs() -> bool:
     with _dispatch_lock:
-        if run_id in _active_run_threads:
+        global _queue_worker_thread
+        if _queue_worker_thread is not None and _queue_worker_thread.is_alive():
             return False
-        _active_run_threads.add(run_id)
-
-    worker = threading.Thread(target=_run_backup_thread, args=(run_id,), daemon=True, name=f"backup-run-{run_id}")
+        worker = threading.Thread(
+            target=_run_backup_queue_worker,
+            daemon=True,
+            name="backup-queue-worker",
+        )
+        _queue_worker_thread = worker
     worker.start()
     return True
 
 
-def _run_backup_thread(run_id: int) -> None:
+def _try_acquire_backup_queue_lock(connection: Any) -> bool:
+    cursor = connection.cursor()
     try:
-        _execute_backup_run(run_id)
+        cursor.execute("SELECT pg_try_advisory_lock(%s)", (BACKUP_QUEUE_LOCK_KEY,))
+        row = cursor.fetchone()
+        connection.commit()
+        return bool(row[0]) if row else False
     finally:
+        cursor.close()
+
+
+def _release_backup_queue_lock(connection: Any, *, acquired: bool) -> None:
+    try:
+        if acquired:
+            cursor = connection.cursor()
+            try:
+                cursor.execute("SELECT pg_advisory_unlock(%s)", (BACKUP_QUEUE_LOCK_KEY,))
+                connection.commit()
+            finally:
+                cursor.close()
+    finally:
+        connection.close()
+
+
+def _claim_next_pending_run() -> int | None:
+    ensure_runtime_storage_tables()
+    with Session(engine) as session:
+        run = (
+            session.query(BackupRun)
+            .filter(BackupRun.status == "pending")
+            .order_by(BackupRun.created_at.asc(), BackupRun.id.asc())
+            .with_for_update(skip_locked=True)
+            .first()
+        )
+        if run is None:
+            return None
+
+        run.status = "running"
+        run.started_at = _utc_now()
+        session.add(run)
+        session.commit()
+        return run.id
+
+
+def _has_pending_backup_runs() -> bool:
+    ensure_runtime_storage_tables()
+    with Session(engine) as session:
+        return session.query(BackupRun.id).filter(BackupRun.status == "pending").first() is not None
+
+
+def _run_backup_queue_worker() -> None:
+    connection = None
+    acquired = False
+    should_recheck_queue = False
+    try:
+        connection = engine.raw_connection()
+        acquired = _try_acquire_backup_queue_lock(connection)
+        if not acquired:
+            return
+
+        while True:
+            run_id = _claim_next_pending_run()
+            if run_id is None:
+                break
+            _execute_backup_run(run_id)
+    finally:
+        if connection is not None:
+            _release_backup_queue_lock(connection, acquired=acquired)
         with _dispatch_lock:
-            _active_run_threads.discard(run_id)
+            global _queue_worker_thread
+            if _queue_worker_thread is threading.current_thread():
+                _queue_worker_thread = None
+                should_recheck_queue = acquired
+        if should_recheck_queue and _has_pending_backup_runs():
+            dispatch_pending_backup_runs()
 
 
 def _hash_file(path: Path) -> tuple[float, str]:
@@ -622,6 +755,39 @@ def _resolve_local_output_path(target: BackupTarget, file_name: str) -> Path:
     return destination_dir / file_name
 
 
+def _resolve_pg_dump_path() -> str:
+    env_override = os.getenv("PG_DUMP_PATH", "").strip()
+    if env_override and Path(env_override).exists():
+        return env_override
+
+    resolved = shutil.which("pg_dump")
+    if resolved:
+        return resolved
+
+    candidate_paths: list[Path] = []
+    if os.name == "nt":
+        candidate_paths.extend(Path(r"C:\Program Files\PostgreSQL").glob(r"*\bin\pg_dump.exe"))
+    else:
+        candidate_paths.extend(
+            [
+                Path("/usr/bin/pg_dump"),
+                Path("/usr/local/bin/pg_dump"),
+            ]
+        )
+        candidate_paths.extend(Path("/usr/lib/postgresql").glob("*/bin/pg_dump"))
+
+    for candidate in candidate_paths:
+        try:
+            if candidate.exists():
+                return str(candidate)
+        except Exception:
+            continue
+
+    raise RuntimeError(
+        "pg_dump not found; install PostgreSQL client tools, add pg_dump to PATH, or set PG_DUMP_PATH"
+    )
+
+
 def _dump_database(output_path: Path) -> None:
     database_url = make_url(settings.DATABASE_URL)
     db_name = database_url.database
@@ -629,7 +795,7 @@ def _dump_database(output_path: Path) -> None:
         raise RuntimeError("DATABASE_URL does not include a database name")
 
     command = [
-        "pg_dump",
+        _resolve_pg_dump_path(),
         "--format=plain",
         "--encoding=UTF8",
         "--no-owner",
@@ -657,7 +823,9 @@ def _dump_database(output_path: Path) -> None:
             env=env,
         )
     except FileNotFoundError as exc:
-        raise RuntimeError("pg_dump not found; install PostgreSQL client tools and add them to PATH") from exc
+        raise RuntimeError(
+            "pg_dump not found; install PostgreSQL client tools, add pg_dump to PATH, or set PG_DUMP_PATH"
+        ) from exc
 
     if completed.returncode != 0:
         message = (completed.stderr or completed.stdout or "unknown error").strip()
@@ -795,13 +963,9 @@ def _build_full_backup_archive(target: BackupTarget, output_path: Path) -> tuple
     with tempfile.TemporaryDirectory(prefix="tg-backup-stage-") as staging_dir:
         staging_root = Path(staging_dir)
 
-        if target.include_database:
-            database_dump_path = staging_root / "database.sql"
-            _dump_database(database_dump_path)
-            manifest["included_files"].append("database.sql")
-
-        if target.include_users_json and _copy_if_exists(PROJECT_ROOT / "users.json", staging_root / "users.json"):
-            manifest["included_files"].append("users.json")
+        database_dump_path = staging_root / "database.sql"
+        _dump_database(database_dump_path)
+        manifest["included_files"].append("database.sql")
 
         if target.include_env_file and _copy_if_exists(PROJECT_ROOT / ".env", staging_root / ".env"):
             manifest["included_files"].append(".env")
@@ -863,23 +1027,52 @@ def _perform_webdav_request(
     body: Any = None,
     headers: dict[str, str] | None = None,
 ) -> int:
-    connection, request_path = _build_webdav_connection(
+    status_code, _, _ = _perform_webdav_request_raw(
+        target,
+        method,
         url,
-        timeout_seconds=target.webdav_timeout_seconds,
-        verify_ssl=bool(target.webdav_verify_ssl),
+        body=body,
+        headers=headers,
     )
+    return status_code
+
+
+def _perform_webdav_request_raw(
+    target: BackupTarget,
+    method: str,
+    url: str,
+    *,
+    body: Any = None,
+    headers: dict[str, str] | None = None,
+) -> tuple[int, dict[str, str], bytes]:
+    current_url = url
     merged_headers = _build_webdav_headers(target)
     if headers:
         merged_headers.update(headers)
 
-    try:
-        connection.request(method, request_path, body=body, headers=merged_headers)
-        response = connection.getresponse()
-        status_code = response.status
-        response.read()
-        return status_code
-    finally:
-        connection.close()
+    for _ in range(5):
+        connection, request_path = _build_webdav_connection(
+            current_url,
+            timeout_seconds=target.webdav_timeout_seconds,
+            verify_ssl=bool(target.webdav_verify_ssl),
+        )
+
+        try:
+            connection.request(method, request_path, body=body, headers=merged_headers)
+            response = connection.getresponse()
+            status_code = response.status
+            response_headers = {key.lower(): value for key, value in response.getheaders()}
+            response_body = response.read()
+        finally:
+            connection.close()
+
+        if status_code in {301, 302, 307, 308} and response_headers.get("location"):
+            current_url = urljoin(current_url, response_headers["location"])
+            continue
+
+        return status_code, response_headers, response_body
+
+    raise RuntimeError("WebDAV request redirected too many times")
 
 
 def _ensure_webdav_directories(target: BackupTarget, remote_path: str) -> None:
@@ -938,6 +1131,130 @@ def _delete_webdav_file(target: BackupTarget, remote_path: str) -> bool:
     return status_code in {200, 202, 204, 404}
 
 
+def _extract_relative_webdav_path(base_url: str, href: str) -> str:
+    base_path = urlsplit(base_url).path.rstrip("/")
+    href_path = unquote(urlsplit(href).path).rstrip("/")
+    if base_path and href_path.startswith(base_path):
+        href_path = href_path[len(base_path):]
+    return _normalize_remote_path(href_path)
+
+
+def _serialize_remote_file(
+    target: BackupTarget,
+    *,
+    name: str,
+    remote_path: str,
+    size_bytes: float | None,
+    modified_at: datetime | None,
+) -> dict[str, Any]:
+    parsed_meta = _parse_backup_file_name(name, target=target)
+    return {
+        "name": name,
+        "remote_path": remote_path,
+        "remote_url": _sanitize_url(_build_webdav_url(target.webdav_base_url, remote_path)),
+        "size_bytes": size_bytes,
+        "modified_at": _to_iso(modified_at),
+        "backup_time": parsed_meta["backup_time"],
+        "backup_mode": parsed_meta["backup_mode"],
+        "range_label": parsed_meta["range_label"],
+        "file_format": parsed_meta["file_format"],
+    }
+
+
+def _list_webdav_files(target: BackupTarget) -> list[dict[str, Any]]:
+    remote_root = _normalize_webdav_root_path(target.webdav_root_path)
+    status_code, _, response_body = _perform_webdav_request_raw(
+        target,
+        "PROPFIND",
+        _build_webdav_url(target.webdav_base_url, remote_root),
+        body=(
+            '<?xml version="1.0" encoding="utf-8"?>'
+            '<d:propfind xmlns:d="DAV:"><d:prop>'
+            "<d:displayname/><d:getcontentlength/><d:getlastmodified/><d:resourcetype/>"
+            "</d:prop></d:propfind>"
+        ).encode("utf-8"),
+        headers={
+            "Depth": "1",
+            "Content-Type": 'application/xml; charset="utf-8"',
+        },
+    )
+
+    if status_code == 404:
+        return []
+    if status_code not in {200, 207}:
+        raise RuntimeError(f"Failed to list WebDAV directory: HTTP {status_code}")
+
+    try:
+        xml_root = ET.fromstring(response_body)
+    except ET.ParseError as exc:
+        raise RuntimeError("WebDAV directory listing returned invalid XML") from exc
+
+    namespace = {"d": "DAV:"}
+    files: list[dict[str, Any]] = []
+    for response_node in xml_root.findall("d:response", namespace):
+        href = response_node.findtext("d:href", default="", namespaces=namespace)
+        relative_path = _extract_relative_webdav_path(target.webdav_base_url, href)
+        if not relative_path or relative_path == remote_root:
+            continue
+
+        resource_type = response_node.find(".//d:resourcetype", namespace)
+        if resource_type is not None and resource_type.find("d:collection", namespace) is not None:
+            continue
+
+        display_name = response_node.findtext(".//d:displayname", default="", namespaces=namespace).strip()
+        file_name = display_name or Path(relative_path).name
+        content_length = response_node.findtext(".//d:getcontentlength", default="", namespaces=namespace).strip()
+        modified_raw = response_node.findtext(".//d:getlastmodified", default="", namespaces=namespace).strip()
+
+        size_bytes = None
+        if content_length:
+            try:
+                size_bytes = float(content_length)
+            except ValueError:
+                size_bytes = None
+
+        modified_at = None
+        if modified_raw:
+            try:
+                modified_at = datetime.strptime(modified_raw, "%a, %d %b %Y %H:%M:%S %Z")
+            except ValueError:
+                try:
+                    modified_at = datetime.strptime(modified_raw, "%a, %d %b %Y %H:%M:%S GMT")
+                except ValueError:
+                    modified_at = None
+
+        files.append(
+            _serialize_remote_file(
+                target,
+                name=file_name,
+                remote_path=relative_path,
+                size_bytes=size_bytes,
+                modified_at=modified_at,
+            )
+        )
+
+    files.sort(
+        key=lambda item: (
+            item.get("backup_time") or item.get("modified_at") or "",
+            item.get("name") or "",
+        ),
+        reverse=True,
+    )
+    return files
+
+
+def _validate_remote_file_path(target: BackupTarget, remote_path: str) -> str:
+    normalized_path = _normalize_remote_path(remote_path)
+    if not normalized_path:
+        raise ValueError("remote_path is required")
+
+    normalized_root = _normalize_webdav_root_path(target.webdav_root_path)
+    if normalized_root and normalized_path != normalized_root and not normalized_path.startswith(f"{normalized_root}/"):
+        raise ValueError("remote_path is outside the configured WebDAV directory")
+
+    return normalized_path
+
+
 def _cleanup_local_file(path_value: str | None) -> bool:
     if not path_value:
         return False
@@ -969,17 +1286,11 @@ def _apply_retention(target_id: int, *, current_run_id: int) -> dict[str, Any]:
             .all()
         )
 
-        cutoff = None
-        if target.retention_days > 0:
-            cutoff = _utc_now() - timedelta(days=target.retention_days)
-
         for index, run in enumerate(runs):
             if run.id == current_run_id:
                 continue
 
-            remove_for_count = target.retention_count > 0 and index >= target.retention_count
-            remove_for_days = cutoff is not None and run.finished_at is not None and run.finished_at < cutoff
-            if not remove_for_count and not remove_for_days:
+            if not (target.retention_count > 0 and index >= target.retention_count):
                 continue
 
             local_pruned = not run.local_path
@@ -1079,6 +1390,7 @@ def _clone_target(target: BackupTarget) -> BackupTarget:
         "schedule_kind",
         "schedule_hour",
         "schedule_minute",
+        "schedule_priority",
         "schedule_weekday",
         "schedule_day",
         "timezone",
@@ -1111,12 +1423,9 @@ def _execute_backup_run(run_id: int) -> None:
         run = session.get(BackupRun, run_id)
         if run is None:
             return
-        if run.status == "running":
+        if run.status != "running":
             return
-        run.status = "running"
-        run.started_at = started_at
-        session.add(run)
-        session.commit()
+        started_at = run.started_at or started_at
 
     try:
         with Session(engine) as session:

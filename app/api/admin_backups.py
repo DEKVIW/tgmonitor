@@ -6,6 +6,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.api.dependencies_runtime import get_admin_user
 from app.schemas.backup_models import (
+    BackupRemoteFileDeleteResponse,
+    BackupRemoteFileResponse,
     BackupRunDeleteRequest,
     BackupRunDeleteResponse,
     BackupRunResponse,
@@ -18,7 +20,9 @@ from app.services.backup_service import (
     create_backup_target,
     delete_backup_runs,
     delete_backup_target,
+    delete_backup_target_remote_file,
     list_backup_runs,
+    list_backup_target_remote_files,
     list_backup_targets,
     start_backup_run,
     test_backup_target,
@@ -107,6 +111,33 @@ async def test_backup_target_api(
     del current_user
     try:
         return BackupTargetTestResult(**test_backup_target(target_id))
+    except Exception as exc:
+        _raise_backup_error(exc)
+        raise
+
+
+@router.get("/targets/{target_id}/remote-files", response_model=List[BackupRemoteFileResponse], summary="List remote backup files")
+async def list_backup_target_remote_files_api(
+    target_id: int,
+    current_user: Dict[str, Any] = Depends(get_admin_user),
+) -> List[BackupRemoteFileResponse]:
+    del current_user
+    try:
+        return [BackupRemoteFileResponse(**item) for item in list_backup_target_remote_files(target_id)]
+    except Exception as exc:
+        _raise_backup_error(exc)
+        raise
+
+
+@router.delete("/targets/{target_id}/remote-files", response_model=BackupRemoteFileDeleteResponse, summary="Delete remote backup file")
+async def delete_backup_target_remote_file_api(
+    target_id: int,
+    remote_path: str = Query(..., min_length=1),
+    current_user: Dict[str, Any] = Depends(get_admin_user),
+) -> BackupRemoteFileDeleteResponse:
+    del current_user
+    try:
+        return BackupRemoteFileDeleteResponse(**delete_backup_target_remote_file(target_id, remote_path))
     except Exception as exc:
         _raise_backup_error(exc)
         raise
