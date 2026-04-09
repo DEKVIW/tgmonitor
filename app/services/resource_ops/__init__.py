@@ -14,6 +14,9 @@ from .catalog import (
     get_catalog_sync_status,
     sync_message_link_catalog_batch,
 )
+from .maintenance import run_resource_ops_retention
+from .resolver import get_work_binding_summary, sync_resource_work_bindings
+from .settings import get_resource_ops_runtime_settings, update_resource_ops_runtime_settings
 from .tracking import get_redirect_target_url, record_click_event
 from .workbench import (
     get_resource_op_workbench_detail,
@@ -31,6 +34,11 @@ __all__ = [
     "sync_message_link_catalog_batch",
     "get_redirect_target_url",
     "record_click_event",
+    "get_resource_ops_runtime_settings",
+    "update_resource_ops_runtime_settings",
+    "sync_resource_work_bindings",
+    "get_work_binding_summary",
+    "run_resource_ops_retention",
     "get_resource_ops_overview",
     "get_resource_ops_platform_distribution",
     "get_resource_ops_trend",

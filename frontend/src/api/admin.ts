@@ -29,6 +29,8 @@ import {
   BulkUsernamesRequest,
   BulkSimpleResponse,
   BulkResetResponse,
+  DedupRuntimeSettingsResponse,
+  DedupRuntimeSettingsUpdate,
   MaintenanceResult,
   ClearOldDataRequest,
   ChannelDiagnosisResult,
@@ -381,8 +383,20 @@ export const dedupLinks = async (): Promise<MaintenanceResult> => {
 /**
  * 清空链接检测数据
  */
+export const getDedupRuntimeSettings = async (): Promise<DedupRuntimeSettingsResponse> => {
+  const response = await apiClient.get<DedupRuntimeSettingsResponse>('/admin/maintenance/dedup-runtime')
+  return response.data
+}
+
+export const updateDedupRuntimeSettings = async (
+  data: DedupRuntimeSettingsUpdate
+): Promise<DedupRuntimeSettingsResponse> => {
+  const response = await apiClient.put<DedupRuntimeSettingsResponse>('/admin/maintenance/dedup-runtime', data)
+  return response.data
+}
+
 export const clearLinkCheckData = async (): Promise<MaintenanceResult> => {
-  const response = await apiClient.post<MaintenanceResult>('/admin/maintenance/clear-link-check-data')
+  const response = await apiClient.post<MaintenanceResult>('/admin/maintenance/link-check-data/clear-all')
   return response.data
 }
 

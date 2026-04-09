@@ -201,6 +201,26 @@ export interface ResourceOpsWorkbenchItem {
   last_message_time?: string | null
   last_clicked_at?: string | null
   latest_message_title?: string | null
+  work_id?: number | null
+  work_title?: string | null
+  work_canonical_title?: string | null
+  work_original_title?: string | null
+  work_provider?: string | null
+  work_media_type?: string | null
+  work_release_year?: number | null
+  work_poster_url?: string | null
+  work_detail_url?: string | null
+  work_match_status: 'pending' | 'matched' | 'no_match' | 'low_confidence' | 'error' | string
+  work_match_status_label: string
+  work_match_source: string
+  work_confidence: number
+  work_match_reason?: string | null
+  work_query_title?: string | null
+  work_candidate_title?: string | null
+  work_season_hint?: string | null
+  work_year_hint?: number | null
+  work_last_attempted_at?: string | null
+  work_matched_at?: string | null
 }
 
 export interface ResourceOpsWorkbenchListResponse {
@@ -248,4 +268,81 @@ export interface ResourceOpsWorkbenchUpdateRequest {
   value_status?: ResourceOpsValueStatus | string
   manual_resource_kind?: Exclude<ResourceOpsResourceKind, 'unknown'> | '' | null
   note?: string
+}
+
+export interface ResourceOpsWorkBindingSummary {
+  total_tracked_targets: number
+  matched_count: number
+  pending_count: number
+  no_match_count: number
+  low_confidence_count: number
+  error_count: number
+  match_rate: number
+}
+
+export interface ResourceOpsRuntimeSettingsResponse {
+  auto_bind_enabled: boolean
+  sync_batch_size: number
+  sync_interval_minutes: number
+  min_confidence: number
+  retry_cooldown_hours: number
+  tmdb_enabled: boolean
+  tmdb_language: string
+  tmdb_api_key_configured: boolean
+  tmdb_read_access_token_configured: boolean
+  tmdb_provider_ready: boolean
+  bangumi_enabled: boolean
+  bangumi_user_agent: string
+  bangumi_provider_ready: boolean
+  retention_click_event_days: number
+  retention_daily_stat_days: number
+  retention_candidate_log_days: number
+  cleanup_interval_hours: number
+  last_sync_at?: string | null
+  last_sync_summary: Record<string, any>
+  last_cleanup_at?: string | null
+  last_cleanup_summary: Record<string, any>
+  binding_summary: ResourceOpsWorkBindingSummary
+}
+
+export interface ResourceOpsRuntimeSettingsUpdateRequest {
+  auto_bind_enabled: boolean
+  sync_batch_size: number
+  sync_interval_minutes: number
+  min_confidence: number
+  retry_cooldown_hours: number
+  tmdb_enabled: boolean
+  tmdb_language: string
+  tmdb_api_key?: string | null
+  tmdb_read_access_token?: string | null
+  bangumi_enabled: boolean
+  bangumi_user_agent: string
+  retention_click_event_days: number
+  retention_daily_stat_days: number
+  retention_candidate_log_days: number
+  cleanup_interval_hours: number
+}
+
+export interface ResourceOpsRecognitionRunResponse {
+  processed_count: number
+  matched_count: number
+  no_match_count: number
+  low_confidence_count: number
+  error_count: number
+  skipped_count: number
+  started_at: string
+  finished_at: string
+  items: Array<Record<string, any>>
+  binding_summary: ResourceOpsWorkBindingSummary
+}
+
+export interface ResourceOpsRetentionRunResponse {
+  deleted_click_events: number
+  deleted_daily_stats: number
+  deleted_candidate_logs: number
+  deleted_orphan_aliases: number
+  deleted_orphan_works: number
+  retention_click_event_days: number
+  retention_daily_stat_days: number
+  retention_candidate_log_days: number
 }

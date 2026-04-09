@@ -670,10 +670,74 @@ class MaintenanceResult(BaseModel):
     cutoff_time: Optional[str] = None
     errors: Optional[List[str]] = None
     error: Optional[str] = None
+    status: Optional[str] = None
+    run_time: Optional[str] = None
+    trigger_source: Optional[str] = None
+    scope_mode: Optional[str] = None
+    scope_label: Optional[str] = None
+    lookback_hours: Optional[int] = None
+    scanned_messages: Optional[int] = None
+    scanned_links: Optional[int] = None
+    unique_links: Optional[int] = None
+    kept_messages: Optional[int] = None
+    duplicate_candidate_count: Optional[int] = None
+    duplicate_group_count: Optional[int] = None
+    duration_seconds: Optional[float] = None
 
 
 class ClearOldDataRequest(BaseModel):
     days: int = Field(default=30, ge=1, le=3650)
+
+
+class DedupRunSummary(BaseModel):
+    run_time: Optional[str] = None
+    trigger_source: Optional[str] = None
+    scope_mode: str = "all_history"
+    scope_label: str = "全量历史"
+    lookback_hours: Optional[int] = None
+    scanned_messages: int = 0
+    scanned_links: int = 0
+    unique_links: int = 0
+    kept_messages: int = 0
+    duplicate_candidate_count: int = 0
+    duplicate_group_count: int = 0
+    deleted_count: int = 0
+    duration_seconds: float = 0.0
+
+
+class DedupRuntimeSettingsResponse(BaseModel):
+    enabled: bool
+    scope_mode: str
+    scope_label: str
+    lookback_hours: int
+    schedule_hour: int
+    schedule_minute: int
+    timezone: str
+    stats_retention_hours: int
+    next_run_at: Optional[str] = None
+    last_run_at: Optional[str] = None
+    last_status: Optional[str] = None
+    last_error_message: Optional[str] = None
+    last_run_summary: Dict[str, Any] = Field(default_factory=dict)
+    status_summary: str
+
+
+class DedupRuntimeSettingsUpdate(BaseModel):
+    enabled: bool = False
+    scope_mode: str = Field(default="all_history", max_length=32)
+    lookback_hours: int = Field(default=72, ge=1, le=24 * 365)
+    schedule_hour: int = Field(default=4, ge=0, le=23)
+    schedule_minute: int = Field(default=20, ge=0, le=59)
+    timezone: str = Field(default="Asia/Shanghai", max_length=64)
+    stats_retention_hours: int = Field(default=240, ge=10, le=24 * 365)
+
+    @field_validator("scope_mode")
+    @classmethod
+    def validate_dedup_scope_mode(cls, value: str) -> str:
+        normalized = _normalize_text(value, field_name="scope_mode").lower()
+        if normalized not in {"all_history", "recent_hours"}:
+            raise ValueError("scope_mode must be all_history or recent_hours")
+        return normalized
 
 
 class ChannelDiagnosisResult(BaseModel):

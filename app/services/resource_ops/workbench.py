@@ -27,6 +27,7 @@ from app.services.resource_ops.analytics import (
     _to_int,
     _utcnow,
 )
+from app.services.resource_ops.resolver import get_work_binding_lookup
 from app.services.resource_ops.topic_extractor import extract_resource_topic
 
 
@@ -169,14 +170,23 @@ def _annotate_topic_metrics(items: list[dict[str, Any]]) -> list[dict[str, Any]]
     topic_map: dict[str, dict[str, Any]] = {}
 
     for item in items:
-        topic_payload = extract_resource_topic(
-            item.get("latest_message_title"),
-            item.get("display_text"),
-            share_key=item.get("share_key"),
-            fallback_id=_to_int(item.get("link_target_id")),
-        )
-        topic_key = topic_payload["topic_key"] or f"link:{_to_int(item.get('link_target_id'))}"
-        topic_title = topic_payload["topic_title"] or f"资源 {_to_int(item.get('link_target_id'))}"
+        work_id = _to_int(item.get("work_id"))
+        work_title = _normalize_text(item.get("work_title"), max_length=255)
+        work_season_hint = _normalize_text(item.get("work_season_hint"), max_length=32) or None
+        if work_id > 0 and work_title:
+            topic_key = f"work:{work_id}"
+            if work_season_hint:
+                topic_key = f"{topic_key}|season:{work_season_hint}"
+            topic_title = work_title
+        else:
+            topic_payload = extract_resource_topic(
+                item.get("latest_message_title"),
+                item.get("display_text"),
+                share_key=item.get("share_key"),
+                fallback_id=_to_int(item.get("link_target_id")),
+            )
+            topic_key = topic_payload["topic_key"] or f"link:{_to_int(item.get('link_target_id'))}"
+            topic_title = topic_payload["topic_title"] or f"资源 {_to_int(item.get('link_target_id'))}"
         item["topic_key"] = topic_key
         item["topic_title"] = topic_title
 
@@ -712,6 +722,12 @@ def _load_workbench_candidate_rows(
             "updated_by": row.updated_by,
         }
         items.append(_evaluate_candidate_row(item))
+    binding_lookup = get_work_binding_lookup(
+        session,
+        link_target_ids=[_to_int(item.get("link_target_id")) for item in items],
+    )
+    for item in items:
+        item.update(binding_lookup.get(_to_int(item.get("link_target_id")), {}))
     return _annotate_topic_metrics(items)
 
 

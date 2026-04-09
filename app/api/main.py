@@ -10,7 +10,9 @@ from app.api import admin_security, security
 from app.schemas.admin_models import PublicSystemConfigResponse
 from app.services.account_service import bootstrap_account_storage
 from app.services.backup_scheduler import start_backup_scheduler, stop_backup_scheduler
+from app.services.dedup_scheduler import start_dedup_scheduler, stop_dedup_scheduler
 from app.services.link_check_scheduler import start_link_check_scheduler, stop_link_check_scheduler
+from app.services.resource_ops_scheduler import start_resource_ops_scheduler, stop_resource_ops_scheduler
 from app.services.system_config_service import get_public_system_config_values
 import logging
 
@@ -64,13 +66,17 @@ app.include_router(resource_ops_public.router)
 async def startup_runtime_services() -> None:
     bootstrap_account_storage()
     start_backup_scheduler()
+    start_dedup_scheduler()
     start_link_check_scheduler()
+    start_resource_ops_scheduler()
 
 
 @app.on_event("shutdown")
 async def shutdown_runtime_services() -> None:
     stop_backup_scheduler()
+    stop_dedup_scheduler()
     stop_link_check_scheduler()
+    stop_resource_ops_scheduler()
 
 
 @app.get("/", summary="API 根路径")

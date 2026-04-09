@@ -1,0 +1,122 @@
+.maintenance-tools-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.maintenance-tools-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid rgba(216, 227, 238, 0.92);
+  border-radius: 22px;
+  background: rgba(247, 250, 252, 0.96);
+}
+
+.maintenance-tools-panel.is-wide {
+  min-width: 0;
+}
+
+.maintenance-tools-panel-head,
+.maintenance-tools-actions,
+.maintenance-tools-inline-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.maintenance-tools-panel-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.maintenance-tools-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+}
+
+.maintenance-tools-summary-card {
+  display: grid;
+  gap: 6px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(216, 227, 238, 0.9);
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.maintenance-tools-summary-label,
+.maintenance-tools-field-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.maintenance-tools-summary-value {
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.2;
+  color: var(--text-primary);
+}
+
+.maintenance-tools-summary-meta {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.maintenance-tools-field-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  gap: 14px 16px;
+}
+
+.maintenance-tools-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.maintenance-tools-field .ant-select,
+.maintenance-tools-field .ant-picker,
+.maintenance-tools-field .ant-input-number {
+  width: 100%;
+}
+
+.maintenance-tools-cleanup-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+@media (max-width: 1080px) {
+  .maintenance-tools-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 768px) {
+  .maintenance-tools-panel {
+    padding: 16px;
+  }
+
+  .maintenance-tools-summary-grid,
+  .maintenance-tools-field-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .maintenance-tools-inline-row {
+    align-items: stretch;
+  }
+
+  .maintenance-tools-inline-row .ant-input-number,
+  .maintenance-tools-inline-row .ant-btn {
+    width: 100%;
+  }
+}

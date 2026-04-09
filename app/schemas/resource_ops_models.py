@@ -212,6 +212,26 @@ class ResourceOpsWorkbenchItem(BaseModel):
     last_message_time: Optional[datetime] = None
     last_clicked_at: Optional[datetime] = None
     latest_message_title: Optional[str] = None
+    work_id: Optional[int] = None
+    work_title: Optional[str] = None
+    work_canonical_title: Optional[str] = None
+    work_original_title: Optional[str] = None
+    work_provider: Optional[str] = None
+    work_media_type: Optional[str] = None
+    work_release_year: Optional[int] = None
+    work_poster_url: Optional[str] = None
+    work_detail_url: Optional[str] = None
+    work_match_status: str = "pending"
+    work_match_status_label: str = "待识别"
+    work_match_source: str = "pending"
+    work_confidence: float = 0
+    work_match_reason: Optional[str] = None
+    work_query_title: Optional[str] = None
+    work_candidate_title: Optional[str] = None
+    work_season_hint: Optional[str] = None
+    work_year_hint: Optional[int] = None
+    work_last_attempted_at: Optional[datetime] = None
+    work_matched_at: Optional[datetime] = None
 
 
 class ResourceOpsWorkbenchListResponse(BaseModel):
@@ -245,3 +265,80 @@ class ResourceOpsWorkbenchUpdateRequest(BaseModel):
     value_status: Optional[str] = None
     manual_resource_kind: Optional[str] = None
     note: Optional[str] = None
+
+
+class ResourceOpsWorkBindingSummaryResponse(BaseModel):
+    total_tracked_targets: int = 0
+    matched_count: int = 0
+    pending_count: int = 0
+    no_match_count: int = 0
+    low_confidence_count: int = 0
+    error_count: int = 0
+    match_rate: float = 0
+
+
+class ResourceOpsRuntimeSettingsUpdateRequest(BaseModel):
+    auto_bind_enabled: bool = False
+    sync_batch_size: int = Field(default=12, ge=1, le=100)
+    sync_interval_minutes: int = Field(default=30, ge=5, le=1440)
+    min_confidence: float = Field(default=0.72, ge=0.4, le=0.99)
+    retry_cooldown_hours: int = Field(default=24, ge=1, le=720)
+    tmdb_enabled: bool = False
+    tmdb_language: str = Field(default="zh-CN", max_length=32)
+    tmdb_api_key: Optional[str] = Field(default=None, max_length=512)
+    tmdb_read_access_token: Optional[str] = Field(default=None, max_length=4096)
+    bangumi_enabled: bool = False
+    bangumi_user_agent: str = Field(default="TGMonitor/1.0", max_length=255)
+    retention_click_event_days: int = Field(default=90, ge=7, le=3650)
+    retention_daily_stat_days: int = Field(default=365, ge=30, le=3650)
+    retention_candidate_log_days: int = Field(default=180, ge=7, le=3650)
+    cleanup_interval_hours: int = Field(default=24, ge=1, le=720)
+
+
+class ResourceOpsRuntimeSettingsResponse(BaseModel):
+    auto_bind_enabled: bool = False
+    sync_batch_size: int = 12
+    sync_interval_minutes: int = 30
+    min_confidence: float = 0.72
+    retry_cooldown_hours: int = 24
+    tmdb_enabled: bool = False
+    tmdb_language: str = "zh-CN"
+    tmdb_api_key_configured: bool = False
+    tmdb_read_access_token_configured: bool = False
+    tmdb_provider_ready: bool = False
+    bangumi_enabled: bool = False
+    bangumi_user_agent: str = "TGMonitor/1.0"
+    bangumi_provider_ready: bool = False
+    retention_click_event_days: int = 90
+    retention_daily_stat_days: int = 365
+    retention_candidate_log_days: int = 180
+    cleanup_interval_hours: int = 24
+    last_sync_at: Optional[str] = None
+    last_sync_summary: Dict[str, Any] = Field(default_factory=dict)
+    last_cleanup_at: Optional[str] = None
+    last_cleanup_summary: Dict[str, Any] = Field(default_factory=dict)
+    binding_summary: ResourceOpsWorkBindingSummaryResponse
+
+
+class ResourceOpsRecognitionRunResponse(BaseModel):
+    processed_count: int = 0
+    matched_count: int = 0
+    no_match_count: int = 0
+    low_confidence_count: int = 0
+    error_count: int = 0
+    skipped_count: int = 0
+    started_at: str
+    finished_at: str
+    items: List[Dict[str, Any]] = Field(default_factory=list)
+    binding_summary: ResourceOpsWorkBindingSummaryResponse
+
+
+class ResourceOpsRetentionRunResponse(BaseModel):
+    deleted_click_events: int = 0
+    deleted_daily_stats: int = 0
+    deleted_candidate_logs: int = 0
+    deleted_orphan_aliases: int = 0
+    deleted_orphan_works: int = 0
+    retention_click_event_days: int = 90
+    retention_daily_stat_days: int = 365
+    retention_candidate_log_days: int = 180

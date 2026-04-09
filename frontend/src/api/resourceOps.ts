@@ -6,6 +6,10 @@ import type {
   ResourceOpsCatalogStatusResponse,
   ResourceOpsOverviewResponse,
   ResourceOpsPlatformDistributionResponse,
+  ResourceOpsRecognitionRunResponse,
+  ResourceOpsRetentionRunResponse,
+  ResourceOpsRuntimeSettingsResponse,
+  ResourceOpsRuntimeSettingsUpdateRequest,
   ResourceOpsTrendResponse,
   ResourceOpsWorkbenchDetailResponse,
   ResourceOpsWorkbenchListResponse,
@@ -106,5 +110,32 @@ export const updateResourceOpsWorkbenchItem = async (
     `/admin/resource-ops/workbench/items/${linkTargetId}`,
     payload
   )
+  return response.data
+}
+
+export const getResourceOpsRuntimeSettings = async (): Promise<ResourceOpsRuntimeSettingsResponse> => {
+  const response = await apiClient.get<ResourceOpsRuntimeSettingsResponse>('/admin/resource-ops/settings')
+  return response.data
+}
+
+export const updateResourceOpsRuntimeSettings = async (
+  payload: ResourceOpsRuntimeSettingsUpdateRequest
+): Promise<ResourceOpsRuntimeSettingsResponse> => {
+  const response = await apiClient.put<ResourceOpsRuntimeSettingsResponse>('/admin/resource-ops/settings', payload)
+  return response.data
+}
+
+export const syncResourceOpsRecognition = async (
+  limit: number = 20,
+  force: boolean = false
+): Promise<ResourceOpsRecognitionRunResponse> => {
+  const response = await apiClient.post<ResourceOpsRecognitionRunResponse>(
+    `/admin/resource-ops/recognition/sync?limit=${limit}&force=${force ? 'true' : 'false'}`
+  )
+  return response.data
+}
+
+export const runResourceOpsRetention = async (): Promise<ResourceOpsRetentionRunResponse> => {
+  const response = await apiClient.post<ResourceOpsRetentionRunResponse>('/admin/resource-ops/maintenance/run')
   return response.data
 }

@@ -64,6 +64,7 @@ import type {
   LinkCheckTaskStatus,
   LinkCleanupApplyRequest,
 } from '@/types/admin'
+import LinkMaintenanceTools from '@/components/admin/LinkMaintenanceTools'
 import './LinkCheckManagerRuntime.css'
 
 const { RangePicker } = DatePicker
@@ -1619,6 +1620,8 @@ const LinkCheckManagerRuntime = () => {
           })}
         />
       </Card>
+
+      <LinkMaintenanceTools />
 
       <Modal
         title="检测结果详情"

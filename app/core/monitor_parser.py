@@ -14,6 +14,7 @@ from urllib.parse import parse_qsl, unquote, urljoin, urlparse
 
 import aiohttp
 
+from app.models.config import settings
 from app.core.monitor_rules import load_monitor_rules, resolve_channel_profile, resolve_channel_profile_name
 
 try:
@@ -47,6 +48,11 @@ class _FallbackURLExtract:
 URL_EXTRACTOR = _URLExtract() if _URLExtract is not None else _FallbackURLExtract()
 _url_cache_lock = threading.RLock()
 _url_resolution_cache: Dict[str, Dict[str, Any]] = {}
+MAX_URL_RESOLUTION_CACHE_ENTRIES = max(
+    1000,
+    int(getattr(settings, "MONITOR_URL_RESOLUTION_CACHE_MAX_ENTRIES", 20000) or 20000),
+)
+URL_RESOLUTION_CACHE_PRUNE_BATCH = max(256, MAX_URL_RESOLUTION_CACHE_ENTRIES // 10)
 LINE_MESSAGE_MODE_PER_LINK = "per_link_line"
 DEFAULT_HTTP_REDIRECT_MAX_HOPS = 8
 DEFAULT_NETDISK_HINT_ALIASES: Dict[str, List[str]] = {
@@ -489,12 +495,40 @@ def _get_cached_resolution(url: str) -> str | None:
         return cache_entry["resolved_url"]
 
 
+def _prune_url_resolution_cache_locked(now_timestamp: float) -> None:
+    expired_keys = [
+        key
+        for key, cache_entry in _url_resolution_cache.items()
+        if now_timestamp - float(cache_entry.get("timestamp") or 0.0) > URL_RESOLUTION_CACHE_TTL_SECONDS
+    ]
+    for key in expired_keys:
+        _url_resolution_cache.pop(key, None)
+
+    overflow = len(_url_resolution_cache) - MAX_URL_RESOLUTION_CACHE_ENTRIES
+    if overflow <= 0:
+        return
+
+    prune_count = max(overflow, URL_RESOLUTION_CACHE_PRUNE_BATCH)
+    oldest_keys = [
+        key
+        for key, _cache_entry in sorted(
+            _url_resolution_cache.items(),
+            key=lambda item: (float(item[1].get("timestamp") or 0.0), item[0]),
+        )[:prune_count]
+    ]
+    for key in oldest_keys:
+        _url_resolution_cache.pop(key, None)
+
+
 def _set_cached_resolution(url: str, resolved_url: str) -> None:
     with _url_cache_lock:
+        current_timestamp = dt.datetime.now().timestamp()
         _url_resolution_cache[url] = {
             "resolved_url": resolved_url,
-            "timestamp": dt.datetime.now().timestamp(),
+            "timestamp": current_timestamp,
         }
+        if len(_url_resolution_cache) > MAX_URL_RESOLUTION_CACHE_ENTRIES:
+            _prune_url_resolution_cache_locked(current_timestamp)
 
 
 async def fetch_redirect_target(

@@ -23,6 +23,8 @@ from app.schemas.admin_models import (
     ClearOldDataRequest,
     CredentialCreate,
     CredentialResponse,
+    DedupRuntimeSettingsResponse,
+    DedupRuntimeSettingsUpdate,
     LinkCleanupApplyRequest,
     LinkCleanupResult,
     LinkCheckTaskCreate,
@@ -41,6 +43,8 @@ from app.schemas.admin_models import (
     UsernameChange,
 )
 from app.services.channel_service import diagnose_channels, resolve_channel_runtime_details, test_monitor
+from app.services.dedup_runtime_service import run_dedup_with_session
+from app.services.dedup_runtime_settings import get_dedup_runtime_settings, update_dedup_runtime_settings
 from app.services.link_cleanup_service import apply_link_check_cleanup
 from app.services.link_check_selection_service import build_manual_selection_snapshot
 from app.services.link_check_runtime import (
@@ -54,7 +58,6 @@ from app.services.link_check_runtime import (
 from app.services.maintenance_service import (
     clear_link_check_data,
     clear_old_link_check_data,
-    dedup_links,
     fix_tags,
 )
 from app.services.system_config_service import apply_system_config, get_link_check_runtime_config, get_system_config_values
@@ -858,7 +861,12 @@ async def dedup_links_api(
     需要 Bearer Token 认证（管理员权限）
     """
     try:
-        result = dedup_links(db)
+        result = run_dedup_with_session(
+            db,
+            trigger_source="manual",
+            updated_by=current_user.get("username"),
+            advance_next_run=False,
+        )
         return MaintenanceResult(**result)
     except Exception as e:
         raise HTTPException(
@@ -867,7 +875,57 @@ async def dedup_links_api(
         )
 
 
-@router.post("/maintenance/clear-link-check-data", response_model=MaintenanceResult, summary="清空链接检测数据")
+@router.get("/maintenance/dedup-runtime", response_model=DedupRuntimeSettingsResponse, summary="获取去重自动计划配置")
+async def get_dedup_runtime_api(
+    db: Session = Depends(get_db),
+    current_user: Dict[str, Any] = Depends(get_admin_user),
+) -> DedupRuntimeSettingsResponse:
+    """
+    获取链接去重自动计划配置
+    """
+    del current_user
+    try:
+        return DedupRuntimeSettingsResponse(**get_dedup_runtime_settings(db))
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取去重自动计划配置失败: {str(e)}"
+        ) from e
+
+
+@router.put("/maintenance/dedup-runtime", response_model=DedupRuntimeSettingsResponse, summary="更新去重自动计划配置")
+async def update_dedup_runtime_api(
+    payload: DedupRuntimeSettingsUpdate,
+    db: Session = Depends(get_db),
+    current_user: Dict[str, Any] = Depends(get_admin_user),
+) -> DedupRuntimeSettingsResponse:
+    """
+    更新链接去重自动计划配置
+    """
+    try:
+        result = update_dedup_runtime_settings(
+            db,
+            payload.model_dump(),
+            updated_by=current_user.get("username"),
+        )
+        db.commit()
+        return DedupRuntimeSettingsResponse(**result)
+    except ValueError as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        ) from e
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"更新去重自动计划配置失败: {str(e)}"
+        ) from e
+
+
+@router.post("/maintenance/link-check-data/clear-all", response_model=MaintenanceResult, summary="清空链接检测数据")
+@router.post("/maintenance/clear-link-check-data", response_model=MaintenanceResult, include_in_schema=False)
 async def clear_link_check_data_api(
     db: Session = Depends(get_db),
     current_user: Dict[str, Any] = Depends(get_admin_user)

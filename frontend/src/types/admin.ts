@@ -325,10 +325,66 @@ export interface MaintenanceResult {
   cutoff_time?: string
   errors?: string[]
   error?: string
+  status?: string
+  run_time?: string
+  trigger_source?: string
+  scope_mode?: string
+  scope_label?: string
+  lookback_hours?: number | null
+  scanned_messages?: number
+  scanned_links?: number
+  unique_links?: number
+  kept_messages?: number
+  duplicate_candidate_count?: number
+  duplicate_group_count?: number
+  duration_seconds?: number
 }
 
 export interface ClearOldDataRequest {
   days: number
+}
+
+export interface DedupRunSummary {
+  run_time?: string | null
+  trigger_source?: string | null
+  scope_mode: 'all_history' | 'recent_hours' | string
+  scope_label: string
+  lookback_hours?: number | null
+  scanned_messages: number
+  scanned_links: number
+  unique_links: number
+  kept_messages: number
+  duplicate_candidate_count: number
+  duplicate_group_count: number
+  deleted_count: number
+  duration_seconds: number
+}
+
+export interface DedupRuntimeSettingsResponse {
+  enabled: boolean
+  scope_mode: 'all_history' | 'recent_hours' | string
+  scope_label: string
+  lookback_hours: number
+  schedule_hour: number
+  schedule_minute: number
+  timezone: string
+  stats_retention_hours: number
+  next_run_at?: string | null
+  last_run_at?: string | null
+  last_status?: string | null
+  last_error_message?: string | null
+  last_run_summary: Partial<DedupRunSummary>
+  status_summary: string
+}
+
+export interface DedupRuntimeSettingsUpdate {
+  enabled: boolean
+  scope_mode: 'all_history' | 'recent_hours'
+  lookback_hours: number
+  schedule_hour: number
+  schedule_minute: number
+  timezone: string
+  stats_retention_hours: number
 }
 
 export interface ChannelDiagnosisResult {

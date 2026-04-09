@@ -5,7 +5,6 @@ import ChannelManager from '@/components/admin/ChannelManagerEnhanced'
 import SecurityConfig from '@/components/admin/SecurityConfig'
 import SystemConfig from '@/components/admin/SystemConfigModern'
 import UserManagerRuntime from '@/components/admin/UserManagerRuntime'
-import DataMaintenance from '@/components/admin/DataMaintenance'
 import LinkCheckManager from '@/components/admin/LinkCheckManagerRuntime'
 import './Admin.css'
 
@@ -45,13 +44,8 @@ const AdminRuntime = () => {
       children: <ChannelManager />,
     },
     {
-      key: 'maintenance',
-      label: '数据维护',
-      children: <DataMaintenance />,
-    },
-    {
       key: 'link-check',
-      label: '链接检测',
+      label: '数据维护',
       children: <LinkCheckManager />,
     },
   ]

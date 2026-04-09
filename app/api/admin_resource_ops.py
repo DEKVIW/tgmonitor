@@ -17,11 +17,16 @@ from app.schemas.resource_ops_models import (
     ResourceOpsWorkbenchLogItem,
     ResourceOpsWorkbenchSummaryResponse,
     ResourceOpsWorkbenchUpdateRequest,
+    ResourceOpsRecognitionRunResponse,
+    ResourceOpsRetentionRunResponse,
+    ResourceOpsRuntimeSettingsResponse,
+    ResourceOpsRuntimeSettingsUpdateRequest,
     ResourceOpsOverviewResponse,
     ResourceOpsPlatformDistributionItem,
     ResourceOpsPlatformDistributionResponse,
     ResourceOpsTrendPoint,
     ResourceOpsTrendResponse,
+    ResourceOpsWorkBindingSummaryResponse,
 )
 from app.services.resource_ops import (
     get_catalog_sync_status,
@@ -29,10 +34,15 @@ from app.services.resource_ops import (
     get_resource_op_workbench_detail,
     get_resource_ops_overview,
     get_resource_ops_platform_distribution,
+    get_resource_ops_runtime_settings,
     get_resource_ops_trend,
+    get_work_binding_summary,
     list_resource_op_candidates,
     list_resource_op_workbench_items,
+    run_resource_ops_retention,
+    sync_resource_work_bindings,
     sync_message_link_catalog_batch,
+    update_resource_ops_runtime_settings,
     update_resource_op_workbench_item,
 )
 
@@ -274,6 +284,103 @@ async def update_resource_workbench_item_api(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to update workbench item: {exc}",
+        ) from exc
+
+
+@router.get("/settings", response_model=ResourceOpsRuntimeSettingsResponse, summary="Get resource operations runtime settings")
+async def get_resource_ops_runtime_settings_api(
+    current_user: Dict[str, Any] = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+) -> ResourceOpsRuntimeSettingsResponse:
+    del current_user
+    try:
+        settings_payload = get_resource_ops_runtime_settings(db)
+        settings_payload["binding_summary"] = ResourceOpsWorkBindingSummaryResponse(**get_work_binding_summary(db))
+        return ResourceOpsRuntimeSettingsResponse(**settings_payload)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load resource runtime settings: {exc}",
+        ) from exc
+
+
+@router.put("/settings", response_model=ResourceOpsRuntimeSettingsResponse, summary="Update resource operations runtime settings")
+async def update_resource_ops_runtime_settings_api(
+    payload: ResourceOpsRuntimeSettingsUpdateRequest,
+    current_user: Dict[str, Any] = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+) -> ResourceOpsRuntimeSettingsResponse:
+    operator = current_user.get("username") or current_user.get("name") or "admin"
+    try:
+        settings_payload = update_resource_ops_runtime_settings(
+            db,
+            payload.dict(exclude_unset=True),
+            updated_by=str(operator),
+        )
+        db.commit()
+        settings_payload["binding_summary"] = ResourceOpsWorkBindingSummaryResponse(**get_work_binding_summary(db))
+        return ResourceOpsRuntimeSettingsResponse(**settings_payload)
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update resource runtime settings: {exc}",
+        ) from exc
+
+
+@router.post("/recognition/sync", response_model=ResourceOpsRecognitionRunResponse, summary="Run one resource recognition batch")
+async def sync_resource_recognition_api(
+    limit: int = Query(20, ge=1, le=100),
+    force: bool = Query(False),
+    current_user: Dict[str, Any] = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+) -> ResourceOpsRecognitionRunResponse:
+    operator = current_user.get("username") or current_user.get("name") or "admin"
+    try:
+        payload = sync_resource_work_bindings(
+            db,
+            limit=limit,
+            force=force,
+            operator=str(operator),
+        )
+        db.commit()
+        payload["binding_summary"] = ResourceOpsWorkBindingSummaryResponse(**payload["binding_summary"])
+        return ResourceOpsRecognitionRunResponse(**payload)
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to run resource recognition sync: {exc}",
+        ) from exc
+
+
+@router.post("/maintenance/run", response_model=ResourceOpsRetentionRunResponse, summary="Run resource operations retention cleanup")
+async def run_resource_ops_maintenance_api(
+    current_user: Dict[str, Any] = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+) -> ResourceOpsRetentionRunResponse:
+    operator = current_user.get("username") or current_user.get("name") or "admin"
+    try:
+        payload = run_resource_ops_retention(db, operator=str(operator))
+        db.commit()
+        return ResourceOpsRetentionRunResponse(**payload)
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to run resource retention cleanup: {exc}",
         ) from exc
 
 

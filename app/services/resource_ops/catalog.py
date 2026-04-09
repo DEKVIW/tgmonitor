@@ -10,7 +10,7 @@ from urllib.parse import parse_qs, urlparse
 from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
-from app.models.models import LinkClickEvent, LinkTarget, LinkTargetDailyStat, Message, MessageLinkRef, SystemSettings
+from app.models.models import LinkClickEvent, LinkTarget, LinkTargetDailyStat, Message, MessageLinkRef, ResourceWorkBinding, SystemSettings
 from app.services.link_check.constants import (
     PLATFORM_115,
     PLATFORM_123,
@@ -24,6 +24,7 @@ from app.services.link_check.constants import (
 )
 from app.services.link_check.parser import canonical_target_key, detect_platform_from_url
 from app.services.link_check.platforms import canonicalize_platform_name
+from app.services.resource_ops.resolver import ensure_work_binding_placeholders
 from app.services.system_config_service import SYSTEM_SETTINGS_SINGLETON_ID, build_default_system_settings_values
 
 
@@ -302,6 +303,8 @@ def _ensure_link_target(
             target.last_seen_at = observed_time
 
     cache[cache_key] = target
+    if getattr(target, "id", None) is not None:
+        ensure_work_binding_placeholders(session, link_target_ids=[int(target.id)])
     return target
 
 
@@ -465,6 +468,11 @@ def _purge_orphan_link_targets(session: Session, target_ids: Iterable[int]) -> N
     (
         session.query(LinkTargetDailyStat)
         .filter(LinkTargetDailyStat.link_target_id.in_(orphan_target_ids))
+        .delete(synchronize_session=False)
+    )
+    (
+        session.query(ResourceWorkBinding)
+        .filter(ResourceWorkBinding.link_target_id.in_(orphan_target_ids))
         .delete(synchronize_session=False)
     )
     (

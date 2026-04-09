@@ -148,6 +148,67 @@ class ResourceCandidateLog(Base):
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
 
 
+class ResourceWork(Base):
+    __tablename__ = "resource_works"
+    __table_args__ = (
+        UniqueConstraint("provider", "provider_work_id", name="ux_resource_works_provider_work_id"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    provider = Column(String(32), nullable=False, index=True)
+    provider_work_id = Column(String(128), nullable=False, index=True)
+    media_type = Column(String(32), nullable=True, index=True)
+    canonical_title = Column(String(255), nullable=False, index=True)
+    original_title = Column(String(255), nullable=True)
+    release_year = Column(Integer, nullable=True, index=True)
+    poster_url = Column(Text, nullable=True)
+    detail_url = Column(Text, nullable=True)
+    popularity = Column(Float, nullable=True)
+    extra_json = Column(JSONB, nullable=False, default=dict)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class ResourceWorkAlias(Base):
+    __tablename__ = "resource_work_aliases"
+    __table_args__ = (
+        UniqueConstraint("work_id", "normalized_alias", name="ux_resource_work_aliases_work_normalized_alias"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    work_id = Column(Integer, ForeignKey("resource_works.id"), nullable=False, index=True)
+    alias = Column(String(255), nullable=False)
+    normalized_alias = Column(String(255), nullable=False, index=True)
+    source = Column(String(32), nullable=False, default="provider", index=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class ResourceWorkBinding(Base):
+    __tablename__ = "resource_work_bindings"
+    __table_args__ = (
+        UniqueConstraint("link_target_id", name="ux_resource_work_bindings_link_target"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    link_target_id = Column(Integer, ForeignKey("link_targets.id"), nullable=False, index=True)
+    work_id = Column(Integer, ForeignKey("resource_works.id"), nullable=True, index=True)
+    match_status = Column(String(32), nullable=False, default="pending", index=True)
+    provider = Column(String(32), nullable=True, index=True)
+    provider_work_id = Column(String(128), nullable=True, index=True)
+    match_source = Column(String(32), nullable=False, default="pending", index=True)
+    query_title = Column(String(255), nullable=True)
+    candidate_title = Column(String(255), nullable=True)
+    confidence = Column(Float, nullable=False, default=0.0)
+    reason = Column(String(255), nullable=False, default="")
+    last_attempted_at = Column(DateTime, nullable=True, index=True)
+    matched_at = Column(DateTime, nullable=True)
+    next_retry_after = Column(DateTime, nullable=True, index=True)
+    error_message = Column(Text, nullable=True)
+    extra_json = Column(JSONB, nullable=False, default=dict)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class Credential(Base):
     __tablename__ = "credentials"
 
@@ -491,11 +552,12 @@ DATABASE_URL = settings.DATABASE_URL
 engine = create_engine(
     DATABASE_URL,
     connect_args={"options": "-c timezone=Asia/Shanghai"},
-    pool_size=5,
-    max_overflow=10,
-    pool_timeout=30,
-    pool_recycle=3600,
+    pool_size=max(1, int(getattr(settings, "DB_POOL_SIZE", 3) or 3)),
+    max_overflow=max(0, int(getattr(settings, "DB_MAX_OVERFLOW", 3) or 3)),
+    pool_timeout=max(5, int(getattr(settings, "DB_POOL_TIMEOUT", 30) or 30)),
+    pool_recycle=max(300, int(getattr(settings, "DB_POOL_RECYCLE", 1800) or 1800)),
     pool_pre_ping=True,
+    pool_use_lifo=True,
     echo=False,
     pool_reset_on_return="commit",
 )
@@ -562,6 +624,9 @@ def ensure_runtime_storage_tables() -> None:
                 LinkTargetDailyStat.__table__,
                 ResourceCandidateProfile.__table__,
                 ResourceCandidateLog.__table__,
+                ResourceWork.__table__,
+                ResourceWorkAlias.__table__,
+                ResourceWorkBinding.__table__,
             ],
         )
         _ensure_system_settings_columns()
@@ -742,6 +807,22 @@ def _ensure_resource_ops_indexes() -> None:
         """
         CREATE INDEX IF NOT EXISTS ix_link_target_daily_stats_target_date
         ON link_target_daily_stats (link_target_id, stat_date DESC)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_resource_works_provider_media_year
+        ON resource_works (provider, media_type, release_year)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_resource_work_aliases_normalized_alias
+        ON resource_work_aliases (normalized_alias)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_resource_work_bindings_status_next_retry
+        ON resource_work_bindings (match_status, next_retry_after)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_resource_work_bindings_work_updated
+        ON resource_work_bindings (work_id, updated_at DESC)
         """,
     )
     with engine.begin() as connection:

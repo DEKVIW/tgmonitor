@@ -15,6 +15,14 @@ class Settings(BaseSettings):
     # 数据库配置（同步 + 可选异步）
     DATABASE_URL: str
     DATABASE_URL_ASYNC: Optional[str] = None
+    DB_POOL_SIZE: int = 3
+    DB_MAX_OVERFLOW: int = 3
+    DB_POOL_TIMEOUT: int = 30
+    DB_POOL_RECYCLE: int = 1800
+    DB_ASYNC_POOL_SIZE: int = 2
+    DB_ASYNC_MAX_OVERFLOW: int = 2
+    DB_ASYNC_POOL_TIMEOUT: int = 30
+    DB_ASYNC_POOL_RECYCLE: int = 1800
 
     # 默认频道配置
     DEFAULT_CHANNELS: str
@@ -55,6 +63,8 @@ class Settings(BaseSettings):
     MONITOR_CHANNEL_REFRESH_INTERVAL_SECONDS: int = 60
     MONITOR_DB_WRITE_MAX_RETRIES: int = 3
     MONITOR_DB_WRITE_RETRY_DELAY_SECONDS: float = 1.0
+    MONITOR_URL_RESOLUTION_CACHE_MAX_ENTRIES: int = 20000
+    LINK_CHECK_RESULT_CACHE_MAX_ENTRIES: int = 30000
 
     class Config:
         env_file = ".env"  # 指定 .env 文件
