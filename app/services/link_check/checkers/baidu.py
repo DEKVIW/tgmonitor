@@ -32,6 +32,8 @@ def _map_errno_message(errno: int, message: str) -> str:
         return "请求受限"
     if errno == -8:
         return "分享已过期"
+    if errno == -21:
+        return "分享已取消或不可访问"
     if errno == -1:
         return "errno=-1"
     return f"errno={errno}"
@@ -39,6 +41,22 @@ def _map_errno_message(errno: int, message: str) -> str:
 
 def _looks_like_requires_code(message: str) -> bool:
     return "提取码" in (message or "")
+
+
+def _looks_like_invalid_share(message: str) -> bool:
+    text = message or ""
+    invalid_markers = (
+        "失效",
+        "取消",
+        "不存在",
+        "删除",
+        "过期",
+        "违规",
+        "封禁",
+        "受限",
+        "无法访问",
+    )
+    return any(marker in text for marker in invalid_markers)
 
 
 class BaiduChecker(BaseChecker):
@@ -98,7 +116,12 @@ class BaiduChecker(BaseChecker):
         ) as response:
             payload, _ = await self.read_json_body(response)
             errno = int(float(payload.get("errno", -1) or -1))
-            message = str(payload.get("errmsg") or payload.get("err_msg") or "")
+            message = str(
+                payload.get("errmsg")
+                or payload.get("err_msg")
+                or payload.get("show_msg")
+                or ""
+            )
             return response.status, errno, message
 
     async def check(self, target: LinkTarget, http_session: aiohttp.ClientSession):
@@ -207,7 +230,7 @@ class BaiduChecker(BaseChecker):
                     response_time=response_time,
                     status_code=status_code,
                 )
-            if errno == -8 or errno == -9 or message:
+            if errno in {-8, -9, -21} or _looks_like_invalid_share(message):
                 return self.invalid_result(
                     target,
                     error=_map_errno_message(errno, message),

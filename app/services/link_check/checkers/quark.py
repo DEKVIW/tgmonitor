@@ -29,6 +29,37 @@ def _looks_like_requires_code(message: str) -> bool:
     return "提取码" in (message or "") or "密码" in (message or "") or "passcode" in lowered
 
 
+def _looks_like_invalid_share(code: object, message: str) -> bool:
+    normalized_code = str(code if code is not None else "").strip()
+    normalized_message = (message or "").strip()
+    lowered = normalized_message.lower()
+
+    if normalized_code in {
+        "41031",  # 分享者用户封禁链接查看受限
+    }:
+        return True
+
+    invalid_markers = (
+        "失效",
+        "取消",
+        "不存在",
+        "删除",
+        "违规",
+        "封禁",
+        "查看受限",
+        "已过期",
+        "过期",
+        "not found",
+        "not exist",
+        "forbidden",
+        "expired",
+        "removed",
+        "deleted",
+        "banned",
+    )
+    return any(marker in normalized_message or marker in lowered for marker in invalid_markers)
+
+
 def _is_success_flag(value: object) -> bool:
     normalized = str(value if value is not None else "").strip().lower()
     return normalized in {"", "0", "200", "ok", "success"}
@@ -115,6 +146,14 @@ class QuarkChecker(BaseChecker):
                     status_code=status_code,
                 )
             if status_code != 200:
+                if _looks_like_invalid_share(payload.get("code"), message):
+                    return self.invalid_result(
+                        target,
+                        error=message or f"Quark token api rejected the link (code={payload.get('code')})",
+                        response_time=response_time,
+                        status_code=status_code,
+                        meta={"api_code": payload.get("code")},
+                    )
                 return self.uncertain_result(
                     target,
                     reason="状态码错误",
@@ -163,6 +202,14 @@ class QuarkChecker(BaseChecker):
                     status_code=detail_status,
                 )
             if detail_status != 200:
+                if _looks_like_invalid_share(detail_payload.get("code"), detail_message):
+                    return self.invalid_result(
+                        target,
+                        error=detail_message or f"Quark detail api rejected the link (code={detail_payload.get('code')})",
+                        response_time=response_time,
+                        status_code=detail_status,
+                        meta={"api_code": detail_payload.get("code")},
+                    )
                 return self.uncertain_result(
                     target,
                     reason="状态码错误",
