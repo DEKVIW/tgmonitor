@@ -574,20 +574,20 @@
 .resource-ops-runtime-stack {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 14px;
 }
 
 .resource-ops-runtime-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.65fr) minmax(320px, 1fr);
-  gap: 16px;
-  align-items: start;
+  grid-template-columns: 1fr;
+  gap: 12px;
+  align-items: stretch;
 }
 
 .resource-ops-runtime-card {
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 12px;
 }
 
 .resource-ops-runtime-card-head {
@@ -607,9 +607,10 @@
 }
 
 .resource-ops-runtime-hint {
-  margin: 8px 0 0;
+  margin: 6px 0 0;
   color: var(--text-muted);
   line-height: 1.65;
+  max-width: 920px;
 }
 
 .resource-ops-status-strip {
@@ -643,12 +644,12 @@
 
 .resource-ops-runtime-meta-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: 12px;
 }
 
 .resource-ops-runtime-meta-grid-side {
-  grid-template-columns: 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
 }
 
 .resource-ops-runtime-meta-card {
@@ -661,7 +662,7 @@
 .resource-ops-runtime-subsection {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
 }
 
 .resource-ops-runtime-subtitle {
@@ -672,13 +673,13 @@
 
 .resource-ops-runtime-form-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(144px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px 14px;
   align-items: start;
 }
 
 .resource-ops-runtime-form-grid-side {
-  grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
 }
 
 .resource-ops-inline-switch {
@@ -686,8 +687,8 @@
   justify-content: space-between;
   align-items: center;
   gap: 12px;
-  min-height: 72px;
-  padding: 12px 14px;
+  min-height: 62px;
+  padding: 10px 14px;
   border-radius: 18px;
   border: 1px solid rgba(214, 224, 233, 0.88);
   background: rgba(246, 249, 252, 0.96);
@@ -743,12 +744,6 @@
   border-radius: 18px;
   border: 1px solid rgba(214, 224, 233, 0.88);
   background: rgba(250, 252, 255, 0.98);
-}
-
-@media (max-width: 1100px) {
-  .resource-ops-runtime-grid {
-    grid-template-columns: 1fr;
-  }
 }
 
 @media (max-width: 900px) {

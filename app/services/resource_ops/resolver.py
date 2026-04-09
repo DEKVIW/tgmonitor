@@ -517,6 +517,28 @@ def _build_resolution_target_query(session: Session):
     return query, binding
 
 
+def _normalize_resolution_target_row(row: Any) -> dict[str, Any]:
+    return {
+        "link_target_id": int(row.link_target_id),
+        "share_key": row.share_key,
+        "platform": row.platform,
+        "display_text": row.display_text or "",
+        "latest_message_title": row.latest_message_title or "",
+        "clicks_30d": int(row.clicks_30d or 0),
+        "last_clicked_at": row.last_clicked_at,
+        "match_status": row.match_status or "pending",
+        "next_retry_after": row.next_retry_after,
+    }
+
+
+def _get_resolution_target_row(session: Session, *, link_target_id: int) -> dict[str, Any] | None:
+    query, _binding = _build_resolution_target_query(session)
+    row = query.filter(LinkTarget.id == int(link_target_id)).first()
+    if row is None:
+        return None
+    return _normalize_resolution_target_row(row)
+
+
 def _list_resolution_targets(session: Session, *, limit: int, force: bool) -> list[dict[str, Any]]:
     now = _utcnow()
     query, binding = _build_resolution_target_query(session)
@@ -531,21 +553,7 @@ def _list_resolution_targets(session: Session, *, limit: int, force: bool) -> li
         )
 
     rows = query.all()
-    normalized_rows: list[dict[str, Any]] = []
-    for row in rows:
-        normalized_rows.append(
-            {
-                "link_target_id": int(row.link_target_id),
-                "share_key": row.share_key,
-                "platform": row.platform,
-                "display_text": row.display_text or "",
-                "latest_message_title": row.latest_message_title or "",
-                "clicks_30d": int(row.clicks_30d or 0),
-                "last_clicked_at": row.last_clicked_at,
-                "match_status": row.match_status or "pending",
-                "next_retry_after": row.next_retry_after,
-            }
-        )
+    normalized_rows = [_normalize_resolution_target_row(row) for row in rows]
 
     normalized_rows.sort(
         key=lambda item: (
@@ -663,14 +671,7 @@ def resolve_link_target_work(
     if not tmdb_ready and not bangumi_ready:
         raise ValueError("请先至少启用并配置一个作品识别来源")
 
-    target_row = next(
-        (
-            item
-            for item in _list_resolution_targets(session, limit=1 if not force else 10, force=True)
-            if int(item["link_target_id"]) == int(link_target_id)
-        ),
-        None,
-    )
+    target_row = _get_resolution_target_row(session, link_target_id=int(link_target_id))
     if target_row is None:
         raise LookupError(f"link_target {link_target_id} not found")
 

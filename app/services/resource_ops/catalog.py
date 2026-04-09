@@ -11,6 +11,7 @@ from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from app.models.models import LinkClickEvent, LinkTarget, LinkTargetDailyStat, Message, MessageLinkRef, ResourceWorkBinding, SystemSettings
+from app.models.models import ResourceCandidateLog, ResourceCandidateProfile
 from app.services.link_check.constants import (
     PLATFORM_115,
     PLATFORM_123,
@@ -468,6 +469,16 @@ def _purge_orphan_link_targets(session: Session, target_ids: Iterable[int]) -> N
     (
         session.query(LinkTargetDailyStat)
         .filter(LinkTargetDailyStat.link_target_id.in_(orphan_target_ids))
+        .delete(synchronize_session=False)
+    )
+    (
+        session.query(ResourceCandidateLog)
+        .filter(ResourceCandidateLog.link_target_id.in_(orphan_target_ids))
+        .delete(synchronize_session=False)
+    )
+    (
+        session.query(ResourceCandidateProfile)
+        .filter(ResourceCandidateProfile.link_target_id.in_(orphan_target_ids))
         .delete(synchronize_session=False)
     )
     (

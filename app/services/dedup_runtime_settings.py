@@ -18,6 +18,9 @@ DEDUP_RUNTIME_EXTRA_KEY = "dedup_runtime"
 ALLOWED_DEDUP_SCOPE_MODES = {"all_history", "recent_hours"}
 DEFAULT_DEDUP_TIMEZONE = "Asia/Shanghai"
 DEFAULT_WAIT_WHEN_BLOCKED_MINUTES = 30
+DEFAULT_DEDUP_INTERVAL_HOURS = 1
+DEFAULT_DEDUP_SCHEDULE_MINUTE = 0
+MAX_DEDUP_INTERVAL_HOURS = 24 * 7
 
 
 def _utcnow() -> datetime:
@@ -95,8 +98,8 @@ def build_default_dedup_runtime_settings() -> dict[str, Any]:
         "enabled": False,
         "scope_mode": "all_history",
         "lookback_hours": 72,
-        "schedule_hour": 4,
-        "schedule_minute": 20,
+        "schedule_interval_hours": DEFAULT_DEDUP_INTERVAL_HOURS,
+        "schedule_minute": DEFAULT_DEDUP_SCHEDULE_MINUTE,
         "timezone": DEFAULT_DEDUP_TIMEZONE,
         "stats_retention_hours": 240,
         "next_run_at": None,
@@ -113,6 +116,12 @@ def _normalize_runtime_storage_values(raw_value: Any) -> dict[str, Any]:
     scope_mode = _coerce_text(payload.get("scope_mode"), defaults["scope_mode"], max_length=32).lower()
     if scope_mode not in ALLOWED_DEDUP_SCOPE_MODES:
         scope_mode = defaults["scope_mode"]
+    schedule_interval_hours = _coerce_int(
+        payload.get("schedule_interval_hours", payload.get("schedule_hour")),
+        defaults["schedule_interval_hours"],
+        minimum=1,
+        maximum=MAX_DEDUP_INTERVAL_HOURS,
+    )
 
     summary = payload.get("last_run_summary")
 
@@ -125,14 +134,14 @@ def _normalize_runtime_storage_values(raw_value: Any) -> dict[str, Any]:
             minimum=1,
             maximum=24 * 365,
         ),
-        "schedule_hour": _coerce_int(payload.get("schedule_hour"), defaults["schedule_hour"], minimum=0, maximum=23),
+        "schedule_interval_hours": schedule_interval_hours,
         "schedule_minute": _coerce_int(
             payload.get("schedule_minute"),
             defaults["schedule_minute"],
             minimum=0,
             maximum=59,
         ),
-        "timezone": _coerce_text(payload.get("timezone"), defaults["timezone"], max_length=64) or DEFAULT_DEDUP_TIMEZONE,
+        "timezone": DEFAULT_DEDUP_TIMEZONE,
         "stats_retention_hours": _coerce_int(
             payload.get("stats_retention_hours"),
             defaults["stats_retention_hours"],
@@ -182,14 +191,25 @@ def compute_dedup_next_run_at(values: dict[str, Any], *, now_utc: datetime | Non
     current_utc = (now_utc or _utcnow()).replace(tzinfo=timezone.utc)
     timezone_info = _get_timezone(str(values.get("timezone") or DEFAULT_DEDUP_TIMEZONE))
     local_now = current_utc.astimezone(timezone_info)
-    candidate = local_now.replace(
-        hour=int(values.get("schedule_hour") or 0),
-        minute=int(values.get("schedule_minute") or 0),
-        second=0,
-        microsecond=0,
+    interval_hours = _coerce_int(
+        values.get("schedule_interval_hours", values.get("schedule_hour")),
+        DEFAULT_DEDUP_INTERVAL_HOURS,
+        minimum=1,
+        maximum=MAX_DEDUP_INTERVAL_HOURS,
     )
-    if candidate <= local_now:
-        candidate += timedelta(days=1)
+    schedule_minute = _coerce_int(
+        values.get("schedule_minute"),
+        DEFAULT_DEDUP_SCHEDULE_MINUTE,
+        minimum=0,
+        maximum=59,
+    )
+    anchor = local_now.replace(hour=0, minute=schedule_minute, second=0, microsecond=0)
+    if anchor > local_now:
+        anchor -= timedelta(days=1)
+    interval = timedelta(hours=interval_hours)
+    elapsed = local_now - anchor
+    steps = int(elapsed.total_seconds() // interval.total_seconds()) + 1
+    candidate = anchor + interval * steps
     return candidate.astimezone(timezone.utc).replace(tzinfo=None)
 
 
@@ -204,19 +224,19 @@ def _build_status_summary(values: dict[str, Any]) -> str:
     if not bool(values.get("enabled")):
         return "自动去重已关闭"
 
-    schedule_label = f"每日 {int(values.get('schedule_hour') or 0):02d}:{int(values.get('schedule_minute') or 0):02d}"
+    schedule_label = f"每 {int(values.get('schedule_interval_hours') or DEFAULT_DEDUP_INTERVAL_HOURS)} 小时"
     scope_label = _build_scope_label(values)
     last_status = str(values.get("last_status") or "").strip()
     last_summary = values.get("last_run_summary") if isinstance(values.get("last_run_summary"), dict) else {}
     deleted_count = int(last_summary.get("deleted_count") or 0)
 
     if last_status == "completed" and last_summary:
-        return f"{schedule_label} 自动去重，范围 {scope_label}，上次删除 {deleted_count} 条消息"
+        return f"{schedule_label}自动去重一次，范围 {scope_label}，上次删除 {deleted_count} 条消息"
     if last_status == "failed":
-        return f"{schedule_label} 自动去重，范围 {scope_label}，上次执行失败"
+        return f"{schedule_label}自动去重，范围 {scope_label}，上次执行失败"
     if last_status == "waiting":
-        return f"{schedule_label} 自动去重，范围 {scope_label}，当前等待上一轮任务结束"
-    return f"{schedule_label} 自动去重，范围 {scope_label}"
+        return f"{schedule_label}自动去重，范围 {scope_label}，当前等待上一轮任务结束"
+    return f"{schedule_label}自动去重，范围 {scope_label}"
 
 
 def get_dedup_runtime_config(session: Session) -> dict[str, Any]:
@@ -230,6 +250,7 @@ def get_dedup_runtime_settings(session: Session) -> dict[str, Any]:
     values = get_dedup_runtime_config(session)
     response = dict(values)
     response["scope_label"] = _build_scope_label(values)
+    response["schedule_interval_hours"] = int(values.get("schedule_interval_hours") or DEFAULT_DEDUP_INTERVAL_HOURS)
     response["next_run_at"] = _to_iso(values.get("next_run_at"))
     response["last_run_at"] = _to_iso(values.get("last_run_at"))
     response["status_summary"] = _build_status_summary(values)
@@ -243,18 +264,21 @@ def update_dedup_runtime_settings(
     updated_by: str | None = None,
 ) -> dict[str, Any]:
     values = get_dedup_runtime_config(session)
+    normalized_payload = dict(payload)
+    if "schedule_interval_hours" not in normalized_payload and "schedule_hour" in normalized_payload:
+        normalized_payload["schedule_interval_hours"] = normalized_payload["schedule_hour"]
 
     for field in (
         "enabled",
         "scope_mode",
         "lookback_hours",
-        "schedule_hour",
+        "schedule_interval_hours",
         "schedule_minute",
         "timezone",
         "stats_retention_hours",
     ):
-        if field in payload:
-            values[field] = payload[field]
+        if field in normalized_payload:
+            values[field] = normalized_payload[field]
 
     values = _normalize_runtime_storage_values(values)
     values["next_run_at"] = compute_dedup_next_run_at(values) if values["enabled"] else None

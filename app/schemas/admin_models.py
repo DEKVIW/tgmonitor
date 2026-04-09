@@ -710,7 +710,7 @@ class DedupRuntimeSettingsResponse(BaseModel):
     scope_mode: str
     scope_label: str
     lookback_hours: int
-    schedule_hour: int
+    schedule_interval_hours: int
     schedule_minute: int
     timezone: str
     stats_retention_hours: int
@@ -726,8 +726,8 @@ class DedupRuntimeSettingsUpdate(BaseModel):
     enabled: bool = False
     scope_mode: str = Field(default="all_history", max_length=32)
     lookback_hours: int = Field(default=72, ge=1, le=24 * 365)
-    schedule_hour: int = Field(default=4, ge=0, le=23)
-    schedule_minute: int = Field(default=20, ge=0, le=59)
+    schedule_interval_hours: int = Field(default=1, ge=1, le=24 * 7)
+    schedule_minute: int = Field(default=0, ge=0, le=59)
     timezone: str = Field(default="Asia/Shanghai", max_length=64)
     stats_retention_hours: int = Field(default=240, ge=10, le=24 * 365)
 

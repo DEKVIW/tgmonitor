@@ -365,7 +365,7 @@ export interface DedupRuntimeSettingsResponse {
   scope_mode: 'all_history' | 'recent_hours' | string
   scope_label: string
   lookback_hours: number
-  schedule_hour: number
+  schedule_interval_hours: number
   schedule_minute: number
   timezone: string
   stats_retention_hours: number
@@ -381,7 +381,7 @@ export interface DedupRuntimeSettingsUpdate {
   enabled: boolean
   scope_mode: 'all_history' | 'recent_hours'
   lookback_hours: number
-  schedule_hour: number
+  schedule_interval_hours: number
   schedule_minute: number
   timezone: string
   stats_retention_hours: number
