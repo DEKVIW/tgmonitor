@@ -21,6 +21,10 @@ def _extract_share_code_and_password(url: str) -> tuple[str, str]:
     return share_code, password
 
 
+def _contains_any(text: str, markers: tuple[str, ...]) -> bool:
+    return any(marker in (text or "") for marker in markers)
+
+
 class Pan115Checker(BaseChecker):
     checker_name = "pan115_api"
 
@@ -66,21 +70,39 @@ class Pan115Checker(BaseChecker):
                     )
 
                 state = payload.get("state")
-                errno = payload.get("errno")
+                errno = str(payload.get("errno", "")).strip()
+                data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+                shareinfo = data.get("shareinfo") if isinstance(data.get("shareinfo"), dict) else {}
                 error_message = str(payload.get("error") or payload.get("msg") or "").strip()
-                error_lower = error_message.lower()
+                forbid_reason = str(
+                    shareinfo.get("forbid_reason")
+                    or payload.get("forbid_reason")
+                    or ""
+                ).strip()
+                combined_message = " | ".join(
+                    part for part in (error_message, forbid_reason) if part
+                )
+                error_lower = combined_message.lower()
+                has_file_list = isinstance(data.get("list"), list) and len(data.get("list")) > 0
+                has_share_metadata = bool(
+                    shareinfo.get("share_title")
+                    or shareinfo.get("snap_id")
+                    or data.get("count")
+                )
+                state_ok = bool(state)
+                errno_ok = errno in {"0", ""}
 
-                if bool(state) or str(errno).strip() in {"0", ""}:
+                if state_ok and errno_ok and (has_file_list or has_share_metadata):
                     return self.valid_result(
                         target,
                         response_time=response_time,
                         status_code=response.status,
                     )
 
-                if any(keyword in error_message for keyword in ("提取码", "密码")):
+                if _contains_any(combined_message, ("提取码", "密码")):
                     return self.requires_code_result(
                         target,
-                        error=error_message or "Missing extraction code",
+                        error=combined_message or "Missing extraction code",
                         response_time=response_time,
                         status_code=response.status,
                     )
@@ -88,16 +110,16 @@ class Pan115Checker(BaseChecker):
                 if any(keyword in error_lower for keyword in ("login", "captcha", "risk")):
                     return self.uncertain_result(
                         target,
-                        error=error_message,
+                        error=combined_message,
                         response_time=response_time,
                         status_code=response.status,
                     )
 
                 invalid_markers = ("失效", "不存在", "删除", "取消", "违规", "过期")
-                if any(marker in error_message for marker in invalid_markers):
+                if (not state_ok or not errno_ok) and _contains_any(combined_message, invalid_markers):
                     return self.invalid_result(
                         target,
-                        error=error_message,
+                        error=combined_message,
                         response_time=response_time,
                         status_code=response.status,
                     )
@@ -105,10 +127,15 @@ class Pan115Checker(BaseChecker):
                 if payload:
                     return self.uncertain_result(
                         target,
-                        error=error_message or str(errno or "Unexpected 115 response"),
+                        error=combined_message or str(errno or "Unexpected 115 response"),
                         response_time=response_time,
                         status_code=response.status,
-                        meta={"payload_keys": sorted(payload.keys())},
+                        meta={
+                            "payload_keys": sorted(payload.keys()),
+                            "state": state,
+                            "errno": errno,
+                            "forbid_reason": forbid_reason or None,
+                        },
                     )
 
                 return self.uncertain_result(
