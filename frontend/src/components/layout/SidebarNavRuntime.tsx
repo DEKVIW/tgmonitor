@@ -8,6 +8,7 @@ import {
   DashboardOutlined,
   LineChartOutlined,
   SettingOutlined,
+  ThunderboltOutlined,
 } from '@ant-design/icons'
 import { useAuthStore } from '@/store/authStore'
 import UserAccountMenu from './UserAccountMenu'
@@ -44,6 +45,11 @@ const SidebarNavRuntime = ({ collapsed, onNavigate, showAccountEntry = false }: 
             key: '/analytics',
             icon: renderMenuIcon(<LineChartOutlined />),
             label: '数据分析',
+          },
+          {
+            key: '/resource-ops',
+            icon: renderMenuIcon(<ThunderboltOutlined />),
+            label: '资源运营',
           },
           {
             key: '/backups',
@@ -90,4 +96,3 @@ const SidebarNavRuntime = ({ collapsed, onNavigate, showAccountEntry = false }: 
 }
 
 export default SidebarNavRuntime
-

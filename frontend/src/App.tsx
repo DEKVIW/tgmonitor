@@ -16,6 +16,7 @@ import Statistics from './pages/Statistics'
 import Analytics from './pages/AnalyticsDashboardModern'
 import Admin from './pages/AdminRuntime'
 import Backups from './pages/BackupsRuntime'
+import ResourceOperations from './pages/ResourceOperationsAdmin'
 import { LOGIN_LINUXDO_CALLBACK_PATH, LOGIN_PATH } from './utils/routes'
 
 function App() {
@@ -53,6 +54,14 @@ function App() {
             element={
               <AdminRoute>
                 <Analytics />
+              </AdminRoute>
+            }
+          />
+          <Route
+            path="/resource-ops"
+            element={
+              <AdminRoute>
+                <ResourceOperations />
               </AdminRoute>
             }
           />

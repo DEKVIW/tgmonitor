@@ -12,6 +12,7 @@ from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from app.models.models import LinkCheckDetails, LinkCheckStats, Message
+from app.services.resource_ops import delete_message_resource_data
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +107,7 @@ def dedup_links(db: Session) -> Dict[str, Any]:
 
         deleted_count = 0
         if id_to_delete:
+            delete_message_resource_data(db, id_to_delete)
             deleted_count = (
                 db.query(Message)
                 .filter(Message.id.in_(id_to_delete))

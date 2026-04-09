@@ -7,6 +7,16 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime
 
 
+class MessageTrackedLinkResponse(BaseModel):
+    link_ref_id: int
+    link_target_id: int
+    provider_label: str
+    link_label: Optional[str] = None
+    display_text: str
+    target_url: str
+    redirect_url: str
+
+
 class MessageResponse(BaseModel):
     """消息响应模型"""
     id: int
@@ -14,6 +24,7 @@ class MessageResponse(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
     links: Optional[Dict[str, Any]] = None
+    tracked_links: Optional[List[MessageTrackedLinkResponse]] = None
     tags: Optional[List[str]] = None
     source: Optional[str] = None
     channel: Optional[str] = None

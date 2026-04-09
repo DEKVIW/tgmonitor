@@ -20,6 +20,7 @@ from app.services.channel_registry import (
     get_runtime_channel_parser_profiles,
     get_runtime_channels,
 )
+from app.services.resource_ops import ensure_message_link_refs_for_message_ids
 from app.services.system_config_service import get_monitor_runtime_config
 
 warnings.filterwarnings(
@@ -282,6 +283,7 @@ async def handler(event: Any) -> None:
             try:
                 async with async_session() as session:
                     try:
+                        created_messages: list[Message] = []
                         for parsed_data in parsed_records:
                             new_message = Message(
                                 timestamp=telegram_local_time,
@@ -289,6 +291,31 @@ async def handler(event: Any) -> None:
                                 netdisk_types=list(parsed_data["links"].keys()),
                             )
                             session.add(new_message)
+                            created_messages.append(new_message)
+                        await session.flush()
+                        new_message_ids = [
+                            int(new_message.id)
+                            for new_message in created_messages
+                            if getattr(new_message, "id", None) is not None
+                        ]
+                        if new_message_ids:
+                            try:
+                                await session.run_sync(
+                                    lambda sync_session: ensure_message_link_refs_for_message_ids(sync_session, new_message_ids)
+                                )
+                            except Exception as resource_index_error:
+                                log_monitor_event(
+                                    logger,
+                                    "resource_index_sync_failed",
+                                    level=logging.WARNING,
+                                    channel=channel_name,
+                                    error=str(resource_index_error),
+                                    affected_messages=len(new_message_ids),
+                                )
+                                print(
+                                    f"[{monitor_time}] 资源索引即时同步失败，已保留消息入库，将由读取修复/手动补录兜底: "
+                                    f"{resource_index_error}"
+                                )
                         await session.commit()
                     except Exception:
                         await session.rollback()

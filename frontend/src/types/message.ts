@@ -8,6 +8,7 @@ export interface MessageResponse {
   title?: string
   description?: string
   links?: Record<string, any>
+  tracked_links?: MessageTrackedLink[]
   tags?: string[]
   source?: string
   channel?: string
@@ -15,6 +16,16 @@ export interface MessageResponse {
   bot?: string
   created_at: string
   netdisk_types?: string[]
+}
+
+export interface MessageTrackedLink {
+  link_ref_id: number
+  link_target_id: number
+  provider_label: string
+  link_label?: string | null
+  display_text: string
+  target_url: string
+  redirect_url: string
 }
 
 export interface MessageListResponse {

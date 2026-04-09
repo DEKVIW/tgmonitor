@@ -13,7 +13,7 @@ import { MessageListResponse } from '@/types/message'
 import { trackEvent } from '@/utils/analytics'
 import { PUBLIC_DASHBOARD_MAX_DAYS } from '@/utils/publicDashboard'
 import PublicAdSlot from './PublicAdSlot'
-import MessageItem from './MessageItem'
+import MessageItem from './MessageItemRuntime'
 import './MessageList.css'
 
 interface MessageListProps {
@@ -158,7 +158,12 @@ const MessageList = ({ isGuestMode = false }: MessageListProps) => {
 
       {data.messages.map((message, index) => (
         <Fragment key={message.id}>
-          <MessageItem message={message} audience={isGuestMode ? 'guest' : 'authenticated'} />
+          <MessageItem
+            message={message}
+            audience={isGuestMode ? 'guest' : 'authenticated'}
+            sourcePage={isGuestMode ? 'public_dashboard' : 'dashboard'}
+            searchQuery={filters.search_query || ''}
+          />
           {inlineAdHtml && inlineEvery > 0 && (index + 1) % inlineEvery === 0 && index + 1 < data.messages.length ? (
             <PublicAdSlot placement="inline" html={inlineAdHtml} />
           ) : null}

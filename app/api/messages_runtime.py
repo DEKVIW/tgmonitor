@@ -22,7 +22,9 @@ from app.services.resource_ops import (
 from app.services.security_service import SEARCH_CLEARANCE_HEADER, ensure_search_challenge_clearance
 from app.services.system_config_service import is_public_dashboard_enabled
 
-router = APIRouter(prefix="/api/messages", tags=["消息"])
+
+router = APIRouter(prefix="/api/messages", tags=["messages"])
+logger = logging.getLogger(__name__)
 
 PUBLIC_DASHBOARD_ALLOWED_TIME_RANGES = frozenset({"最近1小时", "最近24小时", "最近7天"})
 PUBLIC_DASHBOARD_MAX_AGE_DAYS = 7
@@ -53,7 +55,6 @@ def _enforce_public_dashboard_time_range(time_range: str) -> None:
         )
 
 
-@router.get("", response_model=MessageListResponse, summary="获取消息列表")
 def _build_message_response(
     message: Any,
     tracked_links: Optional[List[Dict[str, Any]]] = None,
@@ -75,17 +76,17 @@ def _build_message_response(
     )
 
 
-@router.get("", response_model=MessageListResponse, summary="鑾峰彇娑堟伅鍒楄〃")
+@router.get("", response_model=MessageListResponse, summary="获取消息列表")
 async def get_messages(
     request: Request,
     search_query: Optional[str] = Query(None, description="搜索关键词（支持多关键词，空格分隔）"),
-    time_range: str = Query("最近24小时", description="时间范围：最近1小时、最近24小时、最近7天、最近30天、全部"),
+    time_range: str = Query("最近24小时", description="时间范围"),
     selected_tags: Optional[List[str]] = Query(None, description="选中的标签列表"),
     selected_netdisks: Optional[List[str]] = Query(None, description="选中的网盘类型列表"),
     min_content_length: int = Query(0, description="最小内容长度"),
     has_links_only: bool = Query(False, description="是否只显示有链接的消息"),
-    page: int = Query(1, ge=1, description="页码（从1开始）"),
-    page_size: int = Query(100, ge=1, le=200, description="每页数量（1-200）"),
+    page: int = Query(1, ge=1, description="页码，从 1 开始"),
+    page_size: int = Query(100, ge=1, le=200, description="每页数量"),
     db: Session = Depends(get_db),
     current_user: Optional[Dict[str, Any]] = Depends(get_optional_current_user),
 ) -> MessageListResponse:
@@ -119,8 +120,24 @@ async def get_messages(
             page_size=page_size,
         )
 
+        tracked_by_message: Dict[int, List[Dict[str, Any]]] = {}
+        try:
+            refs_by_message, changed = ensure_message_link_refs_for_messages(db, messages)
+            if changed:
+                db.commit()
+            tracked_by_message = {
+                int(message_id): build_tracked_link_payloads(refs)
+                for message_id, refs in refs_by_message.items()
+            }
+        except Exception:
+            db.rollback()
+            logger.exception("Failed to build tracked links for message list")
+
         return MessageListResponse(
-            messages=[MessageResponse.from_orm(message) for message in messages],
+            messages=[
+                _build_message_response(message, tracked_by_message.get(int(message.id)))
+                for message in messages
+            ],
             total=total,
             page=page,
             page_size=page_size,
@@ -156,7 +173,17 @@ async def get_message(
             detail=f"消息 {message_id} 不存在",
         )
 
-    return MessageResponse.from_orm(message)
+    tracked_links: Optional[List[Dict[str, Any]]] = None
+    try:
+        refs, changed = ensure_message_link_refs(db, message)
+        if changed:
+            db.commit()
+        tracked_links = build_tracked_link_payloads(refs)
+    except Exception:
+        db.rollback()
+        logger.exception("Failed to build tracked links for message %s", message_id)
+
+    return _build_message_response(message, tracked_links)
 
 
 @router.get("/tags/stats", response_model=List[TagStatsResponse], summary="获取标签统计")

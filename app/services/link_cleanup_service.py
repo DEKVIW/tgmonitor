@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.core.monitor_parser import normalize_url
 from app.models.models import LinkCheckDetails, LinkCheckStats, Message
 from app.services.link_check.result import STATUS_INVALID
+from app.services.resource_ops import delete_message_resource_data, ensure_message_link_refs_for_message_ids
 
 logger = logging.getLogger(__name__)
 
@@ -208,6 +209,9 @@ def apply_link_check_cleanup(
     skipped_messages = 0
 
     try:
+        updated_message_ids: list[int] = []
+        deleted_message_ids: list[int] = []
+        messages_to_delete: list[Message] = []
         for message_id, invalid_urls in message_invalid_urls.items():
             message = message_by_id.get(message_id)
             if message is None:
@@ -229,7 +233,8 @@ def apply_link_check_cleanup(
                 removed_links += message_removed_links
                 deleted_messages += 1
                 if not dry_run:
-                    db.delete(message)
+                    deleted_message_ids.append(int(message.id))
+                    messages_to_delete.append(message)
                 continue
 
             if not links_changed:
@@ -241,8 +246,15 @@ def apply_link_check_cleanup(
             if not dry_run:
                 message.links = cleaned_links
                 message.netdisk_types = next_netdisk_types
+                updated_message_ids.append(int(message.id))
 
         if not dry_run:
+            if updated_message_ids:
+                ensure_message_link_refs_for_message_ids(db, updated_message_ids)
+            if deleted_message_ids:
+                delete_message_resource_data(db, deleted_message_ids)
+                for message in messages_to_delete:
+                    db.delete(message)
             stats.updated_messages = int(stats.updated_messages or 0) + updated_messages
             stats.deleted_messages = int(stats.deleted_messages or 0) + deleted_messages
             db.commit()

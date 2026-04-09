@@ -1,7 +1,7 @@
 ﻿import threading
 from datetime import datetime
 
-from sqlalchemy import ARRAY, JSON, Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine, inspect, text
+from sqlalchemy import ARRAY, JSON, Boolean, Column, Date, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine, inspect, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.declarative import declarative_base
 
@@ -25,6 +25,127 @@ class Message(Base):
     bot = Column(String)
     created_at = Column(DateTime, default=datetime.utcnow)
     netdisk_types = Column(JSONB, default=list)
+
+
+class LinkTarget(Base):
+    __tablename__ = "link_targets"
+    __table_args__ = (
+        UniqueConstraint("platform", "normalized_url_hash", name="ux_link_targets_platform_normalized_hash"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    platform = Column(String(64), nullable=False, index=True)
+    original_url = Column(Text, nullable=False)
+    normalized_url = Column(Text, nullable=False)
+    normalized_url_hash = Column(String(64), nullable=False, index=True)
+    share_key = Column(String(255), nullable=True, index=True)
+    passcode = Column(String(64), nullable=True)
+    share_title = Column(String(255), nullable=True)
+    file_count = Column(Integer, nullable=True)
+    total_size_bytes = Column(Float, nullable=True)
+    author_name_masked = Column(String(255), nullable=True)
+    author_platform_id = Column(String(255), nullable=True, index=True)
+    first_seen_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    last_seen_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class MessageLinkRef(Base):
+    __tablename__ = "message_link_refs"
+    __table_args__ = (
+        UniqueConstraint("message_id", "link_index", name="ux_message_link_refs_message_index"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    message_id = Column(Integer, ForeignKey("messages.id"), nullable=False, index=True)
+    link_target_id = Column(Integer, ForeignKey("link_targets.id"), nullable=False, index=True)
+    link_index = Column(Integer, nullable=False)
+    provider_label = Column(String(64), nullable=False)
+    link_label = Column(String(255), nullable=True)
+    display_text = Column(String(255), nullable=False)
+    target_url = Column(Text, nullable=False)
+    channel = Column(String(255), nullable=True)
+    source = Column(String(255), nullable=True)
+    message_timestamp = Column(DateTime, nullable=True, index=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class LinkClickEvent(Base):
+    __tablename__ = "link_click_events"
+    __table_args__ = (
+        UniqueConstraint("event_token", name="ux_link_click_events_event_token"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    event_token = Column(String(64), nullable=True, index=True)
+    link_ref_id = Column(Integer, ForeignKey("message_link_refs.id"), nullable=False, index=True)
+    link_target_id = Column(Integer, ForeignKey("link_targets.id"), nullable=False, index=True)
+    message_id = Column(Integer, ForeignKey("messages.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("user_accounts.id"), nullable=True, index=True)
+    clicked_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    stat_date = Column(Date, nullable=False, index=True)
+    source_page = Column(String(64), nullable=True)
+    search_query = Column(String(255), nullable=True)
+    session_key = Column(String(128), nullable=True, index=True)
+    ip_hash = Column(String(128), nullable=True)
+    ua_hash = Column(String(128), nullable=True)
+    is_logged_in = Column(Boolean, nullable=False, default=False)
+    redirect_confirmed = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class LinkTargetDailyStat(Base):
+    __tablename__ = "link_target_daily_stats"
+    __table_args__ = (
+        UniqueConstraint("stat_date", "link_target_id", name="ux_link_target_daily_stats_date_target"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    stat_date = Column(Date, nullable=False, index=True)
+    link_target_id = Column(Integer, ForeignKey("link_targets.id"), nullable=False, index=True)
+    click_count = Column(Integer, nullable=False, default=0)
+    unique_sessions = Column(Integer, nullable=False, default=0)
+    unique_users = Column(Integer, nullable=False, default=0)
+    search_click_count = Column(Integer, nullable=False, default=0)
+    logged_in_click_count = Column(Integer, nullable=False, default=0)
+    last_clicked_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class ResourceCandidateProfile(Base):
+    __tablename__ = "resource_candidate_profiles"
+    __table_args__ = (
+        UniqueConstraint("link_target_id", name="ux_resource_candidate_profiles_target"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    link_target_id = Column(Integer, ForeignKey("link_targets.id"), nullable=False, index=True)
+    operation_status = Column(String(32), nullable=False, default="pending_review", index=True)
+    value_status = Column(String(32), nullable=False, default="unreviewed", index=True)
+    manual_resource_kind = Column(String(32), nullable=True, index=True)
+    note = Column(Text, nullable=False, default="")
+    extra_json = Column(JSONB, nullable=False, default=dict)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_by = Column(String(128), nullable=True)
+
+
+class ResourceCandidateLog(Base):
+    __tablename__ = "resource_candidate_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    profile_id = Column(Integer, ForeignKey("resource_candidate_profiles.id"), nullable=False, index=True)
+    link_target_id = Column(Integer, ForeignKey("link_targets.id"), nullable=False, index=True)
+    action_type = Column(String(32), nullable=False, default="profile_updated", index=True)
+    action_summary = Column(String(255), nullable=False, default="")
+    note = Column(Text, nullable=False, default="")
+    payload = Column(JSONB, nullable=False, default=dict)
+    operator = Column(String(128), nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
 
 
 class Credential(Base):
@@ -435,6 +556,12 @@ def ensure_runtime_storage_tables() -> None:
                 UserAccount.__table__,
                 AuthIdentity.__table__,
                 AuthSession.__table__,
+                LinkTarget.__table__,
+                MessageLinkRef.__table__,
+                LinkClickEvent.__table__,
+                LinkTargetDailyStat.__table__,
+                ResourceCandidateProfile.__table__,
+                ResourceCandidateLog.__table__,
             ],
         )
         _ensure_system_settings_columns()
@@ -442,6 +569,7 @@ def ensure_runtime_storage_tables() -> None:
         _ensure_backup_target_columns()
         _ensure_backup_management_indexes()
         _ensure_link_check_indexes()
+        _ensure_resource_ops_indexes()
         _runtime_storage_checked = True
 
 
@@ -566,6 +694,54 @@ def _ensure_backup_management_indexes() -> None:
         CREATE UNIQUE INDEX IF NOT EXISTS ux_backup_runs_active_target
         ON backup_runs (target_id)
         WHERE target_id IS NOT NULL AND status IN ('pending', 'running')
+        """,
+    )
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement))
+
+
+def _ensure_resource_ops_indexes() -> None:
+    statements = (
+        """
+        CREATE INDEX IF NOT EXISTS ix_resource_candidate_profiles_status_updated
+        ON resource_candidate_profiles (operation_status, updated_at DESC)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_resource_candidate_profiles_value_status_updated
+        ON resource_candidate_profiles (value_status, updated_at DESC)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_resource_candidate_logs_target_created
+        ON resource_candidate_logs (link_target_id, created_at DESC)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_link_targets_platform_last_seen_at
+        ON link_targets (platform, last_seen_at DESC)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_message_link_refs_target_message
+        ON message_link_refs (link_target_id, message_id)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_link_click_events_target_clicked_at
+        ON link_click_events (link_target_id, clicked_at DESC)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_link_click_events_ref_clicked_at
+        ON link_click_events (link_ref_id, clicked_at DESC)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_link_click_events_stat_date_target
+        ON link_click_events (stat_date, link_target_id)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_link_click_events_session_target_date
+        ON link_click_events (session_key, link_target_id, stat_date)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_link_target_daily_stats_target_date
+        ON link_target_daily_stats (link_target_id, stat_date DESC)
         """,
     )
     with engine.begin() as connection:
