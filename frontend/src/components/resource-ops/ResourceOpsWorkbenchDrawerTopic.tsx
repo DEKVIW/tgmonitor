@@ -12,7 +12,7 @@ import { formatServerDateTime } from '@/utils/dateTime'
 
 const { Paragraph, Text } = Typography
 const formatResourceOpsDateTime = (value?: string | null) =>
-  formatServerDateTime(value, 'YYYY-MM-DD HH:mm', 'Asia/Shanghai', true)
+  formatServerDateTime(value, 'YYYY-MM-DD HH:mm', 'Asia/Shanghai')
 
 interface ResourceOpsWorkbenchDrawerTopicProps {
   open: boolean

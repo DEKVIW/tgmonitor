@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Iterable
 
 from sqlalchemy import func, or_
@@ -63,6 +63,16 @@ RECOGNITION_RETRY_DELAY_MINUTES = 15
 
 def _utcnow() -> datetime:
     return datetime.utcnow()
+
+
+def _to_utc_iso(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        normalized = value.replace(tzinfo=timezone.utc)
+    else:
+        normalized = value.astimezone(timezone.utc)
+    return normalized.isoformat().replace("+00:00", "Z")
 
 
 def _normalize_text(value: Any, *, max_length: int | None = None) -> str:
@@ -753,8 +763,8 @@ def run_resource_ops_recognition_job(
         "matched_count": matched_count,
         "error_count": error_count,
         "remaining_count": summary["pending_count"],
-        "started_at": started_at.isoformat(),
-        "finished_at": _utcnow().isoformat(),
+        "started_at": _to_utc_iso(started_at),
+        "finished_at": _to_utc_iso(_utcnow()),
         "items": processed_items,
         "binding_summary": summary,
     }

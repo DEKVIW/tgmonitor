@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Alert, Button, Card, Col, Empty, Input, InputNumber, Row, Select, Space, Table, Tabs, Tag, Tooltip, Typography, message } from 'antd'
+import { Alert, Button, Card, Col, Collapse, Empty, Input, InputNumber, Row, Select, Space, Table, Tabs, Tag, Tooltip, Typography, message } from 'antd'
 import type { ColumnsType, TableProps } from 'antd/es/table'
 import { DatabaseOutlined, InfoCircleOutlined, LinkOutlined, ReloadOutlined, SyncOutlined } from '@ant-design/icons'
 
@@ -21,7 +21,7 @@ import {
   updateResourceOpsWorkbenchItem,
 } from '@/api/resourceOps'
 import ResourceOpsPlatformChart from '@/components/resource-ops/ResourceOpsPlatformChart'
-import ResourceOpsRecognitionPanel from '@/components/resource-ops/ResourceOpsRecognitionPanel'
+import ResourceOpsRecognitionPanelCompact from '@/components/resource-ops/ResourceOpsRecognitionPanelCompact'
 import ResourceOpsTrendChart from '@/components/resource-ops/ResourceOpsTrendChart'
 import ResourceOpsWorkbenchDrawerTopic from '@/components/resource-ops/ResourceOpsWorkbenchDrawerTopic'
 import type {
@@ -47,7 +47,17 @@ const { Title, Text } = Typography
 
 const formatNumber = (value?: number | null) => new Intl.NumberFormat('zh-CN').format(Number(value || 0))
 const formatResourceOpsDateTime = (value?: string | null) =>
-  formatServerDateTime(value, 'YYYY-MM-DD HH:mm', 'Asia/Shanghai', true)
+  formatServerDateTime(value, 'YYYY-MM-DD HH:mm', 'Asia/Shanghai')
+const RESOURCE_OPS_TAB_STORAGE_KEY = 'resource-ops-active-tab'
+const RESOURCE_OPS_TAB_KEYS = new Set(['overview', 'workbench'])
+
+const getInitialResourceOpsTab = () => {
+  if (typeof window === 'undefined') {
+    return 'overview'
+  }
+  const saved = window.sessionStorage.getItem(RESOURCE_OPS_TAB_STORAGE_KEY)
+  return saved && RESOURCE_OPS_TAB_KEYS.has(saved) ? saved : 'overview'
+}
 
 const buildSettingsDraft = (response: ResourceOpsRuntimeSettingsResponse): ResourceOpsRuntimeSettingsUpdateRequest => ({
   auto_recognition_enabled: response.auto_recognition_enabled,
@@ -65,7 +75,7 @@ const operationColor = (status: string) =>
   status === 'ready_to_mirror' ? 'success' : status === 'observing' ? 'processing' : status === 'ignored' ? 'default' : 'gold'
 
 const ResourceOperationsAdminRuntime = () => {
-  const [activeTab, setActiveTab] = useState('overview')
+  const [activeTab, setActiveTab] = useState(getInitialResourceOpsTab)
   const [overview, setOverview] = useState<ResourceOpsOverviewResponse | null>(null)
   const [trend, setTrend] = useState<ResourceOpsTrendResponse | null>(null)
   const [platforms, setPlatforms] = useState<ResourceOpsPlatformDistributionResponse | null>(null)
@@ -77,6 +87,7 @@ const ResourceOperationsAdminRuntime = () => {
   const [settingsDraft, setSettingsDraft] = useState<ResourceOpsRuntimeSettingsUpdateRequest | null>(null)
   const [settingsLoading, setSettingsLoading] = useState(true)
   const [settingsSaving, setSettingsSaving] = useState(false)
+  const [maintenanceSaving, setMaintenanceSaving] = useState(false)
   const [pendingRunLoading, setPendingRunLoading] = useState(false)
   const [allRunLoading, setAllRunLoading] = useState(false)
   const [retentionRunning, setRetentionRunning] = useState(false)
@@ -190,6 +201,16 @@ const ResourceOperationsAdminRuntime = () => {
     setWorkbenchVisited(true)
     void loadWorkbench(workbenchFilters)
   }, [activeTab, workbenchFilters.page, workbenchFilters.page_size, workbenchFilters.platform, workbenchFilters.operation_status, workbenchFilters.value_status, workbenchFilters.health_status, workbenchFilters.keyword, workbenchFilters.sort_by, workbenchFilters.sort_order])
+
+  useEffect(() => {
+    if (!RESOURCE_OPS_TAB_KEYS.has(activeTab)) {
+      setActiveTab('overview')
+      return
+    }
+    if (typeof window !== 'undefined') {
+      window.sessionStorage.setItem(RESOURCE_OPS_TAB_STORAGE_KEY, activeTab)
+    }
+  }, [activeTab])
 
   const bindingSummary = runtimeSettings?.binding_summary || null
   const recognitionStatus = runtimeSettings?.recognition_status || null
@@ -319,6 +340,29 @@ const ResourceOperationsAdminRuntime = () => {
       message.error(error.response?.data?.detail || '保存配置失败')
     } finally {
       setSettingsSaving(false)
+    }
+  }
+
+  const handleSaveMaintenanceSettings = async () => {
+    if (!settingsDraft) return
+    setMaintenanceSaving(true)
+    try {
+      const response = await updateResourceOpsRuntimeSettings({
+        auto_recognition_enabled: settingsDraft.auto_recognition_enabled,
+        ai_base_url: settingsDraft.ai_base_url,
+        ai_model: settingsDraft.ai_model,
+        retention_click_event_days: settingsDraft.retention_click_event_days,
+        retention_daily_stat_days: settingsDraft.retention_daily_stat_days,
+        retention_candidate_log_days: settingsDraft.retention_candidate_log_days,
+        cleanup_interval_hours: settingsDraft.cleanup_interval_hours,
+      })
+      setRuntimeSettings(response)
+      setSettingsDraft(buildSettingsDraft(response))
+      message.success('维护配置已保存')
+    } catch (error: any) {
+      message.error(error.response?.data?.detail || '保存维护配置失败')
+    } finally {
+      setMaintenanceSaving(false)
     }
   }
 
@@ -534,6 +578,116 @@ const ResourceOperationsAdminRuntime = () => {
     ? 0
     : Math.min(100, Math.round((catalog.indexed_messages / catalog.total_messages_with_links) * 100))
 
+  const maintenanceSection = settingsDraft && runtimeSettings ? (
+    <Collapse
+      ghost
+      defaultActiveKey={[]}
+      className="resource-ops-runtime-collapse resource-ops-maintenance-collapse"
+      items={[
+        {
+          key: 'maintenance',
+          label: (
+            <div className="resource-ops-runtime-collapse-head">
+              <div className="resource-ops-runtime-collapse-copy">
+                <div className="resource-ops-runtime-title">
+                  <DatabaseOutlined />
+                  <span>维护工具</span>
+                </div>
+                <small>补录历史目录和清理资源运营附加数据，属于低频辅助操作，放在工作台下方更顺手。</small>
+              </div>
+              <div className="resource-ops-runtime-collapse-tags">
+                <Tag>上次清理 {formatResourceOpsDateTime(runtimeSettings.last_cleanup_at)}</Tag>
+                <Tag>上次归并 {formatResourceOpsDateTime(runtimeSettings.last_sync_at)}</Tag>
+              </div>
+            </div>
+          ),
+          children: (
+            <div className="resource-ops-runtime-card">
+              <div className="resource-ops-runtime-meta-grid">
+                <div className="resource-ops-runtime-meta-card">
+                  <span>上次清理</span>
+                  <strong>{formatResourceOpsDateTime(runtimeSettings.last_cleanup_at)}</strong>
+                  <small>
+                    点击 {formatNumber(runtimeSettings.last_cleanup_summary?.deleted_click_events)} / 日统计{' '}
+                    {formatNumber(runtimeSettings.last_cleanup_summary?.deleted_daily_stats)}
+                  </small>
+                </div>
+                <div className="resource-ops-runtime-meta-card">
+                  <span>上次归并</span>
+                  <strong>{formatResourceOpsDateTime(runtimeSettings.last_sync_at)}</strong>
+                  <small>
+                    成功 {formatNumber(runtimeSettings.last_sync_summary?.matched_count)} / 异常{' '}
+                    {formatNumber(runtimeSettings.last_sync_summary?.error_count)}
+                  </small>
+                </div>
+              </div>
+
+              <div className="resource-ops-runtime-form-grid resource-ops-maintenance-form-grid">
+                <div className="resource-ops-form-field resource-ops-form-field-compact">
+                  <label>点击事件保留天数</label>
+                  <InputNumber
+                    min={7}
+                    max={3650}
+                    value={settingsDraft.retention_click_event_days}
+                    onChange={(value) => patchDraft('retention_click_event_days', Number(value || 7))}
+                  />
+                </div>
+                <div className="resource-ops-form-field resource-ops-form-field-compact">
+                  <label>日统计保留天数</label>
+                  <InputNumber
+                    min={30}
+                    max={3650}
+                    value={settingsDraft.retention_daily_stat_days}
+                    onChange={(value) => patchDraft('retention_daily_stat_days', Number(value || 30))}
+                  />
+                </div>
+                <div className="resource-ops-form-field resource-ops-form-field-compact">
+                  <label>候选日志保留天数</label>
+                  <InputNumber
+                    min={7}
+                    max={3650}
+                    value={settingsDraft.retention_candidate_log_days}
+                    onChange={(value) => patchDraft('retention_candidate_log_days', Number(value || 7))}
+                  />
+                </div>
+                <div className="resource-ops-form-field resource-ops-form-field-compact">
+                  <label>清理间隔（小时）</label>
+                  <InputNumber
+                    min={1}
+                    max={720}
+                    value={settingsDraft.cleanup_interval_hours}
+                    onChange={(value) => patchDraft('cleanup_interval_hours', Number(value || 1))}
+                  />
+                </div>
+              </div>
+
+              <Alert
+                type="info"
+                showIcon
+                message="清理范围"
+                description="这里只清理资源运营附加数据，不删除消息正文和索引；过期点击事件、日统计、候选日志，以及没有绑定关系的作品别名和作品缓存都会回收。"
+              />
+
+              <div className="resource-ops-runtime-savebar">
+                <Text type="secondary">保存维护配置后立刻生效，立即清理只会处理资源运营附加数据。</Text>
+                <div className="resource-ops-inline-actions resource-ops-inline-actions-tight">
+                  <Button loading={retentionRunning} onClick={() => void handleRunRetention()}>
+                    立即清理
+                  </Button>
+                  <Button type="primary" loading={maintenanceSaving} onClick={() => void handleSaveMaintenanceSettings()}>
+                    保存维护配置
+                  </Button>
+                </div>
+              </div>
+            </div>
+          ),
+        },
+      ]}
+    />
+  ) : (
+    <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无维护配置" />
+  )
+
   return (
     <div className="resource-ops-page">
       <Card className="resource-ops-hero-card">
@@ -614,7 +768,7 @@ const ResourceOperationsAdminRuntime = () => {
             label: '候选工作台',
             children: (
               <div className="resource-ops-tab-stack">
-                <ResourceOpsRecognitionPanel
+                <ResourceOpsRecognitionPanelCompact
                   loading={settingsLoading}
                   settingsSaving={settingsSaving}
                   pendingRunLoading={pendingRunLoading}
@@ -670,6 +824,8 @@ const ResourceOperationsAdminRuntime = () => {
 
                   <Table rowKey="link_target_id" loading={workbenchLoading} dataSource={workbenchData?.items || []} columns={workbenchColumns} onChange={handleWorkbenchTableChange} pagination={{ current: workbenchFilters.page, pageSize: workbenchFilters.page_size, total: workbenchData?.total || 0, showSizeChanger: true }} scroll={{ x: 1180 }} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无候选主题" /> }} />
                 </Card>
+
+                {maintenanceSection}
               </div>
             ),
           },
@@ -722,7 +878,7 @@ const ResourceOperationsAdminRuntime = () => {
               </div>
             ),
           },
-        ]}
+        ].filter((item) => item.key !== 'settings')}
       />
 
       <ResourceOpsWorkbenchDrawerTopic open={detailOpen} loading={detailLoading} saving={detailSaving} data={detailData} onClose={() => { setDetailOpen(false); setDetailData(null) }} onSave={saveDetail} />

@@ -1,12 +1,28 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
-class ResourceOpsTrackClickRequest(BaseModel):
+def _serialize_resource_ops_datetime(value: datetime) -> str:
+    if value.tzinfo is None:
+        normalized = value.replace(tzinfo=timezone.utc)
+    else:
+        normalized = value.astimezone(timezone.utc)
+    return normalized.isoformat().replace("+00:00", "Z")
+
+
+class ResourceOpsBaseModel(BaseModel):
+    model_config = ConfigDict(
+        json_encoders={
+            datetime: _serialize_resource_ops_datetime,
+        }
+    )
+
+
+class ResourceOpsTrackClickRequest(ResourceOpsBaseModel):
     link_ref_id: int = Field(ge=1)
     event_token: str | None = Field(default=None, max_length=64)
     session_key: str | None = Field(default=None, max_length=128)
@@ -14,7 +30,7 @@ class ResourceOpsTrackClickRequest(BaseModel):
     search_query: str | None = Field(default=None, max_length=255)
 
 
-class ResourceOpsTrackClickResponse(BaseModel):
+class ResourceOpsTrackClickResponse(ResourceOpsBaseModel):
     accepted: bool = True
     event_id: int
     event_token: str | None = None
@@ -24,7 +40,7 @@ class ResourceOpsTrackClickResponse(BaseModel):
     redirect_confirmed: bool = False
 
 
-class ResourceOpsCatalogStatusResponse(BaseModel):
+class ResourceOpsCatalogStatusResponse(ResourceOpsBaseModel):
     total_messages_with_links: int = 0
     indexed_messages: int = 0
     link_target_count: int = 0
@@ -39,7 +55,7 @@ class ResourceOpsCatalogStatusResponse(BaseModel):
     batch_size: int | None = None
 
 
-class ResourceOpsOverviewResponse(BaseModel):
+class ResourceOpsOverviewResponse(ResourceOpsBaseModel):
     clicks_last_30_days: int = 0
     unique_sessions_last_30_days: int = 0
     unique_users_last_30_days: int = 0
@@ -53,20 +69,20 @@ class ResourceOpsOverviewResponse(BaseModel):
     generated_at: datetime
 
 
-class ResourceOpsTrendPoint(BaseModel):
+class ResourceOpsTrendPoint(ResourceOpsBaseModel):
     date: str
     click_count: int = 0
     unique_sessions: int = 0
     clicked_targets: int = 0
 
 
-class ResourceOpsTrendResponse(BaseModel):
+class ResourceOpsTrendResponse(ResourceOpsBaseModel):
     days: list[ResourceOpsTrendPoint]
     days_window: int
     generated_at: datetime
 
 
-class ResourceOpsPlatformDistributionItem(BaseModel):
+class ResourceOpsPlatformDistributionItem(ResourceOpsBaseModel):
     platform: str
     click_count: int = 0
     unique_sessions: int = 0
@@ -74,13 +90,13 @@ class ResourceOpsPlatformDistributionItem(BaseModel):
     percentage: float = 0
 
 
-class ResourceOpsPlatformDistributionResponse(BaseModel):
+class ResourceOpsPlatformDistributionResponse(ResourceOpsBaseModel):
     items: list[ResourceOpsPlatformDistributionItem]
     days_window: int
     generated_at: datetime
 
 
-class ResourceOpsCandidateItem(BaseModel):
+class ResourceOpsCandidateItem(ResourceOpsBaseModel):
     link_target_id: int
     platform: str
     display_text: str
@@ -109,14 +125,14 @@ class ResourceOpsCandidateItem(BaseModel):
     last_clicked_at: datetime | None = None
 
 
-class ResourceOpsCandidateListResponse(BaseModel):
+class ResourceOpsCandidateListResponse(ResourceOpsBaseModel):
     items: list[ResourceOpsCandidateItem]
     total: int
     page: int
     page_size: int
 
 
-class ResourceOpsCandidateRefItem(BaseModel):
+class ResourceOpsCandidateRefItem(ResourceOpsBaseModel):
     message_id: int
     message_title: str = ""
     display_text: str = ""
@@ -126,13 +142,13 @@ class ResourceOpsCandidateRefItem(BaseModel):
     links: list[dict[str, Any]] = Field(default_factory=list)
 
 
-class ResourceOpsCandidateDetailResponse(BaseModel):
+class ResourceOpsCandidateDetailResponse(ResourceOpsBaseModel):
     item: ResourceOpsCandidateItem
     recent_refs: list[ResourceOpsCandidateRefItem]
     trend: list[ResourceOpsTrendPoint]
 
 
-class ResourceOpsWorkbenchSummaryResponse(BaseModel):
+class ResourceOpsWorkbenchSummaryResponse(ResourceOpsBaseModel):
     total_candidates: int = 0
     pending_review_count: int = 0
     observing_count: int = 0
@@ -146,7 +162,7 @@ class ResourceOpsWorkbenchSummaryResponse(BaseModel):
     generated_at: datetime
 
 
-class ResourceOpsWorkbenchItem(BaseModel):
+class ResourceOpsWorkbenchItem(ResourceOpsBaseModel):
     link_target_id: int
     platform: str
     display_text: str
@@ -241,7 +257,7 @@ class ResourceOpsWorkbenchItem(BaseModel):
     work_matched_at: datetime | None = None
 
 
-class ResourceOpsWorkbenchListResponse(BaseModel):
+class ResourceOpsWorkbenchListResponse(ResourceOpsBaseModel):
     items: list[ResourceOpsWorkbenchItem]
     total: int
     page: int
@@ -249,7 +265,7 @@ class ResourceOpsWorkbenchListResponse(BaseModel):
     summary: ResourceOpsWorkbenchSummaryResponse
 
 
-class ResourceOpsWorkbenchLogItem(BaseModel):
+class ResourceOpsWorkbenchLogItem(ResourceOpsBaseModel):
     id: int
     action_type: str
     action_summary: str
@@ -259,7 +275,7 @@ class ResourceOpsWorkbenchLogItem(BaseModel):
     payload: dict[str, object] = Field(default_factory=dict)
 
 
-class ResourceOpsWorkbenchDetailResponse(BaseModel):
+class ResourceOpsWorkbenchDetailResponse(ResourceOpsBaseModel):
     item: ResourceOpsWorkbenchItem
     recent_refs: list[ResourceOpsCandidateRefItem]
     trend: list[ResourceOpsTrendPoint]
@@ -267,14 +283,14 @@ class ResourceOpsWorkbenchDetailResponse(BaseModel):
     auto_reasons: list[str] = Field(default_factory=list)
 
 
-class ResourceOpsWorkbenchUpdateRequest(BaseModel):
+class ResourceOpsWorkbenchUpdateRequest(ResourceOpsBaseModel):
     operation_status: str | None = None
     value_status: str | None = None
     manual_resource_kind: str | None = None
     note: str | None = None
 
 
-class ResourceOpsWorkBindingSummaryResponse(BaseModel):
+class ResourceOpsWorkBindingSummaryResponse(ResourceOpsBaseModel):
     total_candidates: int = 0
     matched_count: int = 0
     pending_count: int = 0
@@ -282,7 +298,7 @@ class ResourceOpsWorkBindingSummaryResponse(BaseModel):
     match_rate: float = 0
 
 
-class ResourceOpsRecognitionStatusResponse(BaseModel):
+class ResourceOpsRecognitionStatusResponse(ResourceOpsBaseModel):
     is_running: bool = False
     requested_mode: str | None = None
     current_mode: str | None = None
@@ -297,7 +313,7 @@ class ResourceOpsRecognitionStatusResponse(BaseModel):
     logs: list[str] = Field(default_factory=list)
 
 
-class ResourceOpsRuntimeSettingsUpdateRequest(BaseModel):
+class ResourceOpsRuntimeSettingsUpdateRequest(ResourceOpsBaseModel):
     auto_recognition_enabled: bool = False
     ai_base_url: str = Field(default="", max_length=512)
     ai_model: str = Field(default="", max_length=255)
@@ -308,7 +324,7 @@ class ResourceOpsRuntimeSettingsUpdateRequest(BaseModel):
     cleanup_interval_hours: int = Field(default=24, ge=1, le=720)
 
 
-class ResourceOpsRuntimeSettingsResponse(BaseModel):
+class ResourceOpsRuntimeSettingsResponse(ResourceOpsBaseModel):
     auto_recognition_enabled: bool = False
     ai_base_url: str = ""
     ai_model: str = ""
@@ -326,7 +342,7 @@ class ResourceOpsRuntimeSettingsResponse(BaseModel):
     binding_summary: ResourceOpsWorkBindingSummaryResponse
 
 
-class ResourceOpsRecognitionRunResponse(BaseModel):
+class ResourceOpsRecognitionRunResponse(ResourceOpsBaseModel):
     accepted: bool = True
     mode: str = "pending"
     message: str = ""
@@ -334,19 +350,19 @@ class ResourceOpsRecognitionRunResponse(BaseModel):
     binding_summary: ResourceOpsWorkBindingSummaryResponse
 
 
-class ResourceOpsAiProviderDraftRequest(BaseModel):
+class ResourceOpsAiProviderDraftRequest(ResourceOpsBaseModel):
     base_url: str | None = Field(default=None, max_length=512)
     api_key: str | None = Field(default=None, max_length=8000)
     use_saved_api_key: bool = True
 
 
-class ResourceOpsAiModelItem(BaseModel):
+class ResourceOpsAiModelItem(ResourceOpsBaseModel):
     id: str
     label: str
     owned_by: str | None = None
 
 
-class ResourceOpsAiModelListResponse(BaseModel):
+class ResourceOpsAiModelListResponse(ResourceOpsBaseModel):
     models: list[ResourceOpsAiModelItem] = Field(default_factory=list)
     base_url: str = ""
     used_saved_api_key: bool = False
@@ -358,7 +374,7 @@ class ResourceOpsAiTestRequest(ResourceOpsAiProviderDraftRequest):
     sample_text: str | None = Field(default=None, max_length=500)
 
 
-class ResourceOpsAiTestResponse(BaseModel):
+class ResourceOpsAiTestResponse(ResourceOpsBaseModel):
     ok: bool = True
     base_url: str = ""
     model: str
@@ -371,7 +387,7 @@ class ResourceOpsAiTestResponse(BaseModel):
     reason: str = ""
 
 
-class ResourceOpsRetentionRunResponse(BaseModel):
+class ResourceOpsRetentionRunResponse(ResourceOpsBaseModel):
     deleted_click_events: int = 0
     deleted_daily_stats: int = 0
     deleted_candidate_logs: int = 0

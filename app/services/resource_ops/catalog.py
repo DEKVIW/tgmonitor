@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Iterable
 from urllib.parse import parse_qs, urlparse
 
@@ -35,6 +35,16 @@ RESOURCE_OPS_EXTRA_KEY = "resource_ops"
 CATALOG_CURSOR_KEY = "catalog_cursor_message_id"
 CATALOG_LAST_SYNC_AT_KEY = "catalog_last_sync_at"
 MAX_SEARCH_QUERY_LENGTH = 120
+
+
+def _to_utc_iso(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        normalized = value.replace(tzinfo=timezone.utc)
+    else:
+        normalized = value.astimezone(timezone.utc)
+    return normalized.isoformat().replace("+00:00", "Z")
 
 _PASSCODE_KEYS = ("pwd", "passcode", "code", "password", "share_pwd", "sharepwd", "accessCode")
 
@@ -786,7 +796,7 @@ def sync_message_link_catalog_batch(session: Session, *, batch_size: int = 500) 
     next_cursor = int(messages[-1].id) if messages else cursor_message_id
 
     extra[CATALOG_CURSOR_KEY] = next_cursor
-    extra[CATALOG_LAST_SYNC_AT_KEY] = datetime.utcnow().isoformat()
+    extra[CATALOG_LAST_SYNC_AT_KEY] = _to_utc_iso(datetime.utcnow())
     _write_resource_ops_extra(settings_record, extra)
 
     session.commit()

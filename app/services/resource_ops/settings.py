@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -20,6 +20,16 @@ RECOGNITION_LOG_LIMIT = 120
 
 def _utcnow() -> datetime:
     return datetime.utcnow()
+
+
+def _to_utc_iso(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        normalized = value.replace(tzinfo=timezone.utc)
+    else:
+        normalized = value.astimezone(timezone.utc)
+    return normalized.isoformat().replace("+00:00", "Z")
 
 
 def _coerce_bool(value: Any, default: bool) -> bool:
@@ -87,13 +97,13 @@ def _coerce_datetime(value: Any) -> datetime | None:
     if isinstance(value, datetime):
         return value
     try:
-        return datetime.fromisoformat(str(value))
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
     except ValueError:
         return None
 
 
 def _to_iso(value: datetime | None) -> str | None:
-    return value.isoformat() if value is not None else None
+    return _to_utc_iso(value)
 
 
 def build_default_resource_ops_runtime_settings() -> dict[str, Any]:
