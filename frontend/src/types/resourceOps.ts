@@ -82,6 +82,15 @@ export interface ResourceOpsCandidateRefItem {
   channel: string
   source: string
   message_timestamp?: string | null
+  links: ResourceOpsCandidateRefLinkItem[]
+}
+
+export interface ResourceOpsCandidateRefLinkItem {
+  link_target_id: number
+  platform: string
+  display_text: string
+  target_url: string
+  share_key?: string | null
 }
 
 export interface ResourceOpsCandidateDetailResponse {
@@ -189,6 +198,11 @@ export interface ResourceOpsWorkbenchItem {
   latest_link_health: ResourceOpsHealthStatus | string
   latest_link_health_label: string
   latest_link_health_reason?: string | null
+  checked_link_target_count: number
+  healthy_link_target_count: number
+  warning_link_target_count: number
+  invalid_link_target_count: number
+  unknown_link_target_count: number
   invalid_checks_30d: number
   total_checks_30d: number
   suggested_action: string
@@ -210,10 +224,9 @@ export interface ResourceOpsWorkbenchItem {
   work_release_year?: number | null
   work_poster_url?: string | null
   work_detail_url?: string | null
-  work_match_status: 'pending' | 'matched' | 'no_match' | 'low_confidence' | 'error' | string
+  work_match_status: 'pending' | 'matched' | 'error' | string
   work_match_status_label: string
   work_match_source: string
-  work_confidence: number
   work_match_reason?: string | null
   work_query_title?: string | null
   work_candidate_title?: string | null
@@ -271,29 +284,28 @@ export interface ResourceOpsWorkbenchUpdateRequest {
 }
 
 export interface ResourceOpsWorkBindingSummary {
-  total_tracked_targets: number
+  total_candidates: number
   matched_count: number
   pending_count: number
-  no_match_count: number
-  low_confidence_count: number
   error_count: number
   match_rate: number
+  full_sync_active: boolean
+  full_sync_total: number
+  full_sync_processed: number
+  full_sync_progress: number
+  full_sync_started_at?: string | null
+  full_sync_finished_at?: string | null
 }
 
 export interface ResourceOpsRuntimeSettingsResponse {
   auto_bind_enabled: boolean
   sync_batch_size: number
   sync_interval_minutes: number
-  min_confidence: number
-  retry_cooldown_hours: number
-  tmdb_enabled: boolean
-  tmdb_language: string
-  tmdb_api_key_configured: boolean
-  tmdb_read_access_token_configured: boolean
-  tmdb_provider_ready: boolean
-  bangumi_enabled: boolean
-  bangumi_user_agent: string
-  bangumi_provider_ready: boolean
+  ai_enabled: boolean
+  ai_base_url: string
+  ai_model: string
+  ai_api_key_configured: boolean
+  ai_provider_ready: boolean
   retention_click_event_days: number
   retention_daily_stat_days: number
   retention_candidate_log_days: number
@@ -302,6 +314,10 @@ export interface ResourceOpsRuntimeSettingsResponse {
   last_sync_summary: Record<string, any>
   last_cleanup_at?: string | null
   last_cleanup_summary: Record<string, any>
+  full_sync_active: boolean
+  full_sync_requested_at?: string | null
+  full_sync_started_at?: string | null
+  full_sync_finished_at?: string | null
   binding_summary: ResourceOpsWorkBindingSummary
 }
 
@@ -309,14 +325,10 @@ export interface ResourceOpsRuntimeSettingsUpdateRequest {
   auto_bind_enabled: boolean
   sync_batch_size: number
   sync_interval_minutes: number
-  min_confidence: number
-  retry_cooldown_hours: number
-  tmdb_enabled: boolean
-  tmdb_language: string
-  tmdb_api_key?: string | null
-  tmdb_read_access_token?: string | null
-  bangumi_enabled: boolean
-  bangumi_user_agent: string
+  ai_enabled: boolean
+  ai_base_url: string
+  ai_model: string
+  ai_api_key?: string | null
   retention_click_event_days: number
   retention_daily_stat_days: number
   retention_candidate_log_days: number
@@ -324,16 +336,53 @@ export interface ResourceOpsRuntimeSettingsUpdateRequest {
 }
 
 export interface ResourceOpsRecognitionRunResponse {
+  mode: 'pending' | 'full' | string
   processed_count: number
   matched_count: number
-  no_match_count: number
-  low_confidence_count: number
   error_count: number
   skipped_count: number
+  remaining_count: number
   started_at: string
   finished_at: string
   items: Array<Record<string, any>>
   binding_summary: ResourceOpsWorkBindingSummary
+}
+
+export interface ResourceOpsAiProviderDraftRequest {
+  base_url?: string | null
+  api_key?: string | null
+  use_saved_api_key?: boolean
+}
+
+export interface ResourceOpsAiModelItem {
+  id: string
+  label: string
+  owned_by?: string | null
+}
+
+export interface ResourceOpsAiModelListResponse {
+  models: ResourceOpsAiModelItem[]
+  base_url: string
+  used_saved_api_key: boolean
+  count: number
+}
+
+export interface ResourceOpsAiTestRequest extends ResourceOpsAiProviderDraftRequest {
+  model: string
+  sample_text?: string | null
+}
+
+export interface ResourceOpsAiTestResponse {
+  ok: boolean
+  base_url: string
+  model: string
+  sample_text: string
+  extracted_title?: string | null
+  release_year?: number | null
+  season?: number | null
+  media_type?: string | null
+  confidence: number
+  reason: string
 }
 
 export interface ResourceOpsRetentionRunResponse {

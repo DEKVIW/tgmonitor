@@ -1,23 +1,23 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
 
 
 class ResourceOpsTrackClickRequest(BaseModel):
     link_ref_id: int = Field(ge=1)
-    event_token: Optional[str] = Field(default=None, max_length=64)
-    session_key: Optional[str] = Field(default=None, max_length=128)
-    source_page: Optional[str] = Field(default=None, max_length=64)
-    search_query: Optional[str] = Field(default=None, max_length=255)
+    event_token: str | None = Field(default=None, max_length=64)
+    session_key: str | None = Field(default=None, max_length=128)
+    source_page: str | None = Field(default=None, max_length=64)
+    search_query: str | None = Field(default=None, max_length=255)
 
 
 class ResourceOpsTrackClickResponse(BaseModel):
     accepted: bool = True
     event_id: int
-    event_token: Optional[str] = None
+    event_token: str | None = None
     link_ref_id: int
     link_target_id: int
     redirect_url: str
@@ -30,13 +30,13 @@ class ResourceOpsCatalogStatusResponse(BaseModel):
     link_target_count: int = 0
     link_ref_count: int = 0
     cursor_message_id: int = 0
-    last_sync_at: Optional[str] = None
+    last_sync_at: str | None = None
     is_fully_synced: bool = False
     has_more: bool = False
-    processed_messages: Optional[int] = None
-    indexed_links: Optional[int] = None
-    changed: Optional[bool] = None
-    batch_size: Optional[int] = None
+    processed_messages: int | None = None
+    indexed_links: int | None = None
+    changed: bool | None = None
+    batch_size: int | None = None
 
 
 class ResourceOpsOverviewResponse(BaseModel):
@@ -61,7 +61,7 @@ class ResourceOpsTrendPoint(BaseModel):
 
 
 class ResourceOpsTrendResponse(BaseModel):
-    days: List[ResourceOpsTrendPoint]
+    days: list[ResourceOpsTrendPoint]
     days_window: int
     generated_at: datetime
 
@@ -75,7 +75,7 @@ class ResourceOpsPlatformDistributionItem(BaseModel):
 
 
 class ResourceOpsPlatformDistributionResponse(BaseModel):
-    items: List[ResourceOpsPlatformDistributionItem]
+    items: list[ResourceOpsPlatformDistributionItem]
     days_window: int
     generated_at: datetime
 
@@ -85,7 +85,7 @@ class ResourceOpsCandidateItem(BaseModel):
     platform: str
     display_text: str
     target_url: str
-    share_key: Optional[str] = None
+    share_key: str | None = None
     message_ref_count: int = 0
     message_count: int = 0
     clicks_1d: int = 0
@@ -103,14 +103,14 @@ class ResourceOpsCandidateItem(BaseModel):
     priority: str
     recommendation: str
     score: float = 0
-    first_seen_at: Optional[datetime] = None
-    last_seen_at: Optional[datetime] = None
-    last_message_time: Optional[datetime] = None
-    last_clicked_at: Optional[datetime] = None
+    first_seen_at: datetime | None = None
+    last_seen_at: datetime | None = None
+    last_message_time: datetime | None = None
+    last_clicked_at: datetime | None = None
 
 
 class ResourceOpsCandidateListResponse(BaseModel):
-    items: List[ResourceOpsCandidateItem]
+    items: list[ResourceOpsCandidateItem]
     total: int
     page: int
     page_size: int
@@ -122,13 +122,14 @@ class ResourceOpsCandidateRefItem(BaseModel):
     display_text: str = ""
     channel: str = ""
     source: str = ""
-    message_timestamp: Optional[datetime] = None
+    message_timestamp: datetime | None = None
+    links: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ResourceOpsCandidateDetailResponse(BaseModel):
     item: ResourceOpsCandidateItem
-    recent_refs: List[ResourceOpsCandidateRefItem]
-    trend: List[ResourceOpsTrendPoint]
+    recent_refs: list[ResourceOpsCandidateRefItem]
+    trend: list[ResourceOpsTrendPoint]
 
 
 class ResourceOpsWorkbenchSummaryResponse(BaseModel):
@@ -150,7 +151,7 @@ class ResourceOpsWorkbenchItem(BaseModel):
     platform: str
     display_text: str
     target_url: str
-    share_key: Optional[str] = None
+    share_key: str | None = None
     topic_title: str
     topic_key: str
     topic_link_target_count: int = 1
@@ -158,10 +159,10 @@ class ResourceOpsWorkbenchItem(BaseModel):
     topic_clicks_7d: int = 0
     topic_clicks_30d: int = 0
     topic_platform_count: int = 1
-    topic_latest_message_title: Optional[str] = None
-    topic_last_clicked_at: Optional[datetime] = None
-    topic_last_message_time: Optional[datetime] = None
-    topic_last_activity_at: Optional[datetime] = None
+    topic_latest_message_title: str | None = None
+    topic_last_clicked_at: datetime | None = None
+    topic_last_message_time: datetime | None = None
+    topic_last_activity_at: datetime | None = None
     message_ref_count: int = 0
     message_count: int = 0
     recent_ref_count_30d: int = 0
@@ -196,46 +197,50 @@ class ResourceOpsWorkbenchItem(BaseModel):
     update_mode: str
     update_mode_label: str
     update_confidence: float = 0
-    series_key: Optional[str] = None
+    series_key: str | None = None
     latest_link_health: str
     latest_link_health_label: str
-    latest_link_health_reason: Optional[str] = None
+    latest_link_health_reason: str | None = None
+    checked_link_target_count: int = 0
+    healthy_link_target_count: int = 0
+    warning_link_target_count: int = 0
+    invalid_link_target_count: int = 0
+    unknown_link_target_count: int = 0
     invalid_checks_30d: int = 0
     total_checks_30d: int = 0
     suggested_action: str
-    evidence_tags: List[str] = Field(default_factory=list)
+    evidence_tags: list[str] = Field(default_factory=list)
     note: str = ""
-    updated_by: Optional[str] = None
-    profile_updated_at: Optional[datetime] = None
-    first_seen_at: Optional[datetime] = None
-    last_seen_at: Optional[datetime] = None
-    last_message_time: Optional[datetime] = None
-    last_clicked_at: Optional[datetime] = None
-    latest_message_title: Optional[str] = None
-    work_id: Optional[int] = None
-    work_title: Optional[str] = None
-    work_canonical_title: Optional[str] = None
-    work_original_title: Optional[str] = None
-    work_provider: Optional[str] = None
-    work_media_type: Optional[str] = None
-    work_release_year: Optional[int] = None
-    work_poster_url: Optional[str] = None
-    work_detail_url: Optional[str] = None
+    updated_by: str | None = None
+    profile_updated_at: datetime | None = None
+    first_seen_at: datetime | None = None
+    last_seen_at: datetime | None = None
+    last_message_time: datetime | None = None
+    last_clicked_at: datetime | None = None
+    latest_message_title: str | None = None
+    work_id: int | None = None
+    work_title: str | None = None
+    work_canonical_title: str | None = None
+    work_original_title: str | None = None
+    work_provider: str | None = None
+    work_media_type: str | None = None
+    work_release_year: int | None = None
+    work_poster_url: str | None = None
+    work_detail_url: str | None = None
     work_match_status: str = "pending"
     work_match_status_label: str = "待识别"
     work_match_source: str = "pending"
-    work_confidence: float = 0
-    work_match_reason: Optional[str] = None
-    work_query_title: Optional[str] = None
-    work_candidate_title: Optional[str] = None
-    work_season_hint: Optional[str] = None
-    work_year_hint: Optional[int] = None
-    work_last_attempted_at: Optional[datetime] = None
-    work_matched_at: Optional[datetime] = None
+    work_match_reason: str | None = None
+    work_query_title: str | None = None
+    work_candidate_title: str | None = None
+    work_season_hint: str | None = None
+    work_year_hint: int | None = None
+    work_last_attempted_at: datetime | None = None
+    work_matched_at: datetime | None = None
 
 
 class ResourceOpsWorkbenchListResponse(BaseModel):
-    items: List[ResourceOpsWorkbenchItem]
+    items: list[ResourceOpsWorkbenchItem]
     total: int
     page: int
     page_size: int
@@ -247,48 +252,48 @@ class ResourceOpsWorkbenchLogItem(BaseModel):
     action_type: str
     action_summary: str
     note: str = ""
-    operator: Optional[str] = None
+    operator: str | None = None
     created_at: datetime
-    payload: Dict[str, object] = Field(default_factory=dict)
+    payload: dict[str, object] = Field(default_factory=dict)
 
 
 class ResourceOpsWorkbenchDetailResponse(BaseModel):
     item: ResourceOpsWorkbenchItem
-    recent_refs: List[ResourceOpsCandidateRefItem]
-    trend: List[ResourceOpsTrendPoint]
-    logs: List[ResourceOpsWorkbenchLogItem] = Field(default_factory=list)
-    auto_reasons: List[str] = Field(default_factory=list)
+    recent_refs: list[ResourceOpsCandidateRefItem]
+    trend: list[ResourceOpsTrendPoint]
+    logs: list[ResourceOpsWorkbenchLogItem] = Field(default_factory=list)
+    auto_reasons: list[str] = Field(default_factory=list)
 
 
 class ResourceOpsWorkbenchUpdateRequest(BaseModel):
-    operation_status: Optional[str] = None
-    value_status: Optional[str] = None
-    manual_resource_kind: Optional[str] = None
-    note: Optional[str] = None
+    operation_status: str | None = None
+    value_status: str | None = None
+    manual_resource_kind: str | None = None
+    note: str | None = None
 
 
 class ResourceOpsWorkBindingSummaryResponse(BaseModel):
-    total_tracked_targets: int = 0
+    total_candidates: int = 0
     matched_count: int = 0
     pending_count: int = 0
-    no_match_count: int = 0
-    low_confidence_count: int = 0
     error_count: int = 0
     match_rate: float = 0
+    full_sync_active: bool = False
+    full_sync_total: int = 0
+    full_sync_processed: int = 0
+    full_sync_progress: float = 0
+    full_sync_started_at: str | None = None
+    full_sync_finished_at: str | None = None
 
 
 class ResourceOpsRuntimeSettingsUpdateRequest(BaseModel):
     auto_bind_enabled: bool = False
     sync_batch_size: int = Field(default=12, ge=1, le=100)
     sync_interval_minutes: int = Field(default=30, ge=5, le=1440)
-    min_confidence: float = Field(default=0.72, ge=0.4, le=0.99)
-    retry_cooldown_hours: int = Field(default=24, ge=1, le=720)
-    tmdb_enabled: bool = False
-    tmdb_language: str = Field(default="zh-CN", max_length=32)
-    tmdb_api_key: Optional[str] = Field(default=None, max_length=512)
-    tmdb_read_access_token: Optional[str] = Field(default=None, max_length=4096)
-    bangumi_enabled: bool = False
-    bangumi_user_agent: str = Field(default="TGMonitor/1.0", max_length=255)
+    ai_enabled: bool = False
+    ai_base_url: str = Field(default="", max_length=512)
+    ai_model: str = Field(default="", max_length=255)
+    ai_api_key: str | None = Field(default=None, max_length=8000)
     retention_click_event_days: int = Field(default=90, ge=7, le=3650)
     retention_daily_stat_days: int = Field(default=365, ge=30, le=3650)
     retention_candidate_log_days: int = Field(default=180, ge=7, le=3650)
@@ -299,38 +304,74 @@ class ResourceOpsRuntimeSettingsResponse(BaseModel):
     auto_bind_enabled: bool = False
     sync_batch_size: int = 12
     sync_interval_minutes: int = 30
-    min_confidence: float = 0.72
-    retry_cooldown_hours: int = 24
-    tmdb_enabled: bool = False
-    tmdb_language: str = "zh-CN"
-    tmdb_api_key_configured: bool = False
-    tmdb_read_access_token_configured: bool = False
-    tmdb_provider_ready: bool = False
-    bangumi_enabled: bool = False
-    bangumi_user_agent: str = "TGMonitor/1.0"
-    bangumi_provider_ready: bool = False
+    ai_enabled: bool = False
+    ai_base_url: str = ""
+    ai_model: str = ""
+    ai_api_key_configured: bool = False
+    ai_provider_ready: bool = False
     retention_click_event_days: int = 90
     retention_daily_stat_days: int = 365
     retention_candidate_log_days: int = 180
     cleanup_interval_hours: int = 24
-    last_sync_at: Optional[str] = None
-    last_sync_summary: Dict[str, Any] = Field(default_factory=dict)
-    last_cleanup_at: Optional[str] = None
-    last_cleanup_summary: Dict[str, Any] = Field(default_factory=dict)
+    last_sync_at: str | None = None
+    last_sync_summary: dict[str, Any] = Field(default_factory=dict)
+    last_cleanup_at: str | None = None
+    last_cleanup_summary: dict[str, Any] = Field(default_factory=dict)
+    full_sync_active: bool = False
+    full_sync_requested_at: str | None = None
+    full_sync_started_at: str | None = None
+    full_sync_finished_at: str | None = None
     binding_summary: ResourceOpsWorkBindingSummaryResponse
 
 
 class ResourceOpsRecognitionRunResponse(BaseModel):
+    mode: str = "pending"
     processed_count: int = 0
     matched_count: int = 0
-    no_match_count: int = 0
-    low_confidence_count: int = 0
     error_count: int = 0
     skipped_count: int = 0
+    remaining_count: int = 0
     started_at: str
     finished_at: str
-    items: List[Dict[str, Any]] = Field(default_factory=list)
+    items: list[dict[str, Any]] = Field(default_factory=list)
     binding_summary: ResourceOpsWorkBindingSummaryResponse
+
+
+class ResourceOpsAiProviderDraftRequest(BaseModel):
+    base_url: str | None = Field(default=None, max_length=512)
+    api_key: str | None = Field(default=None, max_length=8000)
+    use_saved_api_key: bool = True
+
+
+class ResourceOpsAiModelItem(BaseModel):
+    id: str
+    label: str
+    owned_by: str | None = None
+
+
+class ResourceOpsAiModelListResponse(BaseModel):
+    models: list[ResourceOpsAiModelItem] = Field(default_factory=list)
+    base_url: str = ""
+    used_saved_api_key: bool = False
+    count: int = 0
+
+
+class ResourceOpsAiTestRequest(ResourceOpsAiProviderDraftRequest):
+    model: str = Field(default="", max_length=255)
+    sample_text: str | None = Field(default=None, max_length=500)
+
+
+class ResourceOpsAiTestResponse(BaseModel):
+    ok: bool = True
+    base_url: str = ""
+    model: str
+    sample_text: str
+    extracted_title: str | None = None
+    release_year: int | None = None
+    season: int | None = None
+    media_type: str | None = None
+    confidence: float = 0
+    reason: str = ""
 
 
 class ResourceOpsRetentionRunResponse(BaseModel):

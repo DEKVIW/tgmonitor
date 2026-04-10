@@ -16,7 +16,7 @@ import Statistics from './pages/Statistics'
 import Analytics from './pages/AnalyticsDashboardModern'
 import Admin from './pages/AdminRuntime'
 import Backups from './pages/BackupsRuntime'
-import ResourceOperations from './pages/ResourceOperationsAdmin'
+import ResourceOperations from './pages/ResourceOperationsAdminRuntime'
 import { LOGIN_LINUXDO_CALLBACK_PATH, LOGIN_PATH } from './utils/routes'
 
 function App() {

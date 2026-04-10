@@ -9,7 +9,11 @@ from sqlalchemy.orm import Session
 
 from app.models.models import engine
 from app.services.resource_ops import run_resource_ops_retention, sync_resource_work_bindings
-from app.services.resource_ops.settings import get_resource_ops_runtime_config
+from app.services.resource_ops.settings import (
+    get_resource_ops_runtime_config,
+    is_resource_ops_ai_ready,
+    is_resource_ops_full_sync_active,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -57,10 +61,8 @@ def _scheduler_tick() -> None:
             return
         try:
             config = get_resource_ops_runtime_config(session)
-            provider_ready = bool(
-                (config.get("tmdb_enabled") and (config.get("tmdb_api_key") or config.get("tmdb_read_access_token")))
-                or (config.get("bangumi_enabled") and config.get("bangumi_user_agent"))
-            )
+            ai_ready = is_resource_ops_ai_ready(config)
+            full_sync_active = is_resource_ops_full_sync_active(config)
 
             cleanup_due = _should_run(
                 config.get("last_cleanup_at"),
@@ -70,18 +72,27 @@ def _scheduler_tick() -> None:
                 run_resource_ops_retention(session, operator="system")
                 session.commit()
 
-            sync_due = bool(config.get("auto_bind_enabled")) and provider_ready and _should_run(
+            sync_due = ai_ready and _should_run(
                 config.get("last_sync_at"),
                 interval_seconds=max(300, int(config.get("sync_interval_minutes") or 30) * 60),
             )
             if sync_due:
-                sync_resource_work_bindings(
-                    session,
-                    limit=int(config.get("sync_batch_size") or 12),
-                    force=False,
-                    operator="system",
-                )
-                session.commit()
+                if full_sync_active:
+                    sync_resource_work_bindings(
+                        session,
+                        limit=int(config.get("sync_batch_size") or 12),
+                        mode="full",
+                        operator="system",
+                    )
+                    session.commit()
+                elif bool(config.get("auto_bind_enabled")):
+                    sync_resource_work_bindings(
+                        session,
+                        limit=int(config.get("sync_batch_size") or 12),
+                        mode="pending",
+                        operator="system",
+                    )
+                    session.commit()
         except Exception:
             session.rollback()
             logger.exception("Resource ops scheduler tick failed")

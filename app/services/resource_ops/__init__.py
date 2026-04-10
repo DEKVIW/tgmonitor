@@ -5,6 +5,7 @@ from .analytics import (
     get_resource_ops_trend,
     list_resource_op_candidates,
 )
+from .ai_title_client import list_resource_ops_ai_models, test_resource_ops_ai_connection
 from .catalog import (
     build_tracked_link_payloads,
     delete_message_resource_data,
@@ -15,8 +16,20 @@ from .catalog import (
     sync_message_link_catalog_batch,
 )
 from .maintenance import run_resource_ops_retention
-from .resolver import get_work_binding_summary, sync_resource_work_bindings
-from .settings import get_resource_ops_runtime_settings, update_resource_ops_runtime_settings
+from .recognition_service import (
+    ensure_work_binding_placeholders,
+    get_work_binding_lookup,
+    get_work_binding_summary,
+    resolve_link_target_work,
+    sync_resource_work_bindings,
+    sync_resource_work_bindings_for_link_targets,
+    sync_resource_work_bindings_for_message_ids,
+)
+from .settings import (
+    get_resource_ops_runtime_settings,
+    request_resource_ops_full_sync,
+    update_resource_ops_runtime_settings,
+)
 from .tracking import get_redirect_target_url, record_click_event
 from .workbench import (
     get_resource_op_workbench_detail,
@@ -37,7 +50,13 @@ __all__ = [
     "get_resource_ops_runtime_settings",
     "update_resource_ops_runtime_settings",
     "sync_resource_work_bindings",
+    "sync_resource_work_bindings_for_link_targets",
+    "sync_resource_work_bindings_for_message_ids",
+    "resolve_link_target_work",
     "get_work_binding_summary",
+    "get_work_binding_lookup",
+    "ensure_work_binding_placeholders",
+    "request_resource_ops_full_sync",
     "run_resource_ops_retention",
     "get_resource_ops_overview",
     "get_resource_ops_platform_distribution",
@@ -47,4 +66,6 @@ __all__ = [
     "list_resource_op_workbench_items",
     "get_resource_op_workbench_detail",
     "update_resource_op_workbench_item",
+    "list_resource_ops_ai_models",
+    "test_resource_ops_ai_connection",
 ]

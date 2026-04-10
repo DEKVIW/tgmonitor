@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from datetime import date, datetime, timedelta
-from typing import Any
+from typing import Any, Iterable
 
 from sqlalchemy import Date as SQLDate
 from sqlalchemy import case, cast, distinct, func, or_
@@ -18,7 +18,7 @@ from app.models.models import (
     ResourceCandidateProfile,
     ensure_runtime_storage_tables,
 )
-from app.schemas.resource_ops_models import ResourceOpsWorkbenchUpdateRequest
+from app.schemas.resource_ops_models_v2 import ResourceOpsWorkbenchUpdateRequest
 from app.services.resource_ops.analytics import (
     DEFAULT_LOOKBACK_DAYS,
     _compute_heat_metrics,
@@ -27,8 +27,8 @@ from app.services.resource_ops.analytics import (
     _to_int,
     _utcnow,
 )
-from app.services.resource_ops.resolver import get_work_binding_lookup
-from app.services.resource_ops.topic_extractor import extract_resource_topic
+from app.services.resource_ops.recognition_service import WORK_MATCH_STATUS_LABELS, get_work_binding_lookup
+from app.services.resource_ops.topic_extractor import extract_resource_topic_v2 as extract_resource_topic
 
 
 OPERATION_STATUS_LABELS = {
@@ -98,6 +98,30 @@ def _normalize_text(value: Any, *, max_length: int | None = None) -> str:
     if max_length is not None and len(text) > max_length:
         text = text[:max_length].strip()
     return text
+
+
+def _normalize_positive_ids(values: Iterable[int]) -> list[int]:
+    normalized: list[int] = []
+    seen: set[int] = set()
+    for raw_value in values:
+        try:
+            value = int(raw_value)
+        except (TypeError, ValueError):
+            continue
+        if value <= 0 or value in seen:
+            continue
+        seen.add(value)
+        normalized.append(value)
+    return normalized
+
+
+def _normalize_optional_int(value: Any) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _normalize_operation_status(value: Any) -> str:
@@ -172,11 +196,8 @@ def _annotate_topic_metrics(items: list[dict[str, Any]]) -> list[dict[str, Any]]
     for item in items:
         work_id = _to_int(item.get("work_id"))
         work_title = _normalize_text(item.get("work_title"), max_length=255)
-        work_season_hint = _normalize_text(item.get("work_season_hint"), max_length=32) or None
         if work_id > 0 and work_title:
             topic_key = f"work:{work_id}"
-            if work_season_hint:
-                topic_key = f"{topic_key}|season:{work_season_hint}"
             topic_title = work_title
         else:
             topic_payload = extract_resource_topic(
@@ -524,6 +545,296 @@ def _build_workbench_summary(items: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _datetime_sort_value(value: datetime | None) -> float:
+    return value.timestamp() if isinstance(value, datetime) else -1.0
+
+
+def _min_datetime(*values: datetime | None) -> datetime | None:
+    candidates = [value for value in values if isinstance(value, datetime)]
+    if not candidates:
+        return None
+    return min(candidates)
+
+
+def _has_topic_manual_profile(item: dict[str, Any]) -> bool:
+    operation_status = _normalize_text(item.get("operation_status"), max_length=32).lower() or "pending_review"
+    value_status = _normalize_text(item.get("value_status"), max_length=32).lower() or "unreviewed"
+    manual_resource_kind = _normalize_text(item.get("manual_resource_kind"), max_length=32).lower()
+    note = _normalize_text(item.get("note"), max_length=2000)
+    return bool(
+        operation_status != "pending_review"
+        or value_status != "unreviewed"
+        or manual_resource_kind in VALID_RESOURCE_KINDS
+        or note
+    )
+
+
+def _select_topic_anchor_item(items: list[dict[str, Any]]) -> dict[str, Any]:
+    return max(items, key=_topic_rank)
+
+
+def _select_topic_profile_item(items: list[dict[str, Any]]) -> dict[str, Any] | None:
+    profiled_items = [item for item in items if _to_int(item.get("profile_id")) > 0]
+    manual_items = [item for item in profiled_items if _has_topic_manual_profile(item)]
+    source_items = manual_items or profiled_items
+    if not source_items:
+        return None
+    return max(
+        source_items,
+        key=lambda item: (
+            _datetime_sort_value(item.get("profile_updated_at")),
+            *_topic_rank(item),
+        ),
+    )
+
+
+def _select_topic_work_item(items: list[dict[str, Any]], anchor_item: dict[str, Any]) -> dict[str, Any]:
+    matched_items = [
+        item
+        for item in items
+        if _to_int(item.get("work_id")) > 0 and _normalize_text(item.get("work_match_status"), max_length=16).lower() == "matched"
+    ]
+    if matched_items:
+        return max(matched_items, key=_topic_rank)
+
+    attempted_items = [
+        item
+        for item in items
+        if _normalize_text(item.get("work_match_status"), max_length=16).lower() in {"pending", "error"}
+    ]
+    if attempted_items:
+        return max(
+            attempted_items,
+            key=lambda item: (
+                _datetime_sort_value(item.get("work_last_attempted_at")),
+                *_topic_rank(item),
+            ),
+        )
+    return anchor_item
+
+
+def _collect_topic_auto_reasons(items: list[dict[str, Any]]) -> list[str]:
+    reasons: list[str] = []
+    for item in items:
+        for reason in item.get("auto_reasons") or []:
+            normalized = _normalize_text(reason, max_length=200)
+            if normalized and normalized not in reasons:
+                reasons.append(normalized)
+    return reasons[:8]
+
+
+def _build_topic_health_snapshot(items: list[dict[str, Any]]) -> dict[str, Any]:
+    counts = {
+        "healthy": 0,
+        "warning": 0,
+        "invalid": 0,
+        "unknown": 0,
+    }
+    latest_reason = ""
+    latest_checked_at: datetime | None = None
+
+    for item in items:
+        status = _normalize_text(item.get("latest_link_health"), max_length=16).lower() or "unknown"
+        if status not in counts:
+            status = "unknown"
+        counts[status] += 1
+        checked_at = item.get("latest_checked_at")
+        if _datetime_sort_value(checked_at) >= _datetime_sort_value(latest_checked_at):
+            latest_checked_at = checked_at
+            latest_reason = _normalize_text(item.get("latest_link_health_reason"), max_length=255)
+
+    checked_count = counts["healthy"] + counts["warning"] + counts["invalid"]
+    if counts["invalid"] > 0:
+        status = "invalid"
+        reason = latest_reason or f"{counts['invalid']} 个成员链接最近失效"
+        latest_is_valid = False
+    elif counts["warning"] > 0:
+        status = "warning"
+        reason = latest_reason or f"{counts['warning']} 个成员链接近期波动"
+        latest_is_valid = None
+    elif counts["healthy"] > 0:
+        status = "healthy"
+        reason = latest_reason or f"已检测 {checked_count} 个成员链接"
+        latest_is_valid = True
+    else:
+        status = "unknown"
+        reason = "暂无成员链接检测记录"
+        latest_is_valid = None
+
+    return {
+        "latest_link_health": status,
+        "latest_link_health_reason": reason,
+        "latest_is_valid": latest_is_valid,
+        "checked_link_target_count": checked_count,
+        "healthy_link_target_count": counts["healthy"],
+        "warning_link_target_count": counts["warning"],
+        "invalid_link_target_count": counts["invalid"],
+        "unknown_link_target_count": counts["unknown"],
+    }
+
+
+def _merge_topic_work_fields(items: list[dict[str, Any]], work_item: dict[str, Any]) -> dict[str, Any]:
+    matched_item = next(
+        (
+            item
+            for item in sorted(items, key=_topic_rank, reverse=True)
+            if _to_int(item.get("work_id")) > 0 and _normalize_text(item.get("work_match_status"), max_length=16).lower() == "matched"
+        ),
+        None,
+    )
+    source_item = matched_item or work_item
+    season_hint = _normalize_text(source_item.get("work_season_hint"), max_length=32) or None
+    year_hint = _normalize_optional_int(source_item.get("work_year_hint"))
+    payload = {
+        "work_id": source_item.get("work_id"),
+        "work_title": source_item.get("work_title"),
+        "work_canonical_title": source_item.get("work_canonical_title"),
+        "work_original_title": source_item.get("work_original_title"),
+        "work_provider": source_item.get("work_provider"),
+        "work_media_type": source_item.get("work_media_type"),
+        "work_release_year": source_item.get("work_release_year"),
+        "work_poster_url": source_item.get("work_poster_url"),
+        "work_detail_url": source_item.get("work_detail_url"),
+        "work_match_status": source_item.get("work_match_status") or "pending",
+        "work_match_status_label": source_item.get("work_match_status_label") or "待归并",
+        "work_match_source": source_item.get("work_match_source") or "ai",
+        "work_match_reason": source_item.get("work_match_reason") or "",
+        "work_query_title": source_item.get("work_query_title"),
+        "work_candidate_title": source_item.get("work_candidate_title"),
+        "work_season_hint": season_hint,
+        "work_year_hint": year_hint,
+        "work_last_attempted_at": source_item.get("work_last_attempted_at"),
+        "work_matched_at": source_item.get("work_matched_at"),
+    }
+    if matched_item is not None:
+        payload["work_match_status"] = "matched"
+        payload["work_match_status_label"] = WORK_MATCH_STATUS_LABELS["matched"]
+    return payload
+
+
+def _aggregate_topic_item(items: list[dict[str, Any]]) -> dict[str, Any]:
+    anchor_item = _select_topic_anchor_item(items)
+    profile_item = _select_topic_profile_item(items)
+    work_item = _select_topic_work_item(items, anchor_item)
+    latest_message_item = max(items, key=lambda item: (_datetime_sort_value(item.get("last_message_time")), len(_normalize_text(item.get("latest_message_title")))))
+    latest_click_item = max(items, key=lambda item: (_datetime_sort_value(item.get("last_clicked_at")), _to_int(item.get("clicks_30d"))))
+    latest_check_item = max(items, key=lambda item: (_datetime_sort_value(item.get("latest_checked_at")), _to_int(item.get("total_checks_30d"))))
+    storage_item = profile_item or anchor_item
+    health_snapshot = _build_topic_health_snapshot(items)
+    topic_title = _normalize_text(work_item.get("work_title"), max_length=255) or _normalize_text(anchor_item.get("topic_title"), max_length=255)
+
+    raw_item = {
+        "link_target_id": _to_int(storage_item.get("link_target_id")) or _to_int(anchor_item.get("link_target_id")),
+        "platform": anchor_item.get("platform") or "",
+        "display_text": anchor_item.get("display_text") or latest_message_item.get("display_text") or topic_title,
+        "target_url": anchor_item.get("target_url") or "",
+        "share_key": anchor_item.get("share_key"),
+        "file_count": max(_to_int(item.get("file_count")) for item in items) if items else 0,
+        "total_size_bytes": max(float(item.get("total_size_bytes") or 0) for item in items) if items else 0,
+        "topic_title": topic_title or "未命名资源",
+        "topic_key": anchor_item.get("topic_key") or f"link:{_to_int(anchor_item.get('link_target_id'))}",
+        "topic_link_target_count": len(items),
+        "topic_message_count": sum(_to_int(item.get("message_count")) for item in items),
+        "topic_clicks_7d": sum(_to_int(item.get("clicks_7d")) for item in items),
+        "topic_clicks_30d": sum(_to_int(item.get("clicks_30d")) for item in items),
+        "topic_platform_count": len({_normalize_text(item.get("platform"), max_length=64) for item in items if _normalize_text(item.get("platform"), max_length=64)}),
+        "topic_latest_message_title": latest_message_item.get("latest_message_title") or latest_message_item.get("display_text") or topic_title,
+        "topic_last_clicked_at": latest_click_item.get("last_clicked_at"),
+        "topic_last_message_time": latest_message_item.get("last_message_time"),
+        "topic_last_activity_at": _max_datetime(latest_click_item.get("last_clicked_at"), latest_message_item.get("last_message_time")),
+        "message_ref_count": sum(_to_int(item.get("message_ref_count")) for item in items),
+        "message_count": sum(_to_int(item.get("message_count")) for item in items),
+        "recent_ref_count_30d": sum(_to_int(item.get("recent_ref_count_30d")) for item in items),
+        "ref_active_days_30d": min(30, sum(_to_int(item.get("ref_active_days_30d")) for item in items)),
+        "clicks_1d": sum(_to_int(item.get("clicks_1d")) for item in items),
+        "clicks_3d": sum(_to_int(item.get("clicks_3d")) for item in items),
+        "clicks_7d": sum(_to_int(item.get("clicks_7d")) for item in items),
+        "clicks_30d": sum(_to_int(item.get("clicks_30d")) for item in items),
+        "unique_sessions_30d": sum(_to_int(item.get("unique_sessions_30d")) for item in items),
+        "unique_users_30d": sum(_to_int(item.get("unique_users_30d")) for item in items),
+        "search_clicks_30d": sum(_to_int(item.get("search_clicks_30d")) for item in items),
+        "active_days_30d": min(30, sum(_to_int(item.get("active_days_30d")) for item in items)),
+        "first_seen_at": _min_datetime(*(item.get("first_seen_at") for item in items)),
+        "last_seen_at": _max_datetime(*(item.get("last_seen_at") for item in items)),
+        "last_message_time": latest_message_item.get("last_message_time"),
+        "last_clicked_at": latest_click_item.get("last_clicked_at"),
+        "latest_message_title": latest_message_item.get("latest_message_title") or latest_message_item.get("display_text") or "",
+        "latest_checked_at": latest_check_item.get("latest_checked_at"),
+        "latest_error_reason": health_snapshot["latest_link_health_reason"],
+        "latest_is_valid": health_snapshot["latest_is_valid"],
+        "total_checks_30d": sum(_to_int(item.get("total_checks_30d")) for item in items),
+        "invalid_checks_30d": sum(_to_int(item.get("invalid_checks_30d")) for item in items),
+        "operation_status": (profile_item or {}).get("operation_status") or "pending_review",
+        "value_status": (profile_item or {}).get("value_status") or "unreviewed",
+        "manual_resource_kind": (profile_item or {}).get("manual_resource_kind"),
+        "note": (profile_item or {}).get("note") or "",
+        "profile_updated_at": (profile_item or {}).get("profile_updated_at"),
+        "updated_by": (profile_item or {}).get("updated_by"),
+        "profile_id": (profile_item or {}).get("profile_id"),
+    }
+    raw_item.update(_merge_topic_work_fields(items, work_item))
+
+    aggregated = _evaluate_candidate_row(raw_item)
+    aggregated["topic_title"] = raw_item["topic_title"]
+    aggregated["topic_key"] = raw_item["topic_key"]
+    aggregated["topic_link_target_count"] = raw_item["topic_link_target_count"]
+    aggregated["topic_message_count"] = raw_item["topic_message_count"]
+    aggregated["topic_clicks_7d"] = raw_item["topic_clicks_7d"]
+    aggregated["topic_clicks_30d"] = raw_item["topic_clicks_30d"]
+    aggregated["topic_platform_count"] = raw_item["topic_platform_count"]
+    aggregated["topic_latest_message_title"] = raw_item["topic_latest_message_title"]
+    aggregated["topic_last_clicked_at"] = raw_item["topic_last_clicked_at"]
+    aggregated["topic_last_message_time"] = raw_item["topic_last_message_time"]
+    aggregated["topic_last_activity_at"] = raw_item["topic_last_activity_at"]
+    aggregated["latest_link_health"] = health_snapshot["latest_link_health"]
+    aggregated["latest_link_health_label"] = LINK_HEALTH_LABELS[health_snapshot["latest_link_health"]]
+    aggregated["latest_link_health_reason"] = health_snapshot["latest_link_health_reason"]
+    aggregated["checked_link_target_count"] = health_snapshot["checked_link_target_count"]
+    aggregated["healthy_link_target_count"] = health_snapshot["healthy_link_target_count"]
+    aggregated["warning_link_target_count"] = health_snapshot["warning_link_target_count"]
+    aggregated["invalid_link_target_count"] = health_snapshot["invalid_link_target_count"]
+    aggregated["unknown_link_target_count"] = health_snapshot["unknown_link_target_count"]
+    aggregated["suggested_action"] = _build_suggested_action(aggregated)
+    aggregated["auto_reasons"] = _collect_topic_auto_reasons(items)
+    aggregated["_member_link_target_ids"] = [
+        _to_int(item.get("link_target_id"))
+        for item in sorted(items, key=_topic_rank, reverse=True)
+        if _to_int(item.get("link_target_id")) > 0
+    ]
+    aggregated["_profile_link_target_id"] = _to_int((profile_item or {}).get("link_target_id")) or _to_int(raw_item["link_target_id"])
+    return aggregated
+
+
+def _load_workbench_topic_rows(
+    session: Session,
+    *,
+    days: int = DEFAULT_LOOKBACK_DAYS,
+    platform: str | None = None,
+    keyword: str | None = None,
+) -> list[dict[str, Any]]:
+    candidate_rows = _load_workbench_candidate_rows(
+        session,
+        days=days,
+        platform=platform,
+        keyword=keyword,
+    )
+    grouped_items: dict[str, list[dict[str, Any]]] = {}
+    for item in candidate_rows:
+        topic_key = _normalize_text(item.get("topic_key"), max_length=160) or f"link:{_to_int(item.get('link_target_id'))}"
+        grouped_items.setdefault(topic_key, []).append(item)
+    return [_aggregate_topic_item(group_items) for group_items in grouped_items.values()]
+
+
+def _find_topic_item_by_link_target_id(items: list[dict[str, Any]], *, link_target_id: int) -> dict[str, Any] | None:
+    for item in items:
+        if _to_int(item.get("link_target_id")) == int(link_target_id):
+            return item
+        member_ids = item.get("_member_link_target_ids") or []
+        if int(link_target_id) in member_ids:
+            return item
+    return None
+
+
 def _load_workbench_candidate_rows(
     session: Session,
     *,
@@ -755,7 +1066,7 @@ def list_resource_op_workbench_items(
     normalized_resource_kind = _normalize_text(resource_kind, max_length=32).lower() or None
     normalized_health_status = _normalize_text(health_status, max_length=32).lower() or None
 
-    items = _load_workbench_candidate_rows(
+    items = _load_workbench_topic_rows(
         session,
         days=days,
         platform=platform,
@@ -809,52 +1120,95 @@ def list_resource_op_workbench_items(
     }
 
 
-def _get_recent_refs(session: Session, *, link_target_id: int) -> list[dict[str, Any]]:
+def _get_topic_recent_refs(session: Session, *, link_target_ids: Iterable[int]) -> list[dict[str, Any]]:
+    normalized_ids = _normalize_positive_ids(link_target_ids)
+    if not normalized_ids:
+        return []
+
     ref_rows = (
         session.query(
             MessageLinkRef.message_id.label("message_id"),
             Message.title.label("message_title"),
+            MessageLinkRef.link_target_id.label("link_target_id"),
             MessageLinkRef.display_text.label("display_text"),
+            MessageLinkRef.target_url.label("target_url"),
+            MessageLinkRef.provider_label.label("provider_label"),
             MessageLinkRef.channel.label("channel"),
             MessageLinkRef.source.label("source"),
             MessageLinkRef.message_timestamp.label("message_timestamp"),
+            LinkTarget.platform.label("platform"),
+            LinkTarget.share_key.label("share_key"),
         )
         .outerjoin(Message, Message.id == MessageLinkRef.message_id)
-        .filter(MessageLinkRef.link_target_id == int(link_target_id))
+        .outerjoin(LinkTarget, LinkTarget.id == MessageLinkRef.link_target_id)
+        .filter(MessageLinkRef.link_target_id.in_(normalized_ids))
         .order_by(
             MessageLinkRef.message_timestamp.is_(None).asc(),
             MessageLinkRef.message_timestamp.desc(),
             MessageLinkRef.id.desc(),
         )
-        .limit(16)
         .all()
     )
-    return [
-        {
-            "message_id": _to_int(row.message_id),
-            "message_title": row.message_title or "",
-            "display_text": row.display_text or "",
-            "channel": row.channel or "",
-            "source": row.source or "",
-            "message_timestamp": row.message_timestamp,
-        }
-        for row in ref_rows
-    ]
+
+    grouped: dict[int, dict[str, Any]] = {}
+    for row in ref_rows:
+        message_id = _to_int(row.message_id)
+        if message_id <= 0:
+            continue
+        bucket = grouped.setdefault(
+            message_id,
+            {
+                "message_id": message_id,
+                "message_title": row.message_title or "",
+                "display_text": row.display_text or "",
+                "channel": row.channel or "",
+                "source": row.source or "",
+                "message_timestamp": row.message_timestamp,
+                "links": [],
+            },
+        )
+        existing_link_ids = {entry["link_target_id"] for entry in bucket["links"]}
+        link_target_id = _to_int(row.link_target_id)
+        if link_target_id > 0 and link_target_id not in existing_link_ids:
+            bucket["links"].append(
+                {
+                    "link_target_id": link_target_id,
+                    "platform": row.platform or "",
+                    "display_text": row.display_text or row.provider_label or row.share_key or f"链接 {link_target_id}",
+                    "target_url": row.target_url or "",
+                    "share_key": row.share_key,
+                }
+            )
+
+    items = list(grouped.values())
+    items.sort(
+        key=lambda item: (
+            _datetime_sort_value(item.get("message_timestamp")),
+            item.get("message_id") or 0,
+        ),
+        reverse=True,
+    )
+    return items
 
 
-def _get_trend_points(session: Session, *, link_target_id: int, days: int = 14) -> list[dict[str, Any]]:
+def _get_topic_trend_points(session: Session, *, link_target_ids: Iterable[int], days: int = 14) -> list[dict[str, Any]]:
+    normalized_ids = _normalize_positive_ids(link_target_ids)
+    if not normalized_ids:
+        return []
+
     safe_days = max(7, min(int(days or 14), 30))
     start = _start_date(safe_days)
     trend_rows = (
         session.query(
             LinkTargetDailyStat.stat_date.label("stat_date"),
-            LinkTargetDailyStat.click_count.label("click_count"),
-            LinkTargetDailyStat.unique_sessions.label("unique_sessions"),
+            func.sum(LinkTargetDailyStat.click_count).label("click_count"),
+            func.sum(LinkTargetDailyStat.unique_sessions).label("unique_sessions"),
         )
         .filter(
-            LinkTargetDailyStat.link_target_id == int(link_target_id),
+            LinkTargetDailyStat.link_target_id.in_(normalized_ids),
             LinkTargetDailyStat.stat_date >= start,
         )
+        .group_by(LinkTargetDailyStat.stat_date)
         .order_by(LinkTargetDailyStat.stat_date.asc())
         .all()
     )
@@ -881,10 +1235,14 @@ def _get_trend_points(session: Session, *, link_target_id: int, days: int = 14) 
     return points
 
 
-def _get_candidate_logs(session: Session, *, link_target_id: int, limit: int = 20) -> list[dict[str, Any]]:
+def _get_topic_candidate_logs(session: Session, *, link_target_ids: Iterable[int], limit: int = 20) -> list[dict[str, Any]]:
+    normalized_ids = _normalize_positive_ids(link_target_ids)
+    if not normalized_ids:
+        return []
+
     rows = (
         session.query(ResourceCandidateLog)
-        .filter(ResourceCandidateLog.link_target_id == int(link_target_id))
+        .filter(ResourceCandidateLog.link_target_id.in_(normalized_ids))
         .order_by(ResourceCandidateLog.created_at.desc(), ResourceCandidateLog.id.desc())
         .limit(max(1, min(int(limit or 20), 100)))
         .all()
@@ -909,19 +1267,24 @@ def get_resource_op_workbench_detail(
     link_target_id: int,
     days: int = 14,
 ) -> dict[str, Any]:
-    items = _load_workbench_candidate_rows(
+    items = _load_workbench_topic_rows(
         session,
         days=DEFAULT_LOOKBACK_DAYS,
     )
-    item = next((current for current in items if _to_int(current.get("link_target_id")) == int(link_target_id)), None)
+    item = _find_topic_item_by_link_target_id(items, link_target_id=int(link_target_id))
     if item is None:
         raise LookupError(f"link_target {link_target_id} not found")
+
+    member_link_target_ids = item.get("_member_link_target_ids") or [_to_int(item.get("link_target_id"))]
+    recent_refs = _get_topic_recent_refs(session, link_target_ids=member_link_target_ids)
+    topic_item = dict(item)
+    topic_item["topic_message_count"] = len(recent_refs)
     return {
-        "item": item,
-        "recent_refs": _get_recent_refs(session, link_target_id=link_target_id),
-        "trend": _get_trend_points(session, link_target_id=link_target_id, days=days),
-        "logs": _get_candidate_logs(session, link_target_id=link_target_id),
-        "auto_reasons": list(item.get("auto_reasons") or []),
+        "item": topic_item,
+        "recent_refs": recent_refs,
+        "trend": _get_topic_trend_points(session, link_target_ids=member_link_target_ids, days=days),
+        "logs": _get_topic_candidate_logs(session, link_target_ids=member_link_target_ids),
+        "auto_reasons": list(topic_item.get("auto_reasons") or []),
     }
 
 
@@ -954,18 +1317,26 @@ def update_resource_op_workbench_item(
     operator: str | None = None,
 ) -> dict[str, Any]:
     ensure_runtime_storage_tables()
-    target = session.get(LinkTarget, int(link_target_id))
-    if target is None:
+    items = _load_workbench_topic_rows(
+        session,
+        days=DEFAULT_LOOKBACK_DAYS,
+    )
+    topic_item = _find_topic_item_by_link_target_id(items, link_target_id=int(link_target_id))
+    if topic_item is None:
         raise LookupError(f"link_target {link_target_id} not found")
+    storage_link_target_id = _to_int(topic_item.get("_profile_link_target_id")) or _to_int(topic_item.get("link_target_id"))
+    target = session.get(LinkTarget, int(storage_link_target_id))
+    if target is None:
+        raise LookupError(f"link_target {storage_link_target_id} not found")
 
     fields_set = set(getattr(payload, "__fields_set__", set()))
     profile_exists = (
         session.query(ResourceCandidateProfile.id)
-        .filter(ResourceCandidateProfile.link_target_id == int(link_target_id))
+        .filter(ResourceCandidateProfile.link_target_id == int(storage_link_target_id))
         .first()
         is not None
     )
-    profile = _ensure_candidate_profile(session, link_target_id=link_target_id)
+    profile = _ensure_candidate_profile(session, link_target_id=storage_link_target_id)
 
     changes: dict[str, dict[str, Any]] = {}
 
@@ -1021,7 +1392,7 @@ def update_resource_op_workbench_item(
         session.add(
             ResourceCandidateLog(
                 profile_id=int(profile.id),
-                link_target_id=int(link_target_id),
+                link_target_id=int(storage_link_target_id),
                 action_type="profile_created" if not profile_exists else "profile_updated",
                 action_summary="；".join(summary_parts) if summary_parts else "更新候选资源策略",
                 note=profile.note or "",
@@ -1032,4 +1403,4 @@ def update_resource_op_workbench_item(
         )
         session.flush()
 
-    return get_resource_op_workbench_detail(session, link_target_id=link_target_id)
+    return get_resource_op_workbench_detail(session, link_target_id=storage_link_target_id)

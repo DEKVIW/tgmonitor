@@ -20,7 +20,9 @@ from app.services.channel_registry import (
     get_runtime_channel_parser_profiles,
     get_runtime_channels,
 )
-from app.services.resource_ops import ensure_message_link_refs_for_message_ids
+from app.services.resource_ops import (
+    ensure_message_link_refs_for_message_ids,
+)
 from app.services.system_config_service import get_monitor_runtime_config
 
 warnings.filterwarnings(

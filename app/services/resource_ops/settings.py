@@ -100,14 +100,14 @@ def build_default_resource_ops_runtime_settings() -> dict[str, Any]:
         "auto_bind_enabled": False,
         "sync_batch_size": 12,
         "sync_interval_minutes": 30,
-        "min_confidence": 0.72,
-        "retry_cooldown_hours": 24,
-        "tmdb_enabled": False,
-        "tmdb_language": "zh-CN",
-        "tmdb_api_key_encrypted": "",
-        "tmdb_read_access_token_encrypted": "",
-        "bangumi_enabled": False,
-        "bangumi_user_agent": "TGMonitor/1.0",
+        "ai_enabled": False,
+        "ai_base_url": "",
+        "ai_model": "",
+        "ai_api_key_encrypted": "",
+        "full_sync_generation": "",
+        "full_sync_requested_at": None,
+        "full_sync_started_at": None,
+        "full_sync_finished_at": None,
         "retention_click_event_days": 90,
         "retention_daily_stat_days": 365,
         "retention_candidate_log_days": 180,
@@ -124,6 +124,9 @@ def _normalize_runtime_storage_values(raw_value: Any) -> dict[str, Any]:
     defaults = build_default_resource_ops_runtime_settings()
     last_sync_at = _coerce_datetime(payload.get("last_sync_at"))
     last_cleanup_at = _coerce_datetime(payload.get("last_cleanup_at"))
+    full_sync_requested_at = _coerce_datetime(payload.get("full_sync_requested_at"))
+    full_sync_started_at = _coerce_datetime(payload.get("full_sync_started_at"))
+    full_sync_finished_at = _coerce_datetime(payload.get("full_sync_finished_at"))
     last_sync_summary = payload.get("last_sync_summary")
     last_cleanup_summary = payload.get("last_cleanup_summary")
 
@@ -136,36 +139,18 @@ def _normalize_runtime_storage_values(raw_value: Any) -> dict[str, Any]:
             minimum=5,
             maximum=1440,
         ),
-        "min_confidence": _coerce_float(
-            payload.get("min_confidence"),
-            defaults["min_confidence"],
-            minimum=0.4,
-            maximum=0.99,
-        ),
-        "retry_cooldown_hours": _coerce_int(
-            payload.get("retry_cooldown_hours"),
-            defaults["retry_cooldown_hours"],
-            minimum=1,
-            maximum=720,
-        ),
-        "tmdb_enabled": _coerce_bool(payload.get("tmdb_enabled"), defaults["tmdb_enabled"]),
-        "tmdb_language": _coerce_text(payload.get("tmdb_language"), defaults["tmdb_language"], max_length=32),
-        "tmdb_api_key_encrypted": _coerce_text(
-            payload.get("tmdb_api_key_encrypted"),
-            defaults["tmdb_api_key_encrypted"],
+        "ai_enabled": _coerce_bool(payload.get("ai_enabled"), defaults["ai_enabled"]),
+        "ai_base_url": _coerce_text(payload.get("ai_base_url"), defaults["ai_base_url"], max_length=512),
+        "ai_model": _coerce_text(payload.get("ai_model"), defaults["ai_model"], max_length=255),
+        "ai_api_key_encrypted": _coerce_text(
+            payload.get("ai_api_key_encrypted"),
+            defaults["ai_api_key_encrypted"],
             max_length=8000,
         ),
-        "tmdb_read_access_token_encrypted": _coerce_text(
-            payload.get("tmdb_read_access_token_encrypted"),
-            defaults["tmdb_read_access_token_encrypted"],
-            max_length=8000,
-        ),
-        "bangumi_enabled": _coerce_bool(payload.get("bangumi_enabled"), defaults["bangumi_enabled"]),
-        "bangumi_user_agent": _coerce_text(
-            payload.get("bangumi_user_agent"),
-            defaults["bangumi_user_agent"],
-            max_length=255,
-        ),
+        "full_sync_generation": _coerce_text(payload.get("full_sync_generation"), defaults["full_sync_generation"], max_length=64),
+        "full_sync_requested_at": full_sync_requested_at,
+        "full_sync_started_at": full_sync_started_at,
+        "full_sync_finished_at": full_sync_finished_at,
         "retention_click_event_days": _coerce_int(
             payload.get("retention_click_event_days"),
             defaults["retention_click_event_days"],
@@ -216,6 +201,9 @@ def _write_runtime_bucket(record: SystemSettings, payload: dict[str, Any], *, up
     normalized = _normalize_runtime_storage_values(payload)
     normalized["last_sync_at"] = _to_iso(normalized.get("last_sync_at"))
     normalized["last_cleanup_at"] = _to_iso(normalized.get("last_cleanup_at"))
+    normalized["full_sync_requested_at"] = _to_iso(normalized.get("full_sync_requested_at"))
+    normalized["full_sync_started_at"] = _to_iso(normalized.get("full_sync_started_at"))
+    normalized["full_sync_finished_at"] = _to_iso(normalized.get("full_sync_finished_at"))
 
     extra_json = dict(record.extra_json or {})
     extra_json[RESOURCE_OPS_RUNTIME_EXTRA_KEY] = normalized
@@ -229,31 +217,69 @@ def get_resource_ops_runtime_config(session: Session) -> dict[str, Any]:
     ensure_runtime_configuration_seeded()
     record = _ensure_system_settings_record(session)
     values = _read_runtime_bucket(record)
-    values["tmdb_api_key"] = decrypt_secret(values["tmdb_api_key_encrypted"])
-    values["tmdb_read_access_token"] = decrypt_secret(values["tmdb_read_access_token_encrypted"])
+    values["ai_api_key"] = decrypt_secret(values["ai_api_key_encrypted"])
     return values
+
+
+def is_resource_ops_ai_ready(config: dict[str, Any]) -> bool:
+    return bool(
+        config.get("ai_enabled")
+        and _coerce_text(config.get("ai_base_url"), "", max_length=512)
+        and _coerce_text(config.get("ai_api_key"), "", max_length=8000)
+    )
+
+def is_resource_ops_full_sync_active(config: dict[str, Any]) -> bool:
+    return bool(
+        _coerce_text(config.get("full_sync_generation"), "", max_length=64)
+        and config.get("full_sync_finished_at") is None
+    )
+
+
+def resolve_resource_ops_ai_request_config(
+    session: Session,
+    payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    request_payload = payload or {}
+    config = get_resource_ops_runtime_config(session)
+
+    base_url = _coerce_text(
+        request_payload.get("base_url"),
+        _coerce_text(config.get("ai_base_url"), "", max_length=512),
+        max_length=512,
+    )
+    model = _coerce_text(
+        request_payload.get("model"),
+        _coerce_text(config.get("ai_model"), "", max_length=255),
+        max_length=255,
+    )
+    use_saved_api_key = _coerce_bool(request_payload.get("use_saved_api_key"), True)
+    request_api_key = _coerce_text(request_payload.get("api_key"), "", max_length=8000)
+    saved_api_key = _coerce_text(config.get("ai_api_key"), "", max_length=8000)
+    api_key = request_api_key or (saved_api_key if use_saved_api_key else "")
+
+    return {
+        "base_url": base_url,
+        "model": model,
+        "api_key": api_key,
+        "used_saved_api_key": bool(not request_api_key and use_saved_api_key and saved_api_key),
+    }
 
 
 def get_resource_ops_runtime_settings(session: Session) -> dict[str, Any]:
     values = get_resource_ops_runtime_config(session)
-    tmdb_api_key = _coerce_text(values.get("tmdb_api_key"), "", max_length=512)
-    tmdb_token = _coerce_text(values.get("tmdb_read_access_token"), "", max_length=4096)
-    bangumi_user_agent = _coerce_text(values.get("bangumi_user_agent"), "TGMonitor/1.0", max_length=255)
+    ai_base_url = _coerce_text(values.get("ai_base_url"), "", max_length=512)
+    ai_model = _coerce_text(values.get("ai_model"), "", max_length=255)
+    ai_api_key = _coerce_text(values.get("ai_api_key"), "", max_length=8000)
 
     return {
         "auto_bind_enabled": bool(values["auto_bind_enabled"]),
         "sync_batch_size": int(values["sync_batch_size"]),
         "sync_interval_minutes": int(values["sync_interval_minutes"]),
-        "min_confidence": float(values["min_confidence"]),
-        "retry_cooldown_hours": int(values["retry_cooldown_hours"]),
-        "tmdb_enabled": bool(values["tmdb_enabled"]),
-        "tmdb_language": values["tmdb_language"],
-        "tmdb_api_key_configured": bool(tmdb_api_key),
-        "tmdb_read_access_token_configured": bool(tmdb_token),
-        "tmdb_provider_ready": bool(values["tmdb_enabled"] and (tmdb_api_key or tmdb_token)),
-        "bangumi_enabled": bool(values["bangumi_enabled"]),
-        "bangumi_user_agent": bangumi_user_agent,
-        "bangumi_provider_ready": bool(values["bangumi_enabled"] and bangumi_user_agent),
+        "ai_enabled": bool(values["ai_enabled"]),
+        "ai_base_url": ai_base_url,
+        "ai_model": ai_model,
+        "ai_api_key_configured": bool(ai_api_key),
+        "ai_provider_ready": is_resource_ops_ai_ready(values),
         "retention_click_event_days": int(values["retention_click_event_days"]),
         "retention_daily_stat_days": int(values["retention_daily_stat_days"]),
         "retention_candidate_log_days": int(values["retention_candidate_log_days"]),
@@ -262,6 +288,10 @@ def get_resource_ops_runtime_settings(session: Session) -> dict[str, Any]:
         "last_sync_summary": dict(values.get("last_sync_summary") or {}),
         "last_cleanup_at": _to_iso(values.get("last_cleanup_at")),
         "last_cleanup_summary": dict(values.get("last_cleanup_summary") or {}),
+        "full_sync_active": is_resource_ops_full_sync_active(values),
+        "full_sync_requested_at": _to_iso(values.get("full_sync_requested_at")),
+        "full_sync_started_at": _to_iso(values.get("full_sync_started_at")),
+        "full_sync_finished_at": _to_iso(values.get("full_sync_finished_at")),
     }
 
 
@@ -277,12 +307,9 @@ def update_resource_ops_runtime_settings(
         "auto_bind_enabled",
         "sync_batch_size",
         "sync_interval_minutes",
-        "min_confidence",
-        "retry_cooldown_hours",
-        "tmdb_enabled",
-        "tmdb_language",
-        "bangumi_enabled",
-        "bangumi_user_agent",
+        "ai_enabled",
+        "ai_base_url",
+        "ai_model",
         "retention_click_event_days",
         "retention_daily_stat_days",
         "retention_candidate_log_days",
@@ -291,12 +318,8 @@ def update_resource_ops_runtime_settings(
         if field in payload:
             values[field] = payload[field]
 
-    if "tmdb_api_key" in payload:
-        values["tmdb_api_key_encrypted"] = encrypt_secret(_coerce_text(payload.get("tmdb_api_key"), "", max_length=512))
-    if "tmdb_read_access_token" in payload:
-        values["tmdb_read_access_token_encrypted"] = encrypt_secret(
-            _coerce_text(payload.get("tmdb_read_access_token"), "", max_length=4096)
-        )
+    if "ai_api_key" in payload:
+        values["ai_api_key_encrypted"] = encrypt_secret(_coerce_text(payload.get("ai_api_key"), "", max_length=8000))
 
     record = _ensure_system_settings_record(session)
     _write_runtime_bucket(record, values, updated_by=updated_by)
@@ -319,6 +342,62 @@ def update_resource_ops_runtime_meta(
     if last_cleanup_summary is not None:
         values["last_cleanup_at"] = _utcnow()
         values["last_cleanup_summary"] = dict(last_cleanup_summary)
+
+    record = _ensure_system_settings_record(session)
+    _write_runtime_bucket(record, values, updated_by=updated_by)
+    session.add(record)
+    session.flush()
+    return get_resource_ops_runtime_settings(session)
+
+
+def request_resource_ops_full_sync(
+    session: Session,
+    *,
+    updated_by: str | None = None,
+) -> dict[str, Any]:
+    values = get_resource_ops_runtime_config(session)
+    values["full_sync_generation"] = _utcnow().strftime("%Y%m%d%H%M%S%f")
+    values["full_sync_requested_at"] = _utcnow()
+    values["full_sync_started_at"] = None
+    values["full_sync_finished_at"] = None
+
+    record = _ensure_system_settings_record(session)
+    _write_runtime_bucket(record, values, updated_by=updated_by)
+    session.add(record)
+    session.flush()
+    return get_resource_ops_runtime_settings(session)
+
+
+def mark_resource_ops_full_sync_started(
+    session: Session,
+    *,
+    updated_by: str | None = None,
+) -> dict[str, Any]:
+    values = get_resource_ops_runtime_config(session)
+    if not _coerce_text(values.get("full_sync_generation"), "", max_length=64):
+        return get_resource_ops_runtime_settings(session)
+    if values.get("full_sync_started_at") is None:
+        values["full_sync_started_at"] = _utcnow()
+    values["full_sync_finished_at"] = None
+
+    record = _ensure_system_settings_record(session)
+    _write_runtime_bucket(record, values, updated_by=updated_by)
+    session.add(record)
+    session.flush()
+    return get_resource_ops_runtime_settings(session)
+
+
+def finish_resource_ops_full_sync(
+    session: Session,
+    *,
+    updated_by: str | None = None,
+) -> dict[str, Any]:
+    values = get_resource_ops_runtime_config(session)
+    if not _coerce_text(values.get("full_sync_generation"), "", max_length=64):
+        return get_resource_ops_runtime_settings(session)
+    if values.get("full_sync_started_at") is None:
+        values["full_sync_started_at"] = _utcnow()
+    values["full_sync_finished_at"] = _utcnow()
 
     record = _ensure_system_settings_record(session)
     _write_runtime_bucket(record, values, updated_by=updated_by)

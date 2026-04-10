@@ -1,5 +1,9 @@
 import apiClient from '@/utils/api'
 import type {
+  ResourceOpsAiModelListResponse,
+  ResourceOpsAiProviderDraftRequest,
+  ResourceOpsAiTestRequest,
+  ResourceOpsAiTestResponse,
   ResourceOpsCandidateDetailResponse,
   ResourceOpsCandidateListResponse,
   ResourceOpsCandidateQuery,
@@ -125,12 +129,34 @@ export const updateResourceOpsRuntimeSettings = async (
   return response.data
 }
 
+export const listResourceOpsAiModels = async (
+  payload: ResourceOpsAiProviderDraftRequest
+): Promise<ResourceOpsAiModelListResponse> => {
+  const response = await apiClient.post<ResourceOpsAiModelListResponse>('/admin/resource-ops/ai/models', payload)
+  return response.data
+}
+
+export const testResourceOpsAiConnection = async (
+  payload: ResourceOpsAiTestRequest
+): Promise<ResourceOpsAiTestResponse> => {
+  const response = await apiClient.post<ResourceOpsAiTestResponse>('/admin/resource-ops/ai/test', payload)
+  return response.data
+}
+
 export const syncResourceOpsRecognition = async (
-  limit: number = 20,
-  force: boolean = false
+  limit: number = 20
 ): Promise<ResourceOpsRecognitionRunResponse> => {
   const response = await apiClient.post<ResourceOpsRecognitionRunResponse>(
-    `/admin/resource-ops/recognition/sync?limit=${limit}&force=${force ? 'true' : 'false'}`
+    `/admin/resource-ops/recognition/sync?limit=${limit}`
+  )
+  return response.data
+}
+
+export const syncResourceOpsRecognitionFull = async (
+  limit: number = 20
+): Promise<ResourceOpsRecognitionRunResponse> => {
+  const response = await apiClient.post<ResourceOpsRecognitionRunResponse>(
+    `/admin/resource-ops/recognition/full?limit=${limit}`
   )
   return response.data
 }

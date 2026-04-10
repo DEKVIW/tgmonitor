@@ -188,6 +188,16 @@
   margin-top: 0;
 }
 
+.resource-ops-chart-grid,
+.resource-ops-setting-grid {
+  width: 100%;
+}
+
+.resource-ops-progress-note {
+  display: grid;
+  gap: 8px;
+}
+
 .resource-ops-catalog-progress-wrap {
   display: flex;
   align-items: center;
@@ -355,6 +365,13 @@
   margin-top: 16px;
 }
 
+.resource-ops-inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+
 .resource-ops-evidence-tag {
   border-radius: 999px;
   padding-inline: 10px;
@@ -402,6 +419,25 @@
   margin-top: 6px;
   font-size: 13px;
   line-height: 1.6;
+}
+
+.resource-ops-ref-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.resource-ops-ref-link-button {
+  max-width: 220px;
+}
+
+.resource-ops-ref-link-button .resource-ops-ellipsis {
+  display: inline-block;
+  max-width: 160px;
+}
+
+.resource-ops-text-muted {
+  color: var(--text-muted);
 }
 
 @media (max-width: 900px) {

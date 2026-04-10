@@ -25,7 +25,7 @@ from app.services.link_check.constants import (
 )
 from app.services.link_check.parser import canonical_target_key, detect_platform_from_url
 from app.services.link_check.platforms import canonicalize_platform_name
-from app.services.resource_ops.resolver import ensure_work_binding_placeholders
+from app.services.resource_ops.recognition_service import ensure_work_binding_placeholders
 from app.services.system_config_service import SYSTEM_SETTINGS_SINGLETON_ID, build_default_system_settings_values
 
 

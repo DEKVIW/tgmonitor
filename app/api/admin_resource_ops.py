@@ -6,7 +6,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.dependencies_runtime_v2 import get_admin_user, get_db
-from app.schemas.resource_ops_models import (
+from app.schemas.resource_ops_models_v2 import (
+    ResourceOpsAiModelItem,
+    ResourceOpsAiModelListResponse,
+    ResourceOpsAiProviderDraftRequest,
+    ResourceOpsAiTestRequest,
+    ResourceOpsAiTestResponse,
     ResourceOpsCandidateDetailResponse,
     ResourceOpsCandidateItem,
     ResourceOpsCandidateListResponse,
@@ -37,11 +42,13 @@ from app.services.resource_ops import (
     get_resource_ops_runtime_settings,
     get_resource_ops_trend,
     get_work_binding_summary,
+    list_resource_ops_ai_models,
     list_resource_op_candidates,
     list_resource_op_workbench_items,
     run_resource_ops_retention,
     sync_resource_work_bindings,
     sync_message_link_catalog_batch,
+    test_resource_ops_ai_connection,
     update_resource_ops_runtime_settings,
     update_resource_op_workbench_item,
 )
@@ -334,10 +341,57 @@ async def update_resource_ops_runtime_settings_api(
         ) from exc
 
 
+@router.post("/ai/models", response_model=ResourceOpsAiModelListResponse, summary="List available AI models")
+async def list_resource_ops_ai_models_api(
+    payload: ResourceOpsAiProviderDraftRequest,
+    current_user: Dict[str, Any] = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+) -> ResourceOpsAiModelListResponse:
+    del current_user
+    try:
+        result = list_resource_ops_ai_models(db, payload.dict(exclude_unset=True))
+        return ResourceOpsAiModelListResponse(
+            models=[ResourceOpsAiModelItem(**item) for item in result.get("models", [])],
+            base_url=result.get("base_url") or "",
+            used_saved_api_key=bool(result.get("used_saved_api_key")),
+            count=int(result.get("count") or 0),
+        )
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load AI model list: {exc}",
+        ) from exc
+
+
+@router.post("/ai/test", response_model=ResourceOpsAiTestResponse, summary="Test AI recognition configuration")
+async def test_resource_ops_ai_connection_api(
+    payload: ResourceOpsAiTestRequest,
+    current_user: Dict[str, Any] = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+) -> ResourceOpsAiTestResponse:
+    del current_user
+    try:
+        return ResourceOpsAiTestResponse(**test_resource_ops_ai_connection(db, payload.dict(exclude_unset=True)))
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to test AI configuration: {exc}",
+        ) from exc
+
+
 @router.post("/recognition/sync", response_model=ResourceOpsRecognitionRunResponse, summary="Run one resource recognition batch")
 async def sync_resource_recognition_api(
     limit: int = Query(20, ge=1, le=100),
-    force: bool = Query(False),
     current_user: Dict[str, Any] = Depends(get_admin_user),
     db: Session = Depends(get_db),
 ) -> ResourceOpsRecognitionRunResponse:
@@ -346,7 +400,7 @@ async def sync_resource_recognition_api(
         payload = sync_resource_work_bindings(
             db,
             limit=limit,
-            force=force,
+            mode="pending",
             operator=str(operator),
         )
         db.commit()
@@ -363,6 +417,37 @@ async def sync_resource_recognition_api(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to run resource recognition sync: {exc}",
+        ) from exc
+
+
+@router.post("/recognition/full", response_model=ResourceOpsRecognitionRunResponse, summary="Run or continue a full AI recognition cycle")
+async def sync_resource_recognition_full_api(
+    limit: int = Query(20, ge=1, le=100),
+    current_user: Dict[str, Any] = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+) -> ResourceOpsRecognitionRunResponse:
+    operator = current_user.get("username") or current_user.get("name") or "admin"
+    try:
+        payload = sync_resource_work_bindings(
+            db,
+            limit=limit,
+            mode="full",
+            operator=str(operator),
+        )
+        db.commit()
+        payload["binding_summary"] = ResourceOpsWorkBindingSummaryResponse(**payload["binding_summary"])
+        return ResourceOpsRecognitionRunResponse(**payload)
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to run full resource recognition sync: {exc}",
         ) from exc
 
 
