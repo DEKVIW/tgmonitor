@@ -153,6 +153,7 @@ export interface ResourceOpsWorkbenchItem {
   topic_key: string
   topic_link_target_count: number
   topic_message_count: number
+  topic_clicks_total: number
   topic_clicks_7d: number
   topic_clicks_30d: number
   topic_platform_count: number
@@ -164,6 +165,7 @@ export interface ResourceOpsWorkbenchItem {
   message_count: number
   recent_ref_count_30d: number
   ref_active_days_30d: number
+  clicks_total: number
   clicks_1d: number
   clicks_3d: number
   clicks_7d: number
@@ -230,7 +232,7 @@ export interface ResourceOpsWorkbenchItem {
   work_match_reason?: string | null
   work_query_title?: string | null
   work_candidate_title?: string | null
-  work_season_hint?: string | null
+  work_season_hint?: string | number | null
   work_year_hint?: number | null
   work_last_attempted_at?: string | null
   work_matched_at?: string | null
@@ -289,19 +291,25 @@ export interface ResourceOpsWorkBindingSummary {
   pending_count: number
   error_count: number
   match_rate: number
-  full_sync_active: boolean
-  full_sync_total: number
-  full_sync_processed: number
-  full_sync_progress: number
-  full_sync_started_at?: string | null
-  full_sync_finished_at?: string | null
+}
+
+export interface ResourceOpsRecognitionStatus {
+  is_running: boolean
+  requested_mode?: 'pending' | 'all' | string | null
+  current_mode?: 'pending' | 'all' | string | null
+  started_at?: string | null
+  finished_at?: string | null
+  total_count: number
+  processed_count: number
+  matched_count: number
+  error_count: number
+  remaining_count: number
+  last_error?: string | null
+  logs: string[]
 }
 
 export interface ResourceOpsRuntimeSettingsResponse {
-  auto_bind_enabled: boolean
-  sync_batch_size: number
-  sync_interval_minutes: number
-  ai_enabled: boolean
+  auto_recognition_enabled: boolean
   ai_base_url: string
   ai_model: string
   ai_api_key_configured: boolean
@@ -314,18 +322,12 @@ export interface ResourceOpsRuntimeSettingsResponse {
   last_sync_summary: Record<string, any>
   last_cleanup_at?: string | null
   last_cleanup_summary: Record<string, any>
-  full_sync_active: boolean
-  full_sync_requested_at?: string | null
-  full_sync_started_at?: string | null
-  full_sync_finished_at?: string | null
+  recognition_status: ResourceOpsRecognitionStatus
   binding_summary: ResourceOpsWorkBindingSummary
 }
 
 export interface ResourceOpsRuntimeSettingsUpdateRequest {
-  auto_bind_enabled: boolean
-  sync_batch_size: number
-  sync_interval_minutes: number
-  ai_enabled: boolean
+  auto_recognition_enabled: boolean
   ai_base_url: string
   ai_model: string
   ai_api_key?: string | null
@@ -336,15 +338,10 @@ export interface ResourceOpsRuntimeSettingsUpdateRequest {
 }
 
 export interface ResourceOpsRecognitionRunResponse {
-  mode: 'pending' | 'full' | string
-  processed_count: number
-  matched_count: number
-  error_count: number
-  skipped_count: number
-  remaining_count: number
-  started_at: string
-  finished_at: string
-  items: Array<Record<string, any>>
+  accepted: boolean
+  mode: 'pending' | 'all' | string
+  message: string
+  recognition_status: ResourceOpsRecognitionStatus
   binding_summary: ResourceOpsWorkBindingSummary
 }
 

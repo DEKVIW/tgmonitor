@@ -21,14 +21,14 @@ from app.models.models import (
 )
 from app.services.resource_ops.ai_title_client import recognize_resource_with_ai
 from app.services.resource_ops.settings import (
-    finish_resource_ops_full_sync,
+    finish_resource_ops_recognition_run,
+    get_resource_ops_runtime_settings,
     get_resource_ops_runtime_config,
     is_resource_ops_ai_ready,
-    is_resource_ops_full_sync_active,
-    mark_resource_ops_full_sync_started,
-    request_resource_ops_full_sync,
+    request_resource_ops_recognition,
+    start_resource_ops_recognition_run,
+    update_resource_ops_recognition_progress,
     update_resource_ops_runtime_settings,
-    update_resource_ops_runtime_meta,
 )
 
 
@@ -53,8 +53,12 @@ class RecognitionCandidate:
     work_id: int | None
     last_attempted_at: datetime | None
     matched_at: datetime | None
+    next_retry_after: datetime | None
     binding_reason: str
     binding_extra_json: dict[str, Any]
+
+
+RECOGNITION_RETRY_DELAY_MINUTES = 15
 
 
 def _utcnow() -> datetime:
@@ -137,6 +141,7 @@ def _build_recognition_candidate_query(session: Session):
             binding.work_id.label("work_id"),
             binding.last_attempted_at.label("last_attempted_at"),
             binding.matched_at.label("matched_at"),
+            binding.next_retry_after.label("next_retry_after"),
             binding.reason.label("binding_reason"),
             binding.extra_json.label("binding_extra_json"),
         )
@@ -168,6 +173,7 @@ def _row_to_candidate(row: Any) -> RecognitionCandidate:
         work_id=int(row.work_id) if row.work_id is not None else None,
         last_attempted_at=row.last_attempted_at,
         matched_at=row.matched_at,
+        next_retry_after=row.next_retry_after,
         binding_reason=_normalize_text(row.binding_reason, max_length=255),
         binding_extra_json=dict(row.binding_extra_json or {}),
     )
@@ -191,12 +197,27 @@ def _list_recognition_candidates(session: Session) -> list[RecognitionCandidate]
     return rows
 
 
-def _candidate_needs_incremental_sync(candidate: RecognitionCandidate) -> bool:
-    return candidate.work_id is None or candidate.match_status != "matched"
+def _candidate_is_retry_due(candidate: RecognitionCandidate, *, now: datetime | None = None) -> bool:
+    current_time = now or _utcnow()
+    return candidate.next_retry_after is None or candidate.next_retry_after <= current_time
 
 
-def _candidate_needs_full_sync(candidate: RecognitionCandidate, generation: str) -> bool:
-    return _normalize_text(candidate.binding_extra_json.get("full_sync_generation"), max_length=64) != generation
+def _candidate_needs_pending_processing(
+    candidate: RecognitionCandidate,
+    *,
+    include_cooling_error: bool = True,
+    now: datetime | None = None,
+) -> bool:
+    if candidate.work_id is not None and candidate.match_status == "matched":
+        return False
+    if include_cooling_error:
+        return True
+    return _candidate_is_retry_due(candidate, now=now)
+
+
+def _candidate_needs_full_processing(candidate: RecognitionCandidate) -> bool:
+    del candidate
+    return True
 
 
 def _get_recent_candidate_titles(session: Session, *, link_target_id: int, limit: int = 5) -> list[str]:
@@ -342,6 +363,46 @@ def ensure_work_binding_placeholders(session: Session, *, link_target_ids: Itera
     return created_count
 
 
+def mark_work_bindings_pending(
+    session: Session,
+    *,
+    link_target_ids: Iterable[int],
+    force_retry_now: bool = False,
+) -> int:
+    normalized_ids: list[int] = []
+    seen: set[int] = set()
+    for raw_value in link_target_ids:
+        try:
+            normalized = int(raw_value)
+        except (TypeError, ValueError):
+            continue
+        if normalized <= 0 or normalized in seen:
+            continue
+        seen.add(normalized)
+        normalized_ids.append(normalized)
+    if not normalized_ids:
+        return 0
+
+    ensure_work_binding_placeholders(session, link_target_ids=normalized_ids)
+    rows = (
+        session.query(ResourceWorkBinding)
+        .filter(ResourceWorkBinding.link_target_id.in_(normalized_ids))
+        .all()
+    )
+    updated_count = 0
+    for row in rows:
+        if row.work_id is not None and row.match_status == "matched":
+            continue
+        row.match_status = "pending"
+        if force_retry_now:
+            row.next_retry_after = None
+        session.add(row)
+        updated_count += 1
+    if updated_count:
+        session.flush()
+    return updated_count
+
+
 def _build_lookup_payload(binding: ResourceWorkBinding | None, work: ResourceWork | None) -> dict[str, Any]:
     extra_json = dict(binding.extra_json or {}) if binding is not None else {}
     raw_status = _normalize_text(getattr(binding, "match_status", None), max_length=32).lower()
@@ -465,7 +526,6 @@ def _apply_binding_success(
     candidate: RecognitionCandidate,
     work: ResourceWork,
     ai_payload: dict[str, Any],
-    full_generation: str | None,
 ) -> None:
     extra_json = dict(binding.extra_json or {})
     extra_json.update(
@@ -474,7 +534,6 @@ def _apply_binding_success(
             "season": (ai_payload.get("extra_json") or {}).get("season"),
             "year": (ai_payload.get("extra_json") or {}).get("year"),
             "used_model": (ai_payload.get("extra_json") or {}).get("used_model"),
-            "full_sync_generation": full_generation or extra_json.get("full_sync_generation"),
         }
     )
     binding.work_id = int(work.id)
@@ -501,13 +560,11 @@ def _apply_binding_error(
     binding: ResourceWorkBinding,
     candidate: RecognitionCandidate,
     reason: str,
-    full_generation: str | None,
 ) -> None:
     extra_json = dict(binding.extra_json or {})
     extra_json.update(
         {
             "query_title": candidate.latest_message_title or candidate.display_text,
-            "full_sync_generation": full_generation or extra_json.get("full_sync_generation"),
         }
     )
     binding.match_status = "error"
@@ -515,31 +572,20 @@ def _apply_binding_error(
     binding.query_title = candidate.latest_message_title or candidate.display_text
     binding.reason = _normalize_text(reason, max_length=255) or "AI 识别失败"
     binding.last_attempted_at = _utcnow()
+    binding.next_retry_after = binding.last_attempted_at + timedelta(minutes=RECOGNITION_RETRY_DELAY_MINUTES)
     binding.error_message = binding.reason
     binding.extra_json = extra_json
     session.add(binding)
     session.flush()
 
 
-def _count_full_sync_processed(rows: list[RecognitionCandidate], generation: str | None) -> int:
-    if not generation:
-        return 0
-    return sum(1 for row in rows if _normalize_text(row.binding_extra_json.get("full_sync_generation"), max_length=64) == generation)
-
-
 def get_work_binding_summary(session: Session) -> dict[str, Any]:
     ensure_runtime_storage_tables()
-    config = get_resource_ops_runtime_config(session)
     rows = _list_recognition_candidates(session)
     total_candidates = len(rows)
     matched_count = sum(1 for row in rows if row.work_id is not None and row.match_status == "matched")
     error_count = sum(1 for row in rows if row.match_status == "error")
-    pending_count = max(0, total_candidates - matched_count - error_count)
-
-    generation = _normalize_text(config.get("full_sync_generation"), max_length=64)
-    full_sync_active = bool(is_resource_ops_full_sync_active(config))
-    full_sync_processed = _count_full_sync_processed(rows, generation)
-    full_sync_total = total_candidates if generation else 0
+    pending_count = sum(1 for row in rows if _candidate_needs_pending_processing(row, include_cooling_error=True))
 
     return {
         "total_candidates": total_candidates,
@@ -547,12 +593,6 @@ def get_work_binding_summary(session: Session) -> dict[str, Any]:
         "pending_count": pending_count,
         "error_count": error_count,
         "match_rate": round((matched_count / total_candidates) * 100, 1) if total_candidates else 0.0,
-        "full_sync_active": full_sync_active,
-        "full_sync_total": full_sync_total,
-        "full_sync_processed": full_sync_processed,
-        "full_sync_progress": round((full_sync_processed / full_sync_total) * 100, 1) if full_sync_total else 0.0,
-        "full_sync_started_at": config.get("full_sync_started_at").isoformat() if config.get("full_sync_started_at") else None,
-        "full_sync_finished_at": config.get("full_sync_finished_at").isoformat() if config.get("full_sync_finished_at") else None,
     }
 
 
@@ -562,7 +602,6 @@ def resolve_link_target_work(
     link_target_id: int,
     candidate_row: RecognitionCandidate | None = None,
     config: dict[str, Any] | None = None,
-    full_generation: str | None = None,
 ) -> dict[str, Any]:
     runtime_config = config or get_resource_ops_runtime_config(session)
     if not is_resource_ops_ai_ready(runtime_config):
@@ -584,7 +623,6 @@ def resolve_link_target_work(
             candidate=candidate,
             work=work,
             ai_payload=ai_payload,
-            full_generation=full_generation,
         )
         info = get_work_binding_lookup(session, link_target_ids=[candidate.link_target_id]).get(candidate.link_target_id)
         return {
@@ -599,7 +637,6 @@ def resolve_link_target_work(
             binding=binding,
             candidate=candidate,
             reason=f"AI 识别异常：{exc}",
-            full_generation=full_generation,
         )
         info = get_work_binding_lookup(session, link_target_ids=[candidate.link_target_id]).get(candidate.link_target_id)
         return {
@@ -610,91 +647,153 @@ def resolve_link_target_work(
         }
 
 
-def sync_resource_work_bindings(
+def _select_processing_candidates(
     session: Session,
     *,
-    limit: int = 20,
+    mode: str,
+    respect_retry_after: bool,
+) -> list[RecognitionCandidate]:
+    normalized_mode = _normalize_text(mode, max_length=16).lower() or "pending"
+    rows = _list_recognition_candidates(session)
+    if normalized_mode == "all":
+        return [row for row in rows if _candidate_needs_full_processing(row)]
+    return [
+        row
+        for row in rows
+        if _candidate_needs_pending_processing(
+            row,
+            include_cooling_error=not respect_retry_after,
+        )
+    ]
+
+
+def _build_recognition_log_line(result: dict[str, Any]) -> str:
+    work_payload = dict(result.get("work") or {})
+    query_title = _normalize_text(work_payload.get("work_query_title"), max_length=160) or "-"
+    resolved_title = _normalize_text(
+        work_payload.get("work_title") or work_payload.get("work_canonical_title"),
+        max_length=160,
+    ) or "-"
+    if _normalize_text(result.get("status"), max_length=16).lower() == "matched":
+        return f"[OK] {query_title} -> {resolved_title}"
+    return f"[ERR] {query_title} -> {_normalize_text(result.get('reason'), max_length=220) or 'AI error'}"
+
+
+def run_resource_ops_recognition_job(
+    session: Session,
+    *,
     mode: str = "pending",
+    respect_retry_after: bool = False,
     operator: str | None = None,
 ) -> dict[str, Any]:
     ensure_runtime_storage_tables()
     config = get_resource_ops_runtime_config(session)
     if not is_resource_ops_ai_ready(config):
-        raise ValueError("请先启用并配置可用的 AI 识别")
+        raise ValueError("璇峰厛鍚敤骞堕厤缃彲鐢ㄧ殑 AI 璇嗗埆")
 
     normalized_mode = _normalize_text(mode, max_length=16).lower() or "pending"
-    if normalized_mode not in {"pending", "full"}:
+    if normalized_mode == "full":
+        normalized_mode = "all"
+    if normalized_mode not in {"pending", "all"}:
         raise ValueError("invalid recognition mode")
 
-    full_generation = _normalize_text(config.get("full_sync_generation"), max_length=64) or None
-    if normalized_mode == "full":
-        if not full_generation or not is_resource_ops_full_sync_active(config):
-            request_resource_ops_full_sync(session, updated_by=operator or "system")
-            session.flush()
-            config = get_resource_ops_runtime_config(session)
-            full_generation = _normalize_text(config.get("full_sync_generation"), max_length=64) or None
-        mark_resource_ops_full_sync_started(session, updated_by=operator or "system")
-        session.flush()
-        config = get_resource_ops_runtime_config(session)
-        full_generation = _normalize_text(config.get("full_sync_generation"), max_length=64) or None
-
-    all_rows = _list_recognition_candidates(session)
-    if normalized_mode == "full":
-        target_rows = [row for row in all_rows if _candidate_needs_full_sync(row, full_generation or "")]
-    else:
-        target_rows = [row for row in all_rows if _candidate_needs_incremental_sync(row)]
-    target_rows = target_rows[: max(1, min(int(limit or 20), 200))]
-
     started_at = _utcnow()
+    target_rows = _select_processing_candidates(
+        session,
+        mode=normalized_mode,
+        respect_retry_after=respect_retry_after,
+    )
+    start_resource_ops_recognition_run(
+        session,
+        mode=normalized_mode,
+        total_count=len(target_rows),
+        updated_by=operator or "system",
+    )
+    session.commit()
+
     processed_items: list[dict[str, Any]] = []
     matched_count = 0
     error_count = 0
-    skipped_count = 0
 
     for row in target_rows:
+        config = get_resource_ops_runtime_config(session)
         result = resolve_link_target_work(
             session,
             link_target_id=row.link_target_id,
             candidate_row=row,
             config=config,
-            full_generation=full_generation,
         )
         processed_items.append(result)
-        status = _normalize_text(result.get("status"), max_length=16).lower()
-        if status == "matched":
+        if _normalize_text(result.get("status"), max_length=16).lower() == "matched":
             matched_count += 1
-        elif status == "error":
-            error_count += 1
+            update_resource_ops_recognition_progress(
+                session,
+                processed_delta=1,
+                matched_delta=1,
+                log_line=_build_recognition_log_line(result),
+                last_error=None,
+                updated_by=operator or "system",
+            )
         else:
-            skipped_count += 1
+            error_count += 1
+            update_resource_ops_recognition_progress(
+                session,
+                processed_delta=1,
+                error_delta=1,
+                log_line=_build_recognition_log_line(result),
+                last_error=_normalize_text(result.get("reason"), max_length=500),
+                updated_by=operator or "system",
+            )
+        session.commit()
 
     summary = get_work_binding_summary(session)
-    if normalized_mode == "full" and summary["full_sync_active"] and summary["full_sync_total"] == summary["full_sync_processed"]:
-        finish_resource_ops_full_sync(session, updated_by=operator or "system")
-        session.flush()
-        summary = get_work_binding_summary(session)
-
-    latest_rows = _list_recognition_candidates(session)
-    if normalized_mode == "full":
-        remaining_count = sum(1 for row in latest_rows if _candidate_needs_full_sync(row, full_generation or ""))
-    else:
-        remaining_count = sum(1 for row in latest_rows if _candidate_needs_incremental_sync(row))
-
     response = {
         "mode": normalized_mode,
         "processed_count": len(processed_items),
         "matched_count": matched_count,
         "error_count": error_count,
-        "skipped_count": skipped_count,
-        "remaining_count": remaining_count,
+        "remaining_count": summary["pending_count"],
         "started_at": started_at.isoformat(),
         "finished_at": _utcnow().isoformat(),
         "items": processed_items,
         "binding_summary": summary,
     }
-    compact_summary = {key: value for key, value in response.items() if key != "items"}
-    update_resource_ops_runtime_meta(session, last_sync_summary=compact_summary, updated_by=operator or "system")
+    finish_resource_ops_recognition_run(
+        session,
+        summary={key: value for key, value in response.items() if key != "items"},
+        updated_by=operator or "system",
+    )
+    session.commit()
     return response
+
+
+def sync_resource_work_bindings(
+    session: Session,
+    *,
+    mode: str = "pending",
+    operator: str | None = None,
+) -> dict[str, Any]:
+    ensure_runtime_storage_tables()
+    config = get_resource_ops_runtime_config(session)
+    normalized_mode = _normalize_text(mode, max_length=16).lower() or "pending"
+    if normalized_mode == "full":
+        normalized_mode = "all"
+    if normalized_mode not in {"pending", "all"}:
+        raise ValueError("invalid recognition mode")
+    if not is_resource_ops_ai_ready(config):
+        raise ValueError("请先启用并配置可用的 AI 识别")
+    settings_payload = request_resource_ops_recognition(
+        session,
+        mode=normalized_mode,
+        updated_by=operator or "system",
+    )
+    return {
+        "accepted": True,
+        "mode": normalized_mode,
+        "message": "queued",
+        "binding_summary": get_work_binding_summary(session),
+        "recognition_status": settings_payload["recognition_status"],
+    }
 
 
 def sync_resource_work_bindings_for_link_targets(
@@ -718,87 +817,34 @@ def sync_resource_work_bindings_for_link_targets(
 
     if not normalized_ids:
         return {
-            "mode": "incremental_targets",
-            "processed_count": 0,
-            "matched_count": 0,
-            "error_count": 0,
-            "skipped_count": 0,
-            "remaining_count": 0,
-            "started_at": _utcnow().isoformat(),
-            "finished_at": _utcnow().isoformat(),
-            "items": [],
+            "accepted": False,
+            "mode": "pending",
+            "message": "empty",
             "binding_summary": get_work_binding_summary(session),
+            "recognition_status": get_resource_ops_runtime_settings(session)["recognition_status"],
         }
 
-    ensure_work_binding_placeholders(session, link_target_ids=normalized_ids)
-    config = get_resource_ops_runtime_config(session)
-    if not bool(config.get("auto_bind_enabled")) or not is_resource_ops_ai_ready(config):
-        return {
-            "mode": "incremental_targets",
-            "processed_count": 0,
-            "matched_count": 0,
-            "error_count": 0,
-            "skipped_count": len(normalized_ids),
-            "remaining_count": len(normalized_ids),
-            "started_at": _utcnow().isoformat(),
-            "finished_at": _utcnow().isoformat(),
-            "items": [],
-            "binding_summary": get_work_binding_summary(session),
-        }
-
-    candidate_map = {row.link_target_id: row for row in _list_recognition_candidates(session)}
-    target_rows = [
-        candidate_map[link_target_id]
-        for link_target_id in normalized_ids
-        if link_target_id in candidate_map and _candidate_needs_incremental_sync(candidate_map[link_target_id])
-    ]
-
-    started_at = _utcnow()
-    processed_items: list[dict[str, Any]] = []
-    matched_count = 0
-    error_count = 0
-    skipped_count = 0
-
-    for row in target_rows:
-        result = resolve_link_target_work(
-            session,
-            link_target_id=row.link_target_id,
-            candidate_row=row,
-            config=config,
-        )
-        processed_items.append(result)
-        status = _normalize_text(result.get("status"), max_length=16).lower()
-        if status == "matched":
-            matched_count += 1
-        elif status == "error":
-            error_count += 1
-        else:
-            skipped_count += 1
-
-    skipped_count += max(0, len(normalized_ids) - len(target_rows))
-    latest_map = {row.link_target_id: row for row in _list_recognition_candidates(session)}
-    summary = get_work_binding_summary(session)
-    remaining_count = sum(
-        1
-        for link_target_id in normalized_ids
-        if link_target_id in latest_map and _candidate_needs_incremental_sync(latest_map[link_target_id])
+    mark_work_bindings_pending(
+        session,
+        link_target_ids=normalized_ids,
+        force_retry_now=True,
     )
-
-    response = {
-        "mode": "incremental_targets",
-        "processed_count": len(processed_items),
-        "matched_count": matched_count,
-        "error_count": error_count,
-        "skipped_count": skipped_count,
-        "remaining_count": remaining_count,
-        "started_at": started_at.isoformat(),
-        "finished_at": _utcnow().isoformat(),
-        "items": processed_items,
-        "binding_summary": summary,
+    config = get_resource_ops_runtime_config(session)
+    if bool(config.get("auto_recognition_enabled")) and is_resource_ops_ai_ready(config):
+        settings_payload = request_resource_ops_recognition(
+            session,
+            mode="pending",
+            updated_by=operator or "system",
+        )
+    else:
+        settings_payload = get_resource_ops_runtime_settings(session)
+    return {
+        "accepted": True,
+        "mode": "pending",
+        "message": "queued",
+        "binding_summary": get_work_binding_summary(session),
+        "recognition_status": settings_payload["recognition_status"],
     }
-    compact_summary = {key: value for key, value in response.items() if key != "items"}
-    update_resource_ops_runtime_meta(session, last_sync_summary=compact_summary, updated_by=operator or "system")
-    return response
 
 
 def sync_resource_work_bindings_for_message_ids(
@@ -820,16 +866,11 @@ def sync_resource_work_bindings_for_message_ids(
         normalized_message_ids.append(normalized)
     if not normalized_message_ids:
         return {
-            "mode": "incremental_messages",
-            "processed_count": 0,
-            "matched_count": 0,
-            "error_count": 0,
-            "skipped_count": 0,
-            "remaining_count": 0,
-            "started_at": _utcnow().isoformat(),
-            "finished_at": _utcnow().isoformat(),
-            "items": [],
+            "accepted": False,
+            "mode": "pending",
+            "message": "empty",
             "binding_summary": get_work_binding_summary(session),
+            "recognition_status": get_resource_ops_runtime_settings(session)["recognition_status"],
         }
 
     link_target_ids = [
@@ -842,10 +883,8 @@ def sync_resource_work_bindings_for_message_ids(
         )
         if link_target_id is not None
     ]
-    result = sync_resource_work_bindings_for_link_targets(
+    return sync_resource_work_bindings_for_link_targets(
         session,
         link_target_ids=link_target_ids,
         operator=operator,
     )
-    result["mode"] = "incremental_messages"
-    return result

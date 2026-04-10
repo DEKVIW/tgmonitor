@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Alert, Button, Card, Col, Empty, Input, InputNumber, Row, Select, Space, Table, Tabs, Tag, Typography, message } from 'antd'
+import { Alert, Button, Card, Col, Empty, Input, InputNumber, Row, Select, Space, Table, Tabs, Tag, Tooltip, Typography, message } from 'antd'
 import type { ColumnsType, TableProps } from 'antd/es/table'
-import { DatabaseOutlined, LinkOutlined, ReloadOutlined, SyncOutlined } from '@ant-design/icons'
+import { DatabaseOutlined, InfoCircleOutlined, LinkOutlined, ReloadOutlined, SyncOutlined } from '@ant-design/icons'
 
 import {
   getResourceOpsCatalogStatus,
@@ -46,12 +46,11 @@ import './ResourceOperations.css'
 const { Title, Text } = Typography
 
 const formatNumber = (value?: number | null) => new Intl.NumberFormat('zh-CN').format(Number(value || 0))
+const formatResourceOpsDateTime = (value?: string | null) =>
+  formatServerDateTime(value, 'YYYY-MM-DD HH:mm', 'Asia/Shanghai', true)
 
 const buildSettingsDraft = (response: ResourceOpsRuntimeSettingsResponse): ResourceOpsRuntimeSettingsUpdateRequest => ({
-  auto_bind_enabled: response.auto_bind_enabled,
-  sync_batch_size: response.sync_batch_size,
-  sync_interval_minutes: response.sync_interval_minutes,
-  ai_enabled: response.ai_enabled,
+  auto_recognition_enabled: response.auto_recognition_enabled,
   ai_base_url: response.ai_base_url,
   ai_model: response.ai_model,
   retention_click_event_days: response.retention_click_event_days,
@@ -78,11 +77,13 @@ const ResourceOperationsAdminRuntime = () => {
   const [settingsDraft, setSettingsDraft] = useState<ResourceOpsRuntimeSettingsUpdateRequest | null>(null)
   const [settingsLoading, setSettingsLoading] = useState(true)
   const [settingsSaving, setSettingsSaving] = useState(false)
-  const [recognitionRunning, setRecognitionRunning] = useState(false)
+  const [pendingRunLoading, setPendingRunLoading] = useState(false)
+  const [allRunLoading, setAllRunLoading] = useState(false)
   const [retentionRunning, setRetentionRunning] = useState(false)
   const [aiModelsLoading, setAiModelsLoading] = useState(false)
   const [aiTesting, setAiTesting] = useState(false)
   const [aiApiKeyInput, setAiApiKeyInput] = useState('')
+  const [aiTestInput, setAiTestInput] = useState('')
   const [aiModelOptions, setAiModelOptions] = useState<ResourceOpsAiModelItem[]>([])
   const [aiTestResult, setAiTestResult] = useState<ResourceOpsAiTestResponse | null>(null)
 
@@ -92,7 +93,7 @@ const ResourceOperationsAdminRuntime = () => {
   const [workbenchFilters, setWorkbenchFilters] = useState<ResourceOpsWorkbenchQuery>({
     page: 1,
     page_size: 20,
-    sort_by: 'topic_clicks_30d',
+    sort_by: 'topic_clicks_total',
     sort_order: 'desc',
   })
   const [keywordInput, setKeywordInput] = useState('')
@@ -145,34 +146,43 @@ const ResourceOperationsAdminRuntime = () => {
     }
   }
 
-  const loadSettings = async () => {
-    setSettingsLoading(true)
+  const loadSettings = async (options?: { refreshModels?: boolean; silent?: boolean }) => {
+    if (!options?.silent) {
+      setSettingsLoading(true)
+    }
     try {
       const response = await getResourceOpsRuntimeSettings()
       setRuntimeSettings(response)
       setSettingsDraft(buildSettingsDraft(response))
-      setAiTestResult(null)
-      await loadSavedModels(response)
+      if (options?.refreshModels) {
+        void loadSavedModels(response)
+      }
     } catch (error: any) {
       message.error(error.response?.data?.detail || '加载资源运营配置失败')
     } finally {
-      setSettingsLoading(false)
+      if (!options?.silent) {
+        setSettingsLoading(false)
+      }
     }
   }
 
-  const loadWorkbench = async (filters = workbenchFilters) => {
-    setWorkbenchLoading(true)
+  const loadWorkbench = async (filters = workbenchFilters, options?: { silent?: boolean }) => {
+    if (!options?.silent) {
+      setWorkbenchLoading(true)
+    }
     try {
       setWorkbenchData(await listResourceOpsWorkbenchItems(filters))
     } catch (error: any) {
       message.error(error.response?.data?.detail || '加载候选资源工作台失败')
     } finally {
-      setWorkbenchLoading(false)
+      if (!options?.silent) {
+        setWorkbenchLoading(false)
+      }
     }
   }
 
   useEffect(() => {
-    void Promise.all([loadOverview(), loadSettings()])
+    void Promise.all([loadOverview(), loadSettings({ refreshModels: true })])
   }, [])
 
   useEffect(() => {
@@ -182,6 +192,20 @@ const ResourceOperationsAdminRuntime = () => {
   }, [activeTab, workbenchFilters.page, workbenchFilters.page_size, workbenchFilters.platform, workbenchFilters.operation_status, workbenchFilters.value_status, workbenchFilters.health_status, workbenchFilters.keyword, workbenchFilters.sort_by, workbenchFilters.sort_order])
 
   const bindingSummary = runtimeSettings?.binding_summary || null
+  const recognitionStatus = runtimeSettings?.recognition_status || null
+
+  useEffect(() => {
+    if (!recognitionStatus?.is_running && !recognitionStatus?.requested_mode) {
+      return
+    }
+    const timer = window.setTimeout(() => {
+      void loadSettings({ silent: true })
+      if (workbenchVisited) {
+        void loadWorkbench(workbenchFilters, { silent: true })
+      }
+    }, 2500)
+    return () => window.clearTimeout(timer)
+  }, [recognitionStatus?.is_running, recognitionStatus?.requested_mode, workbenchVisited, workbenchFilters])
 
   const overviewMetricItems = useMemo(
     () => [
@@ -207,12 +231,12 @@ const ResourceOperationsAdminRuntime = () => {
   const recognitionSummaryItems = useMemo(() => {
     if (!bindingSummary) return []
     return [
-      { label: '候选池', value: bindingSummary.total_candidates, hint: '和工作台主题口径一致' },
-      { label: '已归并', value: bindingSummary.matched_count, hint: `${bindingSummary.match_rate}% 已完成` },
-      { label: '待处理', value: bindingSummary.pending_count, hint: '还没跑到的候选主题' },
-      { label: '异常', value: bindingSummary.error_count, hint: 'AI 返回异常或解析失败' },
+      { label: '主题数', value: workbenchData?.summary.total_candidates || 0, hint: '工作台当前展示的主题行数' },
+      { label: '待处理', value: bindingSummary.pending_count, hint: '新点击和异常重试都会先进入这里' },
+      { label: '已归并', value: bindingSummary.matched_count, hint: `${bindingSummary.match_rate}% 链接目标已归并` },
+      { label: '异常', value: bindingSummary.error_count, hint: 'AI 调用失败或返回空结果' },
     ]
-  }, [bindingSummary])
+  }, [bindingSummary, workbenchData])
 
   const platformOptions = useMemo(() => {
     const values = new Set((workbenchData?.items || []).map((item) => item.platform).filter(Boolean))
@@ -263,7 +287,11 @@ const ResourceOperationsAdminRuntime = () => {
   const handleTestAiConnection = async () => {
     setAiTesting(true)
     try {
-      const result = await testResourceOpsAiConnection({ ...aiDraft(), model: settingsDraft?.ai_model || '' })
+      const result = await testResourceOpsAiConnection({
+        ...aiDraft(),
+        model: settingsDraft?.ai_model || '',
+        sample_text: aiTestInput.trim() || undefined,
+      })
       setAiTestResult(result)
       message.success('AI 识别测试通过')
     } catch (error: any) {
@@ -285,7 +313,7 @@ const ResourceOperationsAdminRuntime = () => {
       setSettingsDraft(buildSettingsDraft(response))
       setAiApiKeyInput('')
       setAiTestResult(null)
-      await loadSavedModels(response)
+      void loadSavedModels(response)
       message.success('配置已保存')
     } catch (error: any) {
       message.error(error.response?.data?.detail || '保存配置失败')
@@ -294,22 +322,37 @@ const ResourceOperationsAdminRuntime = () => {
     }
   }
 
-  const handleRunRecognition = async (mode: 'pending' | 'full') => {
-    setRecognitionRunning(true)
+  const handleRunRecognition = async (mode: 'pending' | 'all') => {
+    if (mode === 'pending') {
+      setPendingRunLoading(true)
+    } else {
+      setAllRunLoading(true)
+    }
     try {
-      const runner = mode === 'full' ? syncResourceOpsRecognitionFull : syncResourceOpsRecognition
-      const result = await runner(settingsDraft?.sync_batch_size || 12)
-      const progress = result.binding_summary?.full_sync_progress
-      message.success(
-        mode === 'full'
-          ? `全量归并本次处理 ${result.processed_count} 条，成功 ${result.matched_count} 条，异常 ${result.error_count} 条，当前进度 ${progress}%`
-          : `本次归并处理 ${result.processed_count} 条，成功 ${result.matched_count} 条，异常 ${result.error_count} 条`
+      const runner = mode === 'all' ? syncResourceOpsRecognitionFull : syncResourceOpsRecognition
+      const result = await runner()
+      setRuntimeSettings((current) =>
+        current
+          ? {
+              ...current,
+              recognition_status: result.recognition_status,
+              binding_summary: result.binding_summary,
+            }
+          : current
       )
-      await Promise.all([loadSettings(), workbenchVisited ? loadWorkbench() : Promise.resolve()])
+      message.success(mode === 'all' ? '全部扫描已加入队列' : '待处理任务已加入队列')
+      await Promise.all([
+        loadSettings({ silent: true }),
+        workbenchVisited ? loadWorkbench(workbenchFilters, { silent: true }) : Promise.resolve(),
+      ])
     } catch (error: any) {
       message.error(error.response?.data?.detail || '执行作品归并失败')
     } finally {
-      setRecognitionRunning(false)
+      if (mode === 'pending') {
+        setPendingRunLoading(false)
+      } else {
+        setAllRunLoading(false)
+      }
     }
   }
 
@@ -320,7 +363,7 @@ const ResourceOperationsAdminRuntime = () => {
       message.success(
         `本次清理点击 ${result.deleted_click_events} 条、日统计 ${result.deleted_daily_stats} 条、候选日志 ${result.deleted_candidate_logs} 条`
       )
-      await loadSettings()
+      await loadSettings({ silent: true })
     } catch (error: any) {
       message.error(error.response?.data?.detail || '执行数据清理失败')
     } finally {
@@ -361,7 +404,7 @@ const ResourceOperationsAdminRuntime = () => {
       {
         title: '资源',
         key: 'topic_title',
-        width: 280,
+        width: 260,
         sorter: true,
         render: (_, record) => (
           <div className="resource-ops-resource-cell">
@@ -372,29 +415,49 @@ const ResourceOperationsAdminRuntime = () => {
         ),
       },
       {
-        title: '热度',
-        key: 'topic_clicks_30d',
+        title: (
+          <span className="resource-ops-column-title">
+            热度
+            <Tooltip title="主数字为累计点击；副行依次是 7 天 / 30 天点击和最近活动时间。">
+              <InfoCircleOutlined />
+            </Tooltip>
+          </span>
+        ),
+        key: 'topic_clicks_total',
         sorter: true,
-        width: 180,
+        width: 190,
         render: (_, record) => (
           <div className="resource-ops-score-cell">
-            <strong>{formatNumber(record.topic_clicks_30d)}</strong>
-            <small>7 天 {formatNumber(record.topic_clicks_7d)} / 30 天点击</small>
-            <small>最近活动 {formatServerDateTime(record.topic_last_activity_at)}</small>
+            <strong>{formatNumber(record.topic_clicks_total)}</strong>
+            <small>
+              {formatNumber(record.topic_clicks_7d)} / {formatNumber(record.topic_clicks_30d)}
+            </small>
+            <small>{formatResourceOpsDateTime(record.topic_last_activity_at)}</small>
           </div>
         ),
       },
       {
-        title: '归并',
+        title: (
+          <span className="resource-ops-column-title">
+            归并
+            <Tooltip title="只看当前主题已归并多少条原始消息；不再在表格里堆原始标题。">
+              <InfoCircleOutlined />
+            </Tooltip>
+          </span>
+        ),
         key: 'work_match_status',
-        width: 200,
+        width: 180,
         render: (_, record) => (
           <div className="resource-ops-status-cell">
             <Tag color={workColor(record.work_match_status)}>{record.work_match_status_label}</Tag>
-            <small title={record.work_query_title || record.topic_latest_message_title || '-'}>
-              {record.work_query_title || record.topic_latest_message_title || '等待处理'}
+            <small>
+              {record.work_match_status === 'matched'
+                ? `已归并 ${formatNumber(record.topic_message_count)} 条消息`
+                : record.work_match_status === 'error'
+                  ? `异常待重试 ${formatNumber(record.topic_message_count)} 条消息`
+                  : `待处理 ${formatNumber(record.topic_message_count)} 条消息`}
             </small>
-            <small>最近尝试 {formatServerDateTime(record.work_last_attempted_at)}</small>
+            <small>{formatResourceOpsDateTime(record.work_matched_at || record.work_last_attempted_at)}</small>
           </div>
         ),
       },
@@ -446,7 +509,7 @@ const ResourceOperationsAdminRuntime = () => {
     const activeSorter = Array.isArray(sorter) ? sorter[0] : sorter
     const sortBy =
       activeSorter && activeSorter.order
-        ? String(activeSorter.columnKey || workbenchFilters.sort_by || 'topic_clicks_30d')
+        ? String(activeSorter.columnKey || workbenchFilters.sort_by || 'topic_clicks_total')
         : workbenchFilters.sort_by
     const sortOrder =
       activeSorter && activeSorter.order ? (activeSorter.order === 'ascend' ? 'asc' : 'desc') : workbenchFilters.sort_order
@@ -554,19 +617,24 @@ const ResourceOperationsAdminRuntime = () => {
                 <ResourceOpsRecognitionPanel
                   loading={settingsLoading}
                   settingsSaving={settingsSaving}
-                  recognitionRunning={recognitionRunning}
+                  pendingRunLoading={pendingRunLoading}
+                  allRunLoading={allRunLoading}
                   aiModelsLoading={aiModelsLoading}
                   aiTesting={aiTesting}
                   settingsDraft={settingsDraft}
                   runtimeSettings={runtimeSettings}
                   bindingSummary={bindingSummary}
+                  recognitionStatus={recognitionStatus}
                   recognitionSummaryItems={recognitionSummaryItems}
                   aiApiKeyInput={aiApiKeyInput}
+                  aiTestInput={aiTestInput}
                   aiModelOptions={aiModelOptions}
                   aiTestResult={aiTestResult}
                   formatNumber={formatNumber}
+                  formatDateTime={formatResourceOpsDateTime}
                   onPatchDraft={handlePatchDraft}
                   onAiApiKeyInputChange={setAiApiKeyInput}
+                  onAiTestInputChange={setAiTestInput}
                   onLoadAiModels={() => void handleLoadAiModels()}
                   onTestAiConnection={() => void handleTestAiConnection()}
                   onRunRecognition={(mode) => void handleRunRecognition(mode)}
@@ -625,12 +693,12 @@ const ResourceOperationsAdminRuntime = () => {
                       <div className="resource-ops-runtime-meta-grid">
                         <div className="resource-ops-runtime-meta-card">
                           <span>上次清理</span>
-                          <strong>{formatServerDateTime(runtimeSettings.last_cleanup_at)}</strong>
+                          <strong>{formatResourceOpsDateTime(runtimeSettings.last_cleanup_at)}</strong>
                           <small>点击 {formatNumber(runtimeSettings.last_cleanup_summary?.deleted_click_events)} / 日统计 {formatNumber(runtimeSettings.last_cleanup_summary?.deleted_daily_stats)}</small>
                         </div>
                         <div className="resource-ops-runtime-meta-card">
                           <span>最近归并</span>
-                          <strong>{formatServerDateTime(runtimeSettings.last_sync_at)}</strong>
+                          <strong>{formatResourceOpsDateTime(runtimeSettings.last_sync_at)}</strong>
                           <small>成功 {formatNumber(runtimeSettings.last_sync_summary?.matched_count)} / 异常 {formatNumber(runtimeSettings.last_sync_summary?.error_count)}</small>
                         </div>
                       </div>

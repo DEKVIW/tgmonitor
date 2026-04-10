@@ -11,6 +11,8 @@ import type {
 import { formatServerDateTime } from '@/utils/dateTime'
 
 const { Paragraph, Text } = Typography
+const formatResourceOpsDateTime = (value?: string | null) =>
+  formatServerDateTime(value, 'YYYY-MM-DD HH:mm', 'Asia/Shanghai', true)
 
 interface ResourceOpsWorkbenchDrawerTopicProps {
   open: boolean
@@ -73,26 +75,42 @@ const ResourceOpsWorkbenchDrawerTopic = ({
         title: '消息标题',
         dataIndex: 'message_title',
         key: 'message_title',
-        width: 320,
+        width: 220,
         render: (value: string) => (
-          <span className="resource-ops-ellipsis" title={value || '-'}>
+          <span
+            role={value ? 'button' : undefined}
+            tabIndex={value ? 0 : -1}
+            className="resource-ops-ref-message-copy resource-ops-ellipsis"
+            title={value ? `${value}（点击复制）` : '-'}
+            onClick={() => {
+              if (value) {
+                void navigator.clipboard?.writeText(value)
+              }
+            }}
+            onKeyDown={(event) => {
+              if (!value) return
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault()
+                void navigator.clipboard?.writeText(value)
+              }
+            }}
+          >
             {value || '-'}
           </span>
         ),
       },
       {
         title: '频道',
-        dataIndex: 'channel',
         key: 'channel',
         width: 180,
-        render: (value: string) => value || '-',
+        render: (_, record) => record.channel || record.source || '-',
       },
       {
         title: '时间',
         dataIndex: 'message_timestamp',
         key: 'message_timestamp',
         width: 170,
-        render: (value?: string | null) => formatServerDateTime(value),
+        render: (value?: string | null) => formatResourceOpsDateTime(value),
       },
       {
         title: '链接',
@@ -172,14 +190,16 @@ const ResourceOpsWorkbenchDrawerTopic = ({
 
             <div className="resource-ops-topic-grid">
               <div className="resource-ops-topic-card">
-                <span>7天点击</span>
-                <strong>{data.item.topic_clicks_7d}</strong>
-                <small>最近 7 天主题总点击</small>
+                <span>总点击</span>
+                <strong>{data.item.topic_clicks_total}</strong>
+                <small>当前主题累计点击</small>
               </div>
               <div className="resource-ops-topic-card">
-                <span>30天点击</span>
-                <strong>{data.item.topic_clicks_30d}</strong>
-                <small>最近 30 天主题总点击</small>
+                <span>7天 / 30天</span>
+                <strong>
+                  {data.item.topic_clicks_7d} / {data.item.topic_clicks_30d}
+                </strong>
+                <small>短期热度对比</small>
               </div>
               <div className="resource-ops-topic-card">
                 <span>消息 / 链接</span>
@@ -190,14 +210,14 @@ const ResourceOpsWorkbenchDrawerTopic = ({
               </div>
               <div className="resource-ops-topic-card">
                 <span>最近活动</span>
-                <strong>{formatServerDateTime(data.item.topic_last_activity_at)}</strong>
+                <strong>{formatResourceOpsDateTime(data.item.topic_last_activity_at)}</strong>
                 <small>主题聚合后的最后活跃时间</small>
               </div>
             </div>
 
             <Descriptions column={2} size="small" className="resource-ops-drawer-descriptions">
               <Descriptions.Item label="AI 结果">{data.item.work_title || '待归并'}</Descriptions.Item>
-              <Descriptions.Item label="识别时间">{formatServerDateTime(data.item.work_matched_at || data.item.work_last_attempted_at)}</Descriptions.Item>
+              <Descriptions.Item label="识别时间">{formatResourceOpsDateTime(data.item.work_matched_at || data.item.work_last_attempted_at)}</Descriptions.Item>
               <Descriptions.Item label="建议动作">{data.item.suggested_action}</Descriptions.Item>
               <Descriptions.Item label="更新模式">{data.item.update_mode_label}</Descriptions.Item>
               <Descriptions.Item label="健康概览">
@@ -309,7 +329,7 @@ const ResourceOpsWorkbenchDrawerTopic = ({
                   <div key={log.id} className="resource-ops-log-item">
                     <div className="resource-ops-log-head">
                       <strong>{log.action_summary}</strong>
-                      <span>{formatServerDateTime(log.created_at)}</span>
+                      <span>{formatResourceOpsDateTime(log.created_at)}</span>
                     </div>
                     <div className="resource-ops-log-meta">操作人：{log.operator || '-'}</div>
                     {log.note ? <div className="resource-ops-log-note">{log.note}</div> : null}

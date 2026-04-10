@@ -28,7 +28,6 @@ from app.services.resource_ops.analytics import (
     _utcnow,
 )
 from app.services.resource_ops.recognition_service import WORK_MATCH_STATUS_LABELS, get_work_binding_lookup
-from app.services.resource_ops.topic_extractor import extract_resource_topic_v2 as extract_resource_topic
 
 
 OPERATION_STATUS_LABELS = {
@@ -191,87 +190,40 @@ def _topic_rank(item: dict[str, Any]) -> tuple[float, int, int, int]:
 
 
 def _annotate_topic_metrics(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    topic_map: dict[str, dict[str, Any]] = {}
-
     for item in items:
         work_id = _to_int(item.get("work_id"))
         work_title = _normalize_text(item.get("work_title"), max_length=255)
-        if work_id > 0 and work_title:
+        work_status = _normalize_text(item.get("work_match_status"), max_length=16).lower()
+        if work_id > 0 and work_title and work_status == "matched":
             topic_key = f"work:{work_id}"
             topic_title = work_title
         else:
-            topic_payload = extract_resource_topic(
-                item.get("latest_message_title"),
-                item.get("display_text"),
-                share_key=item.get("share_key"),
-                fallback_id=_to_int(item.get("link_target_id")),
+            link_target_id = _to_int(item.get("link_target_id"))
+            topic_key = f"link:{link_target_id}"
+            topic_title = (
+                _normalize_text(item.get("latest_message_title"), max_length=255)
+                or _normalize_text(item.get("display_text"), max_length=255)
+                or f"资源 {link_target_id}"
             )
-            topic_key = topic_payload["topic_key"] or f"link:{_to_int(item.get('link_target_id'))}"
-            topic_title = topic_payload["topic_title"] or f"资源 {_to_int(item.get('link_target_id'))}"
         item["topic_key"] = topic_key
         item["topic_title"] = topic_title
-
-        aggregate = topic_map.setdefault(
-            topic_key,
-            {
-                "topic_key": topic_key,
-                "topic_title": topic_title,
-                "topic_link_target_count": 0,
-                "topic_message_count": 0,
-                "topic_clicks_7d": 0,
-                "topic_clicks_30d": 0,
-                "topic_platforms": set(),
-                "topic_latest_message_title": "",
-                "topic_last_clicked_at": None,
-                "topic_last_message_time": None,
-                "topic_last_activity_at": None,
-                "_rank": (-1.0, 0, 0, 0),
-            },
+        item["topic_link_target_count"] = 1
+        item["topic_message_count"] = _to_int(item.get("message_count"))
+        item["topic_clicks_total"] = _to_int(item.get("clicks_total"))
+        item["topic_clicks_7d"] = _to_int(item.get("clicks_7d"))
+        item["topic_clicks_30d"] = _to_int(item.get("clicks_30d"))
+        item["topic_platform_count"] = 1 if _normalize_text(item.get("platform"), max_length=64) else 0
+        item["topic_latest_message_title"] = (
+            _normalize_text(item.get("latest_message_title"))
+            or _normalize_text(item.get("display_text"))
+            or topic_title
         )
-
-        aggregate["topic_link_target_count"] += 1
-        aggregate["topic_message_count"] += _to_int(item.get("message_count"))
-        aggregate["topic_clicks_7d"] += _to_int(item.get("clicks_7d"))
-        aggregate["topic_clicks_30d"] += _to_int(item.get("clicks_30d"))
-        aggregate["topic_last_clicked_at"] = _max_datetime(aggregate["topic_last_clicked_at"], item.get("last_clicked_at"))
-        aggregate["topic_last_message_time"] = _max_datetime(
-            aggregate["topic_last_message_time"],
-            item.get("last_message_time"),
-        )
-        aggregate["topic_last_activity_at"] = _max_datetime(
-            aggregate["topic_last_activity_at"],
+        item["topic_last_clicked_at"] = item.get("last_clicked_at")
+        item["topic_last_message_time"] = item.get("last_message_time")
+        item["topic_last_activity_at"] = _max_datetime(
             item.get("last_clicked_at"),
             item.get("last_message_time"),
         )
-
-        platform = _normalize_text(item.get("platform"))
-        if platform:
-            aggregate["topic_platforms"].add(platform)
-
-        rank = _topic_rank(item)
-        if rank >= aggregate["_rank"]:
-            aggregate["_rank"] = rank
-            aggregate["topic_title"] = topic_title
-            aggregate["topic_latest_message_title"] = (
-                _normalize_text(item.get("latest_message_title"))
-                or _normalize_text(item.get("display_text"))
-                or topic_title
-            )
-
-    for item in items:
-        aggregate = topic_map.get(item.get("topic_key"))
-        if not aggregate:
-            continue
-        item["topic_title"] = aggregate["topic_title"]
-        item["topic_link_target_count"] = aggregate["topic_link_target_count"]
-        item["topic_message_count"] = aggregate["topic_message_count"]
-        item["topic_clicks_7d"] = aggregate["topic_clicks_7d"]
-        item["topic_clicks_30d"] = aggregate["topic_clicks_30d"]
-        item["topic_platform_count"] = len(aggregate["topic_platforms"])
-        item["topic_latest_message_title"] = aggregate["topic_latest_message_title"]
-        item["topic_last_clicked_at"] = aggregate["topic_last_clicked_at"]
-        item["topic_last_message_time"] = aggregate["topic_last_message_time"]
-        item["topic_last_activity_at"] = aggregate["topic_last_activity_at"]
 
     return items
 
@@ -712,7 +664,11 @@ def _merge_topic_work_fields(items: list[dict[str, Any]], work_item: dict[str, A
     return payload
 
 
-def _aggregate_topic_item(items: list[dict[str, Any]]) -> dict[str, Any]:
+def _aggregate_topic_item(
+    items: list[dict[str, Any]],
+    *,
+    message_ids_by_link_target: dict[int, set[int]] | None = None,
+) -> dict[str, Any]:
     anchor_item = _select_topic_anchor_item(items)
     profile_item = _select_topic_profile_item(items)
     work_item = _select_topic_work_item(items, anchor_item)
@@ -722,6 +678,15 @@ def _aggregate_topic_item(items: list[dict[str, Any]]) -> dict[str, Any]:
     storage_item = profile_item or anchor_item
     health_snapshot = _build_topic_health_snapshot(items)
     topic_title = _normalize_text(work_item.get("work_title"), max_length=255) or _normalize_text(anchor_item.get("topic_title"), max_length=255)
+    topic_message_ids: set[int] = set()
+    if message_ids_by_link_target:
+        for item in items:
+            topic_message_ids.update(
+                message_ids_by_link_target.get(_to_int(item.get("link_target_id")), set())
+            )
+    topic_message_count = len(topic_message_ids) if topic_message_ids else sum(
+        _to_int(item.get("message_count")) for item in items
+    )
 
     raw_item = {
         "link_target_id": _to_int(storage_item.get("link_target_id")) or _to_int(anchor_item.get("link_target_id")),
@@ -734,7 +699,8 @@ def _aggregate_topic_item(items: list[dict[str, Any]]) -> dict[str, Any]:
         "topic_title": topic_title or "未命名资源",
         "topic_key": anchor_item.get("topic_key") or f"link:{_to_int(anchor_item.get('link_target_id'))}",
         "topic_link_target_count": len(items),
-        "topic_message_count": sum(_to_int(item.get("message_count")) for item in items),
+        "topic_message_count": topic_message_count,
+        "topic_clicks_total": sum(_to_int(item.get("clicks_total")) for item in items),
         "topic_clicks_7d": sum(_to_int(item.get("clicks_7d")) for item in items),
         "topic_clicks_30d": sum(_to_int(item.get("clicks_30d")) for item in items),
         "topic_platform_count": len({_normalize_text(item.get("platform"), max_length=64) for item in items if _normalize_text(item.get("platform"), max_length=64)}),
@@ -746,6 +712,7 @@ def _aggregate_topic_item(items: list[dict[str, Any]]) -> dict[str, Any]:
         "message_count": sum(_to_int(item.get("message_count")) for item in items),
         "recent_ref_count_30d": sum(_to_int(item.get("recent_ref_count_30d")) for item in items),
         "ref_active_days_30d": min(30, sum(_to_int(item.get("ref_active_days_30d")) for item in items)),
+        "clicks_total": sum(_to_int(item.get("clicks_total")) for item in items),
         "clicks_1d": sum(_to_int(item.get("clicks_1d")) for item in items),
         "clicks_3d": sum(_to_int(item.get("clicks_3d")) for item in items),
         "clicks_7d": sum(_to_int(item.get("clicks_7d")) for item in items),
@@ -779,6 +746,7 @@ def _aggregate_topic_item(items: list[dict[str, Any]]) -> dict[str, Any]:
     aggregated["topic_key"] = raw_item["topic_key"]
     aggregated["topic_link_target_count"] = raw_item["topic_link_target_count"]
     aggregated["topic_message_count"] = raw_item["topic_message_count"]
+    aggregated["topic_clicks_total"] = raw_item["topic_clicks_total"]
     aggregated["topic_clicks_7d"] = raw_item["topic_clicks_7d"]
     aggregated["topic_clicks_30d"] = raw_item["topic_clicks_30d"]
     aggregated["topic_platform_count"] = raw_item["topic_platform_count"]
@@ -822,7 +790,32 @@ def _load_workbench_topic_rows(
     for item in candidate_rows:
         topic_key = _normalize_text(item.get("topic_key"), max_length=160) or f"link:{_to_int(item.get('link_target_id'))}"
         grouped_items.setdefault(topic_key, []).append(item)
-    return [_aggregate_topic_item(group_items) for group_items in grouped_items.values()]
+    member_link_target_ids = _normalize_positive_ids(
+        _to_int(item.get("link_target_id"))
+        for group_items in grouped_items.values()
+        for item in group_items
+    )
+    message_ids_by_link_target: dict[int, set[int]] = {}
+    if member_link_target_ids:
+        message_rows = (
+            session.query(
+                MessageLinkRef.link_target_id.label("link_target_id"),
+                MessageLinkRef.message_id.label("message_id"),
+            )
+            .filter(MessageLinkRef.link_target_id.in_(member_link_target_ids))
+            .all()
+        )
+        for row in message_rows:
+            link_target_id = _to_int(row.link_target_id)
+            message_id = _to_int(row.message_id)
+            if link_target_id <= 0 or message_id <= 0:
+                continue
+            message_ids_by_link_target.setdefault(link_target_id, set()).add(message_id)
+
+    return [
+        _aggregate_topic_item(group_items, message_ids_by_link_target=message_ids_by_link_target)
+        for group_items in grouped_items.values()
+    ]
 
 
 def _find_topic_item_by_link_target_id(items: list[dict[str, Any]], *, link_target_id: int) -> dict[str, Any] | None:
@@ -865,6 +858,14 @@ def _load_workbench_candidate_rows(
             func.max(LinkTargetDailyStat.last_clicked_at).label("last_clicked_at"),
         )
         .filter(LinkTargetDailyStat.stat_date >= start)
+        .group_by(LinkTargetDailyStat.link_target_id)
+        .subquery()
+    )
+    click_total_subquery = (
+        session.query(
+            LinkTargetDailyStat.link_target_id.label("link_target_id"),
+            func.sum(LinkTargetDailyStat.click_count).label("clicks_total"),
+        )
         .group_by(LinkTargetDailyStat.link_target_id)
         .subquery()
     )
@@ -934,6 +935,7 @@ def _load_workbench_candidate_rows(
             LinkTarget.total_size_bytes.label("total_size_bytes"),
             LinkTarget.first_seen_at.label("first_seen_at"),
             LinkTarget.last_seen_at.label("last_seen_at"),
+            click_total_subquery.c.clicks_total,
             click_metrics_subquery.c.clicks_30d,
             click_metrics_subquery.c.unique_sessions_30d,
             click_metrics_subquery.c.unique_users_30d,
@@ -966,6 +968,7 @@ def _load_workbench_candidate_rows(
             profile.id.label("profile_id"),
         )
         .join(ref_stats_subquery, ref_stats_subquery.c.link_target_id == LinkTarget.id)
+        .outerjoin(click_total_subquery, click_total_subquery.c.link_target_id == LinkTarget.id)
         .outerjoin(click_metrics_subquery, click_metrics_subquery.c.link_target_id == LinkTarget.id)
         .outerjoin(latest_ref_id_subquery, latest_ref_id_subquery.c.link_target_id == LinkTarget.id)
         .outerjoin(latest_ref, latest_ref.id == latest_ref_id_subquery.c.latest_ref_id)
@@ -1011,6 +1014,7 @@ def _load_workbench_candidate_rows(
             "last_seen_at": row.last_seen_at,
             "last_message_time": row.last_message_time,
             "last_clicked_at": row.last_clicked_at,
+            "clicks_total": _to_int(row.clicks_total),
             "clicks_30d": _to_int(row.clicks_30d),
             "unique_sessions_30d": _to_int(row.unique_sessions_30d),
             "unique_users_30d": _to_int(row.unique_users_30d),
@@ -1092,11 +1096,13 @@ def list_resource_op_workbench_items(
         "value_score",
         "cost_score",
         "risk_score",
+        "topic_clicks_total",
         "topic_clicks_30d",
         "topic_clicks_7d",
         "topic_message_count",
         "topic_link_target_count",
         "topic_last_activity_at",
+        "clicks_total",
         "clicks_30d",
         "clicks_7d",
         "unique_sessions_30d",
@@ -1129,6 +1135,9 @@ def _get_topic_recent_refs(session: Session, *, link_target_ids: Iterable[int]) 
         session.query(
             MessageLinkRef.message_id.label("message_id"),
             Message.title.label("message_title"),
+            Message.channel.label("message_channel"),
+            Message.source.label("message_source"),
+            Message.timestamp.label("message_time_fallback"),
             MessageLinkRef.link_target_id.label("link_target_id"),
             MessageLinkRef.display_text.label("display_text"),
             MessageLinkRef.target_url.label("target_url"),
@@ -1159,14 +1168,22 @@ def _get_topic_recent_refs(session: Session, *, link_target_ids: Iterable[int]) 
             message_id,
             {
                 "message_id": message_id,
-                "message_title": row.message_title or "",
+                "message_title": row.message_title or row.display_text or "",
                 "display_text": row.display_text or "",
-                "channel": row.channel or "",
-                "source": row.source or "",
-                "message_timestamp": row.message_timestamp,
+                "channel": row.channel or row.message_channel or "",
+                "source": row.source or row.message_source or "",
+                "message_timestamp": row.message_timestamp or row.message_time_fallback,
                 "links": [],
             },
         )
+        if not bucket["message_title"]:
+            bucket["message_title"] = row.message_title or row.display_text or ""
+        if not bucket["channel"]:
+            bucket["channel"] = row.channel or row.message_channel or ""
+        if not bucket["source"]:
+            bucket["source"] = row.source or row.message_source or ""
+        if bucket["message_timestamp"] is None:
+            bucket["message_timestamp"] = row.message_timestamp or row.message_time_fallback
         existing_link_ids = {entry["link_target_id"] for entry in bucket["links"]}
         link_target_id = _to_int(row.link_target_id)
         if link_target_id > 0 and link_target_id not in existing_link_ids:

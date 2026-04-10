@@ -8,11 +8,14 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.models.models import engine
-from app.services.resource_ops import run_resource_ops_retention, sync_resource_work_bindings
+from app.services.resource_ops.maintenance import run_resource_ops_retention
+from app.services.resource_ops.recognition_service import run_resource_ops_recognition_job
+from app.services.resource_ops.recognition_service import get_work_binding_summary
 from app.services.resource_ops.settings import (
+    get_resource_ops_recognition_request_mode,
     get_resource_ops_runtime_config,
     is_resource_ops_ai_ready,
-    is_resource_ops_full_sync_active,
+    is_resource_ops_recognition_running,
 )
 
 
@@ -20,6 +23,7 @@ logger = logging.getLogger(__name__)
 
 _scheduler_lock = threading.RLock()
 _scheduler_stop_event = threading.Event()
+_scheduler_wakeup_event = threading.Event()
 _scheduler_thread: threading.Thread | None = None
 _scheduler_advisory_lock_key = 42025091
 
@@ -61,8 +65,6 @@ def _scheduler_tick() -> None:
             return
         try:
             config = get_resource_ops_runtime_config(session)
-            ai_ready = is_resource_ops_ai_ready(config)
-            full_sync_active = is_resource_ops_full_sync_active(config)
 
             cleanup_due = _should_run(
                 config.get("last_cleanup_at"),
@@ -71,28 +73,31 @@ def _scheduler_tick() -> None:
             if cleanup_due:
                 run_resource_ops_retention(session, operator="system")
                 session.commit()
+                config = get_resource_ops_runtime_config(session)
 
-            sync_due = ai_ready and _should_run(
-                config.get("last_sync_at"),
-                interval_seconds=max(300, int(config.get("sync_interval_minutes") or 30) * 60),
-            )
-            if sync_due:
-                if full_sync_active:
-                    sync_resource_work_bindings(
+            if not is_resource_ops_ai_ready(config):
+                return
+            if is_resource_ops_recognition_running(config):
+                return
+
+            requested_mode = get_resource_ops_recognition_request_mode(config)
+            if requested_mode:
+                run_resource_ops_recognition_job(
+                    session,
+                    mode=requested_mode,
+                    operator="system",
+                )
+                return
+
+            if bool(config.get("auto_recognition_enabled")):
+                summary = get_work_binding_summary(session)
+                if int(summary.get("pending_count") or 0) > 0:
+                    run_resource_ops_recognition_job(
                         session,
-                        limit=int(config.get("sync_batch_size") or 12),
-                        mode="full",
-                        operator="system",
-                    )
-                    session.commit()
-                elif bool(config.get("auto_bind_enabled")):
-                    sync_resource_work_bindings(
-                        session,
-                        limit=int(config.get("sync_batch_size") or 12),
                         mode="pending",
+                        respect_retry_after=True,
                         operator="system",
                     )
-                    session.commit()
         except Exception:
             session.rollback()
             logger.exception("Resource ops scheduler tick failed")
@@ -103,7 +108,12 @@ def _scheduler_tick() -> None:
 def _scheduler_loop() -> None:
     while not _scheduler_stop_event.is_set():
         _scheduler_tick()
-        _scheduler_stop_event.wait(120)
+        _scheduler_wakeup_event.wait(5)
+        _scheduler_wakeup_event.clear()
+
+
+def notify_resource_ops_scheduler() -> None:
+    _scheduler_wakeup_event.set()
 
 
 def start_resource_ops_scheduler() -> None:
@@ -112,6 +122,7 @@ def start_resource_ops_scheduler() -> None:
         if _scheduler_thread is not None and _scheduler_thread.is_alive():
             return
         _scheduler_stop_event.clear()
+        _scheduler_wakeup_event.clear()
         _scheduler_thread = threading.Thread(
             target=_scheduler_loop,
             daemon=True,
@@ -124,6 +135,7 @@ def stop_resource_ops_scheduler() -> None:
     global _scheduler_thread
     with _scheduler_lock:
         _scheduler_stop_event.set()
+        _scheduler_wakeup_event.set()
         thread = _scheduler_thread
         _scheduler_thread = None
 

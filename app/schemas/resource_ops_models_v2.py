@@ -156,6 +156,7 @@ class ResourceOpsWorkbenchItem(BaseModel):
     topic_key: str
     topic_link_target_count: int = 1
     topic_message_count: int = 0
+    topic_clicks_total: int = 0
     topic_clicks_7d: int = 0
     topic_clicks_30d: int = 0
     topic_platform_count: int = 1
@@ -167,6 +168,7 @@ class ResourceOpsWorkbenchItem(BaseModel):
     message_count: int = 0
     recent_ref_count_30d: int = 0
     ref_active_days_30d: int = 0
+    clicks_total: int = 0
     clicks_1d: int = 0
     clicks_3d: int = 0
     clicks_7d: int = 0
@@ -233,7 +235,7 @@ class ResourceOpsWorkbenchItem(BaseModel):
     work_match_reason: str | None = None
     work_query_title: str | None = None
     work_candidate_title: str | None = None
-    work_season_hint: str | None = None
+    work_season_hint: str | int | None = None
     work_year_hint: int | None = None
     work_last_attempted_at: datetime | None = None
     work_matched_at: datetime | None = None
@@ -278,19 +280,25 @@ class ResourceOpsWorkBindingSummaryResponse(BaseModel):
     pending_count: int = 0
     error_count: int = 0
     match_rate: float = 0
-    full_sync_active: bool = False
-    full_sync_total: int = 0
-    full_sync_processed: int = 0
-    full_sync_progress: float = 0
-    full_sync_started_at: str | None = None
-    full_sync_finished_at: str | None = None
+
+
+class ResourceOpsRecognitionStatusResponse(BaseModel):
+    is_running: bool = False
+    requested_mode: str | None = None
+    current_mode: str | None = None
+    started_at: str | None = None
+    finished_at: str | None = None
+    total_count: int = 0
+    processed_count: int = 0
+    matched_count: int = 0
+    error_count: int = 0
+    remaining_count: int = 0
+    last_error: str | None = None
+    logs: list[str] = Field(default_factory=list)
 
 
 class ResourceOpsRuntimeSettingsUpdateRequest(BaseModel):
-    auto_bind_enabled: bool = False
-    sync_batch_size: int = Field(default=12, ge=1, le=100)
-    sync_interval_minutes: int = Field(default=30, ge=5, le=1440)
-    ai_enabled: bool = False
+    auto_recognition_enabled: bool = False
     ai_base_url: str = Field(default="", max_length=512)
     ai_model: str = Field(default="", max_length=255)
     ai_api_key: str | None = Field(default=None, max_length=8000)
@@ -301,10 +309,7 @@ class ResourceOpsRuntimeSettingsUpdateRequest(BaseModel):
 
 
 class ResourceOpsRuntimeSettingsResponse(BaseModel):
-    auto_bind_enabled: bool = False
-    sync_batch_size: int = 12
-    sync_interval_minutes: int = 30
-    ai_enabled: bool = False
+    auto_recognition_enabled: bool = False
     ai_base_url: str = ""
     ai_model: str = ""
     ai_api_key_configured: bool = False
@@ -317,23 +322,15 @@ class ResourceOpsRuntimeSettingsResponse(BaseModel):
     last_sync_summary: dict[str, Any] = Field(default_factory=dict)
     last_cleanup_at: str | None = None
     last_cleanup_summary: dict[str, Any] = Field(default_factory=dict)
-    full_sync_active: bool = False
-    full_sync_requested_at: str | None = None
-    full_sync_started_at: str | None = None
-    full_sync_finished_at: str | None = None
+    recognition_status: ResourceOpsRecognitionStatusResponse
     binding_summary: ResourceOpsWorkBindingSummaryResponse
 
 
 class ResourceOpsRecognitionRunResponse(BaseModel):
+    accepted: bool = True
     mode: str = "pending"
-    processed_count: int = 0
-    matched_count: int = 0
-    error_count: int = 0
-    skipped_count: int = 0
-    remaining_count: int = 0
-    started_at: str
-    finished_at: str
-    items: list[dict[str, Any]] = Field(default_factory=list)
+    message: str = ""
+    recognition_status: ResourceOpsRecognitionStatusResponse
     binding_summary: ResourceOpsWorkBindingSummaryResponse
 
 

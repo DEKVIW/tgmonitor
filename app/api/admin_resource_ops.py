@@ -389,9 +389,8 @@ async def test_resource_ops_ai_connection_api(
         ) from exc
 
 
-@router.post("/recognition/sync", response_model=ResourceOpsRecognitionRunResponse, summary="Run one resource recognition batch")
+@router.post("/recognition/pending", response_model=ResourceOpsRecognitionRunResponse, summary="Queue pending resource recognition")
 async def sync_resource_recognition_api(
-    limit: int = Query(20, ge=1, le=100),
     current_user: Dict[str, Any] = Depends(get_admin_user),
     db: Session = Depends(get_db),
 ) -> ResourceOpsRecognitionRunResponse:
@@ -399,12 +398,10 @@ async def sync_resource_recognition_api(
     try:
         payload = sync_resource_work_bindings(
             db,
-            limit=limit,
             mode="pending",
             operator=str(operator),
         )
         db.commit()
-        payload["binding_summary"] = ResourceOpsWorkBindingSummaryResponse(**payload["binding_summary"])
         return ResourceOpsRecognitionRunResponse(**payload)
     except ValueError as exc:
         db.rollback()
@@ -420,9 +417,8 @@ async def sync_resource_recognition_api(
         ) from exc
 
 
-@router.post("/recognition/full", response_model=ResourceOpsRecognitionRunResponse, summary="Run or continue a full AI recognition cycle")
+@router.post("/recognition/all", response_model=ResourceOpsRecognitionRunResponse, summary="Queue a full AI recognition cycle")
 async def sync_resource_recognition_full_api(
-    limit: int = Query(20, ge=1, le=100),
     current_user: Dict[str, Any] = Depends(get_admin_user),
     db: Session = Depends(get_db),
 ) -> ResourceOpsRecognitionRunResponse:
@@ -430,12 +426,10 @@ async def sync_resource_recognition_full_api(
     try:
         payload = sync_resource_work_bindings(
             db,
-            limit=limit,
-            mode="full",
+            mode="all",
             operator=str(operator),
         )
         db.commit()
-        payload["binding_summary"] = ResourceOpsWorkBindingSummaryResponse(**payload["binding_summary"])
         return ResourceOpsRecognitionRunResponse(**payload)
     except ValueError as exc:
         db.rollback()

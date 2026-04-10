@@ -144,20 +144,14 @@ export const testResourceOpsAiConnection = async (
 }
 
 export const syncResourceOpsRecognition = async (
-  limit: number = 20
 ): Promise<ResourceOpsRecognitionRunResponse> => {
-  const response = await apiClient.post<ResourceOpsRecognitionRunResponse>(
-    `/admin/resource-ops/recognition/sync?limit=${limit}`
-  )
+  const response = await apiClient.post<ResourceOpsRecognitionRunResponse>('/admin/resource-ops/recognition/pending')
   return response.data
 }
 
 export const syncResourceOpsRecognitionFull = async (
-  limit: number = 20
 ): Promise<ResourceOpsRecognitionRunResponse> => {
-  const response = await apiClient.post<ResourceOpsRecognitionRunResponse>(
-    `/admin/resource-ops/recognition/full?limit=${limit}`
-  )
+  const response = await apiClient.post<ResourceOpsRecognitionRunResponse>('/admin/resource-ops/recognition/all')
   return response.data
 }
 

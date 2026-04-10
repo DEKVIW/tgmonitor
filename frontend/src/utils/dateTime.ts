@@ -10,7 +10,8 @@ const DEFAULT_DISPLAY_TIMEZONE = 'Asia/Shanghai'
 
 export const parseServerDateTime = (
   value?: string | null,
-  targetTimezone: string = DEFAULT_DISPLAY_TIMEZONE
+  targetTimezone: string = DEFAULT_DISPLAY_TIMEZONE,
+  naiveAsLocal: boolean = false
 ) => {
   if (!value) {
     return null
@@ -19,7 +20,11 @@ export const parseServerDateTime = (
   if (!normalized) {
     return null
   }
-  const parsed = SERVER_TZ_PATTERN.test(normalized) ? dayjs(normalized) : dayjs.utc(normalized)
+  const parsed = SERVER_TZ_PATTERN.test(normalized)
+    ? dayjs(normalized)
+    : naiveAsLocal
+      ? dayjs.tz(normalized, targetTimezone)
+      : dayjs.utc(normalized)
   if (!parsed.isValid()) {
     return null
   }
@@ -29,9 +34,10 @@ export const parseServerDateTime = (
 export const formatServerDateTime = (
   value?: string | null,
   format: string = 'YYYY-MM-DD HH:mm',
-  targetTimezone: string = DEFAULT_DISPLAY_TIMEZONE
+  targetTimezone: string = DEFAULT_DISPLAY_TIMEZONE,
+  naiveAsLocal: boolean = false
 ) => {
-  const parsed = parseServerDateTime(value, targetTimezone)
+  const parsed = parseServerDateTime(value, targetTimezone, naiveAsLocal)
   if (!parsed) {
     return '-'
   }

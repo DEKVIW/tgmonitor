@@ -15,12 +15,38 @@ from app.services.resource_ops.settings import resolve_resource_ops_ai_request_c
 AI_RECOGNITION_SYSTEM_PROMPT = """
 你是影视剧名称提取助手。
 用户会给你一段原始消息标题。
-你的任务只有一个：提取这段文字里的影视剧名称。
-只回复影视剧名称本身，不要解释，不要加前缀，不要加标点，不要返回 JSON，不要返回多行。
+你的任务只有一个：提取这段文字里的影视剧名称本身。
+只回复影视剧名称，不要解释，不要加前缀，不要加标点，不要返回 JSON，不要返回多行。
+不要输出季数、部数、集数、年份、字幕、画质、演员名字、更新状态、合集说明。
+如果原文是“月鳞绮纪 2026 第17集 无字幕 鞠婧祎 曾舜晞 陈都灵”，你只能回复“月鳞绮纪”。
 如果无法判断，就回复空字符串。
 """.strip()
 
 TITLE_PREFIX_PATTERN = re.compile(r"^(影视剧名称|剧名|名称|标题|答案)\s*[:：]\s*", re.IGNORECASE)
+TITLE_SEASON_SUFFIX_PATTERN = re.compile(
+    r"\s*(?:"
+    r"第\s*[0-9一二三四五六七八九十百零两]+\s*(?:季|部|篇|章)"
+    r"|Season\s*\d+"
+    r"|S\s*\d{1,2}"
+    r"|S\d{1,2}"
+    r")\s*$",
+    re.IGNORECASE,
+)
+TITLE_EPISODE_SUFFIX_PATTERN = re.compile(
+    r"\s*(?:"
+    r"第\s*\d+\s*(?:集|话|期)"
+    r"|EP?\s*\d+"
+    r"|E\d+"
+    r")\s*$",
+    re.IGNORECASE,
+)
+TITLE_NOISE_SUFFIX_PATTERNS = (
+    TITLE_SEASON_SUFFIX_PATTERN,
+    TITLE_EPISODE_SUFFIX_PATTERN,
+    re.compile(r"\s*(?:全集|完结|完整版|无字幕|中字|双语|国语|粤语|4K|8K|2160P|1080P|720P|HDR|杜比视界)\s*$", re.IGNORECASE),
+    re.compile(r"\s*(?:\||｜|/|·|-|_)+\s*$", re.IGNORECASE),
+)
+GENERIC_EMPTY_TITLES = {"影视剧名称", "剧名", "名称", "标题", "答案", "未知", "无"}
 
 
 class ResourceOpsAiError(RuntimeError):
@@ -78,6 +104,17 @@ def _extract_plain_title(raw_text: str) -> str:
     title = title.strip("`'\"“”‘’[](){}<>")
     if title.startswith("《") and title.endswith("》") and len(title) > 2:
         title = title[1:-1].strip()
+    title = re.sub(r"\s+", " ", title).strip()
+
+    previous = None
+    while title and title != previous:
+        previous = title
+        for pattern in TITLE_NOISE_SUFFIX_PATTERNS:
+            title = pattern.sub("", title).strip()
+        title = title.strip("`'\"“”‘’[](){}<>|｜/·-_ ").strip()
+
+    if title in GENERIC_EMPTY_TITLES:
+        return ""
     return _normalize_text(title, max_length=255)
 
 
@@ -153,7 +190,11 @@ def _extract_completion_text(payload: dict[str, Any]) -> str:
 
 def _build_user_prompt(*, primary_title: str) -> str:
     normalized_title = _normalize_text(primary_title, max_length=500)
-    return f"{normalized_title}\n\n把这段文字的影视剧名称提取处理，只要影视剧名称，不要多回答。"
+    return (
+        f"{normalized_title}\n\n"
+        "把这段文字里的影视剧名称提取出来，只返回影视剧名称本身。"
+        "不要返回第几季、多少集、年份、字幕、画质、演员、更新状态，也不要多说一句话。"
+    )
 
 
 def _extract_model_ids(payload: dict[str, Any]) -> list[str]:
