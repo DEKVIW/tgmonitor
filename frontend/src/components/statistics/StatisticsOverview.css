@@ -1,10 +1,18 @@
 .statistics-overview {
-  margin-bottom: 4px;
+  margin-bottom: 12px;
 }
 
-.statistics-overview .ant-card {
+.statistics-overview-card {
   border-radius: 22px;
   box-shadow: var(--shadow-soft);
+  height: 100%;
+}
+
+.statistics-overview-card .ant-card-body {
+  min-height: 146px;
+  padding: 28px 30px;
+  display: flex;
+  align-items: center;
 }
 
 .statistics-overview .ant-statistic-title {
@@ -17,5 +25,31 @@
   font-size: 28px;
   font-weight: 600;
   color: var(--text-strong);
+}
+
+@media (max-width: 991px) {
+  .statistics-overview-card .ant-card-body {
+    min-height: 132px;
+    padding: 24px 26px;
+  }
+}
+
+@media (max-width: 640px) {
+  .statistics-overview {
+    margin-bottom: 12px;
+  }
+
+  .statistics-overview-card .ant-card-body {
+    min-height: 118px;
+    padding: 20px 22px;
+  }
+
+  .statistics-overview .ant-statistic-title {
+    margin-bottom: 10px;
+  }
+
+  .statistics-overview .ant-statistic-content {
+    font-size: 26px;
+  }
 }
 

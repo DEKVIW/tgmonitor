@@ -13,9 +13,9 @@ interface StatisticsOverviewProps {
 
 const StatisticsOverview = ({ data }: StatisticsOverviewProps) => {
   return (
-    <Row gutter={16} className="statistics-overview">
-      <Col xs={24} sm={8}>
-        <Card variant="outlined">
+    <Row gutter={[18, 18]} className="statistics-overview">
+      <Col xs={24} sm={12} lg={8}>
+        <Card className="statistics-overview-card" variant="outlined">
           <Statistic
             title="今日消息"
             value={data.today_messages}
@@ -24,8 +24,8 @@ const StatisticsOverview = ({ data }: StatisticsOverviewProps) => {
           />
         </Card>
       </Col>
-      <Col xs={24} sm={8}>
-        <Card variant="outlined">
+      <Col xs={24} sm={12} lg={8}>
+        <Card className="statistics-overview-card" variant="outlined">
           <Statistic
             title="总消息数"
             value={data.total_messages}
@@ -34,8 +34,8 @@ const StatisticsOverview = ({ data }: StatisticsOverviewProps) => {
           />
         </Card>
       </Col>
-      <Col xs={24} sm={8}>
-        <Card variant="outlined">
+      <Col xs={24} sm={12} lg={8}>
+        <Card className="statistics-overview-card" variant="outlined">
           <Statistic
             title="总链接数"
             value={data.total_links}
