@@ -4,6 +4,7 @@ import type { ColumnsType, TableProps } from 'antd/es/table'
 import { DatabaseOutlined, InfoCircleOutlined, LinkOutlined, ReloadOutlined, SyncOutlined } from '@ant-design/icons'
 
 import {
+  clearResourceOpsRuntimeLogs,
   getResourceOpsCatalogStatus,
   getResourceOpsOverview,
   getResourceOpsPlatformDistribution,
@@ -26,7 +27,6 @@ import ResourceOpsTrendChart from '@/components/resource-ops/ResourceOpsTrendCha
 import ResourceOpsWorkbenchDrawerTopic from '@/components/resource-ops/ResourceOpsWorkbenchDrawerTopic'
 import type {
   ResourceOpsAiModelItem,
-  ResourceOpsAiTestResponse,
   ResourceOpsCatalogStatusResponse,
   ResourceOpsOverviewResponse,
   ResourceOpsPlatformDistributionResponse,
@@ -93,10 +93,10 @@ const ResourceOperationsAdminRuntime = () => {
   const [retentionRunning, setRetentionRunning] = useState(false)
   const [aiModelsLoading, setAiModelsLoading] = useState(false)
   const [aiTesting, setAiTesting] = useState(false)
+  const [logsClearing, setLogsClearing] = useState(false)
   const [aiApiKeyInput, setAiApiKeyInput] = useState('')
   const [aiTestInput, setAiTestInput] = useState('')
   const [aiModelOptions, setAiModelOptions] = useState<ResourceOpsAiModelItem[]>([])
-  const [aiTestResult, setAiTestResult] = useState<ResourceOpsAiTestResponse | null>(null)
 
   const [workbenchLoading, setWorkbenchLoading] = useState(false)
   const [workbenchVisited, setWorkbenchVisited] = useState(false)
@@ -189,6 +189,15 @@ const ResourceOperationsAdminRuntime = () => {
       if (!options?.silent) {
         setWorkbenchLoading(false)
       }
+    }
+  }
+
+  const refreshRuntimeStatusOnly = async () => {
+    try {
+      const response = await getResourceOpsRuntimeSettings()
+      setRuntimeSettings(response)
+    } catch {
+      // keep current view state if lightweight refresh fails
     }
   }
 
@@ -322,6 +331,7 @@ const ResourceOperationsAdminRuntime = () => {
       message.error(error.response?.data?.detail || '加载 AI 模型失败')
     } finally {
       setAiModelsLoading(false)
+      void refreshRuntimeStatusOnly()
     }
   }
 
@@ -333,13 +343,12 @@ const ResourceOperationsAdminRuntime = () => {
         model: settingsDraft?.ai_model || '',
         sample_text: aiTestInput.trim() || undefined,
       })
-      setAiTestResult(result)
-      message.success('AI 识别测试通过')
+      message.success(`AI 识别测试通过：${result.extracted_title || '未识别出主题'}`)
     } catch (error: any) {
-      setAiTestResult(null)
       message.error(error.response?.data?.detail || 'AI 识别测试失败')
     } finally {
       setAiTesting(false)
+      void refreshRuntimeStatusOnly()
     }
   }
 
@@ -353,7 +362,6 @@ const ResourceOperationsAdminRuntime = () => {
       setRuntimeSettings(response)
       setSettingsDraft(buildSettingsDraft(response))
       setAiApiKeyInput('')
-      setAiTestResult(null)
       void loadSavedModels(response)
       message.success('配置已保存')
     } catch (error: any) {
@@ -432,6 +440,19 @@ const ResourceOperationsAdminRuntime = () => {
       message.error(error.response?.data?.detail || '执行数据清理失败')
     } finally {
       setRetentionRunning(false)
+    }
+  }
+
+  const handleClearLogs = async () => {
+    setLogsClearing(true)
+    try {
+      const response = await clearResourceOpsRuntimeLogs()
+      setRuntimeSettings(response)
+      message.success('终端日志已清空')
+    } catch (error: any) {
+      message.error(error.response?.data?.detail || '清空终端日志失败')
+    } finally {
+      setLogsClearing(false)
     }
   }
 
@@ -795,6 +816,7 @@ const ResourceOperationsAdminRuntime = () => {
                   allRunLoading={allRunLoading}
                   aiModelsLoading={aiModelsLoading}
                   aiTesting={aiTesting}
+                  logsClearing={logsClearing}
                   settingsDraft={settingsDraft}
                   runtimeSettings={runtimeSettings}
                   bindingSummary={bindingSummary}
@@ -803,12 +825,12 @@ const ResourceOperationsAdminRuntime = () => {
                   aiApiKeyInput={aiApiKeyInput}
                   aiTestInput={aiTestInput}
                   aiModelOptions={aiModelOptions}
-                  aiTestResult={aiTestResult}
                   formatNumber={formatNumber}
                   formatDateTime={formatResourceOpsDateTime}
                   onPatchDraft={handlePatchDraft}
                   onAiApiKeyInputChange={setAiApiKeyInput}
                   onAiTestInputChange={setAiTestInput}
+                  onClearLogs={() => void handleClearLogs()}
                   onLoadAiModels={() => void handleLoadAiModels()}
                   onTestAiConnection={() => void handleTestAiConnection()}
                   onRunRecognition={(mode) => void handleRunRecognition(mode)}

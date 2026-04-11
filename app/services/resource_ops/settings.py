@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -18,6 +19,7 @@ RESOURCE_OPS_RUNTIME_EXTRA_KEY = "resource_ops_runtime"
 RECOGNITION_LOG_LIMIT = 120
 WORKER_HEARTBEAT_GRACE_SECONDS = 30
 RESOURCE_OPS_AI_API_MODES = {"auto", "chat_completions", "responses"}
+RESOURCE_OPS_LOG_TIMEZONE = ZoneInfo("Asia/Shanghai")
 
 
 def _utcnow() -> datetime:
@@ -117,6 +119,14 @@ def _coerce_datetime(value: Any) -> datetime | None:
 
 def _to_iso(value: datetime | None) -> str | None:
     return _to_utc_iso(value)
+
+
+def _format_runtime_log_line(message: Any) -> str:
+    text = _coerce_text(message, "", max_length=420)
+    if not text:
+        return ""
+    timestamp = datetime.now(RESOURCE_OPS_LOG_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
+    return f"[{timestamp}] {text}"
 
 
 def build_default_resource_ops_runtime_settings() -> dict[str, Any]:
@@ -432,7 +442,7 @@ def update_resource_ops_worker_state(
     if payload.get("reset_logs"):
         values["worker_logs"] = []
     if "log_line" in payload:
-        log_line = _coerce_text(payload.get("log_line"), "", max_length=500)
+        log_line = _format_runtime_log_line(payload.get("log_line"))
         if log_line:
             logs = list(values.get("worker_logs") or [])
             logs.append(log_line)
@@ -443,3 +453,33 @@ def update_resource_ops_worker_state(
     session.add(record)
     session.flush()
     return get_resource_ops_runtime_settings(session)
+
+
+def append_resource_ops_runtime_log(
+    session: Session,
+    *,
+    log_line: str,
+    updated_by: str | None = None,
+    last_error: str | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "log_line": log_line,
+    }
+    if last_error is not None:
+        payload["worker_last_error"] = _coerce_text(last_error, "", max_length=2000)
+    return update_resource_ops_worker_state(session, payload, updated_by=updated_by)
+
+
+def clear_resource_ops_runtime_logs(
+    session: Session,
+    *,
+    updated_by: str | None = None,
+) -> dict[str, Any]:
+    return update_resource_ops_worker_state(
+        session,
+        {
+            "reset_logs": True,
+            "worker_last_error": "",
+        },
+        updated_by=updated_by,
+    )

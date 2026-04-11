@@ -28,6 +28,8 @@ from .recognition_service import (
     sync_resource_work_bindings_for_message_ids,
 )
 from .settings import (
+    append_resource_ops_runtime_log,
+    clear_resource_ops_runtime_logs,
     get_resource_ops_runtime_settings,
     update_resource_ops_runtime_settings,
 )
@@ -50,6 +52,8 @@ __all__ = [
     "record_click_event",
     "get_resource_ops_runtime_settings",
     "update_resource_ops_runtime_settings",
+    "append_resource_ops_runtime_log",
+    "clear_resource_ops_runtime_logs",
     "sync_resource_work_bindings",
     "sync_resource_work_bindings_for_link_targets",
     "sync_resource_work_bindings_for_message_ids",

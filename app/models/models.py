@@ -195,6 +195,7 @@ class ResourceWorkBinding(Base):
     match_status = Column(String(32), nullable=False, default="pending", index=True)
     provider = Column(String(32), nullable=True, index=True)
     provider_work_id = Column(String(128), nullable=True, index=True)
+    confidence = Column(Float, nullable=False, default=0.0, server_default=text("0"))
     match_source = Column(String(32), nullable=False, default="pending", index=True)
     query_title = Column(String(255), nullable=True)
     candidate_title = Column(String(255), nullable=True)

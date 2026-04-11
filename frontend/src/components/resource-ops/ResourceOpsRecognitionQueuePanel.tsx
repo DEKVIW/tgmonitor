@@ -3,7 +3,6 @@ import { InfoCircleOutlined, RobotOutlined } from '@ant-design/icons'
 
 import type {
   ResourceOpsAiModelItem,
-  ResourceOpsAiTestResponse,
   ResourceOpsRecognitionStatus,
   ResourceOpsRuntimeSettingsResponse,
   ResourceOpsRuntimeSettingsUpdateRequest,
@@ -25,6 +24,7 @@ interface ResourceOpsRecognitionQueuePanelProps {
   allRunLoading: boolean
   aiModelsLoading: boolean
   aiTesting: boolean
+  logsClearing: boolean
   settingsDraft: ResourceOpsRuntimeSettingsUpdateRequest | null
   runtimeSettings: ResourceOpsRuntimeSettingsResponse | null
   bindingSummary: ResourceOpsWorkBindingSummary | null
@@ -33,12 +33,12 @@ interface ResourceOpsRecognitionQueuePanelProps {
   aiApiKeyInput: string
   aiTestInput: string
   aiModelOptions: ResourceOpsAiModelItem[]
-  aiTestResult: ResourceOpsAiTestResponse | null
   formatNumber: (value?: number | null) => string
   formatDateTime: (value?: string | null) => string
   onPatchDraft: (key: keyof ResourceOpsRuntimeSettingsUpdateRequest, value: string | number | boolean) => void
   onAiApiKeyInputChange: (value: string) => void
   onAiTestInputChange: (value: string) => void
+  onClearLogs: () => void
   onLoadAiModels: () => void
   onTestAiConnection: () => void
   onRunRecognition: (mode: 'pending' | 'all') => void
@@ -47,16 +47,6 @@ interface ResourceOpsRecognitionQueuePanelProps {
 
 const RECOGNITION_TOOLTIP =
   'AI 只读取被点击链接对应的原始消息标题，提取影视剧名称后归并到同一主题。开启自动识别并保存后，新点击会自动进入待处理队列，由 tg-worker 持续消化。'
-
-const getApiModeLabel = (value?: string | null) =>
-  (
-    {
-      auto: '自动兜底',
-      chat_completions: 'Chat',
-      chat_completions_stream: 'Chat 流式',
-      responses: 'Responses',
-    } as Record<string, string>
-  )[value || 'auto'] || '自动兜底'
 
 const getRuntimeTag = (
   runtimeSettings: ResourceOpsRuntimeSettingsResponse,
@@ -92,6 +82,7 @@ const ResourceOpsRecognitionQueuePanel = ({
   allRunLoading,
   aiModelsLoading,
   aiTesting,
+  logsClearing,
   settingsDraft,
   runtimeSettings,
   bindingSummary,
@@ -100,12 +91,12 @@ const ResourceOpsRecognitionQueuePanel = ({
   aiApiKeyInput,
   aiTestInput,
   aiModelOptions,
-  aiTestResult,
   formatNumber,
   formatDateTime,
   onPatchDraft,
   onAiApiKeyInputChange,
   onAiTestInputChange,
+  onClearLogs,
   onLoadAiModels,
   onTestAiConnection,
   onRunRecognition,
@@ -201,15 +192,6 @@ const ResourceOpsRecognitionQueuePanel = ({
 
                   {recognitionStatus?.last_error ? (
                     <Alert type="error" showIcon message="最近一次处理出现异常" description={recognitionStatus.last_error} />
-                  ) : null}
-
-                  {aiTestResult ? (
-                    <Alert
-                      type="success"
-                      showIcon
-                      message={`测试结果：${aiTestResult.extracted_title || '未识别出主题'}`}
-                      description={`模型：${aiTestResult.model} / 模式：${getApiModeLabel(aiTestResult.used_api_mode)}${aiTestResult.reason ? ` / ${aiTestResult.reason}` : ''}`}
-                    />
                   ) : null}
 
                   <div className="resource-ops-recognition-grid">
@@ -385,7 +367,12 @@ const ResourceOpsRecognitionQueuePanel = ({
                       ) : null}
 
                       <div className="resource-ops-form-field">
-                        <label>终端日志</label>
+                        <div className="resource-ops-field-head">
+                          <label>终端日志</label>
+                          <Button size="small" loading={logsClearing} onClick={onClearLogs}>
+                            清空
+                          </Button>
+                        </div>
                         <div className="resource-ops-terminal">
                           {recognitionStatus?.logs?.length ? (
                             recognitionStatus.logs.map((line, index) => (

@@ -316,11 +316,12 @@ def record_click_event(
             session.flush()
 
     try:
-        sync_resource_work_bindings_for_link_targets(
-            session,
-            link_target_ids=[int(link_ref.link_target_id)],
-            operator="system",
-        )
+        with session.begin_nested():
+            sync_resource_work_bindings_for_link_targets(
+                session,
+                link_target_ids=[int(link_ref.link_target_id)],
+                operator="system",
+            )
     except Exception:
         # Click tracking should never fail because the recognition queue could not be updated.
         pass

@@ -143,6 +143,11 @@ export const testResourceOpsAiConnection = async (
   return response.data
 }
 
+export const clearResourceOpsRuntimeLogs = async (): Promise<ResourceOpsRuntimeSettingsResponse> => {
+  const response = await apiClient.post<ResourceOpsRuntimeSettingsResponse>('/admin/resource-ops/logs/clear')
+  return response.data
+}
+
 export const syncResourceOpsRecognition = async (
 ): Promise<ResourceOpsRecognitionRunResponse> => {
   const response = await apiClient.post<ResourceOpsRecognitionRunResponse>('/admin/resource-ops/recognition/pending')

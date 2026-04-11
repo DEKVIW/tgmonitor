@@ -34,6 +34,8 @@ from app.schemas.resource_ops_models_v2 import (
     ResourceOpsWorkBindingSummaryResponse,
 )
 from app.services.resource_ops import (
+    append_resource_ops_runtime_log,
+    clear_resource_ops_runtime_logs,
     get_catalog_sync_status,
     get_resource_op_candidate_detail,
     get_resource_op_workbench_detail,
@@ -319,22 +321,45 @@ async def update_resource_ops_runtime_settings_api(
 ) -> ResourceOpsRuntimeSettingsResponse:
     operator = current_user.get("username") or current_user.get("name") or "admin"
     try:
-        settings_payload = update_resource_ops_runtime_settings(
+        update_resource_ops_runtime_settings(
             db,
             payload.dict(exclude_unset=True),
             updated_by=str(operator),
         )
+        append_resource_ops_runtime_log(
+            db,
+            log_line=(
+                f"[INFO] 归并配置已保存 -> 模型 {payload.ai_model or '自动选择'} / "
+                f"自动识别 {'开启' if payload.auto_recognition_enabled else '关闭'}"
+            ),
+            updated_by=str(operator),
+        )
         db.commit()
+        settings_payload = get_resource_ops_runtime_settings(db)
         settings_payload["binding_summary"] = ResourceOpsWorkBindingSummaryResponse(**get_work_binding_summary(db))
         return ResourceOpsRuntimeSettingsResponse(**settings_payload)
     except ValueError as exc:
         db.rollback()
+        append_resource_ops_runtime_log(
+            db,
+            log_line=f"[ERR] 保存归并配置失败 -> {exc}",
+            updated_by=str(operator),
+            last_error=str(exc),
+        )
+        db.commit()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(exc),
         ) from exc
     except Exception as exc:
         db.rollback()
+        append_resource_ops_runtime_log(
+            db,
+            log_line=f"[ERR] 保存归并配置异常 -> {exc}",
+            updated_by=str(operator),
+            last_error=str(exc),
+        )
+        db.commit()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to update resource runtime settings: {exc}",
@@ -347,9 +372,15 @@ async def list_resource_ops_ai_models_api(
     current_user: Dict[str, Any] = Depends(get_admin_user),
     db: Session = Depends(get_db),
 ) -> ResourceOpsAiModelListResponse:
-    del current_user
+    operator = current_user.get("username") or current_user.get("name") or "admin"
     try:
         result = list_resource_ops_ai_models(db, payload.dict(exclude_unset=True))
+        append_resource_ops_runtime_log(
+            db,
+            log_line=f"[INFO] 模型刷新成功 -> 共 {int(result.get('count') or 0)} 个模型",
+            updated_by=str(operator),
+        )
+        db.commit()
         return ResourceOpsAiModelListResponse(
             models=[ResourceOpsAiModelItem(**item) for item in result.get("models", [])],
             base_url=result.get("base_url") or "",
@@ -357,11 +388,25 @@ async def list_resource_ops_ai_models_api(
             count=int(result.get("count") or 0),
         )
     except RuntimeError as exc:
+        append_resource_ops_runtime_log(
+            db,
+            log_line=f"[ERR] 模型刷新失败 -> {exc}",
+            updated_by=str(operator),
+            last_error=str(exc),
+        )
+        db.commit()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(exc),
         ) from exc
     except Exception as exc:
+        append_resource_ops_runtime_log(
+            db,
+            log_line=f"[ERR] 模型刷新异常 -> {exc}",
+            updated_by=str(operator),
+            last_error=str(exc),
+        )
+        db.commit()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to load AI model list: {exc}",
@@ -374,18 +419,62 @@ async def test_resource_ops_ai_connection_api(
     current_user: Dict[str, Any] = Depends(get_admin_user),
     db: Session = Depends(get_db),
 ) -> ResourceOpsAiTestResponse:
-    del current_user
+    operator = current_user.get("username") or current_user.get("name") or "admin"
     try:
-        return ResourceOpsAiTestResponse(**test_resource_ops_ai_connection(db, payload.dict(exclude_unset=True)))
+        result = test_resource_ops_ai_connection(db, payload.dict(exclude_unset=True))
+        append_resource_ops_runtime_log(
+            db,
+            log_line=(
+                f"[OK] 测试识别 -> {result.get('sample_text') or '-'} => "
+                f"{result.get('extracted_title') or '未识别'} / "
+                f"{result.get('used_api_mode') or 'auto'} / {result.get('model') or '-'}"
+            ),
+            updated_by=str(operator),
+        )
+        db.commit()
+        return ResourceOpsAiTestResponse(**result)
     except RuntimeError as exc:
+        append_resource_ops_runtime_log(
+            db,
+            log_line=f"[ERR] 测试识别失败 -> {exc}",
+            updated_by=str(operator),
+            last_error=str(exc),
+        )
+        db.commit()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(exc),
         ) from exc
     except Exception as exc:
+        append_resource_ops_runtime_log(
+            db,
+            log_line=f"[ERR] 测试识别异常 -> {exc}",
+            updated_by=str(operator),
+            last_error=str(exc),
+        )
+        db.commit()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to test AI configuration: {exc}",
+        ) from exc
+
+
+@router.post("/logs/clear", response_model=ResourceOpsRuntimeSettingsResponse, summary="Clear resource operations runtime logs")
+async def clear_resource_ops_logs_api(
+    current_user: Dict[str, Any] = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+) -> ResourceOpsRuntimeSettingsResponse:
+    operator = current_user.get("username") or current_user.get("name") or "admin"
+    try:
+        settings_payload = clear_resource_ops_runtime_logs(db, updated_by=str(operator))
+        db.commit()
+        settings_payload["binding_summary"] = ResourceOpsWorkBindingSummaryResponse(**get_work_binding_summary(db))
+        return ResourceOpsRuntimeSettingsResponse(**settings_payload)
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to clear resource runtime logs: {exc}",
         ) from exc
 
 
@@ -401,16 +490,35 @@ async def sync_resource_recognition_api(
             mode="pending",
             operator=str(operator),
         )
+        append_resource_ops_runtime_log(
+            db,
+            log_line=f"[INFO] 手动入队 -> 待处理 / {payload.get('message') or '-'}",
+            updated_by=str(operator),
+        )
         db.commit()
         return ResourceOpsRecognitionRunResponse(**payload)
     except ValueError as exc:
         db.rollback()
+        append_resource_ops_runtime_log(
+            db,
+            log_line=f"[ERR] 手动入队失败 -> {exc}",
+            updated_by=str(operator),
+            last_error=str(exc),
+        )
+        db.commit()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(exc),
         ) from exc
     except Exception as exc:
         db.rollback()
+        append_resource_ops_runtime_log(
+            db,
+            log_line=f"[ERR] 手动入队异常 -> {exc}",
+            updated_by=str(operator),
+            last_error=str(exc),
+        )
+        db.commit()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to run resource recognition sync: {exc}",
@@ -429,16 +537,35 @@ async def sync_resource_recognition_full_api(
             mode="all",
             operator=str(operator),
         )
+        append_resource_ops_runtime_log(
+            db,
+            log_line=f"[INFO] 手动入队 -> 全部扫描 / {payload.get('message') or '-'}",
+            updated_by=str(operator),
+        )
         db.commit()
         return ResourceOpsRecognitionRunResponse(**payload)
     except ValueError as exc:
         db.rollback()
+        append_resource_ops_runtime_log(
+            db,
+            log_line=f"[ERR] 全部扫描入队失败 -> {exc}",
+            updated_by=str(operator),
+            last_error=str(exc),
+        )
+        db.commit()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(exc),
         ) from exc
     except Exception as exc:
         db.rollback()
+        append_resource_ops_runtime_log(
+            db,
+            log_line=f"[ERR] 全部扫描入队异常 -> {exc}",
+            updated_by=str(operator),
+            last_error=str(exc),
+        )
+        db.commit()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to run full resource recognition sync: {exc}",

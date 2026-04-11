@@ -354,7 +354,12 @@ def _ensure_binding(session: Session, *, link_target_id: int) -> ResourceWorkBin
     binding = session.query(ResourceWorkBinding).filter(ResourceWorkBinding.link_target_id == int(link_target_id)).first()
     if binding is not None:
         return binding
-    binding = ResourceWorkBinding(link_target_id=int(link_target_id), match_status="pending", match_source="ai")
+    binding = ResourceWorkBinding(
+        link_target_id=int(link_target_id),
+        match_status="pending",
+        match_source="ai",
+        confidence=0.0,
+    )
     session.add(binding)
     session.flush()
     return binding
@@ -394,6 +399,7 @@ def ensure_work_binding_placeholders(session: Session, *, link_target_ids: Itera
                 link_target_id=link_target_id,
                 match_status="pending",
                 match_source="ai",
+                confidence=0.0,
             )
         )
         created_count += 1
@@ -538,6 +544,7 @@ def _build_ai_work_candidate(
         "original_title": canonical_title,
         "release_year": None,
         "media_type": None,
+        "confidence": float(getattr(result, "confidence", 0) or 0),
         "aliases": aliases,
         "extra_json": {
             "provider": "ai",
@@ -574,6 +581,7 @@ def _apply_binding_success(
     binding.match_status = "matched"
     binding.provider = "ai"
     binding.provider_work_id = work.provider_work_id
+    binding.confidence = float(ai_payload.get("confidence") or 0)
     binding.match_source = "ai"
     binding.query_title = (ai_payload.get("extra_json") or {}).get("query_title") or candidate.latest_message_title or candidate.display_text
     binding.candidate_title = work.canonical_title
@@ -600,6 +608,7 @@ def _apply_binding_error(
         }
     )
     binding.match_status = "error"
+    binding.confidence = 0.0
     binding.match_source = "ai"
     binding.query_title = candidate.latest_message_title or candidate.display_text
     binding.reason = _normalize_text(reason, max_length=255) or "AI 识别失败"

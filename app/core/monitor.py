@@ -302,9 +302,10 @@ async def handler(event: Any) -> None:
                         ]
                         if new_message_ids:
                             try:
-                                await session.run_sync(
-                                    lambda sync_session: ensure_message_link_refs_for_message_ids(sync_session, new_message_ids)
-                                )
+                                async with session.begin_nested():
+                                    await session.run_sync(
+                                        lambda sync_session: ensure_message_link_refs_for_message_ids(sync_session, new_message_ids)
+                                    )
                             except Exception as resource_index_error:
                                 log_monitor_event(
                                     logger,

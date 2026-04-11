@@ -355,6 +355,13 @@
   gap: 8px;
 }
 
+.resource-ops-field-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
 .resource-ops-form-field label {
   color: var(--text-muted);
   font-size: 12px;

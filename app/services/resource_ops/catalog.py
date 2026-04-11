@@ -25,7 +25,6 @@ from app.services.link_check.constants import (
 )
 from app.services.link_check.parser import canonical_target_key, detect_platform_from_url
 from app.services.link_check.platforms import canonicalize_platform_name
-from app.services.resource_ops.recognition_service import ensure_work_binding_placeholders
 from app.services.system_config_service import SYSTEM_SETTINGS_SINGLETON_ID, build_default_system_settings_values
 
 
@@ -314,8 +313,6 @@ def _ensure_link_target(
             target.last_seen_at = observed_time
 
     cache[cache_key] = target
-    if getattr(target, "id", None) is not None:
-        ensure_work_binding_placeholders(session, link_target_ids=[int(target.id)])
     return target
 
 
