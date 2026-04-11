@@ -20,14 +20,17 @@ from app.models.models import (
     ensure_runtime_storage_tables,
 )
 from app.services.resource_ops.ai_title_client import recognize_resource_with_ai
+from app.services.resource_ops.recognition_queue import (
+    CLICK_RECOGNITION_PRIORITY,
+    DEFAULT_RECOGNITION_PRIORITY,
+    FULL_SCAN_RECOGNITION_PRIORITY,
+    enqueue_recognition_tasks,
+    get_recognition_queue_summary,
+)
 from app.services.resource_ops.settings import (
-    finish_resource_ops_recognition_run,
-    get_resource_ops_runtime_settings,
     get_resource_ops_runtime_config,
     is_resource_ops_ai_ready,
-    request_resource_ops_recognition,
-    start_resource_ops_recognition_run,
-    update_resource_ops_recognition_progress,
+    get_resource_ops_runtime_settings,
     update_resource_ops_runtime_settings,
 )
 
@@ -37,7 +40,6 @@ WORK_MATCH_STATUS_LABELS = {
     "matched": "已归并",
     "error": "异常",
 }
-
 
 @dataclass(slots=True)
 class RecognitionCandidate:
@@ -53,12 +55,8 @@ class RecognitionCandidate:
     work_id: int | None
     last_attempted_at: datetime | None
     matched_at: datetime | None
-    next_retry_after: datetime | None
     binding_reason: str
     binding_extra_json: dict[str, Any]
-
-
-RECOGNITION_RETRY_DELAY_MINUTES = 15
 
 
 def _utcnow() -> datetime:
@@ -95,6 +93,21 @@ def _normalize_optional_int(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _normalize_positive_ids(values: Iterable[int]) -> list[int]:
+    normalized: list[int] = []
+    seen: set[int] = set()
+    for raw_value in values:
+        try:
+            value = int(raw_value)
+        except (TypeError, ValueError):
+            continue
+        if value <= 0 or value in seen:
+            continue
+        seen.add(value)
+        normalized.append(value)
+    return normalized
 
 
 def _build_ai_provider_work_id(title: str) -> str:
@@ -151,7 +164,6 @@ def _build_recognition_candidate_query(session: Session):
             binding.work_id.label("work_id"),
             binding.last_attempted_at.label("last_attempted_at"),
             binding.matched_at.label("matched_at"),
-            binding.next_retry_after.label("next_retry_after"),
             binding.reason.label("binding_reason"),
             binding.extra_json.label("binding_extra_json"),
         )
@@ -183,7 +195,6 @@ def _row_to_candidate(row: Any) -> RecognitionCandidate:
         work_id=int(row.work_id) if row.work_id is not None else None,
         last_attempted_at=row.last_attempted_at,
         matched_at=row.matched_at,
-        next_retry_after=row.next_retry_after,
         binding_reason=_normalize_text(row.binding_reason, max_length=255),
         binding_extra_json=dict(row.binding_extra_json or {}),
     )
@@ -207,27 +218,32 @@ def _list_recognition_candidates(session: Session) -> list[RecognitionCandidate]
     return rows
 
 
-def _candidate_is_retry_due(candidate: RecognitionCandidate, *, now: datetime | None = None) -> bool:
-    current_time = now or _utcnow()
-    return candidate.next_retry_after is None or candidate.next_retry_after <= current_time
+def _get_candidate_by_link_target_id(session: Session, *, link_target_id: int) -> RecognitionCandidate | None:
+    return next(
+        (row for row in _list_recognition_candidates(session) if row.link_target_id == int(link_target_id)),
+        None,
+    )
 
 
 def _candidate_needs_pending_processing(
     candidate: RecognitionCandidate,
-    *,
-    include_cooling_error: bool = True,
-    now: datetime | None = None,
 ) -> bool:
     if candidate.work_id is not None and candidate.match_status == "matched":
         return False
-    if include_cooling_error:
-        return True
-    return _candidate_is_retry_due(candidate, now=now)
+    return True
 
 
 def _candidate_needs_full_processing(candidate: RecognitionCandidate) -> bool:
     del candidate
     return True
+
+
+def _collect_processing_target_ids(session: Session, *, mode: str) -> list[int]:
+    normalized_mode = _normalize_text(mode, max_length=16).lower() or "pending"
+    rows = _list_recognition_candidates(session)
+    if normalized_mode == "all":
+        return [row.link_target_id for row in rows if _candidate_needs_full_processing(row)]
+    return [row.link_target_id for row in rows if _candidate_needs_pending_processing(row)]
 
 
 def _get_recent_candidate_titles(session: Session, *, link_target_id: int, limit: int = 5) -> list[str]:
@@ -250,6 +266,20 @@ def _get_recent_candidate_titles(session: Session, *, link_target_id: int, limit
             if normalized and normalized not in titles:
                 titles.append(normalized)
     return titles
+
+
+def _get_primary_title(candidate: RecognitionCandidate, session: Session | None = None) -> str:
+    primary_title = _normalize_text(candidate.latest_message_title, max_length=255)
+    if primary_title:
+        return primary_title
+    if session is not None:
+        recent_titles = _get_recent_candidate_titles(session, link_target_id=candidate.link_target_id, limit=1)
+        if recent_titles:
+            return _normalize_text(recent_titles[0], max_length=255)
+    primary_title = _normalize_text(candidate.display_text, max_length=255)
+    if primary_title:
+        return primary_title
+    return candidate.share_key or f"link_target_{candidate.link_target_id}"
 
 
 def _ensure_work_aliases(session: Session, *, work_id: int, aliases: Iterable[str], source: str) -> None:
@@ -377,7 +407,6 @@ def mark_work_bindings_pending(
     session: Session,
     *,
     link_target_ids: Iterable[int],
-    force_retry_now: bool = False,
 ) -> int:
     normalized_ids: list[int] = []
     seen: set[int] = set()
@@ -404,8 +433,6 @@ def mark_work_bindings_pending(
         if row.work_id is not None and row.match_status == "matched":
             continue
         row.match_status = "pending"
-        if force_retry_now:
-            row.next_retry_after = None
         session.add(row)
         updated_count += 1
     if updated_count:
@@ -477,14 +504,7 @@ def _build_ai_work_candidate(
     candidate: RecognitionCandidate,
     config: dict[str, Any],
 ) -> dict[str, Any]:
-    recent_titles = _get_recent_candidate_titles(session, link_target_id=candidate.link_target_id, limit=1)
-    primary_title = _normalize_text(candidate.latest_message_title, max_length=255)
-    if not primary_title and recent_titles:
-        primary_title = _normalize_text(recent_titles[0], max_length=255)
-    if not primary_title:
-        primary_title = _normalize_text(candidate.display_text, max_length=255)
-    if not primary_title:
-        primary_title = candidate.share_key or f"link_target_{candidate.link_target_id}"
+    primary_title = _get_primary_title(candidate, session)
 
     result = recognize_resource_with_ai(
         base_url=str(config.get("ai_base_url") or ""),
@@ -553,11 +573,9 @@ def _apply_binding_success(
     binding.match_source = "ai"
     binding.query_title = (ai_payload.get("extra_json") or {}).get("query_title") or candidate.latest_message_title or candidate.display_text
     binding.candidate_title = work.canonical_title
-    binding.confidence = 0
     binding.reason = f"AI 归并为：{work.canonical_title}"
     binding.last_attempted_at = _utcnow()
     binding.matched_at = binding.last_attempted_at
-    binding.next_retry_after = None
     binding.error_message = None
     binding.extra_json = extra_json
     session.add(binding)
@@ -582,8 +600,24 @@ def _apply_binding_error(
     binding.query_title = candidate.latest_message_title or candidate.display_text
     binding.reason = _normalize_text(reason, max_length=255) or "AI 识别失败"
     binding.last_attempted_at = _utcnow()
-    binding.next_retry_after = binding.last_attempted_at + timedelta(minutes=RECOGNITION_RETRY_DELAY_MINUTES)
     binding.error_message = binding.reason
+    binding.extra_json = extra_json
+    session.add(binding)
+    session.flush()
+
+
+def _apply_preserved_binding_error(
+    session: Session,
+    *,
+    binding: ResourceWorkBinding,
+    candidate: RecognitionCandidate,
+    reason: str,
+) -> None:
+    extra_json = dict(binding.extra_json or {})
+    extra_json["query_title"] = _get_primary_title(candidate)
+    extra_json["last_error"] = _normalize_text(reason, max_length=500)
+    binding.last_attempted_at = _utcnow()
+    binding.error_message = _normalize_text(reason, max_length=500)
     binding.extra_json = extra_json
     session.add(binding)
     session.flush()
@@ -594,14 +628,20 @@ def get_work_binding_summary(session: Session) -> dict[str, Any]:
     rows = _list_recognition_candidates(session)
     total_candidates = len(rows)
     matched_count = sum(1 for row in rows if row.work_id is not None and row.match_status == "matched")
-    error_count = sum(1 for row in rows if row.match_status == "error")
-    pending_count = sum(1 for row in rows if _candidate_needs_pending_processing(row, include_cooling_error=True))
+    binding_error_count = sum(1 for row in rows if row.match_status == "error")
+    queue_summary = get_recognition_queue_summary(session)
 
     return {
         "total_candidates": total_candidates,
         "matched_count": matched_count,
-        "pending_count": pending_count,
-        "error_count": error_count,
+        "pending_count": int(queue_summary["pending_count"]),
+        "queued_count": int(queue_summary["queued_count"]),
+        "processing_count": int(queue_summary["processing_count"]),
+        "retry_wait_count": int(queue_summary["retry_wait_count"]),
+        "done_count": int(queue_summary["done_count"]),
+        "failed_count": int(queue_summary["failed_count"]),
+        "error_count": int(queue_summary["failed_count"]),
+        "binding_error_count": binding_error_count,
         "match_rate": round((matched_count / total_candidates) * 100, 1) if total_candidates else 0.0,
     }
 
@@ -617,13 +657,12 @@ def resolve_link_target_work(
     if not is_resource_ops_ai_ready(runtime_config):
         raise ValueError("请先启用并配置可用的 AI 识别")
 
-    candidate = candidate_row
-    if candidate is None:
-        candidate = next((row for row in _list_recognition_candidates(session) if row.link_target_id == int(link_target_id)), None)
+    candidate = candidate_row or _get_candidate_by_link_target_id(session, link_target_id=int(link_target_id))
     if candidate is None:
         raise LookupError(f"link_target {link_target_id} not found")
 
     binding = _ensure_binding(session, link_target_id=candidate.link_target_id)
+    had_matched_binding = binding.work_id is not None and binding.match_status == "matched"
     try:
         ai_payload = _build_ai_work_candidate(session, candidate=candidate, config=runtime_config)
         work = _upsert_ai_work(session, candidate=ai_payload)
@@ -642,12 +681,21 @@ def resolve_link_target_work(
             "work": info,
         }
     except Exception as exc:
-        _apply_binding_error(
-            session,
-            binding=binding,
-            candidate=candidate,
-            reason=f"AI 识别异常：{exc}",
-        )
+        error_reason = f"AI 识别异常：{exc}"
+        if had_matched_binding:
+            _apply_preserved_binding_error(
+                session,
+                binding=binding,
+                candidate=candidate,
+                reason=error_reason,
+            )
+        else:
+            _apply_binding_error(
+                session,
+                binding=binding,
+                candidate=candidate,
+                reason=error_reason,
+            )
         info = get_work_binding_lookup(session, link_target_ids=[candidate.link_target_id]).get(candidate.link_target_id)
         return {
             "link_target_id": candidate.link_target_id,
@@ -657,27 +705,7 @@ def resolve_link_target_work(
         }
 
 
-def _select_processing_candidates(
-    session: Session,
-    *,
-    mode: str,
-    respect_retry_after: bool,
-) -> list[RecognitionCandidate]:
-    normalized_mode = _normalize_text(mode, max_length=16).lower() or "pending"
-    rows = _list_recognition_candidates(session)
-    if normalized_mode == "all":
-        return [row for row in rows if _candidate_needs_full_processing(row)]
-    return [
-        row
-        for row in rows
-        if _candidate_needs_pending_processing(
-            row,
-            include_cooling_error=not respect_retry_after,
-        )
-    ]
-
-
-def _build_recognition_log_line(result: dict[str, Any]) -> str:
+def build_recognition_log_line(result: dict[str, Any]) -> str:
     work_payload = dict(result.get("work") or {})
     query_title = _normalize_text(work_payload.get("work_query_title"), max_length=160) or "-"
     resolved_title = _normalize_text(
@@ -689,6 +717,9 @@ def _build_recognition_log_line(result: dict[str, Any]) -> str:
     return f"[ERR] {query_title} -> {_normalize_text(result.get('reason'), max_length=220) or 'AI error'}"
 
 
+_build_recognition_log_line = build_recognition_log_line
+
+
 def run_resource_ops_recognition_job(
     session: Session,
     *,
@@ -696,85 +727,23 @@ def run_resource_ops_recognition_job(
     respect_retry_after: bool = False,
     operator: str | None = None,
 ) -> dict[str, Any]:
-    ensure_runtime_storage_tables()
-    config = get_resource_ops_runtime_config(session)
-    if not is_resource_ops_ai_ready(config):
-        raise ValueError("璇峰厛鍚敤骞堕厤缃彲鐢ㄧ殑 AI 璇嗗埆")
-
-    normalized_mode = _normalize_text(mode, max_length=16).lower() or "pending"
-    if normalized_mode == "full":
-        normalized_mode = "all"
-    if normalized_mode not in {"pending", "all"}:
-        raise ValueError("invalid recognition mode")
-
-    started_at = _utcnow()
-    target_rows = _select_processing_candidates(
+    del respect_retry_after
+    payload = sync_resource_work_bindings(
         session,
-        mode=normalized_mode,
-        respect_retry_after=respect_retry_after,
+        mode=mode,
+        operator=operator,
     )
-    start_resource_ops_recognition_run(
-        session,
-        mode=normalized_mode,
-        total_count=len(target_rows),
-        updated_by=operator or "system",
-    )
-    session.commit()
-
-    processed_items: list[dict[str, Any]] = []
-    matched_count = 0
-    error_count = 0
-
-    for row in target_rows:
-        config = get_resource_ops_runtime_config(session)
-        result = resolve_link_target_work(
-            session,
-            link_target_id=row.link_target_id,
-            candidate_row=row,
-            config=config,
-        )
-        processed_items.append(result)
-        if _normalize_text(result.get("status"), max_length=16).lower() == "matched":
-            matched_count += 1
-            update_resource_ops_recognition_progress(
-                session,
-                processed_delta=1,
-                matched_delta=1,
-                log_line=_build_recognition_log_line(result),
-                last_error=None,
-                updated_by=operator or "system",
-            )
-        else:
-            error_count += 1
-            update_resource_ops_recognition_progress(
-                session,
-                processed_delta=1,
-                error_delta=1,
-                log_line=_build_recognition_log_line(result),
-                last_error=_normalize_text(result.get("reason"), max_length=500),
-                updated_by=operator or "system",
-            )
-        session.commit()
-
-    summary = get_work_binding_summary(session)
-    response = {
-        "mode": normalized_mode,
-        "processed_count": len(processed_items),
-        "matched_count": matched_count,
-        "error_count": error_count,
-        "remaining_count": summary["pending_count"],
-        "started_at": _to_utc_iso(started_at),
+    return {
+        "mode": payload["mode"],
+        "processed_count": 0,
+        "matched_count": 0,
+        "error_count": 0,
+        "remaining_count": int(payload["binding_summary"]["pending_count"]),
+        "started_at": _to_utc_iso(_utcnow()),
         "finished_at": _to_utc_iso(_utcnow()),
-        "items": processed_items,
-        "binding_summary": summary,
+        "items": [],
+        "binding_summary": payload["binding_summary"],
     }
-    finish_resource_ops_recognition_run(
-        session,
-        summary={key: value for key, value in response.items() if key != "items"},
-        updated_by=operator or "system",
-    )
-    session.commit()
-    return response
 
 
 def sync_resource_work_bindings(
@@ -792,15 +761,21 @@ def sync_resource_work_bindings(
         raise ValueError("invalid recognition mode")
     if not is_resource_ops_ai_ready(config):
         raise ValueError("请先启用并配置可用的 AI 识别")
-    settings_payload = request_resource_ops_recognition(
+    link_target_ids = _collect_processing_target_ids(session, mode=normalized_mode)
+    enqueue_result = enqueue_recognition_tasks(
         session,
-        mode=normalized_mode,
-        updated_by=operator or "system",
+        link_target_ids=link_target_ids,
+        source="full_scan" if normalized_mode == "all" else "manual",
+        priority=FULL_SCAN_RECOGNITION_PRIORITY if normalized_mode == "all" else DEFAULT_RECOGNITION_PRIORITY,
+        skip_matched=False,
     )
+    settings_payload = get_resource_ops_runtime_settings(session)
+    if operator:
+        settings_payload["recognition_status"]["last_operator"] = str(operator)
     return {
-        "accepted": True,
+        "accepted": enqueue_result["accepted_count"] > 0,
         "mode": normalized_mode,
-        "message": "queued",
+        "message": "queued" if enqueue_result["accepted_count"] > 0 else "empty",
         "binding_summary": get_work_binding_summary(session),
         "recognition_status": settings_payload["recognition_status"],
     }
@@ -813,17 +788,8 @@ def sync_resource_work_bindings_for_link_targets(
     operator: str | None = None,
 ) -> dict[str, Any]:
     ensure_runtime_storage_tables()
-    normalized_ids: list[int] = []
-    seen: set[int] = set()
-    for raw_value in link_target_ids:
-        try:
-            normalized = int(raw_value)
-        except (TypeError, ValueError):
-            continue
-        if normalized <= 0 or normalized in seen:
-            continue
-        seen.add(normalized)
-        normalized_ids.append(normalized)
+    del operator
+    normalized_ids = _normalize_positive_ids(link_target_ids)
 
     if not normalized_ids:
         return {
@@ -834,24 +800,27 @@ def sync_resource_work_bindings_for_link_targets(
             "recognition_status": get_resource_ops_runtime_settings(session)["recognition_status"],
         }
 
-    mark_work_bindings_pending(
-        session,
-        link_target_ids=normalized_ids,
-        force_retry_now=True,
-    )
+    ensure_work_binding_placeholders(session, link_target_ids=normalized_ids)
     config = get_resource_ops_runtime_config(session)
+    enqueue_result = {
+        "accepted_count": 0,
+        "skipped_matched_count": 0,
+    }
+    message = "disabled"
     if bool(config.get("auto_recognition_enabled")) and is_resource_ops_ai_ready(config):
-        settings_payload = request_resource_ops_recognition(
+        enqueue_result = enqueue_recognition_tasks(
             session,
-            mode="pending",
-            updated_by=operator or "system",
+            link_target_ids=normalized_ids,
+            source="click",
+            priority=CLICK_RECOGNITION_PRIORITY,
+            skip_matched=True,
         )
-    else:
-        settings_payload = get_resource_ops_runtime_settings(session)
+        message = "queued" if enqueue_result["accepted_count"] > 0 else "skipped"
+    settings_payload = get_resource_ops_runtime_settings(session)
     return {
-        "accepted": True,
+        "accepted": enqueue_result["accepted_count"] > 0,
         "mode": "pending",
-        "message": "queued",
+        "message": message,
         "binding_summary": get_work_binding_summary(session),
         "recognition_status": settings_payload["recognition_status"],
     }
@@ -863,17 +832,7 @@ def sync_resource_work_bindings_for_message_ids(
     message_ids: Iterable[int],
     operator: str | None = None,
 ) -> dict[str, Any]:
-    normalized_message_ids: list[int] = []
-    seen: set[int] = set()
-    for raw_value in message_ids:
-        try:
-            normalized = int(raw_value)
-        except (TypeError, ValueError):
-            continue
-        if normalized <= 0 or normalized in seen:
-            continue
-        seen.add(normalized)
-        normalized_message_ids.append(normalized)
+    normalized_message_ids = _normalize_positive_ids(message_ids)
     if not normalized_message_ids:
         return {
             "accepted": False,

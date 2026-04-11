@@ -12,7 +12,6 @@ from app.models.config import settings
 from app.models.models import LinkClickEvent, LinkTargetDailyStat, MessageLinkRef
 from app.services.resource_ops.catalog import normalize_search_query
 from app.services.resource_ops.recognition_service import sync_resource_work_bindings_for_link_targets
-from app.services.resource_ops_scheduler import notify_resource_ops_scheduler
 
 
 EVENT_TOKEN_MAX_LENGTH = 64
@@ -322,7 +321,6 @@ def record_click_event(
             link_target_ids=[int(link_ref.link_target_id)],
             operator="system",
         )
-        notify_resource_ops_scheduler()
     except Exception:
         # Click tracking should never fail because the recognition queue could not be updated.
         pass

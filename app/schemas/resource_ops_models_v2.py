@@ -294,21 +294,27 @@ class ResourceOpsWorkBindingSummaryResponse(ResourceOpsBaseModel):
     total_candidates: int = 0
     matched_count: int = 0
     pending_count: int = 0
+    queued_count: int = 0
+    processing_count: int = 0
+    retry_wait_count: int = 0
+    done_count: int = 0
+    failed_count: int = 0
     error_count: int = 0
+    binding_error_count: int = 0
     match_rate: float = 0
 
 
 class ResourceOpsRecognitionStatusResponse(ResourceOpsBaseModel):
+    worker_state: str = "idle"
+    worker_alive: bool = False
     is_running: bool = False
-    requested_mode: str | None = None
-    current_mode: str | None = None
     started_at: str | None = None
     finished_at: str | None = None
-    total_count: int = 0
-    processed_count: int = 0
-    matched_count: int = 0
-    error_count: int = 0
-    remaining_count: int = 0
+    last_heartbeat_at: str | None = None
+    last_processed_at: str | None = None
+    current_link_target_id: int | None = None
+    current_title: str | None = None
+    current_source: str | None = None
     last_error: str | None = None
     logs: list[str] = Field(default_factory=list)
 

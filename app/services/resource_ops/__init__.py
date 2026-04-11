@@ -17,19 +17,18 @@ from .catalog import (
 )
 from .maintenance import run_resource_ops_retention
 from .recognition_service import (
+    build_recognition_log_line,
     ensure_work_binding_placeholders,
     get_work_binding_lookup,
     get_work_binding_summary,
     mark_work_bindings_pending,
     resolve_link_target_work,
-    run_resource_ops_recognition_job,
     sync_resource_work_bindings,
     sync_resource_work_bindings_for_link_targets,
     sync_resource_work_bindings_for_message_ids,
 )
 from .settings import (
     get_resource_ops_runtime_settings,
-    request_resource_ops_recognition,
     update_resource_ops_runtime_settings,
 )
 from .tracking import get_redirect_target_url, record_click_event
@@ -55,12 +54,11 @@ __all__ = [
     "sync_resource_work_bindings_for_link_targets",
     "sync_resource_work_bindings_for_message_ids",
     "resolve_link_target_work",
+    "build_recognition_log_line",
     "get_work_binding_summary",
     "get_work_binding_lookup",
     "ensure_work_binding_placeholders",
     "mark_work_bindings_pending",
-    "request_resource_ops_recognition",
-    "run_resource_ops_recognition_job",
     "run_resource_ops_retention",
     "get_resource_ops_overview",
     "get_resource_ops_platform_distribution",

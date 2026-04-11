@@ -16,6 +16,7 @@ from app.services.system_config_service import (
 
 RESOURCE_OPS_RUNTIME_EXTRA_KEY = "resource_ops_runtime"
 RECOGNITION_LOG_LIMIT = 120
+WORKER_HEARTBEAT_GRACE_SECONDS = 30
 
 
 def _utcnow() -> datetime:
@@ -95,11 +96,15 @@ def _coerce_datetime(value: Any) -> datetime | None:
     if value in (None, "", 0):
         return None
     if isinstance(value, datetime):
-        return value
-    try:
-        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    except ValueError:
-        return None
+        parsed = value
+    else:
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return parsed
 
 
 def _to_iso(value: datetime | None) -> str | None:
@@ -112,17 +117,16 @@ def build_default_resource_ops_runtime_settings() -> dict[str, Any]:
         "ai_base_url": "",
         "ai_model": "",
         "ai_api_key_encrypted": "",
-        "recognition_requested_mode": "",
-        "recognition_requested_at": None,
-        "recognition_running_mode": "",
-        "recognition_started_at": None,
-        "recognition_finished_at": None,
-        "recognition_total": 0,
-        "recognition_processed": 0,
-        "recognition_matched": 0,
-        "recognition_error": 0,
-        "recognition_last_error": "",
-        "recognition_logs": [],
+        "worker_state": "idle",
+        "worker_started_at": None,
+        "worker_finished_at": None,
+        "worker_last_heartbeat_at": None,
+        "worker_last_processed_at": None,
+        "worker_current_link_target_id": None,
+        "worker_current_title": "",
+        "worker_current_source": "",
+        "worker_last_error": "",
+        "worker_logs": [],
         "retention_click_event_days": 90,
         "retention_daily_stat_days": 365,
         "retention_candidate_log_days": 180,
@@ -144,7 +148,7 @@ def _normalize_runtime_storage_values(raw_value: Any) -> dict[str, Any]:
     auto_recognition_raw = payload.get("auto_recognition_enabled")
     if auto_recognition_raw is None:
         auto_recognition_raw = payload.get("auto_bind_enabled")
-    recognition_logs = payload.get("recognition_logs")
+    worker_logs = payload.get("worker_logs") or payload.get("recognition_logs")
 
     return {
         "auto_recognition_enabled": _coerce_bool(auto_recognition_raw, defaults["auto_recognition_enabled"]),
@@ -155,46 +159,35 @@ def _normalize_runtime_storage_values(raw_value: Any) -> dict[str, Any]:
             defaults["ai_api_key_encrypted"],
             max_length=8000,
         ),
-        "recognition_requested_mode": _coerce_text(
-            payload.get("recognition_requested_mode"),
-            defaults["recognition_requested_mode"],
-            max_length=16,
-        ),
-        "recognition_requested_at": _coerce_datetime(payload.get("recognition_requested_at")),
-        "recognition_running_mode": _coerce_text(
-            payload.get("recognition_running_mode"),
-            defaults["recognition_running_mode"],
-            max_length=16,
-        ),
-        "recognition_started_at": _coerce_datetime(payload.get("recognition_started_at")),
-        "recognition_finished_at": _coerce_datetime(payload.get("recognition_finished_at")),
-        "recognition_total": _coerce_int(payload.get("recognition_total"), defaults["recognition_total"], minimum=0, maximum=1_000_000),
-        "recognition_processed": _coerce_int(
-            payload.get("recognition_processed"),
-            defaults["recognition_processed"],
+        "worker_state": _coerce_text(payload.get("worker_state"), defaults["worker_state"], max_length=32) or "idle",
+        "worker_started_at": _coerce_datetime(payload.get("worker_started_at") or payload.get("recognition_started_at")),
+        "worker_finished_at": _coerce_datetime(payload.get("worker_finished_at") or payload.get("recognition_finished_at")),
+        "worker_last_heartbeat_at": _coerce_datetime(payload.get("worker_last_heartbeat_at")),
+        "worker_last_processed_at": _coerce_datetime(payload.get("worker_last_processed_at")),
+        "worker_current_link_target_id": _coerce_int(
+            payload.get("worker_current_link_target_id"),
+            0,
             minimum=0,
-            maximum=1_000_000,
+            maximum=10_000_000,
         ),
-        "recognition_matched": _coerce_int(
-            payload.get("recognition_matched"),
-            defaults["recognition_matched"],
-            minimum=0,
-            maximum=1_000_000,
+        "worker_current_title": _coerce_text(
+            payload.get("worker_current_title"),
+            defaults["worker_current_title"],
+            max_length=255,
         ),
-        "recognition_error": _coerce_int(
-            payload.get("recognition_error"),
-            defaults["recognition_error"],
-            minimum=0,
-            maximum=1_000_000,
+        "worker_current_source": _coerce_text(
+            payload.get("worker_current_source"),
+            defaults["worker_current_source"],
+            max_length=32,
         ),
-        "recognition_last_error": _coerce_text(
-            payload.get("recognition_last_error"),
-            defaults["recognition_last_error"],
+        "worker_last_error": _coerce_text(
+            payload.get("worker_last_error") or payload.get("recognition_last_error"),
+            defaults["worker_last_error"],
             max_length=2000,
         ),
-        "recognition_logs": [
+        "worker_logs": [
             _coerce_text(item, "", max_length=500)
-            for item in (recognition_logs if isinstance(recognition_logs, list) else [])
+            for item in (worker_logs if isinstance(worker_logs, list) else [])
             if _coerce_text(item, "", max_length=500)
         ][-RECOGNITION_LOG_LIMIT:],
         "retention_click_event_days": _coerce_int(
@@ -247,9 +240,10 @@ def _write_runtime_bucket(record: SystemSettings, payload: dict[str, Any], *, up
     normalized = _normalize_runtime_storage_values(payload)
     normalized["last_sync_at"] = _to_iso(normalized.get("last_sync_at"))
     normalized["last_cleanup_at"] = _to_iso(normalized.get("last_cleanup_at"))
-    normalized["recognition_requested_at"] = _to_iso(normalized.get("recognition_requested_at"))
-    normalized["recognition_started_at"] = _to_iso(normalized.get("recognition_started_at"))
-    normalized["recognition_finished_at"] = _to_iso(normalized.get("recognition_finished_at"))
+    normalized["worker_started_at"] = _to_iso(normalized.get("worker_started_at"))
+    normalized["worker_finished_at"] = _to_iso(normalized.get("worker_finished_at"))
+    normalized["worker_last_heartbeat_at"] = _to_iso(normalized.get("worker_last_heartbeat_at"))
+    normalized["worker_last_processed_at"] = _to_iso(normalized.get("worker_last_processed_at"))
 
     extra_json = dict(record.extra_json or {})
     extra_json[RESOURCE_OPS_RUNTIME_EXTRA_KEY] = normalized
@@ -274,13 +268,11 @@ def is_resource_ops_ai_ready(config: dict[str, Any]) -> bool:
     )
 
 
-def is_resource_ops_recognition_running(config: dict[str, Any]) -> bool:
-    return bool(_coerce_text(config.get("recognition_running_mode"), "", max_length=16))
-
-
-def get_resource_ops_recognition_request_mode(config: dict[str, Any]) -> str | None:
-    mode = _coerce_text(config.get("recognition_requested_mode"), "", max_length=16).lower()
-    return mode if mode in {"pending", "all"} else None
+def is_resource_ops_worker_alive(config: dict[str, Any]) -> bool:
+    heartbeat_at = _coerce_datetime(config.get("worker_last_heartbeat_at"))
+    if heartbeat_at is None:
+        return False
+    return (_utcnow() - heartbeat_at).total_seconds() <= WORKER_HEARTBEAT_GRACE_SECONDS
 
 
 def resolve_resource_ops_ai_request_config(
@@ -318,10 +310,9 @@ def get_resource_ops_runtime_settings(session: Session) -> dict[str, Any]:
     ai_base_url = _coerce_text(values.get("ai_base_url"), "", max_length=512)
     ai_model = _coerce_text(values.get("ai_model"), "", max_length=255)
     ai_api_key = _coerce_text(values.get("ai_api_key"), "", max_length=8000)
-    total_count = int(values.get("recognition_total") or 0)
-    processed_count = int(values.get("recognition_processed") or 0)
-    matched_count = int(values.get("recognition_matched") or 0)
-    error_count = int(values.get("recognition_error") or 0)
+    worker_state = _coerce_text(values.get("worker_state"), "idle", max_length=32) or "idle"
+    worker_alive = is_resource_ops_worker_alive(values)
+    current_link_target_id = _coerce_int(values.get("worker_current_link_target_id"), 0, minimum=0)
 
     return {
         "auto_recognition_enabled": bool(values["auto_recognition_enabled"]),
@@ -338,18 +329,18 @@ def get_resource_ops_runtime_settings(session: Session) -> dict[str, Any]:
         "last_cleanup_at": _to_iso(values.get("last_cleanup_at")),
         "last_cleanup_summary": dict(values.get("last_cleanup_summary") or {}),
         "recognition_status": {
-            "is_running": is_resource_ops_recognition_running(values),
-            "requested_mode": get_resource_ops_recognition_request_mode(values),
-            "current_mode": _coerce_text(values.get("recognition_running_mode"), "", max_length=16) or None,
-            "started_at": _to_iso(values.get("recognition_started_at")),
-            "finished_at": _to_iso(values.get("recognition_finished_at")),
-            "total_count": total_count,
-            "processed_count": processed_count,
-            "matched_count": matched_count,
-            "error_count": error_count,
-            "remaining_count": max(0, total_count - processed_count),
-            "last_error": _coerce_text(values.get("recognition_last_error"), "", max_length=2000) or None,
-            "logs": list(values.get("recognition_logs") or []),
+            "worker_state": worker_state,
+            "worker_alive": worker_alive,
+            "is_running": worker_state == "running" and worker_alive,
+            "started_at": _to_iso(values.get("worker_started_at")),
+            "finished_at": _to_iso(values.get("worker_finished_at")),
+            "last_heartbeat_at": _to_iso(values.get("worker_last_heartbeat_at")),
+            "last_processed_at": _to_iso(values.get("worker_last_processed_at")),
+            "current_link_target_id": current_link_target_id or None,
+            "current_title": _coerce_text(values.get("worker_current_title"), "", max_length=255) or None,
+            "current_source": _coerce_text(values.get("worker_current_source"), "", max_length=32) or None,
+            "last_error": _coerce_text(values.get("worker_last_error"), "", max_length=2000) or None,
+            "logs": list(values.get("worker_logs") or []),
         },
     }
 
@@ -406,107 +397,35 @@ def update_resource_ops_runtime_meta(
     return get_resource_ops_runtime_settings(session)
 
 
-def request_resource_ops_recognition(
+def update_resource_ops_worker_state(
     session: Session,
+    payload: dict[str, Any],
     *,
-    mode: str,
-    updated_by: str | None = None,
-) -> dict[str, Any]:
-    normalized_mode = _coerce_text(mode, "", max_length=16).lower()
-    if normalized_mode not in {"pending", "all"}:
-        raise ValueError("invalid recognition mode")
-
-    values = get_resource_ops_runtime_config(session)
-    current_request = get_resource_ops_recognition_request_mode(values)
-    current_running = _coerce_text(values.get("recognition_running_mode"), "", max_length=16).lower()
-
-    if current_running == "all":
-        return get_resource_ops_runtime_settings(session)
-    if current_running == "pending" and normalized_mode == "pending":
-        return get_resource_ops_runtime_settings(session)
-    if current_request == "all":
-        return get_resource_ops_runtime_settings(session)
-
-    values["recognition_requested_mode"] = "all" if normalized_mode == "all" else (current_request or "pending")
-    values["recognition_requested_at"] = _utcnow()
-
-    record = _ensure_system_settings_record(session)
-    _write_runtime_bucket(record, values, updated_by=updated_by)
-    session.add(record)
-    session.flush()
-    return get_resource_ops_runtime_settings(session)
-
-
-def start_resource_ops_recognition_run(
-    session: Session,
-    *,
-    mode: str,
-    total_count: int,
-    updated_by: str | None = None,
-) -> dict[str, Any]:
-    normalized_mode = _coerce_text(mode, "", max_length=16).lower()
-    if normalized_mode not in {"pending", "all"}:
-        raise ValueError("invalid recognition mode")
-
-    values = get_resource_ops_runtime_config(session)
-    values["recognition_requested_mode"] = ""
-    values["recognition_requested_at"] = None
-    values["recognition_running_mode"] = normalized_mode
-    values["recognition_started_at"] = _utcnow()
-    values["recognition_finished_at"] = None
-    values["recognition_total"] = max(0, int(total_count or 0))
-    values["recognition_processed"] = 0
-    values["recognition_matched"] = 0
-    values["recognition_error"] = 0
-    values["recognition_last_error"] = ""
-    values["recognition_logs"] = []
-
-    record = _ensure_system_settings_record(session)
-    _write_runtime_bucket(record, values, updated_by=updated_by)
-    session.add(record)
-    session.flush()
-    return get_resource_ops_runtime_settings(session)
-
-
-def update_resource_ops_recognition_progress(
-    session: Session,
-    *,
-    processed_delta: int = 0,
-    matched_delta: int = 0,
-    error_delta: int = 0,
-    log_line: str | None = None,
-    last_error: str | None = None,
     updated_by: str | None = None,
 ) -> dict[str, Any]:
     values = get_resource_ops_runtime_config(session)
-    values["recognition_processed"] = max(0, int(values.get("recognition_processed") or 0) + int(processed_delta or 0))
-    values["recognition_matched"] = max(0, int(values.get("recognition_matched") or 0) + int(matched_delta or 0))
-    values["recognition_error"] = max(0, int(values.get("recognition_error") or 0) + int(error_delta or 0))
-    if log_line:
-        logs = list(values.get("recognition_logs") or [])
-        logs.append(_coerce_text(log_line, "", max_length=500))
-        values["recognition_logs"] = [item for item in logs if item][-RECOGNITION_LOG_LIMIT:]
-    if last_error is not None:
-        values["recognition_last_error"] = _coerce_text(last_error, "", max_length=2000)
+    for field in (
+        "worker_state",
+        "worker_started_at",
+        "worker_finished_at",
+        "worker_last_heartbeat_at",
+        "worker_last_processed_at",
+        "worker_current_link_target_id",
+        "worker_current_title",
+        "worker_current_source",
+        "worker_last_error",
+    ):
+        if field in payload:
+            values[field] = payload[field]
 
-    record = _ensure_system_settings_record(session)
-    _write_runtime_bucket(record, values, updated_by=updated_by)
-    session.add(record)
-    session.flush()
-    return get_resource_ops_runtime_settings(session)
-
-
-def finish_resource_ops_recognition_run(
-    session: Session,
-    *,
-    summary: dict[str, Any],
-    updated_by: str | None = None,
-) -> dict[str, Any]:
-    values = get_resource_ops_runtime_config(session)
-    values["recognition_running_mode"] = ""
-    values["recognition_finished_at"] = _utcnow()
-    values["last_sync_at"] = _utcnow()
-    values["last_sync_summary"] = dict(summary or {})
+    if payload.get("reset_logs"):
+        values["worker_logs"] = []
+    if "log_line" in payload:
+        log_line = _coerce_text(payload.get("log_line"), "", max_length=500)
+        if log_line:
+            logs = list(values.get("worker_logs") or [])
+            logs.append(log_line)
+            values["worker_logs"] = [item for item in logs if item][-RECOGNITION_LOG_LIMIT:]
 
     record = _ensure_system_settings_record(session)
     _write_runtime_bucket(record, values, updated_by=updated_by)

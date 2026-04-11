@@ -21,7 +21,7 @@ import {
   updateResourceOpsWorkbenchItem,
 } from '@/api/resourceOps'
 import ResourceOpsPlatformChart from '@/components/resource-ops/ResourceOpsPlatformChart'
-import ResourceOpsRecognitionPanelCompact from '@/components/resource-ops/ResourceOpsRecognitionPanelCompact'
+import ResourceOpsRecognitionQueuePanel from '@/components/resource-ops/ResourceOpsRecognitionQueuePanel'
 import ResourceOpsTrendChart from '@/components/resource-ops/ResourceOpsTrendChart'
 import ResourceOpsWorkbenchDrawerTopic from '@/components/resource-ops/ResourceOpsWorkbenchDrawerTopic'
 import type {
@@ -216,7 +216,12 @@ const ResourceOperationsAdminRuntime = () => {
   const recognitionStatus = runtimeSettings?.recognition_status || null
 
   useEffect(() => {
-    if (!recognitionStatus?.is_running && !recognitionStatus?.requested_mode) {
+    const shouldPoll =
+      Boolean(recognitionStatus?.is_running) ||
+      Boolean((bindingSummary?.pending_count || 0) > 0) ||
+      Boolean(!recognitionStatus?.worker_alive && (bindingSummary?.pending_count || 0) > 0)
+
+    if (!shouldPoll) {
       return
     }
     const timer = window.setTimeout(() => {
@@ -226,7 +231,7 @@ const ResourceOperationsAdminRuntime = () => {
       }
     }, 2500)
     return () => window.clearTimeout(timer)
-  }, [recognitionStatus?.is_running, recognitionStatus?.requested_mode, workbenchVisited, workbenchFilters])
+  }, [bindingSummary?.pending_count, recognitionStatus?.is_running, recognitionStatus?.worker_alive, workbenchVisited, workbenchFilters])
 
   const overviewMetricItems = useMemo(
     () => [
@@ -258,6 +263,21 @@ const ResourceOperationsAdminRuntime = () => {
       { label: '异常', value: bindingSummary.error_count, hint: 'AI 调用失败或返回空结果' },
     ]
   }, [bindingSummary, workbenchData])
+
+  const recognitionQueueSummaryItems = useMemo(() => {
+    if (!bindingSummary) return []
+    return [
+      { label: '主题数', value: workbenchData?.summary.total_candidates || 0, hint: '工作台当前展示的主题行数' },
+      {
+        label: '待处理',
+        value: bindingSummary.pending_count,
+        hint: `排队 ${bindingSummary.queued_count} / 处理中 ${bindingSummary.processing_count} / 重试 ${bindingSummary.retry_wait_count}`,
+      },
+      { label: '已归并', value: bindingSummary.matched_count, hint: `${bindingSummary.match_rate}% 链接目标已归并` },
+      { label: '异常', value: bindingSummary.failed_count, hint: `队列失败 ${bindingSummary.failed_count}，绑定异常 ${bindingSummary.binding_error_count}` },
+    ]
+  }, [bindingSummary, workbenchData])
+  void recognitionSummaryItems
 
   const platformOptions = useMemo(() => {
     const values = new Set((workbenchData?.items || []).map((item) => item.platform).filter(Boolean))
@@ -768,7 +788,7 @@ const ResourceOperationsAdminRuntime = () => {
             label: '候选工作台',
             children: (
               <div className="resource-ops-tab-stack">
-                <ResourceOpsRecognitionPanelCompact
+                <ResourceOpsRecognitionQueuePanel
                   loading={settingsLoading}
                   settingsSaving={settingsSaving}
                   pendingRunLoading={pendingRunLoading}
@@ -779,7 +799,7 @@ const ResourceOperationsAdminRuntime = () => {
                   runtimeSettings={runtimeSettings}
                   bindingSummary={bindingSummary}
                   recognitionStatus={recognitionStatus}
-                  recognitionSummaryItems={recognitionSummaryItems}
+                  recognitionSummaryItems={recognitionQueueSummaryItems}
                   aiApiKeyInput={aiApiKeyInput}
                   aiTestInput={aiTestInput}
                   aiModelOptions={aiModelOptions}

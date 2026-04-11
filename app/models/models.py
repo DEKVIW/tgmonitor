@@ -198,13 +198,38 @@ class ResourceWorkBinding(Base):
     match_source = Column(String(32), nullable=False, default="pending", index=True)
     query_title = Column(String(255), nullable=True)
     candidate_title = Column(String(255), nullable=True)
-    confidence = Column(Float, nullable=False, default=0.0)
     reason = Column(String(255), nullable=False, default="")
     last_attempted_at = Column(DateTime, nullable=True, index=True)
     matched_at = Column(DateTime, nullable=True)
-    next_retry_after = Column(DateTime, nullable=True, index=True)
     error_message = Column(Text, nullable=True)
     extra_json = Column(JSONB, nullable=False, default=dict)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class ResourceRecognitionTask(Base):
+    __tablename__ = "resource_recognition_tasks"
+    __table_args__ = (
+        UniqueConstraint("link_target_id", name="ux_resource_recognition_tasks_link_target"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    link_target_id = Column(Integer, ForeignKey("link_targets.id"), nullable=False, index=True)
+    status = Column(String(32), nullable=False, default="queued", index=True)
+    source = Column(String(32), nullable=False, default="manual", index=True)
+    priority = Column(Integer, nullable=False, default=100, index=True)
+    attempt_count = Column(Integer, nullable=False, default=0)
+    max_attempts = Column(Integer, nullable=False, default=5)
+    next_retry_at = Column(DateTime, nullable=True, index=True)
+    locked_by = Column(String(128), nullable=True, index=True)
+    locked_at = Column(DateTime, nullable=True, index=True)
+    started_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
+    last_error = Column(Text, nullable=True)
+    last_title = Column(String(255), nullable=True)
+    last_result_title = Column(String(255), nullable=True)
+    last_enqueued_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    last_processed_at = Column(DateTime, nullable=True, index=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -627,6 +652,7 @@ def ensure_runtime_storage_tables() -> None:
                 ResourceWork.__table__,
                 ResourceWorkAlias.__table__,
                 ResourceWorkBinding.__table__,
+                ResourceRecognitionTask.__table__,
             ],
         )
         _ensure_system_settings_columns()
@@ -817,12 +843,23 @@ def _ensure_resource_ops_indexes() -> None:
         ON resource_work_aliases (normalized_alias)
         """,
         """
-        CREATE INDEX IF NOT EXISTS ix_resource_work_bindings_status_next_retry
-        ON resource_work_bindings (match_status, next_retry_after)
+        DROP INDEX IF EXISTS ix_resource_work_bindings_status_next_retry
         """,
         """
         CREATE INDEX IF NOT EXISTS ix_resource_work_bindings_work_updated
         ON resource_work_bindings (work_id, updated_at DESC)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_resource_recognition_tasks_status_priority
+        ON resource_recognition_tasks (status, priority DESC, last_enqueued_at ASC)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_resource_recognition_tasks_retry
+        ON resource_recognition_tasks (status, next_retry_at ASC)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_resource_recognition_tasks_locked_at
+        ON resource_recognition_tasks (locked_at ASC)
         """,
     )
     with engine.begin() as connection:

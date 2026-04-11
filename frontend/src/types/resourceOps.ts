@@ -289,21 +289,28 @@ export interface ResourceOpsWorkBindingSummary {
   total_candidates: number
   matched_count: number
   pending_count: number
+  queued_count: number
+  processing_count: number
+  retry_wait_count: number
+  done_count: number
+  failed_count: number
   error_count: number
+  binding_error_count: number
   match_rate: number
 }
 
 export interface ResourceOpsRecognitionStatus {
+  worker_state: string
+  worker_alive: boolean
   is_running: boolean
-  requested_mode?: 'pending' | 'all' | string | null
-  current_mode?: 'pending' | 'all' | string | null
   started_at?: string | null
   finished_at?: string | null
-  total_count: number
-  processed_count: number
-  matched_count: number
-  error_count: number
-  remaining_count: number
+  last_heartbeat_at?: string | null
+  last_processed_at?: string | null
+  current_link_target_id?: number | null
+  current_title?: string | null
+  current_source?: string | null
+  last_operator?: string | null
   last_error?: string | null
   logs: string[]
 }
