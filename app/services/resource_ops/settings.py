@@ -17,6 +17,7 @@ from app.services.system_config_service import (
 RESOURCE_OPS_RUNTIME_EXTRA_KEY = "resource_ops_runtime"
 RECOGNITION_LOG_LIMIT = 120
 WORKER_HEARTBEAT_GRACE_SECONDS = 30
+RESOURCE_OPS_AI_API_MODES = {"auto", "chat_completions", "responses"}
 
 
 def _utcnow() -> datetime:
@@ -92,6 +93,13 @@ def _coerce_text(value: Any, default: str = "", *, max_length: int | None = None
     return normalized
 
 
+def _coerce_ai_api_mode(value: Any, default: str = "auto") -> str:
+    normalized = _coerce_text(value, default, max_length=32).lower()
+    if normalized not in RESOURCE_OPS_AI_API_MODES:
+        return default
+    return normalized
+
+
 def _coerce_datetime(value: Any) -> datetime | None:
     if value in (None, "", 0):
         return None
@@ -115,6 +123,7 @@ def build_default_resource_ops_runtime_settings() -> dict[str, Any]:
     return {
         "auto_recognition_enabled": False,
         "ai_base_url": "",
+        "ai_api_mode": "auto",
         "ai_model": "",
         "ai_api_key_encrypted": "",
         "worker_state": "idle",
@@ -153,6 +162,7 @@ def _normalize_runtime_storage_values(raw_value: Any) -> dict[str, Any]:
     return {
         "auto_recognition_enabled": _coerce_bool(auto_recognition_raw, defaults["auto_recognition_enabled"]),
         "ai_base_url": _coerce_text(payload.get("ai_base_url"), defaults["ai_base_url"], max_length=512),
+        "ai_api_mode": _coerce_ai_api_mode(payload.get("ai_api_mode"), defaults["ai_api_mode"]),
         "ai_model": _coerce_text(payload.get("ai_model"), defaults["ai_model"], max_length=255),
         "ai_api_key_encrypted": _coerce_text(
             payload.get("ai_api_key_encrypted"),
@@ -299,6 +309,7 @@ def resolve_resource_ops_ai_request_config(
 
     return {
         "base_url": base_url,
+        "ai_api_mode": "auto",
         "model": model,
         "api_key": api_key,
         "used_saved_api_key": bool(not request_api_key and use_saved_api_key and saved_api_key),

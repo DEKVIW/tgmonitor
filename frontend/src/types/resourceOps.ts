@@ -380,6 +380,7 @@ export interface ResourceOpsAiTestResponse {
   ok: boolean
   base_url: string
   model: string
+  used_api_mode: string
   sample_text: string
   extracted_title?: string | null
   release_year?: number | null

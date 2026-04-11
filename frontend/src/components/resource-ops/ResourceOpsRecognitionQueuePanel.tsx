@@ -48,6 +48,16 @@ interface ResourceOpsRecognitionQueuePanelProps {
 const RECOGNITION_TOOLTIP =
   'AI 只读取被点击链接对应的原始消息标题，提取影视剧名称后归并到同一主题。开启自动识别并保存后，新点击会自动进入待处理队列，由 tg-worker 持续消化。'
 
+const getApiModeLabel = (value?: string | null) =>
+  (
+    {
+      auto: '自动兜底',
+      chat_completions: 'Chat',
+      chat_completions_stream: 'Chat 流式',
+      responses: 'Responses',
+    } as Record<string, string>
+  )[value || 'auto'] || '自动兜底'
+
 const getRuntimeTag = (
   runtimeSettings: ResourceOpsRuntimeSettingsResponse,
   bindingSummary: ResourceOpsWorkBindingSummary | null,
@@ -198,7 +208,7 @@ const ResourceOpsRecognitionQueuePanel = ({
                       type="success"
                       showIcon
                       message={`测试结果：${aiTestResult.extracted_title || '未识别出主题'}`}
-                      description={`模型：${aiTestResult.model}${aiTestResult.reason ? ` / ${aiTestResult.reason}` : ''}`}
+                      description={`模型：${aiTestResult.model} / 模式：${getApiModeLabel(aiTestResult.used_api_mode)}${aiTestResult.reason ? ` / ${aiTestResult.reason}` : ''}`}
                     />
                   ) : null}
 
@@ -231,8 +241,23 @@ const ResourceOpsRecognitionQueuePanel = ({
                           <strong>{settingsDraft.ai_model || '自动选择'}</strong>
                         </div>
                         <div className="resource-ops-mini-stat">
+                          <span>识别策略</span>
+                          <strong>后端自动兜底</strong>
+                        </div>
+                      </div>
+
+                      <div className="resource-ops-mini-stats">
+                        <div className="resource-ops-mini-stat">
                           <span>最近归并</span>
                           <strong>{formatDateTime(runtimeSettings.last_sync_at)}</strong>
+                        </div>
+                        <div className="resource-ops-mini-stat">
+                          <span>自动识别</span>
+                          <strong>{settingsDraft.auto_recognition_enabled ? '已开启' : '已关闭'}</strong>
+                        </div>
+                        <div className="resource-ops-mini-stat">
+                          <span>保存说明</span>
+                          <strong>改完要保存</strong>
                         </div>
                       </div>
 
@@ -297,6 +322,13 @@ const ResourceOpsRecognitionQueuePanel = ({
                         <Button loading={aiTesting} onClick={onTestAiConnection}>
                           测试识别
                         </Button>
+                      </div>
+
+                      <div className="resource-ops-runtime-side-note resource-ops-runtime-side-note-compact">
+                        <span>识别说明</span>
+                        <small>
+                          后端会自动按“普通 Chat、流式 Chat、Responses”顺序兜底，优先帮你拿到可用结果，不需要手动切模式。
+                        </small>
                       </div>
                     </div>
 

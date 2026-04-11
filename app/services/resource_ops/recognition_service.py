@@ -510,9 +510,11 @@ def _build_ai_work_candidate(
         base_url=str(config.get("ai_base_url") or ""),
         api_key=str(config.get("ai_api_key") or ""),
         model=str(config.get("ai_model") or ""),
+        ai_api_mode=str(config.get("ai_api_mode") or "auto"),
         primary_title=primary_title,
     )
     used_model = _normalize_text(getattr(result, "used_model", None), max_length=255)
+    used_api_mode = _normalize_text(getattr(result, "used_api_mode", None), max_length=64)
     if used_model and used_model != _normalize_text(config.get("ai_model"), max_length=255):
         update_resource_ops_runtime_settings(
             session,
@@ -544,6 +546,7 @@ def _build_ai_work_candidate(
             "season": None,
             "year": None,
             "used_model": used_model,
+            "used_api_mode": used_api_mode,
             "source_link_target_id": candidate.link_target_id,
         },
     }
@@ -564,6 +567,7 @@ def _apply_binding_success(
             "season": (ai_payload.get("extra_json") or {}).get("season"),
             "year": (ai_payload.get("extra_json") or {}).get("year"),
             "used_model": (ai_payload.get("extra_json") or {}).get("used_model"),
+            "used_api_mode": (ai_payload.get("extra_json") or {}).get("used_api_mode"),
         }
     )
     binding.work_id = int(work.id)

@@ -384,6 +384,7 @@ class ResourceOpsAiTestResponse(ResourceOpsBaseModel):
     ok: bool = True
     base_url: str = ""
     model: str
+    used_api_mode: str = ""
     sample_text: str
     extracted_title: str | None = None
     release_year: int | None = None
