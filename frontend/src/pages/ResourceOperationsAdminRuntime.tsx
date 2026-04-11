@@ -124,6 +124,17 @@ const ResourceOperationsAdminRuntime = () => {
     use_saved_api_key: !aiApiKeyInput,
   })
 
+  const shouldAutoRefreshAiModels = (
+    current: ResourceOpsRuntimeSettingsResponse | null,
+    draft: ResourceOpsRuntimeSettingsUpdateRequest | null,
+    nextApiKeyInput: string
+  ) => {
+    if (!draft) return false
+    const currentBaseUrl = (current?.ai_base_url || '').trim()
+    const nextBaseUrl = (draft.ai_base_url || '').trim()
+    return currentBaseUrl !== nextBaseUrl || Boolean(nextApiKeyInput.trim())
+  }
+
   const loadSavedModels = async (response: ResourceOpsRuntimeSettingsResponse) => {
     if (!response.ai_base_url || !response.ai_api_key_configured) {
       setAiModelOptions([])
@@ -157,7 +168,7 @@ const ResourceOperationsAdminRuntime = () => {
     }
   }
 
-  const loadSettings = async (options?: { refreshModels?: boolean; silent?: boolean }) => {
+  const loadSettings = async (options?: { silent?: boolean }) => {
     if (!options?.silent) {
       setSettingsLoading(true)
     }
@@ -165,9 +176,6 @@ const ResourceOperationsAdminRuntime = () => {
       const response = await getResourceOpsRuntimeSettings()
       setRuntimeSettings(response)
       setSettingsDraft(buildSettingsDraft(response))
-      if (options?.refreshModels) {
-        void loadSavedModels(response)
-      }
     } catch (error: any) {
       message.error(error.response?.data?.detail || '加载资源运营配置失败')
     } finally {
@@ -202,7 +210,7 @@ const ResourceOperationsAdminRuntime = () => {
   }
 
   useEffect(() => {
-    void Promise.all([loadOverview(), loadSettings({ refreshModels: true })])
+    void Promise.all([loadOverview(), loadSettings()])
   }, [])
 
   useEffect(() => {
@@ -356,13 +364,16 @@ const ResourceOperationsAdminRuntime = () => {
     if (!settingsDraft) return
     setSettingsSaving(true)
     try {
+      const shouldRefreshModels = shouldAutoRefreshAiModels(runtimeSettings, settingsDraft, aiApiKeyInput)
       const payload: ResourceOpsRuntimeSettingsUpdateRequest = { ...settingsDraft }
       if (aiApiKeyInput) payload.ai_api_key = aiApiKeyInput
       const response = await updateResourceOpsRuntimeSettings(payload)
       setRuntimeSettings(response)
       setSettingsDraft(buildSettingsDraft(response))
       setAiApiKeyInput('')
-      void loadSavedModels(response)
+      if (shouldRefreshModels) {
+        void loadSavedModels(response)
+      }
       message.success('配置已保存')
     } catch (error: any) {
       message.error(error.response?.data?.detail || '保存配置失败')

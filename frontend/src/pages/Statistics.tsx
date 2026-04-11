@@ -2,30 +2,49 @@
  * 统计信息页面
  */
 
-import { useState, useEffect } from 'react'
-import { Card, Spin, Alert, Row, Col } from 'antd'
+import { useEffect, useState } from 'react'
+import { Alert, Card, Col, Row, Spin, Tabs } from 'antd'
+import ActivityHeatmap from '@/components/statistics/ActivityHeatmap'
+import ChannelMatrixTable from '@/components/statistics/ChannelMatrixTable'
+import DedupChart from '@/components/statistics/DedupChart'
+import NetdiskChart from '@/components/statistics/NetdiskChart'
+import StatisticsOverview from '@/components/statistics/StatisticsOverview'
+import TrendChart from '@/components/statistics/TrendChart'
 import {
-  getStatisticsOverview,
+  getActivityHeatmap,
+  getAdminChannelMatrix,
   getDailyTrend,
   getDedupStats,
   getNetdiskDistribution,
-  getActivityHeatmap,
+  getStatisticsOverview,
 } from '@/api/statistics'
-import StatisticsOverview from '@/components/statistics/StatisticsOverview'
-import TrendChart from '@/components/statistics/TrendChart'
-import DedupChart from '@/components/statistics/DedupChart'
-import NetdiskChart from '@/components/statistics/NetdiskChart'
-import ActivityHeatmap from '@/components/statistics/ActivityHeatmap'
+import { useAuthStore } from '@/store/authStore'
 import {
-  StatisticsOverview as StatisticsOverviewType,
+  ActivityHeatmapResponse,
+  AdminChannelMatrixResponse,
   DailyTrendResponse,
   DedupStatsResponse,
   NetdiskDistributionResponse,
-  ActivityHeatmapResponse,
+  StatisticsOverview as StatisticsOverviewType,
 } from '@/types/statistics'
 import './Statistics.css'
 
+const STATISTICS_TAB_STORAGE_KEY = 'statistics-active-tab'
+const STATISTICS_TAB_KEYS = new Set(['overview', 'channels'])
+
+const getInitialStatisticsTab = (isAdmin: boolean) => {
+  if (typeof window === 'undefined' || !isAdmin) {
+    return 'overview'
+  }
+
+  const saved = window.sessionStorage.getItem(STATISTICS_TAB_STORAGE_KEY)
+  return saved && STATISTICS_TAB_KEYS.has(saved) ? saved : 'overview'
+}
+
 const Statistics = () => {
+  const { user, _hasHydrated } = useAuthStore()
+  const isAdmin = user?.role === 'admin'
+
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [overview, setOverview] = useState<StatisticsOverviewType | null>(null)
@@ -33,6 +52,11 @@ const Statistics = () => {
   const [dedupStats, setDedupStats] = useState<DedupStatsResponse | null>(null)
   const [netdiskDist, setNetdiskDist] = useState<NetdiskDistributionResponse | null>(null)
   const [activityHeatmap, setActivityHeatmap] = useState<ActivityHeatmapResponse | null>(null)
+  const [activeTab, setActiveTab] = useState(() => getInitialStatisticsTab(Boolean(isAdmin)))
+  const [channelMatrixDays, setChannelMatrixDays] = useState(14)
+  const [channelMatrixLoading, setChannelMatrixLoading] = useState(false)
+  const [channelMatrixError, setChannelMatrixError] = useState<string | null>(null)
+  const [channelMatrix, setChannelMatrix] = useState<AdminChannelMatrixResponse | null>(null)
 
   // 加载统计数据
   const loadStatistics = async () => {
@@ -59,10 +83,49 @@ const Statistics = () => {
     }
   }
 
+  const loadChannelMatrix = async (days = channelMatrixDays) => {
+    if (!isAdmin) {
+      return
+    }
+
+    setChannelMatrixLoading(true)
+    setChannelMatrixError(null)
+    try {
+      setChannelMatrix(await getAdminChannelMatrix(days))
+    } catch (err: any) {
+      setChannelMatrixError(err.response?.data?.detail || '加载频道统计失败')
+    } finally {
+      setChannelMatrixLoading(false)
+    }
+  }
+
   // 初始加载
   useEffect(() => {
-    loadStatistics()
+    void loadStatistics()
   }, [])
+
+  useEffect(() => {
+    if (!_hasHydrated) {
+      return
+    }
+
+    if (!isAdmin) {
+      setActiveTab('overview')
+      return
+    }
+
+    if (typeof window !== 'undefined') {
+      const nextTab = activeTab && STATISTICS_TAB_KEYS.has(activeTab) ? activeTab : 'overview'
+      window.sessionStorage.setItem(STATISTICS_TAB_STORAGE_KEY, nextTab)
+    }
+  }, [activeTab, isAdmin, _hasHydrated])
+
+  useEffect(() => {
+    if (!isAdmin || activeTab !== 'channels') {
+      return
+    }
+    void loadChannelMatrix(channelMatrixDays)
+  }, [activeTab, channelMatrixDays, isAdmin])
 
   if (loading && !overview) {
     return (
@@ -78,8 +141,8 @@ const Statistics = () => {
     return <Alert message="错误" description={error} type="error" showIcon />
   }
 
-  return (
-    <div className="statistics-page">
+  const overviewContent = (
+    <>
       {/* 总体统计 */}
       {overview && <StatisticsOverview data={overview} />}
 
@@ -114,6 +177,54 @@ const Statistics = () => {
           </Col>
         </Row>
       </div>
+    </>
+  )
+
+  return (
+    <div className="statistics-page">
+      {!isAdmin ? (
+        overviewContent
+      ) : (
+        <Tabs
+          className="statistics-admin-tabs"
+          activeKey={activeTab}
+          onChange={setActiveTab}
+          items={[
+            {
+              key: 'overview',
+              label: '总览',
+              children: overviewContent,
+            },
+            {
+              key: 'channels',
+              label: '频道统计',
+              children: (
+                <div className="statistics-admin-pane">
+                  {channelMatrixError ? (
+                    <Alert
+                      className="statistics-admin-alert"
+                      message="频道统计加载失败"
+                      description={channelMatrixError}
+                      type="error"
+                      showIcon
+                    />
+                  ) : null}
+
+                  <Card className="chart-card statistics-admin-card" variant="outlined">
+                    <ChannelMatrixTable
+                      data={channelMatrix}
+                      loading={channelMatrixLoading}
+                      days={channelMatrixDays}
+                      onDaysChange={setChannelMatrixDays}
+                      onReload={() => void loadChannelMatrix(channelMatrixDays)}
+                    />
+                  </Card>
+                </div>
+              ),
+            },
+          ]}
+        />
+      )}
     </div>
   )
 }

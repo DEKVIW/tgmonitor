@@ -9,6 +9,7 @@ import {
   DedupStatsResponse,
   NetdiskDistributionResponse,
   ActivityHeatmapResponse,
+  AdminChannelMatrixResponse,
 } from '@/types/statistics'
 
 /**
@@ -48,6 +49,11 @@ export const getNetdiskDistribution = async (hours: number = 24): Promise<Netdis
  */
 export const getActivityHeatmap = async (days: number = 7): Promise<ActivityHeatmapResponse> => {
   const response = await apiClient.get<ActivityHeatmapResponse>(`/statistics/activity-heatmap?days=${days}`)
+  return response.data
+}
+
+export const getAdminChannelMatrix = async (days: number = 14): Promise<AdminChannelMatrixResponse> => {
+  const response = await apiClient.get<AdminChannelMatrixResponse>(`/admin/statistics/channel-matrix?days=${days}`)
   return response.data
 }
 

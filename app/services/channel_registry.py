@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Dict, List
+from typing import Any, Dict, List
 
 from sqlalchemy.orm import Session
 
@@ -59,3 +59,23 @@ def get_runtime_channel_parser_profiles() -> Dict[str, str | None]:
             profile_map[normalized] = getattr(channel, "parser_profile", None)
 
     return profile_map
+
+
+def get_runtime_channel_metadata() -> Dict[str, Dict[str, Any]]:
+    """Return runtime channel metadata keyed by normalized channel username."""
+    metadata: Dict[str, Dict[str, Any]] = {}
+
+    ensure_channel_parser_profile_column()
+    with Session(engine) as session:
+        for channel in session.query(Channel).all():
+            try:
+                normalized = normalize_channel_username(channel.username)
+            except ValueError:
+                logger.warning("Skipping invalid channel from database for metadata: %s", channel.username)
+                continue
+            metadata[normalized] = {
+                "config_id": int(channel.id),
+                "parser_profile": getattr(channel, "parser_profile", None),
+            }
+
+    return metadata

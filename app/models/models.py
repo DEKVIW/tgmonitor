@@ -1,7 +1,7 @@
 ﻿import threading
 from datetime import datetime
 
-from sqlalchemy import ARRAY, JSON, Boolean, Column, Date, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine, inspect, text
+from sqlalchemy import ARRAY, JSON, BigInteger, Boolean, Column, Date, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine, inspect, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.declarative import declarative_base
 
@@ -23,6 +23,11 @@ class Message(Base):
     channel = Column(String)
     group_name = Column(String)
     bot = Column(String)
+    monitor_channel_config_id = Column(Integer, ForeignKey("channels.id"), nullable=True, index=True)
+    monitor_chat_id = Column(BigInteger, nullable=True, index=True)
+    monitor_channel_key = Column(String(255), nullable=True, index=True)
+    monitor_channel_title = Column(String(255), nullable=True)
+    monitor_message_id = Column(Integer, nullable=True, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     netdisk_types = Column(JSONB, default=list)
 
@@ -590,6 +595,8 @@ engine = create_engine(
 
 _channel_schema_lock = threading.RLock()
 _channel_schema_checked = False
+_message_monitor_schema_lock = threading.RLock()
+_message_monitor_schema_checked = False
 _runtime_storage_lock = threading.RLock()
 _runtime_storage_checked = False
 
@@ -597,6 +604,7 @@ _runtime_storage_checked = False
 def create_tables():
     Base.metadata.create_all(bind=engine)
     ensure_channel_parser_profile_column()
+    ensure_message_monitor_source_columns()
     ensure_runtime_storage_tables()
 
 
@@ -620,6 +628,41 @@ def ensure_channel_parser_profile_column() -> None:
                 connection.execute(text("ALTER TABLE channels ADD COLUMN parser_profile VARCHAR"))
 
         _channel_schema_checked = True
+
+
+def ensure_message_monitor_source_columns() -> None:
+    global _message_monitor_schema_checked
+    if _message_monitor_schema_checked:
+        return
+
+    with _message_monitor_schema_lock:
+        if _message_monitor_schema_checked:
+            return
+
+        inspector = inspect(engine)
+        try:
+            columns = {column["name"] for column in inspector.get_columns("messages")}
+        except Exception:
+            columns = set()
+
+        if not columns:
+            return
+
+        pending_alters = {
+            "monitor_channel_config_id": "ALTER TABLE messages ADD COLUMN monitor_channel_config_id INTEGER",
+            "monitor_chat_id": "ALTER TABLE messages ADD COLUMN monitor_chat_id BIGINT",
+            "monitor_channel_key": "ALTER TABLE messages ADD COLUMN monitor_channel_key VARCHAR(255)",
+            "monitor_channel_title": "ALTER TABLE messages ADD COLUMN monitor_channel_title VARCHAR(255)",
+            "monitor_message_id": "ALTER TABLE messages ADD COLUMN monitor_message_id INTEGER",
+        }
+
+        with engine.begin() as connection:
+            for column_name, sql in pending_alters.items():
+                if column_name in columns:
+                    continue
+                connection.execute(text(sql))
+
+        _message_monitor_schema_checked = True
 
 
 def ensure_runtime_storage_tables() -> None:
@@ -656,11 +699,13 @@ def ensure_runtime_storage_tables() -> None:
                 ResourceRecognitionTask.__table__,
             ],
         )
+        ensure_message_monitor_source_columns()
         _ensure_system_settings_columns()
         _ensure_link_check_columns()
         _ensure_backup_target_columns()
         _ensure_backup_management_indexes()
         _ensure_link_check_indexes()
+        _ensure_message_monitor_indexes()
         _ensure_resource_ops_indexes()
         _runtime_storage_checked = True
 
@@ -786,6 +831,26 @@ def _ensure_backup_management_indexes() -> None:
         CREATE UNIQUE INDEX IF NOT EXISTS ux_backup_runs_active_target
         ON backup_runs (target_id)
         WHERE target_id IS NOT NULL AND status IN ('pending', 'running')
+        """,
+    )
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement))
+
+
+def _ensure_message_monitor_indexes() -> None:
+    statements = (
+        """
+        CREATE INDEX IF NOT EXISTS ix_messages_monitor_channel_config_timestamp
+        ON messages (monitor_channel_config_id, timestamp DESC)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_messages_monitor_channel_key_timestamp
+        ON messages (monitor_channel_key, timestamp DESC)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_messages_monitor_chat_message
+        ON messages (monitor_chat_id, monitor_message_id DESC)
         """,
     )
     with engine.begin() as connection:

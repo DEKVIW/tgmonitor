@@ -18,6 +18,186 @@
   margin-top: 4px;
 }
 
+.statistics-admin-tabs .ant-tabs-nav {
+  margin-bottom: 6px;
+}
+
+.statistics-admin-tabs .ant-tabs-tab {
+  padding-inline: 18px;
+}
+
+.statistics-admin-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.statistics-admin-alert {
+  border-radius: 18px;
+}
+
+.statistics-admin-card .ant-card-body {
+  padding: 18px;
+}
+
+.channel-matrix-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.channel-matrix-toolbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.channel-matrix-toolbar__copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.channel-matrix-toolbar__copy strong {
+  color: var(--text-color, #16324a);
+  font-size: 16px;
+}
+
+.channel-matrix-toolbar__copy span {
+  color: var(--text-muted);
+  line-height: 1.6;
+  font-size: 13px;
+}
+
+.channel-matrix-toolbar__actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.channel-matrix-empty {
+  padding: 24px 0 6px;
+}
+
+.channel-matrix-table .ant-table-container {
+  border-radius: 18px;
+}
+
+.channel-matrix-table .ant-table-thead > tr > th {
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
+.channel-matrix-table .ant-table-tbody > tr > td {
+  vertical-align: middle;
+}
+
+.channel-matrix-date-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  line-height: 1.15;
+}
+
+.channel-matrix-date-head strong {
+  font-size: 13px;
+}
+
+.channel-matrix-date-head span {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.channel-matrix-channel {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.channel-matrix-channel strong {
+  color: #16324a;
+  font-size: 14px;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.channel-matrix-channel small {
+  color: var(--text-muted);
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.channel-matrix-metric {
+  color: #16324a;
+  font-weight: 600;
+}
+
+.channel-matrix-cell {
+  min-height: 56px;
+  border-radius: 14px;
+  border: 1px solid rgba(216, 227, 238, 0.95);
+  padding: 8px 6px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  transition: transform 140ms ease, box-shadow 140ms ease;
+}
+
+.channel-matrix-cell span {
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.channel-matrix-cell small {
+  min-height: 14px;
+  font-size: 11px;
+  line-height: 1.1;
+  opacity: 0.92;
+}
+
+.channel-matrix-table .ant-table-tbody > tr:hover .channel-matrix-cell {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 18px rgba(15, 35, 52, 0.08);
+}
+
+.channel-trend-sparkline {
+  width: 132px;
+  height: 40px;
+  color: #0b6bcb;
+}
+
+.channel-trend-sparkline svg {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.channel-trend-sparkline__area {
+  fill: rgba(11, 107, 203, 0.12);
+}
+
+.channel-trend-sparkline__line {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.channel-trend-sparkline__dot {
+  fill: currentColor;
+  stroke: #ffffff;
+  stroke-width: 1.4;
+}
+
 .chart-card {
   border-radius: 22px;
   box-shadow: var(--shadow-soft);
@@ -93,11 +273,32 @@
     padding: 16px;
   }
 
+  .statistics-admin-card .ant-card-body {
+    padding: 14px;
+  }
+
   .trend-chart,
   .dedup-chart,
   .netdisk-chart,
   .activity-heatmap {
     width: 100%;
+  }
+
+  .channel-matrix-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .channel-matrix-toolbar__actions {
+    justify-content: space-between;
+  }
+
+  .channel-matrix-cell {
+    min-height: 52px;
+  }
+
+  .channel-trend-sparkline {
+    width: 116px;
   }
 
   .netdisk-chart-empty,

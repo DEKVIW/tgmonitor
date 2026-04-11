@@ -50,3 +50,23 @@ export interface ActivityHeatmapResponse {
   max_count: number
 }
 
+export interface AdminChannelMatrixRow {
+  row_key: string
+  monitor_channel_config_id?: number | null
+  monitor_channel_key?: string | null
+  monitor_channel_title: string
+  total_messages: number
+  total_links: number
+  message_counts: Record<string, number>
+  link_counts: Record<string, number>
+  trend: number[]
+}
+
+export interface AdminChannelMatrixResponse {
+  days: number
+  dates: string[]
+  rows: AdminChannelMatrixRow[]
+  available_since?: string | null
+  max_daily_messages: number
+}
+

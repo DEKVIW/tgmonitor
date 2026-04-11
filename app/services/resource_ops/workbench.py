@@ -1135,6 +1135,8 @@ def _get_topic_recent_refs(session: Session, *, link_target_ids: Iterable[int]) 
         session.query(
             MessageLinkRef.message_id.label("message_id"),
             Message.title.label("message_title"),
+            Message.monitor_channel_title.label("monitor_channel_title"),
+            Message.monitor_channel_key.label("monitor_channel_key"),
             Message.channel.label("message_channel"),
             Message.source.label("message_source"),
             Message.timestamp.label("message_time_fallback"),
@@ -1170,7 +1172,7 @@ def _get_topic_recent_refs(session: Session, *, link_target_ids: Iterable[int]) 
                 "message_id": message_id,
                 "message_title": row.message_title or row.display_text or "",
                 "display_text": row.display_text or "",
-                "channel": row.channel or row.message_channel or "",
+                "channel": row.monitor_channel_title or row.monitor_channel_key or row.channel or row.message_channel or "",
                 "source": row.source or row.message_source or "",
                 "message_timestamp": row.message_timestamp or row.message_time_fallback,
                 "links": [],
@@ -1179,7 +1181,7 @@ def _get_topic_recent_refs(session: Session, *, link_target_ids: Iterable[int]) 
         if not bucket["message_title"]:
             bucket["message_title"] = row.message_title or row.display_text or ""
         if not bucket["channel"]:
-            bucket["channel"] = row.channel or row.message_channel or ""
+            bucket["channel"] = row.monitor_channel_title or row.monitor_channel_key or row.channel or row.message_channel or ""
         if not bucket["source"]:
             bucket["source"] = row.source or row.message_source or ""
         if bucket["message_timestamp"] is None:

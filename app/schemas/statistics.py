@@ -63,3 +63,23 @@ class ActivityHeatmapResponse(BaseModel):
     cells: List[ActivityHeatmapCell]
     max_count: int
 
+
+class AdminChannelMatrixRow(BaseModel):
+    row_key: str
+    monitor_channel_config_id: Optional[int] = None
+    monitor_channel_key: Optional[str] = None
+    monitor_channel_title: str
+    total_messages: int
+    total_links: int
+    message_counts: Dict[str, int]
+    link_counts: Dict[str, int]
+    trend: List[int]
+
+
+class AdminChannelMatrixResponse(BaseModel):
+    days: int
+    dates: List[str]
+    rows: List[AdminChannelMatrixRow]
+    available_since: Optional[str] = None
+    max_daily_messages: int
+

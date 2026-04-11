@@ -15,9 +15,9 @@ from app.core.monitor_observability import MonitorMetrics, log_monitor_event
 from app.core.monitor_parser import parse_message_content, parse_message_records
 from app.models.config import settings
 from app.models.db import async_session
-from app.models.models import Credential, Message, engine
+from app.models.models import Credential, Message, engine, ensure_message_monitor_source_columns
 from app.services.channel_registry import (
-    get_runtime_channel_parser_profiles,
+    get_runtime_channel_metadata,
     get_runtime_channels,
 )
 from app.services.resource_ops import (
@@ -51,8 +51,8 @@ def get_channels() -> List[str]:
     return get_runtime_channels()
 
 
-def get_channel_parser_profiles() -> Dict[str, str | None]:
-    return get_runtime_channel_parser_profiles()
+def get_channel_runtime_metadata() -> Dict[str, Dict[str, Any]]:
+    return get_runtime_channel_metadata()
 
 
 
@@ -66,7 +66,7 @@ def is_invite_link_hash(channel_name: str) -> bool:
 async def build_channel_id_mapping(
     tg_client: TelegramClient,
     channels: List[str] | None = None,
-    parser_profiles: Dict[str, str | None] | None = None,
+    runtime_metadata: Dict[str, Dict[str, Any]] | None = None,
 ) -> Tuple[List[int], Dict[str, Dict[str, Any]]]:
     """构建所有频道到真实 ID 的映射。"""
     resolved_channels = channels if channels is not None else get_channels()
@@ -77,13 +77,16 @@ async def build_channel_id_mapping(
     for channel in resolved_channels:
         try:
             entity = await tg_client.get_entity(f"https://t.me/{channel}")
+            metadata = (runtime_metadata or {}).get(channel) or {}
             resolved_ids.append(entity.id)
             resolved_info[channel] = {
                 "id": entity.id,
                 "title": getattr(entity, "title", "N/A"),
                 "username": getattr(entity, "username", None),
                 "type": "invite_link" if is_invite_link_hash(channel) else "standard",
-                "parser_profile": (parser_profiles or {}).get(channel),
+                "parser_profile": metadata.get("parser_profile"),
+                "config_id": metadata.get("config_id"),
+                "channel_key": channel,
             }
             print(f"✅ 解析频道: {channel} -> ID: {entity.id}, Title: {getattr(entity, 'title', 'N/A')}")
         except Exception as exc:
@@ -99,13 +102,13 @@ async def refresh_channel_mapping(force: bool = False) -> bool:
     global channel_signature
 
     latest_channels = get_channels()
-    parser_profiles = get_channel_parser_profiles()
+    runtime_metadata = get_channel_runtime_metadata()
     latest_signature = tuple(sorted(latest_channels))
     active_signature = tuple(sorted(channel_info.keys()))
     if not force and latest_signature == channel_signature and active_signature == latest_signature:
         return False
 
-    ids, info = await build_channel_id_mapping(client, latest_channels, parser_profiles=parser_profiles)
+    ids, info = await build_channel_id_mapping(client, latest_channels, runtime_metadata=runtime_metadata)
     channel_usernames.clear()
     channel_usernames.extend(latest_channels)
     channel_ids.clear()
@@ -142,6 +145,7 @@ async def channel_refresh_loop() -> None:
 
 
 api_id, api_hash = get_api_credentials()
+ensure_message_monitor_source_columns()
 client = TelegramClient("tg_monitor_session", api_id, api_hash)
 channel_usernames = get_channels()
 channel_ids: List[int] = []
@@ -218,7 +222,8 @@ async def handler(event: Any) -> None:
         telegram_local_time = _to_local_telegram_time(event.date)
         monitor_time = datetime.datetime.now()
         delay_seconds = (monitor_time - telegram_local_time).total_seconds()
-        chat_title = getattr(chat, "title", "Unknown")
+        channel_runtime_info = channel_info.get(channel_name) or {}
+        chat_title = getattr(chat, "title", None) or channel_runtime_info.get("title") or channel_name or "Unknown"
 
         print(
             f"[{monitor_time}] 收到来自 {chat_title}({channel_name}) 的新消息，开始解析... "
@@ -286,9 +291,19 @@ async def handler(event: Any) -> None:
                 async with async_session() as session:
                     try:
                         created_messages: list[Message] = []
+                        monitor_channel_config_id = channel_runtime_info.get("config_id")
+                        monitor_chat_id = int(incoming_chat_id) if incoming_chat_id is not None else None
+                        monitor_channel_key = str(channel_runtime_info.get("channel_key") or channel_name or "").strip() or None
+                        monitor_channel_title = str(chat_title).strip() or None
+                        monitor_message_id = getattr(event.message, "id", None)
                         for parsed_data in parsed_records:
                             new_message = Message(
                                 timestamp=telegram_local_time,
+                                monitor_channel_config_id=int(monitor_channel_config_id) if monitor_channel_config_id else None,
+                                monitor_chat_id=monitor_chat_id,
+                                monitor_channel_key=monitor_channel_key,
+                                monitor_channel_title=monitor_channel_title,
+                                monitor_message_id=int(monitor_message_id) if monitor_message_id is not None else None,
                                 **parsed_data,
                                 netdisk_types=list(parsed_data["links"].keys()),
                             )
