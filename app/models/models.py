@@ -121,6 +121,24 @@ class LinkTargetDailyStat(Base):
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class ChannelDailyStat(Base):
+    __tablename__ = "channel_daily_stats"
+    __table_args__ = (
+        UniqueConstraint("stat_date", "monitor_channel_key", name="ux_channel_daily_stats_date_channel_key"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    stat_date = Column(Date, nullable=False, index=True)
+    monitor_channel_config_id = Column(Integer, ForeignKey("channels.id"), nullable=True, index=True)
+    monitor_channel_key = Column(String(255), nullable=False, index=True)
+    monitor_channel_title = Column(String(255), nullable=False, default="")
+    message_count = Column(Integer, nullable=False, default=0)
+    link_count = Column(Integer, nullable=False, default=0)
+    last_message_at = Column(DateTime, nullable=True, index=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class ResourceCandidateProfile(Base):
     __tablename__ = "resource_candidate_profiles"
     __table_args__ = (
@@ -691,6 +709,7 @@ def ensure_runtime_storage_tables() -> None:
                 MessageLinkRef.__table__,
                 LinkClickEvent.__table__,
                 LinkTargetDailyStat.__table__,
+                ChannelDailyStat.__table__,
                 ResourceCandidateProfile.__table__,
                 ResourceCandidateLog.__table__,
                 ResourceWork.__table__,
@@ -706,6 +725,7 @@ def ensure_runtime_storage_tables() -> None:
         _ensure_backup_management_indexes()
         _ensure_link_check_indexes()
         _ensure_message_monitor_indexes()
+        _ensure_channel_daily_stats_indexes()
         _ensure_resource_ops_indexes()
         _runtime_storage_checked = True
 
@@ -851,6 +871,26 @@ def _ensure_message_monitor_indexes() -> None:
         """
         CREATE INDEX IF NOT EXISTS ix_messages_monitor_chat_message
         ON messages (monitor_chat_id, monitor_message_id DESC)
+        """,
+    )
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement))
+
+
+def _ensure_channel_daily_stats_indexes() -> None:
+    statements = (
+        """
+        CREATE INDEX IF NOT EXISTS ix_channel_daily_stats_channel_config_date
+        ON channel_daily_stats (monitor_channel_config_id, stat_date DESC)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_channel_daily_stats_channel_key_date
+        ON channel_daily_stats (monitor_channel_key, stat_date DESC)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_channel_daily_stats_date_last_message
+        ON channel_daily_stats (stat_date DESC, last_message_at DESC)
         """,
     )
     with engine.begin() as connection:

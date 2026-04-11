@@ -53,7 +53,7 @@ const Statistics = () => {
   const [netdiskDist, setNetdiskDist] = useState<NetdiskDistributionResponse | null>(null)
   const [activityHeatmap, setActivityHeatmap] = useState<ActivityHeatmapResponse | null>(null)
   const [activeTab, setActiveTab] = useState(() => getInitialStatisticsTab(Boolean(isAdmin)))
-  const [channelMatrixDays, setChannelMatrixDays] = useState(14)
+  const [channelMatrixDays, setChannelMatrixDays] = useState(7)
   const [channelMatrixLoading, setChannelMatrixLoading] = useState(false)
   const [channelMatrixError, setChannelMatrixError] = useState<string | null>(null)
   const [channelMatrix, setChannelMatrix] = useState<AdminChannelMatrixResponse | null>(null)

@@ -52,7 +52,7 @@ export const getActivityHeatmap = async (days: number = 7): Promise<ActivityHeat
   return response.data
 }
 
-export const getAdminChannelMatrix = async (days: number = 14): Promise<AdminChannelMatrixResponse> => {
+export const getAdminChannelMatrix = async (days: number = 7): Promise<AdminChannelMatrixResponse> => {
   const response = await apiClient.get<AdminChannelMatrixResponse>(`/admin/statistics/channel-matrix?days=${days}`)
   return response.data
 }

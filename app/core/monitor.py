@@ -23,6 +23,9 @@ from app.services.channel_registry import (
 from app.services.resource_ops import (
     ensure_message_link_refs_for_message_ids,
 )
+from app.services.channel_daily_stats_service import (
+    accumulate_channel_daily_stats_for_message_ids,
+)
 from app.services.system_config_service import get_monitor_runtime_config
 
 warnings.filterwarnings(
@@ -333,6 +336,28 @@ async def handler(event: Any) -> None:
                                 print(
                                     f"[{monitor_time}] 资源索引即时同步失败，已保留消息入库，将由读取修复/手动补录兜底: "
                                     f"{resource_index_error}"
+                                )
+                        if new_message_ids:
+                            try:
+                                async with session.begin_nested():
+                                    await session.run_sync(
+                                        lambda sync_session: accumulate_channel_daily_stats_for_message_ids(
+                                            sync_session,
+                                            new_message_ids,
+                                        )
+                                    )
+                            except Exception as channel_daily_stats_error:
+                                log_monitor_event(
+                                    logger,
+                                    "channel_daily_stats_sync_failed",
+                                    level=logging.WARNING,
+                                    channel=channel_name,
+                                    error=str(channel_daily_stats_error),
+                                    affected_messages=len(new_message_ids),
+                                )
+                                print(
+                                    f"[{monitor_time}] channel_daily_stats 鍚屾澶辫触锛屼絾涓嶄細褰卞搷娑堟伅鍏ュ簱: "
+                                    f"{channel_daily_stats_error}"
                                 )
                         await session.commit()
                     except Exception:

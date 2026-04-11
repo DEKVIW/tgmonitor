@@ -1,16 +1,23 @@
 from __future__ import annotations
 
-from datetime import date, datetime, time, timedelta
+import logging
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.models.models import Message, MessageLinkRef, ensure_message_monitor_source_columns
+from app.models.models import ChannelDailyStat, Message, ensure_runtime_storage_tables
+from app.services.channel_daily_stats_service import (
+    CHANNEL_DAILY_STATS_RETENTION_DAYS,
+    backfill_recent_channel_daily_stats_window_once,
+)
+
+logger = logging.getLogger(__name__)
 
 
 def _safe_days(value: int | None) -> int:
-    return max(7, min(int(value or 14), 30))
+    return max(7, min(int(value or 7), 30))
 
 
 def _build_date_keys(days: int) -> list[date]:
@@ -25,8 +32,12 @@ def _row_key(config_id: int | None, channel_key: str | None) -> str:
     return f"key:{(channel_key or '').strip()}"
 
 
-def get_admin_channel_matrix(session: Session, *, days: int = 14) -> dict[str, Any]:
-    ensure_message_monitor_source_columns()
+def get_admin_channel_matrix(session: Session, *, days: int = 7) -> dict[str, Any]:
+    ensure_runtime_storage_tables()
+    try:
+        backfill_recent_channel_daily_stats_window_once(days=CHANNEL_DAILY_STATS_RETENTION_DAYS)
+    except Exception:
+        logger.exception("failed to backfill channel daily stats window")
 
     safe_days = _safe_days(days)
     dates = _build_date_keys(safe_days)
@@ -39,7 +50,6 @@ def get_admin_channel_matrix(session: Session, *, days: int = 14) -> dict[str, A
             "max_daily_messages": 0,
         }
 
-    start_dt = datetime.combine(dates[0], time.min)
     date_labels = [item.isoformat() for item in dates]
 
     available_since_value = (
@@ -48,47 +58,18 @@ def get_admin_channel_matrix(session: Session, *, days: int = 14) -> dict[str, A
         .scalar()
     )
 
-    message_rows = (
+    stat_rows = (
         session.query(
-            Message.monitor_channel_config_id.label("config_id"),
-            Message.monitor_channel_key.label("channel_key"),
-            Message.monitor_channel_title.label("channel_title"),
-            func.date(Message.timestamp).label("stat_date"),
-            func.max(Message.timestamp).label("last_message_at"),
-            func.count(Message.id).label("message_count"),
+            ChannelDailyStat.monitor_channel_config_id.label("config_id"),
+            ChannelDailyStat.monitor_channel_key.label("channel_key"),
+            ChannelDailyStat.monitor_channel_title.label("channel_title"),
+            ChannelDailyStat.stat_date.label("stat_date"),
+            ChannelDailyStat.last_message_at.label("last_message_at"),
+            ChannelDailyStat.message_count.label("message_count"),
+            ChannelDailyStat.link_count.label("link_count"),
         )
         .filter(
-            Message.monitor_channel_key.isnot(None),
-            Message.timestamp >= start_dt,
-        )
-        .group_by(
-            Message.monitor_channel_config_id,
-            Message.monitor_channel_key,
-            Message.monitor_channel_title,
-            func.date(Message.timestamp),
-        )
-        .all()
-    )
-
-    link_rows = (
-        session.query(
-            Message.monitor_channel_config_id.label("config_id"),
-            Message.monitor_channel_key.label("channel_key"),
-            Message.monitor_channel_title.label("channel_title"),
-            func.date(Message.timestamp).label("stat_date"),
-            func.max(Message.timestamp).label("last_message_at"),
-            func.count(MessageLinkRef.id).label("link_count"),
-        )
-        .join(MessageLinkRef, MessageLinkRef.message_id == Message.id)
-        .filter(
-            Message.monitor_channel_key.isnot(None),
-            Message.timestamp >= start_dt,
-        )
-        .group_by(
-            Message.monitor_channel_config_id,
-            Message.monitor_channel_key,
-            Message.monitor_channel_title,
-            func.date(Message.timestamp),
+            ChannelDailyStat.stat_date >= dates[0],
         )
         .all()
     )
@@ -116,23 +97,13 @@ def get_admin_channel_matrix(session: Session, *, days: int = 14) -> dict[str, A
         rows_by_key[key] = row
         return row
 
-    for raw_row in message_rows:
+    for raw_row in stat_rows:
         stat_date = raw_row.stat_date.isoformat() if raw_row.stat_date is not None else None
         if not stat_date or stat_date not in date_labels:
             continue
         row = ensure_row(raw_row.config_id, raw_row.channel_key, raw_row.channel_title)
         row["message_counts"][stat_date] += int(raw_row.message_count or 0)
         row["total_messages"] += int(raw_row.message_count or 0)
-        last_message_at = raw_row.last_message_at
-        if last_message_at is not None and (row["_last_message_at"] is None or last_message_at > row["_last_message_at"]):
-            row["_last_message_at"] = last_message_at
-            row["monitor_channel_title"] = (raw_row.channel_title or "").strip() or row["monitor_channel_key"] or row["monitor_channel_title"]
-
-    for raw_row in link_rows:
-        stat_date = raw_row.stat_date.isoformat() if raw_row.stat_date is not None else None
-        if not stat_date or stat_date not in date_labels:
-            continue
-        row = ensure_row(raw_row.config_id, raw_row.channel_key, raw_row.channel_title)
         row["link_counts"][stat_date] += int(raw_row.link_count or 0)
         row["total_links"] += int(raw_row.link_count or 0)
         last_message_at = raw_row.last_message_at

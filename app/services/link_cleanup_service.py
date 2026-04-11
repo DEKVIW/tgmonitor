@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Dict, Tuple
 
 from sqlalchemy.orm import Session
 
 from app.core.monitor_parser import normalize_url
 from app.models.models import LinkCheckDetails, LinkCheckStats, Message
+from app.services.channel_daily_stats_service import rebuild_channel_daily_stats_for_pairs
 from app.services.link_check.result import STATUS_INVALID
 from app.services.resource_ops import delete_message_resource_data, ensure_message_link_refs_for_message_ids
 
@@ -100,6 +101,14 @@ def _extract_netdisk_types(links: Any) -> list[str]:
     if isinstance(links, dict):
         return [key for key, value in links.items() if not _is_empty_container(value)]
     return []
+
+
+def _message_channel_stat_pair(message: Message) -> Tuple[date, str] | None:
+    timestamp = getattr(message, "timestamp", None)
+    channel_key = str(getattr(message, "monitor_channel_key", None) or "").strip()
+    if not isinstance(timestamp, datetime) or not channel_key:
+        return None
+    return timestamp.date(), channel_key
 
 
 def _is_cleanup_candidate(detail: LinkCheckDetails) -> bool:
@@ -212,6 +221,7 @@ def apply_link_check_cleanup(
         updated_message_ids: list[int] = []
         deleted_message_ids: list[int] = []
         messages_to_delete: list[Message] = []
+        affected_pairs: set[tuple[date, str]] = set()
         for message_id, invalid_urls in message_invalid_urls.items():
             message = message_by_id.get(message_id)
             if message is None:
@@ -233,6 +243,9 @@ def apply_link_check_cleanup(
                 removed_links += message_removed_links
                 deleted_messages += 1
                 if not dry_run:
+                    stat_pair = _message_channel_stat_pair(message)
+                    if stat_pair is not None:
+                        affected_pairs.add(stat_pair)
                     deleted_message_ids.append(int(message.id))
                     messages_to_delete.append(message)
                 continue
@@ -247,6 +260,9 @@ def apply_link_check_cleanup(
                 message.links = cleaned_links
                 message.netdisk_types = next_netdisk_types
                 updated_message_ids.append(int(message.id))
+                stat_pair = _message_channel_stat_pair(message)
+                if stat_pair is not None:
+                    affected_pairs.add(stat_pair)
 
         if not dry_run:
             if updated_message_ids:
@@ -255,6 +271,12 @@ def apply_link_check_cleanup(
                 delete_message_resource_data(db, deleted_message_ids)
                 for message in messages_to_delete:
                     db.delete(message)
+            if affected_pairs:
+                try:
+                    with db.begin_nested():
+                        rebuild_channel_daily_stats_for_pairs(db, affected_pairs)
+                except Exception:
+                    logger.exception("failed to rebuild channel daily stats during cleanup")
             stats.updated_messages = int(stats.updated_messages or 0) + updated_messages
             stats.deleted_messages = int(stats.deleted_messages or 0) + deleted_messages
             db.commit()
