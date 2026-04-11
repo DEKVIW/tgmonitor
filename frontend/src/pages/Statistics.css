@@ -90,10 +90,12 @@
 .channel-matrix-table .ant-table-thead > tr > th {
   white-space: nowrap;
   vertical-align: bottom;
+  padding: 10px 8px;
 }
 
 .channel-matrix-table .ant-table-tbody > tr > td {
   vertical-align: middle;
+  padding: 10px 8px;
 }
 
 .channel-matrix-date-head {
@@ -104,12 +106,12 @@
 }
 
 .channel-matrix-date-head strong {
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .channel-matrix-date-head span {
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: 10px;
 }
 
 .channel-matrix-channel {
@@ -121,15 +123,21 @@
 
 .channel-matrix-channel strong {
   color: #16324a;
-  font-size: 14px;
-  line-height: 1.4;
+  font-size: 13px;
+  line-height: 1.35;
   word-break: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .channel-matrix-channel small {
   color: var(--text-muted);
-  font-size: 12px;
-  word-break: break-all;
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .channel-matrix-metric {
@@ -138,10 +146,10 @@
 }
 
 .channel-matrix-cell {
-  min-height: 56px;
-  border-radius: 14px;
+  min-height: 48px;
+  border-radius: 12px;
   border: 1px solid rgba(216, 227, 238, 0.95);
-  padding: 8px 6px;
+  padding: 6px 4px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -151,14 +159,14 @@
 }
 
 .channel-matrix-cell span {
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 700;
   line-height: 1;
 }
 
 .channel-matrix-cell small {
-  min-height: 14px;
-  font-size: 11px;
+  min-height: 12px;
+  font-size: 10px;
   line-height: 1.1;
   opacity: 0.92;
 }
@@ -169,8 +177,8 @@
 }
 
 .channel-trend-sparkline {
-  width: 132px;
-  height: 40px;
+  width: 88px;
+  height: 32px;
   color: #0b6bcb;
 }
 
@@ -294,11 +302,12 @@
   }
 
   .channel-matrix-cell {
-    min-height: 52px;
+    min-height: 44px;
   }
 
   .channel-trend-sparkline {
-    width: 116px;
+    width: 82px;
+    height: 28px;
   }
 
   .netdisk-chart-empty,

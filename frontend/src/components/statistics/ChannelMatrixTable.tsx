@@ -20,6 +20,11 @@ const DAY_OPTIONS = [
   { label: '\u8fd130\u5929', value: 30 },
 ]
 
+const CHANNEL_COL_WIDTH = 176
+const TOTAL_COL_WIDTH = 84
+const TREND_COL_WIDTH = 102
+const DATE_COL_WIDTH = 72
+
 const weekdayFormatter = new Intl.DateTimeFormat('zh-CN', { weekday: 'short' })
 
 const formatShortDate = (value: string) => `${value.slice(5, 7)}-${value.slice(8, 10)}`
@@ -64,7 +69,7 @@ const ChannelMatrixTable = ({
       dataIndex: 'monitor_channel_title',
       key: 'monitor_channel_title',
       fixed: 'left',
-      width: 260,
+      width: CHANNEL_COL_WIDTH,
       sorter: (left, right) =>
         (left.monitor_channel_title || left.monitor_channel_key || '').localeCompare(
           right.monitor_channel_title || right.monitor_channel_key || '',
@@ -81,8 +86,7 @@ const ChannelMatrixTable = ({
       title: '\u6d88\u606f\u6570',
       dataIndex: 'total_messages',
       key: 'total_messages',
-      fixed: 'left',
-      width: 112,
+      width: TOTAL_COL_WIDTH,
       defaultSortOrder: 'descend',
       sorter: (left, right) => (left.total_messages || 0) - (right.total_messages || 0),
       render: (value: number) => <span className="channel-matrix-metric">{formatNumber(value || 0)}</span>,
@@ -91,22 +95,20 @@ const ChannelMatrixTable = ({
       title: '\u94fe\u63a5\u6570',
       dataIndex: 'total_links',
       key: 'total_links',
-      fixed: 'left',
-      width: 112,
+      width: TOTAL_COL_WIDTH,
       sorter: (left, right) => (left.total_links || 0) - (right.total_links || 0),
       render: (value: number) => <span className="channel-matrix-metric">{formatNumber(value || 0)}</span>,
     },
     {
       title: '\u8d8b\u52bf',
       key: 'trend',
-      fixed: 'left',
-      width: 160,
+      width: TREND_COL_WIDTH,
       sorter: (left, right) => {
         const leftPeak = Math.max(...(left.trend || [0]))
         const rightPeak = Math.max(...(right.trend || [0]))
         return leftPeak - rightPeak
       },
-      render: (_, row) => <ChannelTrendSparkline values={row.trend || []} />,
+      render: (_, row) => <ChannelTrendSparkline values={row.trend || []} width={88} height={32} />,
     },
     ...dates.map((date) => ({
       title: (
@@ -116,7 +118,7 @@ const ChannelMatrixTable = ({
         </div>
       ),
       key: date,
-      width: 110,
+      width: DATE_COL_WIDTH,
       sorter: (left: AdminChannelMatrixRow, right: AdminChannelMatrixRow) =>
         (left.message_counts?.[date] || 0) - (right.message_counts?.[date] || 0),
       render: (_: unknown, row: AdminChannelMatrixRow) => {
@@ -170,7 +172,13 @@ const ChannelMatrixTable = ({
             pageSizeOptions: [10, 20, 50, 100],
             showTotal: (total) => `${total} channels`,
           }}
-          scroll={{ x: 980 + dates.length * 110 }}
+          scroll={{
+            x:
+              CHANNEL_COL_WIDTH +
+              TOTAL_COL_WIDTH * 2 +
+              TREND_COL_WIDTH +
+              DATE_COL_WIDTH * dates.length,
+          }}
           sticky
           size="middle"
           className="channel-matrix-table"
