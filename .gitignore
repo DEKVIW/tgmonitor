@@ -48,3 +48,5 @@ env.bak/
 *.session-journal
 telegram_sessions/ 
 *.md 
+# local tests
+/tests/

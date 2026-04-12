@@ -1,34 +1,12 @@
-/**
- * 消息筛选组件（顶部工具条 + 高级筛选抽屉）
- */
-
 import { useEffect, useMemo, useState } from 'react'
-import {
-  Alert,
-  Input,
-  Button,
-  Space,
-  Select,
-  Drawer,
-  Switch,
-  InputNumber,
-  Divider,
-  Modal,
-  Tag,
-  Tooltip,
-} from 'antd'
-import {
-  SearchOutlined,
-  FilterOutlined,
-  ReloadOutlined,
-  ClearOutlined,
-} from '@ant-design/icons'
+import { Alert, Button, Input, InputNumber, Modal, Select, Space, Tag, Tooltip } from 'antd'
+import { ClearOutlined, FilterOutlined, SearchOutlined } from '@ant-design/icons'
 import { useMessageStore } from '@/store/messageStore'
 import { useAuthStore } from '@/store/authStore'
 import TurnstileWidget from '@/components/security/TurnstileWidget'
 import { verifySearchTurnstile } from '@/api/security'
 import { trackEvent } from '@/utils/analytics'
-import { TIME_RANGES, PAGE_SIZES, NETDISK_TYPES } from '@/utils/constants'
+import { NETDISK_TYPES, TIME_RANGES } from '@/utils/constants'
 import { getTagStats } from '@/api/messages'
 import { MessageFilters as MessageFiltersState, TagStatsResponse } from '@/types/message'
 import {
@@ -40,8 +18,23 @@ import {
 } from '@/utils/securityConfig'
 import './MessageFilters.css'
 
-const { Search } = Input
 const { Option } = Select
+
+const DEFAULT_REFRESH_INTERVAL = 60
+
+const sanitizeHiddenFilters = (value: MessageFiltersState): MessageFiltersState => ({
+  ...value,
+  has_links_only: false,
+  min_content_length: 0,
+})
+
+const normalizeRefreshInterval = (value: number | null | undefined) => {
+  const numericValue = Number(value || DEFAULT_REFRESH_INTERVAL)
+  if (!Number.isFinite(numericValue)) {
+    return DEFAULT_REFRESH_INTERVAL
+  }
+  return Math.min(300, Math.max(30, numericValue))
+}
 
 interface MessageFiltersProps {
   disabled?: boolean
@@ -58,28 +51,24 @@ const MessageFilters = ({
 }: MessageFiltersProps) => {
   const { user } = useAuthStore()
   const securityConfig = usePublicSecurityConfig()
-  const {
-    filters,
-    setFilters,
-    resetFilters,
-    refreshInterval,
-    setRefreshInterval,
-    triggerReload,
-  } = useMessageStore()
+  const { filters, setFilters, resetFilters, refreshInterval, setRefreshInterval } = useMessageStore()
   const [tagOptions, setTagOptions] = useState<TagStatsResponse[]>([])
-  const [drawerOpen, setDrawerOpen] = useState(false)
+  const [advancedOpen, setAdvancedOpen] = useState(false)
   const [challengeOpen, setChallengeOpen] = useState(false)
   const [challengeError, setChallengeError] = useState('')
   const [challengeBusy, setChallengeBusy] = useState(false)
   const [challengeResetKey, setChallengeResetKey] = useState(0)
   const [pendingSearchValue, setPendingSearchValue] = useState<string | null>(null)
   const [searchValue, setSearchValue] = useState(filters.search_query || '')
-  const [draft, setDraft] = useState(filters)
+  const [draft, setDraft] = useState<MessageFiltersState>(() => sanitizeHiddenFilters(filters))
+  const [draftRefreshInterval, setDraftRefreshInterval] = useState(refreshInterval)
   const [searchChallengeVersion, setSearchChallengeVersion] = useState(0)
+
   const allowedTimeRangeSet = useMemo(
     () => (allowedTimeRanges ? new Set(allowedTimeRanges) : null),
     [allowedTimeRanges]
   )
+
   const toolbarClassName = useMemo(
     () =>
       [
@@ -91,23 +80,28 @@ const MessageFilters = ({
         .join(' '),
     [layoutVariant]
   )
+
   const audience = layoutVariant === 'guest-header' ? 'guest' : 'authenticated'
   const searchChallengeRequired = isSearchChallengeRequiredForAudience(securityConfig, user)
   const searchChallengeClearance = useMemo(
     () => readSearchChallengeClearance(user),
     [searchChallengeVersion, user?.username]
   )
-
   const hasSearchChallengeClearance = Boolean(searchChallengeClearance)
+  const hasAdvancedSelections =
+    Boolean(filters.selected_tags?.length) ||
+    Boolean(filters.selected_netdisks?.length) ||
+    normalizeRefreshInterval(refreshInterval) !== DEFAULT_REFRESH_INTERVAL
 
-  const buildFilterEventData = (nextFilters: MessageFiltersState) => ({
+  const buildFilterEventData = (
+    nextFilters: MessageFiltersState,
+    nextRefreshInterval: number = refreshInterval
+  ) => ({
     audience,
     time_range: nextFilters.time_range || '',
-    page_size: nextFilters.page_size || 0,
     tags_count: nextFilters.selected_tags?.length || 0,
     netdisk_count: nextFilters.selected_netdisks?.length || 0,
-    has_links_only: nextFilters.has_links_only ? 'true' : 'false',
-    min_content_length: nextFilters.min_content_length || 0,
+    refresh_interval: normalizeRefreshInterval(nextRefreshInterval),
   })
 
   const applySearch = (value: string) => {
@@ -140,17 +134,19 @@ const MessageFilters = ({
     return true
   }
 
-  // 加载标签选项
   useEffect(() => {
     getTagStats(50)
       .then(setTagOptions)
       .catch((error) => console.error('获取标签失败:', error))
   }, [])
 
-  // 同步 store 改变到抽屉草稿
   useEffect(() => {
-    setDraft(filters)
+    setDraft(sanitizeHiddenFilters(filters))
   }, [filters])
+
+  useEffect(() => {
+    setDraftRefreshInterval(refreshInterval)
+  }, [refreshInterval])
 
   useEffect(() => {
     setSearchValue(filters.search_query || '')
@@ -167,6 +163,13 @@ const MessageFilters = ({
   }, [allowedTimeRangeSet, fallbackTimeRange, filters.time_range, setFilters])
 
   useEffect(() => {
+    if (!filters.has_links_only && !(filters.min_content_length || 0)) {
+      return
+    }
+    setFilters({ has_links_only: false, min_content_length: 0 })
+  }, [filters.has_links_only, filters.min_content_length, setFilters])
+
+  useEffect(() => {
     if ((filters.search_query || '') === searchValue) {
       return
     }
@@ -180,14 +183,7 @@ const MessageFilters = ({
     }, 350)
 
     return () => window.clearTimeout(timer)
-  }, [
-    audience,
-    filters.search_query,
-    hasSearchChallengeClearance,
-    searchChallengeRequired,
-    searchValue,
-    setFilters,
-  ])
+  }, [filters.search_query, hasSearchChallengeClearance, searchChallengeRequired, searchValue, setFilters])
 
   const handleSearch = (value: string) => {
     setSearchValue(value)
@@ -216,16 +212,6 @@ const MessageFilters = ({
     [allowedTimeRangeSet]
   )
 
-  const pageSizeOptions = useMemo(
-    () =>
-      PAGE_SIZES.map((size) => (
-        <Option key={size} value={size}>
-          {size} 条/页
-        </Option>
-      )),
-    []
-  )
-
   const netdiskOptions = useMemo(
     () =>
       NETDISK_TYPES.map((type) => (
@@ -246,36 +232,31 @@ const MessageFilters = ({
     [tagOptions]
   )
 
-  const applyAdvanced = () => {
-    setFilters(draft)
-    trackEvent('filters_apply', buildFilterEventData(draft))
-    setDrawerOpen(false)
+  const handleAdvancedOpen = () => {
+    setDraft(sanitizeHiddenFilters(filters))
+    setDraftRefreshInterval(refreshInterval)
+    setAdvancedOpen(true)
   }
 
-  const resetAdvanced = () => {
-    resetFilters()
-    trackEvent('filters_reset', { audience, source: 'drawer' })
-    setDrawerOpen(false)
+  const handleAdvancedClose = () => {
+    setDraft(sanitizeHiddenFilters(filters))
+    setDraftRefreshInterval(refreshInterval)
+    setAdvancedOpen(false)
+  }
+
+  const applyAdvanced = () => {
+    const nextFilters = sanitizeHiddenFilters(draft)
+    const nextRefreshInterval = normalizeRefreshInterval(draftRefreshInterval)
+
+    setFilters(nextFilters)
+    setRefreshInterval(nextRefreshInterval)
+    trackEvent('filters_apply', buildFilterEventData(nextFilters, nextRefreshInterval))
+    setAdvancedOpen(false)
   }
 
   const handleToolbarReset = () => {
     resetFilters()
     trackEvent('filters_reset', { audience, source: 'toolbar' })
-  }
-
-  const handleReload = () => {
-    triggerReload()
-    trackEvent('feed_refresh', { audience })
-  }
-
-  const handleTimeRangeChange = (value: string) => {
-    setFilters({ time_range: value })
-    trackEvent('filter_change', { audience, control: 'time_range', value })
-  }
-
-  const handlePageSizeChange = (value: number) => {
-    setFilters({ page_size: value })
-    trackEvent('filter_change', { audience, control: 'page_size', value })
   }
 
   const handleSearchChallengeClose = () => {
@@ -313,75 +294,37 @@ const MessageFilters = ({
 
   return (
     <div className={toolbarClassName}>
-      <div className="filters-left">
-        <Search
-          className="filters-search"
-          placeholder="搜索消息（关键词用空格分隔）"
-          allowClear
-          enterButton={<SearchOutlined />}
+      <div className="filters-search-shell">
+        <SearchOutlined className="filters-search-shell__lead" />
+        <Input
+          className="filters-search-input"
+          bordered={false}
+          placeholder="搜索"
           value={searchValue}
-          onSearch={handleSearch}
-          onChange={(e) => setSearchValue(e.target.value)}
+          onPressEnter={() => handleSearch(searchValue)}
+          onChange={(event) => setSearchValue(event.target.value)}
           disabled={disabled}
         />
-      </div>
-      <div className="filters-right">
-        <Space size={10} className="filters-actions" wrap={false}>
-          <Select
-            className="toolbar-select toolbar-select--time"
-            value={filters.time_range}
-            onChange={handleTimeRangeChange}
-            style={{ width: 160 }}
-            disabled={disabled}
-          >
-            {timeRangeOptions}
-          </Select>
-          <Select
-            className="toolbar-select toolbar-select--page"
-            value={filters.page_size}
-            onChange={handlePageSizeChange}
-            style={{ width: 120 }}
-            disabled={disabled}
-          >
-            {pageSizeOptions}
-          </Select>
+        <div className="filters-search-actions">
           <Tooltip title="高级筛选">
             <Button
-              className="toolbar-button toolbar-button--advanced"
+              type="text"
+              className={`toolbar-icon-button ${hasAdvancedSelections ? 'toolbar-icon-button--active' : ''}`}
               icon={<FilterOutlined />}
-              onClick={() => setDrawerOpen(true)}
+              onClick={handleAdvancedOpen}
               disabled={disabled}
-            >
-              高级筛选
-            </Button>
+            />
           </Tooltip>
           <Tooltip title="重置筛选">
             <Button
-              className="toolbar-button"
+              type="text"
+              className="toolbar-icon-button"
               icon={<ClearOutlined />}
               onClick={handleToolbarReset}
               disabled={disabled}
             />
           </Tooltip>
-          <Tooltip title="刷新数据">
-            <Button className="toolbar-button" icon={<ReloadOutlined />} onClick={handleReload} disabled={disabled} />
-          </Tooltip>
-          <div className="refresh-inline">
-            <span className="refresh-label">自动刷新</span>
-            <InputNumber
-              min={30}
-              max={300}
-              step={30}
-              value={refreshInterval}
-              onChange={(v) => setRefreshInterval(v || 30)}
-              controls
-              size="small"
-              style={{ width: 110 }}
-              disabled={disabled}
-            />
-            <span className="refresh-unit">秒</span>
-          </div>
-        </Space>
+        </div>
       </div>
 
       <Modal
@@ -412,18 +355,20 @@ const MessageFilters = ({
         </Space>
       </Modal>
 
-      <Drawer
+      <Modal
         title="高级筛选"
-        placement="right"
-        open={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
-        width={360}
+        open={advancedOpen}
+        onCancel={handleAdvancedClose}
+        onOk={applyAdvanced}
+        okText="应用筛选"
+        cancelText="取消"
+        width={560}
         maskClosable={!disabled}
-        rootClassName="responsive-drawer-root"
+        className="filters-advanced-modal"
       >
-        <Space direction="vertical" size="large" style={{ width: '100%' }}>
-          <div className="drawer-block">
-            <div className="drawer-block-title">时间范围</div>
+        <div className="filters-advanced-grid">
+          <div className="filters-modal-field filters-modal-field--full">
+            <div className="filters-modal-label">时间范围</div>
             <Select
               value={draft.time_range}
               onChange={(value) => setDraft({ ...draft, time_range: value })}
@@ -434,12 +379,12 @@ const MessageFilters = ({
             </Select>
           </div>
 
-          <div className="drawer-block">
-            <div className="drawer-block-title">标签</div>
+          <div className="filters-modal-field filters-modal-field--full">
+            <div className="filters-modal-label">标签</div>
             <Select
               mode="multiple"
               showSearch
-              value={draft.selected_tags}
+              value={draft.selected_tags || []}
               onChange={(value) => setDraft({ ...draft, selected_tags: value })}
               style={{ width: '100%' }}
               maxTagCount="responsive"
@@ -448,20 +393,20 @@ const MessageFilters = ({
             >
               {tagSelectOptions}
             </Select>
-            <div className="drawer-tags-preview">
-              {draft.selected_tags?.slice(0, 4)?.map((t) => (
-                <Tag key={t} color="blue">
-                  #{t}
+            <div className="filters-modal-tags-preview">
+              {(draft.selected_tags || []).slice(0, 6).map((tag) => (
+                <Tag key={tag} color="blue">
+                  #{tag}
                 </Tag>
               ))}
             </div>
           </div>
 
-          <div className="drawer-block">
-            <div className="drawer-block-title">网盘类型</div>
+          <div className="filters-modal-field filters-modal-field--full">
+            <div className="filters-modal-label">网盘类型</div>
             <Select
               mode="multiple"
-              value={draft.selected_netdisks}
+              value={draft.selected_netdisks || []}
               onChange={(value) => setDraft({ ...draft, selected_netdisks: value })}
               style={{ width: '100%' }}
               placeholder="选择网盘类型"
@@ -471,51 +416,24 @@ const MessageFilters = ({
             </Select>
           </div>
 
-          <div className="drawer-block">
-            <div className="drawer-block-title">只看有链接</div>
-            <Switch
-              checked={draft.has_links_only}
-              onChange={(checked) => setDraft({ ...draft, has_links_only: checked })}
-              disabled={disabled}
-            />
-          </div>
-
-          <div className="drawer-block">
-            <div className="drawer-block-title">最小内容长度</div>
+          <div className="filters-modal-field filters-modal-field--full">
+            <div className="filters-modal-label">自动刷新间隔</div>
             <InputNumber
-              min={0}
+              min={30}
+              max={300}
+              step={30}
+              value={draftRefreshInterval}
+              onChange={(value) => setDraftRefreshInterval(normalizeRefreshInterval(value))}
+              controls
               style={{ width: '100%' }}
-              value={draft.min_content_length}
-              onChange={(value) => setDraft({ ...draft, min_content_length: value || 0 })}
-              placeholder="例如 20，表示标题+描述长度至少 20"
               disabled={disabled}
             />
+            <div className="filters-modal-help">单位：秒，默认 60 秒自动刷新一次。</div>
           </div>
-
-          <div className="drawer-block">
-            <div className="drawer-block-title">每页显示</div>
-            <Select
-              value={draft.page_size}
-              onChange={(value) => setDraft({ ...draft, page_size: value })}
-              style={{ width: '100%' }}
-              disabled={disabled}
-            >
-              {pageSizeOptions}
-            </Select>
-          </div>
-
-          <Divider style={{ margin: '8px 0' }} />
-          <Space>
-            <Button onClick={resetAdvanced} disabled={disabled}>重置</Button>
-            <Button type="primary" onClick={applyAdvanced} disabled={disabled}>
-              应用筛选
-            </Button>
-          </Space>
-        </Space>
-      </Drawer>
+        </div>
+      </Modal>
     </div>
   )
 }
 
 export default MessageFilters
-

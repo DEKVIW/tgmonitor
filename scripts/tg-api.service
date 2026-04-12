@@ -1,5 +1,5 @@
 [Unit]
-Description=TG Monitor Telegram Worker
+Description=TG Monitor API (FastAPI)
 After=network.target postgresql.service
 Wants=network.target
 
@@ -11,14 +11,13 @@ WorkingDirectory=/root/data/python/tg-monitor
 Environment="PATH=/root/data/python/tg-monitor/tgmonitor-venv/bin"
 Environment="PYTHONPATH=/root/data/python/tg-monitor"
 Environment="PYTHONUNBUFFERED=1"
-ExecStart=/root/data/python/tg-monitor/tgmonitor-venv/bin/python -m app.core.monitor
+# Keep a single worker here because FastAPI startup launches in-process schedulers.
+ExecStart=/root/data/python/tg-monitor/tgmonitor-venv/bin/uvicorn app.api.main:app --host 0.0.0.0 --port 8000 --workers 1
 Restart=always
 RestartSec=3
-
-# 确保服务在SSH断开后继续运行
 KillMode=mixed
 KillSignal=SIGINT
 TimeoutStopSec=20
 
 [Install]
-WantedBy=multi-user.target 
+WantedBy=multi-user.target

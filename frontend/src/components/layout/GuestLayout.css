@@ -71,10 +71,18 @@
   .guest-header {
     padding-inline: 14px;
     gap: 10px;
+    flex-wrap: wrap;
   }
 
   .guest-brand > div:first-child {
     font-size: 18px !important;
+  }
+
+  .guest-header-toolbar {
+    flex: 1 1 100%;
+    width: 100%;
+    padding-bottom: 0;
+    margin-bottom: 0;
   }
 }
 

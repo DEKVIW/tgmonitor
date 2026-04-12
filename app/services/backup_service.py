@@ -1440,7 +1440,6 @@ def _execute_backup_run(run_id: int) -> None:
             target_snapshot = _clone_target(target)
 
         result = _perform_backup(target_snapshot)
-        cleanup_info = _apply_retention(target_snapshot.id, current_run_id=run_id)
         finished_at = _utc_now()
         duration = max(0.0, (finished_at - started_at).total_seconds())
 
@@ -1462,7 +1461,7 @@ def _execute_backup_run(run_id: int) -> None:
             run.finished_at = finished_at
             run.duration_seconds = duration
             run.error_message = None
-            run.result_json = {**(result["result_json"] or {}), "retention": cleanup_info}
+            run.result_json = result["result_json"] or {}
 
             target.last_run_at = finished_at
             target.last_status = "success"
@@ -1500,6 +1499,32 @@ def _execute_backup_run(run_id: int) -> None:
                     session.add(target)
 
             session.commit()
+        return
+
+    cleanup_info: dict[str, Any] = {
+        "deleted_local_files": 0,
+        "deleted_remote_files": 0,
+        "removed_run_ids": [],
+    }
+    try:
+        cleanup_info = _apply_retention(target_snapshot.id, current_run_id=run_id)
+    except Exception as exc:
+        logger.warning("Backup run %s retention cleanup failed", run_id, exc_info=True)
+        cleanup_info = {
+            **cleanup_info,
+            "error": str(exc),
+        }
+
+    try:
+        with Session(engine) as session:
+            run = session.get(BackupRun, run_id)
+            if run is None:
+                return
+            run.result_json = {**(run.result_json or {}), "retention": cleanup_info}
+            session.add(run)
+            session.commit()
+    except Exception:
+        logger.warning("Failed to persist retention result for backup run %s", run_id, exc_info=True)
 
 
 def test_backup_target(target_id: int) -> dict[str, Any]:
