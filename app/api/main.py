@@ -5,7 +5,7 @@ FastAPI 应用主入口
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.models.config import settings
-from app.api import admin, admin_accounts_runtime, admin_backups, admin_extras_runtime, admin_resource_ops, admin_statistics, auth_runtime_v2, messages_runtime, resource_ops_public, statistics
+from app.api import admin, admin_accounts_runtime, admin_backups, admin_extras_runtime, admin_pan_transfer, admin_resource_ops, admin_statistics, auth_runtime_v2, messages_runtime, resource_ops_public, statistics
 from app.api import admin_security, security
 from app.schemas.admin_models import PublicSystemConfigResponse
 from app.services.account_service import bootstrap_account_storage
@@ -56,6 +56,7 @@ app.include_router(admin_accounts_runtime.router)
 app.include_router(admin_security.router)
 app.include_router(admin_backups.router)
 app.include_router(admin_extras_runtime.router)
+app.include_router(admin_pan_transfer.router)
 app.include_router(admin_resource_ops.router)
 app.include_router(admin_statistics.router)
 app.include_router(security.router)

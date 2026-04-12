@@ -258,6 +258,104 @@ class ResourceRecognitionTask(Base):
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class PanTransferAccount(Base):
+    __tablename__ = "pan_transfer_accounts"
+    __table_args__ = (
+        UniqueConstraint("platform", "account_name", name="ux_pan_transfer_accounts_platform_name"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    platform = Column(String(64), nullable=False, index=True)
+    account_name = Column(String(128), nullable=False)
+    auth_type = Column(String(32), nullable=False, default="cookie")
+    credential_encrypted = Column(Text, nullable=False, default="")
+    default_save_root = Column(String(255), nullable=False, default="")
+    default_share_mode = Column(String(32), nullable=False, default="public")
+    default_share_passcode = Column(String(32), nullable=True)
+    default_share_expire_days = Column(Integer, nullable=True)
+    is_enabled = Column(Boolean, nullable=False, default=True, index=True)
+    is_default = Column(Boolean, nullable=False, default=False, index=True)
+    last_validated_at = Column(DateTime, nullable=True, index=True)
+    last_error_message = Column(Text, nullable=True)
+    extra_json = Column(JSONB, nullable=False, default=dict)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class PanTransferBatch(Base):
+    __tablename__ = "pan_transfer_batches"
+
+    id = Column(Integer, primary_key=True, index=True)
+    batch_type = Column(String(32), nullable=False, default="manual", index=True)
+    source_scope = Column(String(32), nullable=False, default="message_selection", index=True)
+    status = Column(String(32), nullable=False, default="draft", index=True)
+    created_by = Column(String(128), nullable=True, index=True)
+    total_message_count = Column(Integer, nullable=False, default=0)
+    total_link_target_count = Column(Integer, nullable=False, default=0)
+    success_item_count = Column(Integer, nullable=False, default=0)
+    failed_item_count = Column(Integer, nullable=False, default=0)
+    request_json = Column(JSONB, nullable=False, default=dict)
+    result_json = Column(JSONB, nullable=False, default=dict)
+    started_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class PanTransferBatchItem(Base):
+    __tablename__ = "pan_transfer_batch_items"
+    __table_args__ = (
+        UniqueConstraint("batch_id", "link_target_id", name="ux_pan_transfer_batch_items_batch_target"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    batch_id = Column(Integer, ForeignKey("pan_transfer_batches.id"), nullable=False, index=True)
+    link_target_id = Column(Integer, ForeignKey("link_targets.id"), nullable=False, index=True)
+    target_account_id = Column(Integer, ForeignKey("pan_transfer_accounts.id"), nullable=True, index=True)
+    platform = Column(String(64), nullable=False, index=True)
+    short_title = Column(String(255), nullable=False, default="")
+    original_url = Column(Text, nullable=False)
+    source_message_count = Column(Integer, nullable=False, default=0)
+    source_ref_count = Column(Integer, nullable=False, default=0)
+    latest_message_title = Column(String(255), nullable=True)
+    latest_message_time = Column(DateTime, nullable=True, index=True)
+    latest_link_health = Column(String(32), nullable=False, default="unknown", index=True)
+    transfer_status = Column(String(32), nullable=False, default="queued", index=True)
+    share_status = Column(String(32), nullable=False, default="pending", index=True)
+    validation_status = Column(String(32), nullable=False, default="pending", index=True)
+    replacement_status = Column(String(32), nullable=False, default="pending", index=True)
+    attempt_count = Column(Integer, nullable=False, default=0)
+    max_attempts = Column(Integer, nullable=False, default=3)
+    next_retry_at = Column(DateTime, nullable=True, index=True)
+    locked_by = Column(String(128), nullable=True, index=True)
+    locked_at = Column(DateTime, nullable=True, index=True)
+    started_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
+    last_validated_at = Column(DateTime, nullable=True)
+    new_share_url = Column(Text, nullable=True)
+    new_link_target_id = Column(Integer, ForeignKey("link_targets.id"), nullable=True, index=True)
+    error_message = Column(Text, nullable=True)
+    extra_json = Column(JSONB, nullable=False, default=dict)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class PanTransferReplacementLog(Base):
+    __tablename__ = "pan_transfer_replacement_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    batch_item_id = Column(Integer, ForeignKey("pan_transfer_batch_items.id"), nullable=False, index=True)
+    old_link_target_id = Column(Integer, ForeignKey("link_targets.id"), nullable=False, index=True)
+    new_link_target_id = Column(Integer, ForeignKey("link_targets.id"), nullable=True, index=True)
+    old_url = Column(Text, nullable=False)
+    new_url = Column(Text, nullable=True)
+    affected_message_count = Column(Integer, nullable=False, default=0)
+    status = Column(String(32), nullable=False, default="pending", index=True)
+    operator = Column(String(128), nullable=True, index=True)
+    payload = Column(JSONB, nullable=False, default=dict)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+
 class Credential(Base):
     __tablename__ = "credentials"
 
@@ -716,6 +814,10 @@ def ensure_runtime_storage_tables() -> None:
                 ResourceWorkAlias.__table__,
                 ResourceWorkBinding.__table__,
                 ResourceRecognitionTask.__table__,
+                PanTransferAccount.__table__,
+                PanTransferBatch.__table__,
+                PanTransferBatchItem.__table__,
+                PanTransferReplacementLog.__table__,
             ],
         )
         ensure_message_monitor_source_columns()
@@ -727,6 +829,8 @@ def ensure_runtime_storage_tables() -> None:
         _ensure_message_monitor_indexes()
         _ensure_channel_daily_stats_indexes()
         _ensure_resource_ops_indexes()
+        _ensure_pan_transfer_columns()
+        _ensure_pan_transfer_indexes()
         _runtime_storage_checked = True
 
 
@@ -971,4 +1075,67 @@ def _ensure_resource_ops_indexes() -> None:
     with engine.begin() as connection:
         for statement in statements:
             connection.execute(text(statement))
+
+
+def _ensure_pan_transfer_indexes() -> None:
+    statements = (
+        """
+        CREATE INDEX IF NOT EXISTS ix_pan_transfer_accounts_platform_enabled_default
+        ON pan_transfer_accounts (platform, is_enabled DESC, is_default DESC, updated_at DESC)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_pan_transfer_batches_status_created
+        ON pan_transfer_batches (status, created_at DESC)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_pan_transfer_batch_items_batch_status
+        ON pan_transfer_batch_items (batch_id, transfer_status, updated_at DESC)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_pan_transfer_batch_items_target_status
+        ON pan_transfer_batch_items (link_target_id, transfer_status, updated_at DESC)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_pan_transfer_batch_items_status_retry
+        ON pan_transfer_batch_items (transfer_status, next_retry_at ASC, updated_at ASC)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_pan_transfer_batch_items_locked_at
+        ON pan_transfer_batch_items (locked_at ASC)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_pan_transfer_replacement_logs_batch_item_created
+        ON pan_transfer_replacement_logs (batch_item_id, created_at DESC)
+        """,
+    )
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement))
+
+
+def _ensure_pan_transfer_columns() -> None:
+    inspector = inspect(engine)
+    try:
+        item_columns = {column["name"] for column in inspector.get_columns("pan_transfer_batch_items")}
+    except Exception:
+        item_columns = set()
+
+    if not item_columns:
+        return
+
+    pending_alters = {
+        "attempt_count": "ALTER TABLE pan_transfer_batch_items ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0",
+        "max_attempts": "ALTER TABLE pan_transfer_batch_items ADD COLUMN max_attempts INTEGER NOT NULL DEFAULT 3",
+        "next_retry_at": "ALTER TABLE pan_transfer_batch_items ADD COLUMN next_retry_at TIMESTAMP WITHOUT TIME ZONE",
+        "locked_by": "ALTER TABLE pan_transfer_batch_items ADD COLUMN locked_by VARCHAR(128)",
+        "locked_at": "ALTER TABLE pan_transfer_batch_items ADD COLUMN locked_at TIMESTAMP WITHOUT TIME ZONE",
+        "started_at": "ALTER TABLE pan_transfer_batch_items ADD COLUMN started_at TIMESTAMP WITHOUT TIME ZONE",
+        "finished_at": "ALTER TABLE pan_transfer_batch_items ADD COLUMN finished_at TIMESTAMP WITHOUT TIME ZONE",
+        "last_validated_at": "ALTER TABLE pan_transfer_batch_items ADD COLUMN last_validated_at TIMESTAMP WITHOUT TIME ZONE",
+    }
+    with engine.begin() as connection:
+        for column_name, sql in pending_alters.items():
+            if column_name in item_columns:
+                continue
+            connection.execute(text(sql))
 

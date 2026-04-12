@@ -1,0 +1,206 @@
+.resource-ops-transfer-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.resource-ops-transfer-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.resource-ops-transfer-card-head h4.ant-typography {
+  margin-bottom: 4px;
+}
+
+.resource-ops-transfer-card-head p {
+  margin: 0;
+  color: rgba(0, 0, 0, 0.45);
+}
+
+.resource-ops-transfer-copy {
+  margin-bottom: 0;
+}
+
+.resource-ops-transfer-head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.resource-ops-transfer-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+}
+
+.resource-ops-transfer-summary-item {
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 14px;
+  padding: 12px 14px;
+  background: #fafcff;
+}
+
+.resource-ops-transfer-summary-item span {
+  display: block;
+  color: rgba(0, 0, 0, 0.45);
+  font-size: 12px;
+}
+
+.resource-ops-transfer-summary-item strong {
+  display: block;
+  margin-top: 6px;
+  font-size: 20px;
+  line-height: 1.2;
+}
+
+.resource-ops-transfer-summary-item small {
+  display: block;
+  margin-top: 4px;
+  color: rgba(0, 0, 0, 0.45);
+}
+
+.resource-ops-transfer-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-end;
+  margin-bottom: 16px;
+}
+
+.resource-ops-transfer-field {
+  min-width: 160px;
+  flex: 1 1 160px;
+}
+
+.resource-ops-transfer-field label {
+  display: block;
+  margin-bottom: 6px;
+  color: rgba(0, 0, 0, 0.65);
+  font-size: 12px;
+}
+
+.resource-ops-transfer-field--compact {
+  flex: 0 0 140px;
+  min-width: 140px;
+}
+
+.resource-ops-transfer-inline-switch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+}
+
+.resource-ops-transfer-url {
+  display: inline-block;
+  max-width: 420px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(0, 0, 0, 0.65);
+}
+
+.resource-ops-transfer-title-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.resource-ops-transfer-title-main {
+  font-weight: 600;
+  color: rgba(15, 23, 42, 0.92);
+}
+
+.resource-ops-transfer-title-sub {
+  color: rgba(0, 0, 0, 0.45);
+  font-size: 12px;
+}
+
+.resource-ops-transfer-tag-stack {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.resource-ops-transfer-validation {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.resource-ops-transfer-validation small {
+  color: rgba(0, 0, 0, 0.45);
+  line-height: 1.4;
+}
+
+.resource-ops-transfer-validation small.is-error {
+  color: #cf1322;
+}
+
+.resource-ops-transfer-number-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.resource-ops-transfer-number-stack strong {
+  font-size: 16px;
+  line-height: 1.1;
+}
+
+.resource-ops-transfer-number-stack small {
+  color: rgba(0, 0, 0, 0.45);
+}
+
+.resource-ops-transfer-form-tip {
+  margin-top: -4px;
+  margin-bottom: 8px;
+  color: rgba(0, 0, 0, 0.45);
+  font-size: 12px;
+}
+
+.resource-ops-transfer-modal-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.resource-ops-transfer-drawer-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.resource-ops-transfer-expanded {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.resource-ops-transfer-log-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.resource-ops-transfer-log-item {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: center;
+}
+
+@media (max-width: 900px) {
+  .resource-ops-transfer-card-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .resource-ops-transfer-url {
+    max-width: 240px;
+  }
+}

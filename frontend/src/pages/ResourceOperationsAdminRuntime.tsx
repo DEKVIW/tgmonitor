@@ -23,6 +23,7 @@ import {
 } from '@/api/resourceOps'
 import ResourceOpsPlatformChart from '@/components/resource-ops/ResourceOpsPlatformChart'
 import ResourceOpsRecognitionQueuePanel from '@/components/resource-ops/ResourceOpsRecognitionQueuePanel'
+import ResourceOpsTransferCenter from '@/components/resource-ops/transfer-center/ResourceOpsTransferCenterMain'
 import ResourceOpsTrendChart from '@/components/resource-ops/ResourceOpsTrendChart'
 import ResourceOpsWorkbenchDrawerTopic from '@/components/resource-ops/ResourceOpsWorkbenchDrawerTopic'
 import type {
@@ -49,7 +50,7 @@ const formatNumber = (value?: number | null) => new Intl.NumberFormat('zh-CN').f
 const formatResourceOpsDateTime = (value?: string | null) =>
   formatServerDateTime(value, 'YYYY-MM-DD HH:mm', 'Asia/Shanghai')
 const RESOURCE_OPS_TAB_STORAGE_KEY = 'resource-ops-active-tab'
-const RESOURCE_OPS_TAB_KEYS = new Set(['overview', 'workbench'])
+const RESOURCE_OPS_TAB_KEYS = new Set(['overview', 'workbench', 'transfer'])
 
 const getInitialResourceOpsTab = () => {
   if (typeof window === 'undefined') {
@@ -879,6 +880,15 @@ const ResourceOperationsAdminRuntime = () => {
                 </Card>
 
                 {maintenanceSection}
+              </div>
+            ),
+          },
+          {
+            key: 'transfer',
+            label: '转存中心',
+            children: (
+              <div className="resource-ops-tab-stack">
+                <ResourceOpsTransferCenter />
               </div>
             ),
           },
