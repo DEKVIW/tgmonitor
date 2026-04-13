@@ -408,6 +408,7 @@ class BaiduPanTransferProvider(PanTransferProvider):
         staging_root: str,
         staging_folder_name: str,
         staging_folder_id: str | None,
+        share_target_mode: str,
         share_mode: str,
         share_passcode: str | None,
         share_expire_days: int | None,
@@ -439,20 +440,45 @@ class BaiduPanTransferProvider(PanTransferProvider):
             if not folder_id:
                 raise PanTransferProviderError("Baidu staging directory is missing fs_id", retryable=False)
 
+            resolved_share_target_mode = "resource_dir"
+            share_target_id = folder_id
+            share_target_name = str(title_hint or staging_folder_name or "").strip() or staging_folder_name
+            share_target_fallback_reason = None
+            if str(share_target_mode or "").strip().lower() == "content_root":
+                staging_path = "/" + "/".join(part for part in str(staging_root or "").split("/") if part)
+                staging_path = f"{staging_path}/{staging_folder_name}" if staging_path and staging_path != "/" else f"/{staging_folder_name}"
+                child_rows = await client.list_dir(staging_path, bdstoken=bdstoken)
+                if isinstance(child_rows, int):
+                    share_target_fallback_reason = f"inspect content root failed: errno {child_rows}"
+                elif len(child_rows) == 1:
+                    child = dict(child_rows[0] or {})
+                    share_target_id = str(child.get("fs_id") or "").strip() or folder_id
+                    share_target_name = str(child.get("server_filename") or share_target_name).strip() or share_target_name
+                    resolved_share_target_mode = "content_root"
+                elif not child_rows:
+                    share_target_fallback_reason = "staging directory is empty"
+                else:
+                    share_target_fallback_reason = f"found {len(child_rows)} top-level items"
+
             new_share_url = await client.create_share(
-                fs_id=folder_id,
+                fs_id=share_target_id,
                 bdstoken=bdstoken,
                 expire_days=share_expire_days,
                 passcode=final_share_passcode,
             )
             return PanTransferShareResult(
                 new_share_url=new_share_url,
-                share_title=str(title_hint or staging_folder_name or "").strip() or staging_folder_name,
+                share_title=share_target_name,
                 share_passcode=final_share_passcode,
                 staging_root=staging_root,
                 staging_folder_name=staging_folder_name,
                 staging_folder_id=folder_id,
                 payload={
                     "validation": validation_payload,
+                    "share_target_mode_requested": share_target_mode,
+                    "share_target_mode_resolved": resolved_share_target_mode,
+                    "share_target_id": share_target_id,
+                    "share_target_name": share_target_name,
+                    "share_target_fallback_reason": share_target_fallback_reason,
                 },
             )

@@ -7,7 +7,15 @@ from sqlalchemy.orm import Session
 
 from app.models.models import LinkTarget, PanTransferAccount, PanTransferBatch, PanTransferBatchItem, ensure_runtime_storage_tables
 
-from .common import build_staging_folder_name, generate_share_passcode, normalize_relative_path, utcnow
+from .common import (
+    DEFAULT_SHARE_TARGET_MODE,
+    SHARE_TARGET_CONTENT_ROOT,
+    SHARE_TARGET_RESOURCE_DIR,
+    build_staging_folder_name,
+    generate_share_passcode,
+    normalize_relative_path,
+    utcnow,
+)
 from .constants import (
     PAN_TRANSFER_BATCH_STATUS_CANCELLED,
     PAN_TRANSFER_REPLACEMENT_STATUS_FAILED,
@@ -44,6 +52,13 @@ def _build_staging_name(item: PanTransferBatchItem) -> str:
     if next_attempt <= 1:
         return base_name
     return f"{base_name}-r{next_attempt}"
+
+
+def _normalize_share_target_mode(value: Any) -> str:
+    normalized = str(value or DEFAULT_SHARE_TARGET_MODE).strip().lower() or DEFAULT_SHARE_TARGET_MODE
+    if normalized not in {SHARE_TARGET_RESOURCE_DIR, SHARE_TARGET_CONTENT_ROOT}:
+        return DEFAULT_SHARE_TARGET_MODE
+    return normalized
 
 
 def _iso_utc_now() -> str:
@@ -92,7 +107,51 @@ def _get_share_request(item: PanTransferBatchItem) -> dict[str, Any] | None:
     share_mode = str(share_request.get("share_mode") or "").strip().lower()
     if not share_mode:
         return None
-    return dict(share_request)
+    normalized = dict(share_request)
+    normalized["share_target_mode"] = _normalize_share_target_mode(normalized.get("share_target_mode"))
+    return normalized
+
+
+def _get_item_execution_plan(
+    *,
+    item: PanTransferBatchItem,
+    account: PanTransferAccount,
+) -> dict[str, Any]:
+    extra_json = dict(item.extra_json or {})
+    resolved_paths = extra_json.get("resolved_paths")
+    path_strategy = extra_json.get("path_strategy")
+
+    if isinstance(resolved_paths, dict):
+        staging_root = normalize_relative_path(str(resolved_paths.get("staging_root") or ""))
+        staging_folder_name = str(resolved_paths.get("staging_folder_name") or "").strip()
+        if staging_folder_name:
+            resolved_path = normalize_relative_path(
+                str(resolved_paths.get("resolved_path") or "/".join(part for part in (staging_root, staging_folder_name) if part))
+            )
+            return {
+                "staging_root": staging_root,
+                "staging_folder_name": staging_folder_name,
+                "resolved_path": resolved_path,
+                "transfer_layout": str(resolved_paths.get("transfer_layout") or "").strip() or None,
+                "batch_folder_name": str(resolved_paths.get("batch_folder_name") or "").strip() or None,
+                "share_target_mode": _normalize_share_target_mode(resolved_paths.get("share_target_mode")),
+                "source": "resolved_paths",
+            }
+
+    fallback_root = normalize_relative_path(str(account.default_save_root or ""))
+    fallback_folder = _build_staging_name(item)
+    fallback_share_target_mode = DEFAULT_SHARE_TARGET_MODE
+    if isinstance(path_strategy, dict):
+        fallback_share_target_mode = _normalize_share_target_mode(path_strategy.get("share_target_mode"))
+    return {
+        "staging_root": fallback_root,
+        "staging_folder_name": fallback_folder,
+        "resolved_path": normalize_relative_path("/".join(part for part in (fallback_root, fallback_folder) if part)),
+        "transfer_layout": None,
+        "batch_folder_name": None,
+        "share_target_mode": fallback_share_target_mode,
+        "source": "legacy_fallback",
+    }
 
 
 def _build_share_request(
@@ -101,6 +160,7 @@ def _build_share_request(
     item: PanTransferBatchItem,
     staging_root: str,
     staging_folder_name: str,
+    share_target_mode: str = DEFAULT_SHARE_TARGET_MODE,
 ) -> dict[str, Any]:
     share_mode = str(account.default_share_mode or "public").strip().lower() or "public"
     share_passcode = str(account.default_share_passcode or "").strip() or None
@@ -114,6 +174,7 @@ def _build_share_request(
         "title_hint": title_hint,
         "staging_root": staging_root,
         "staging_folder_name": staging_folder_name,
+        "share_target_mode": _normalize_share_target_mode(share_target_mode),
     }
 
 
@@ -122,12 +183,14 @@ def _build_share_request_from_snapshot(
     account: PanTransferAccount,
     item: PanTransferBatchItem,
     staging_snapshot: dict[str, Any],
+    share_target_mode: str = DEFAULT_SHARE_TARGET_MODE,
 ) -> dict[str, Any]:
     return _build_share_request(
         account=account,
         item=item,
         staging_root=normalize_relative_path(str(staging_snapshot.get("root") or "")),
         staging_folder_name=str(staging_snapshot.get("folder_name") or _build_staging_name(item)),
+        share_target_mode=share_target_mode,
     )
 
 
@@ -169,19 +232,21 @@ async def _process_pan_transfer_item_async(
 
     credential_value = decrypt_account_credential(account)
     provider = get_pan_transfer_provider(str(item.platform or ""))
+    execution_plan = _get_item_execution_plan(item=item, account=account)
 
     staging_snapshot = _get_staging_snapshot(item)
     share_request = _get_share_request(item)
 
     if not str(item.new_share_url or "").strip():
         if staging_snapshot is None:
-            staging_root = normalize_relative_path(str(account.default_save_root or ""))
-            staging_folder_name = _build_staging_name(item)
+            staging_root = normalize_relative_path(str(execution_plan.get("staging_root") or ""))
+            staging_folder_name = str(execution_plan.get("staging_folder_name") or _build_staging_name(item))
             share_request = _build_share_request(
                 account=account,
                 item=item,
                 staging_root=staging_root,
                 staging_folder_name=staging_folder_name,
+                share_target_mode=str(execution_plan.get("share_target_mode") or DEFAULT_SHARE_TARGET_MODE),
             )
             append_pan_transfer_execution_log(
                 session,
@@ -193,6 +258,11 @@ async def _process_pan_transfer_item_async(
                     "account_name": str(account.account_name or ""),
                     "staging_root": staging_root,
                     "staging_folder_name": staging_folder_name,
+                    "resolved_path": execution_plan.get("resolved_path"),
+                    "transfer_layout": execution_plan.get("transfer_layout"),
+                    "batch_folder_name": execution_plan.get("batch_folder_name"),
+                    "share_target_mode": execution_plan.get("share_target_mode"),
+                    "path_source": execution_plan.get("source"),
                 },
             )
             try:
@@ -212,6 +282,11 @@ async def _process_pan_transfer_item_async(
                     "account_name": str(account.account_name or ""),
                     "staging_root": staging_root,
                     "staging_folder_name": staging_folder_name,
+                    "resolved_path": execution_plan.get("resolved_path"),
+                    "transfer_layout": execution_plan.get("transfer_layout"),
+                    "batch_folder_name": execution_plan.get("batch_folder_name"),
+                    "share_target_mode": execution_plan.get("share_target_mode"),
+                    "path_source": execution_plan.get("source"),
                     **_extract_error_payload(exc),
                 }
                 _mark_account_validation(
@@ -269,6 +344,10 @@ async def _process_pan_transfer_item_async(
                     "staging_root": staging_snapshot.get("root"),
                     "staging_folder_name": staging_snapshot.get("folder_name"),
                     "staging_folder_id": staging_snapshot.get("folder_id"),
+                    "resolved_path": execution_plan.get("resolved_path"),
+                    "transfer_layout": execution_plan.get("transfer_layout"),
+                    "batch_folder_name": execution_plan.get("batch_folder_name"),
+                    "share_target_mode": execution_plan.get("share_target_mode"),
                     "provider_payload": dict(transfer_result.payload or {}),
                 },
             )
@@ -278,6 +357,7 @@ async def _process_pan_transfer_item_async(
                     account=account,
                     item=item,
                     staging_snapshot=staging_snapshot,
+                    share_target_mode=str(execution_plan.get("share_target_mode") or DEFAULT_SHARE_TARGET_MODE),
                 )
                 _merge_extra_json(item, {"share_request": share_request})
                 session.add(item)
@@ -291,6 +371,11 @@ async def _process_pan_transfer_item_async(
                     "staging_root": staging_snapshot.get("root"),
                     "staging_folder_name": staging_snapshot.get("folder_name"),
                     "staging_folder_id": staging_snapshot.get("folder_id"),
+                    "resolved_path": execution_plan.get("resolved_path"),
+                    "transfer_layout": execution_plan.get("transfer_layout"),
+                    "batch_folder_name": execution_plan.get("batch_folder_name"),
+                    "share_target_mode": execution_plan.get("share_target_mode"),
+                    "path_source": execution_plan.get("source"),
                 },
             )
 
@@ -307,6 +392,7 @@ async def _process_pan_transfer_item_async(
                 "staging_folder_name": staging_snapshot.get("folder_name") if staging_snapshot else None,
                 "staging_folder_id": staging_snapshot.get("folder_id") if staging_snapshot else None,
                 "share_mode": share_request.get("share_mode") if share_request else None,
+                "share_target_mode": share_request.get("share_target_mode") if share_request else execution_plan.get("share_target_mode"),
             },
         )
         try:
@@ -316,6 +402,7 @@ async def _process_pan_transfer_item_async(
                 staging_root=normalize_relative_path(str((staging_snapshot or {}).get("root") or "")),
                 staging_folder_name=str((staging_snapshot or {}).get("folder_name") or ""),
                 staging_folder_id=str((staging_snapshot or {}).get("folder_id") or "") or None,
+                share_target_mode=str((share_request or {}).get("share_target_mode") or execution_plan.get("share_target_mode") or DEFAULT_SHARE_TARGET_MODE),
                 share_mode=str((share_request or {}).get("share_mode") or "public"),
                 share_passcode=str((share_request or {}).get("share_passcode") or "").strip() or None,
                 share_expire_days=(share_request or {}).get("share_expire_days"),
@@ -330,6 +417,7 @@ async def _process_pan_transfer_item_async(
                 "staging_folder_name": (staging_snapshot or {}).get("folder_name"),
                 "staging_folder_id": (staging_snapshot or {}).get("folder_id"),
                 "share_mode": (share_request or {}).get("share_mode"),
+                "share_target_mode": (share_request or {}).get("share_target_mode") or execution_plan.get("share_target_mode"),
                 **_extract_error_payload(exc),
             }
             _mark_account_validation(
@@ -370,6 +458,7 @@ async def _process_pan_transfer_item_async(
                     "share_title": share_result.share_title,
                     "share_passcode": share_result.share_passcode,
                     "shared_at": _iso_utc_now(),
+                    "share_target_mode": str((share_request or {}).get("share_target_mode") or execution_plan.get("share_target_mode") or DEFAULT_SHARE_TARGET_MODE),
                     "payload": dict(share_result.payload or {}),
                 },
             },
@@ -386,6 +475,7 @@ async def _process_pan_transfer_item_async(
                 "new_share_url": share_result.new_share_url,
                 "share_title": share_result.share_title,
                 "share_passcode": share_result.share_passcode,
+                "share_target_mode": str((share_request or {}).get("share_target_mode") or execution_plan.get("share_target_mode") or DEFAULT_SHARE_TARGET_MODE),
                 "provider_payload": dict(share_result.payload or {}),
             },
         )

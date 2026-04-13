@@ -15,6 +15,8 @@ from app.schemas.pan_transfer_models import (
     PanTransferBatchCreateRequest,
     PanTransferBatchDetailResponse,
     PanTransferBatchListResponse,
+    PanTransferMessagePublishRequest,
+    PanTransferMessagePublishResponse,
     PanTransferBatchRetryRequest,
     PanTransferBatchSummaryItem,
     PanTransferDeleteResponse,
@@ -31,6 +33,7 @@ from app.services.pan_transfer import (
     get_pan_transfer_batch_detail,
     list_pan_transfer_accounts,
     list_pan_transfer_batches,
+    publish_pan_transfer_batch_item_message,
     preview_manual_pan_transfer_selection,
     retry_pan_transfer_batch,
     start_pan_transfer_batch,
@@ -343,6 +346,42 @@ async def cancel_pan_transfer_batch_api(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to cancel pan transfer batch: {exc}",
+        ) from exc
+
+
+@router.post(
+    "/batches/{batch_id}/items/{item_id}/publish",
+    response_model=PanTransferMessagePublishResponse,
+    summary="Publish a pan transfer batch item to the frontend feed",
+)
+async def publish_pan_transfer_batch_item_message_api(
+    batch_id: int,
+    item_id: int,
+    payload: PanTransferMessagePublishRequest,
+    current_user: dict[str, Any] = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+) -> PanTransferMessagePublishResponse:
+    try:
+        result = publish_pan_transfer_batch_item_message(
+            db,
+            batch_id=batch_id,
+            item_id=item_id,
+            payload=payload.model_dump(),
+            operator=str(current_user.get("username") or current_user.get("account") or "admin"),
+        )
+        db.commit()
+        return PanTransferMessagePublishResponse(**result)
+    except LookupError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to publish pan transfer batch item: {exc}",
         ) from exc
 
 

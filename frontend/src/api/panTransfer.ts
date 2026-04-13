@@ -8,6 +8,8 @@ import type {
   PanTransferBatchCreateRequest,
   PanTransferBatchDetailResponse,
   PanTransferBatchListResponse,
+  PanTransferMessagePublishRequest,
+  PanTransferMessagePublishResponse,
   PanTransferBatchRetryRequest,
   PanTransferDeleteResponse,
   PanTransferManualPreviewRequest,
@@ -107,5 +109,17 @@ export const startPanTransferBatch = async (batchId: number): Promise<PanTransfe
 
 export const deletePanTransferBatch = async (batchId: number): Promise<PanTransferDeleteResponse> => {
   const response = await apiClient.delete<PanTransferDeleteResponse>(`/admin/pan-transfer/batches/${batchId}`)
+  return response.data
+}
+
+export const publishPanTransferBatchItemMessage = async (
+  batchId: number,
+  itemId: number,
+  payload: PanTransferMessagePublishRequest
+): Promise<PanTransferMessagePublishResponse> => {
+  const response = await apiClient.post<PanTransferMessagePublishResponse>(
+    `/admin/pan-transfer/batches/${batchId}/items/${itemId}/publish`,
+    payload
+  )
   return response.data
 }

@@ -68,6 +68,7 @@ class PanTransferProvider:
         staging_root: str,
         staging_folder_name: str,
         staging_folder_id: str | None,
+        share_target_mode: str,
         share_mode: str,
         share_passcode: str | None,
         share_expire_days: int | None,

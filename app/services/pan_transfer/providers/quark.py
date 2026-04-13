@@ -156,6 +156,15 @@ class _QuarkClient:
             None,
         )
 
+    @staticmethod
+    def _resolve_content_root(rows: list[dict[str, Any]]) -> tuple[dict[str, Any] | None, str | None]:
+        candidates = [dict(row or {}) for row in rows if str(row.get("fid") or "").strip()]
+        if not candidates:
+            return None, "staging directory is empty"
+        if len(candidates) != 1:
+            return None, f"found {len(candidates)} top-level items"
+        return candidates[0], None
+
     async def create_dir(self, *, parent_id: str, folder_name: str) -> dict[str, Any]:
         payload = await self._request_json(
             "POST",
@@ -500,6 +509,7 @@ class QuarkPanTransferProvider(PanTransferProvider):
         staging_root: str,
         staging_folder_name: str,
         staging_folder_id: str | None,
+        share_target_mode: str,
         share_mode: str,
         share_passcode: str | None,
         share_expire_days: int | None,
@@ -525,9 +535,23 @@ class QuarkPanTransferProvider(PanTransferProvider):
             if not folder_id:
                 raise PanTransferProviderError("Quark staging directory is missing fid", retryable=False)
 
+            resolved_share_target_mode = "resource_dir"
+            share_target_id = folder_id
+            share_target_name = str(title_hint or staging_folder_name)
+            share_target_fallback_reason = None
+            if str(share_target_mode or "").strip().lower() == "content_root":
+                rows = await client.list_dir(parent_id=folder_id)
+                content_root, fallback_reason = client._resolve_content_root(rows)
+                if content_root is not None:
+                    share_target_id = str(content_root.get("fid") or "").strip() or folder_id
+                    share_target_name = str(content_root.get("file_name") or staging_folder_name).strip() or staging_folder_name
+                    resolved_share_target_mode = "content_root"
+                else:
+                    share_target_fallback_reason = fallback_reason or "unique content root was not found"
+
             share_task_id = await client.create_share_task(
-                fid=folder_id,
-                title=str(title_hint or staging_folder_name),
+                fid=share_target_id,
+                title=share_target_name,
                 share_mode=share_mode,
                 share_passcode=share_passcode,
                 share_expire_days=share_expire_days,
@@ -539,7 +563,7 @@ class QuarkPanTransferProvider(PanTransferProvider):
             new_share_url, resolved_passcode = await client.publish_share(share_id=share_id)
             return PanTransferShareResult(
                 new_share_url=new_share_url,
-                share_title=str(title_hint or staging_folder_name),
+                share_title=share_target_name,
                 share_passcode=resolved_passcode if share_mode == "private" else None,
                 staging_root=staging_root,
                 staging_folder_name=staging_folder_name,
@@ -549,5 +573,10 @@ class QuarkPanTransferProvider(PanTransferProvider):
                     "share_task_id": share_task_id,
                     "share_id": share_id,
                     "task_payload": task_payload,
+                    "share_target_mode_requested": share_target_mode,
+                    "share_target_mode_resolved": resolved_share_target_mode,
+                    "share_target_id": share_target_id,
+                    "share_target_name": share_target_name,
+                    "share_target_fallback_reason": share_target_fallback_reason,
                 },
             )

@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { Key } from 'react'
-import { Alert, Form, Input, InputNumber, Modal, Select, Space, Switch, message } from 'antd'
+import { Alert, Form, Input, InputNumber, Modal, Select, Space, Switch, Tooltip, message } from 'antd'
 import type { TablePaginationConfig } from 'antd/es/table'
+import { QuestionCircleOutlined } from '@ant-design/icons'
 
 import {
   cancelPanTransferBatch,
@@ -13,6 +14,7 @@ import {
   getPanTransferBatchDetail,
   listPanTransferAccounts,
   listPanTransferBatches,
+  publishPanTransferBatchItemMessage,
   previewManualPanTransfer,
   retryPanTransferBatch,
   startPanTransferBatch,
@@ -25,9 +27,11 @@ import type {
   PanTransferAccountUpdateRequest,
   PanTransferBatchCreateRequest,
   PanTransferBatchDetailResponse,
+  PanTransferBatchItem,
   PanTransferBatchSummaryItem,
   PanTransferManualPreviewRequest,
   PanTransferManualPreviewResponse,
+  PanTransferMessagePublishRequest,
 } from '@/types/panTransfer'
 
 import AccountsSection from './AccountsSection'
@@ -41,12 +45,24 @@ import {
   DEFAULT_PREVIEW_DRAFT,
   formatRetryDelay,
   getErrorMessage,
+  ITEM_FOLDER_MODE_OPTIONS,
   PLATFORM_OPTIONS,
   PreviewDraft,
   RETRY_DELAY_OPTIONS,
   SHARE_MODE_OPTIONS,
+  SHARE_TARGET_MODE_OPTIONS,
+  TRANSFER_LAYOUT_OPTIONS,
 } from './shared'
 import '../ResourceOpsTransferCenter.css'
+
+const renderBatchCreateLabel = (label: string, tip: string) => (
+  <span className="resource-ops-transfer-create-label">
+    <span>{label}</span>
+    <Tooltip title={tip}>
+      <QuestionCircleOutlined className="resource-ops-transfer-create-label-icon" />
+    </Tooltip>
+  </span>
+)
 
 const ResourceOpsTransferCenterMain = () => {
   const [accounts, setAccounts] = useState<PanTransferAccountItem[]>([])
@@ -80,8 +96,12 @@ const ResourceOpsTransferCenterMain = () => {
   const [detailLoading, setDetailLoading] = useState(false)
   const [detailData, setDetailData] = useState<PanTransferBatchDetailResponse | null>(null)
   const [selectedFailedItemKeys, setSelectedFailedItemKeys] = useState<Key[]>([])
+  const [publishModalOpen, setPublishModalOpen] = useState(false)
+  const [publishingItem, setPublishingItem] = useState<PanTransferBatchItem | null>(null)
+  const [publishingItemId, setPublishingItemId] = useState<number | null>(null)
 
   const [accountForm] = Form.useForm()
+  const [publishForm] = Form.useForm()
 
   const loadAccounts = async () => {
     setAccountsLoading(true)
@@ -157,6 +177,48 @@ const ResourceOpsTransferCenterMain = () => {
     return PLATFORM_OPTIONS.filter((item) => !enabledPlatforms.has(item.value))
   }, [accounts])
 
+  const batchPathPreview = useMemo(() => {
+    const itemFolderName =
+      batchCreateDraft.itemFolderMode === 'custom'
+        ? batchCreateDraft.itemFolderTemplate.trim() || '{title}'
+        : 'tg-transfer-<批次>-<项目>-<标题>'
+    const folderParts = ['<账号根目录>']
+    if (batchCreateDraft.transferLayout === 'batch_archive') {
+      folderParts.push(batchCreateDraft.batchFolderName.trim() || 'batch-<批次>')
+    }
+    folderParts.push(itemFolderName)
+    const resourceDirPath = folderParts.join('/')
+    const transferPath = `${resourceDirPath}/<原内容>`
+    const sharePath =
+      batchCreateDraft.shareTargetMode === 'content_root'
+        ? `${resourceDirPath}/<原内容根目录>`
+        : resourceDirPath
+    const shareTip =
+      batchCreateDraft.shareTargetMode === 'content_root'
+        ? '若资源目录下只有 1 个顶层内容，则直接分享该内容；否则自动回退为分享资源目录。'
+        : '默认分享资源目录，原内容会作为其下级目录保留。'
+    return {
+      itemFolderName,
+      transferPath,
+      sharePath,
+      shareTip,
+    }
+  }, [batchCreateDraft])
+
+  const publishSourceHint = useMemo(() => {
+    if (!publishingItem) return null
+    if (publishingItem.new_link_target_url) {
+      return { label: '已回写新链接', url: publishingItem.new_link_target_url }
+    }
+    if (publishingItem.new_share_url) {
+      return { label: '新分享链接', url: publishingItem.new_share_url }
+    }
+    if (publishingItem.original_url) {
+      return { label: '原始链接', url: publishingItem.original_url }
+    }
+    return null
+  }, [publishingItem])
+
   const openCreateModal = () => {
     setEditingAccount(null)
     accountForm.resetFields()
@@ -191,6 +253,17 @@ const ResourceOpsTransferCenterMain = () => {
       is_default: account.is_default,
     })
     setAccountModalOpen(true)
+  }
+
+  const openPublishModal = (item: PanTransferBatchItem) => {
+    setPublishingItem(item)
+    publishForm.resetFields()
+    publishForm.setFieldsValue({
+      title: item.short_title || '',
+      description: '',
+      tags: [],
+    })
+    setPublishModalOpen(true)
   }
 
   const handleSaveAccount = async () => {
@@ -306,6 +379,35 @@ const ResourceOpsTransferCenterMain = () => {
     }
   }
 
+  const handlePublishMessage = async () => {
+    if (!publishingItem) return
+    try {
+      const values = await publishForm.validateFields()
+      setPublishingItemId(publishingItem.id)
+      const payload: PanTransferMessagePublishRequest = {
+        title: values.title,
+        description: values.description || null,
+        tags: Array.isArray(values.tags) ? values.tags : [],
+      }
+      const response = await publishPanTransferBatchItemMessage(
+        publishingItem.batch_id,
+        publishingItem.id,
+        payload
+      )
+      message.success(`已发布到前台，消息 #${response.message_id}`)
+      setPublishModalOpen(false)
+      setPublishingItem(null)
+      publishForm.resetFields()
+      await loadBatchDetail(publishingItem.batch_id, { open: false })
+      await loadBatches(batchPagination.page, batchPagination.pageSize)
+    } catch (error) {
+      if ((error as { errorFields?: unknown })?.errorFields) return
+      message.error(getErrorMessage(error, '发布消息失败'))
+    } finally {
+      setPublishingItemId(null)
+    }
+  }
+
   return (
     <div className="resource-ops-transfer-stack">
       <AccountsSection
@@ -392,6 +494,7 @@ const ResourceOpsTransferCenterMain = () => {
         detailLoading={detailLoading}
         detailData={detailData}
         selectedFailedItemKeys={selectedFailedItemKeys}
+        publishingItemId={publishingItemId}
         onRefresh={() => void loadBatches()}
         onTableChange={(pagination) => void loadBatches(pagination.current || 1, pagination.pageSize || batchPagination.pageSize)}
         onOpenDetail={(batchId) => void loadBatchDetail(batchId, { open: true })}
@@ -436,6 +539,7 @@ const ResourceOpsTransferCenterMain = () => {
         onRefreshDetail={(batchId) => void loadBatchDetail(batchId, { open: false })}
         onSelectFailedKeys={setSelectedFailedItemKeys}
         onClearLogs={(batchId) => void runBatchClearLogs(batchId)}
+        onPublish={(item) => openPublishModal(item)}
       />
 
       <Modal
@@ -475,12 +579,24 @@ const ResourceOpsTransferCenterMain = () => {
           if (!lastPreviewPayload || selectedPreviewKeys.length <= 0) return
           setBatchCreating(true)
           try {
+            const { page: _page, page_size: _pageSize, ...selectionPayload } = lastPreviewPayload
             const payload: PanTransferBatchCreateRequest = {
-              ...lastPreviewPayload,
+              ...selectionPayload,
               selected_link_target_ids: selectedPreviewKeys.map((item) => Number(item)),
               start_immediately: batchCreateDraft.startImmediately,
               max_attempts: batchCreateDraft.maxAttempts,
               retry_delay_seconds: batchCreateDraft.retryDelaySeconds,
+              transfer_layout: batchCreateDraft.transferLayout,
+              batch_folder_name:
+                batchCreateDraft.transferLayout === 'batch_archive'
+                  ? batchCreateDraft.batchFolderName || null
+                  : null,
+              item_folder_mode: batchCreateDraft.itemFolderMode,
+              item_folder_template:
+                batchCreateDraft.itemFolderMode === 'custom'
+                  ? batchCreateDraft.itemFolderTemplate || null
+                  : null,
+              share_target_mode: batchCreateDraft.shareTargetMode,
             }
             const response = await createManualPanTransferBatch(payload)
             message.success(batchCreateDraft.startImmediately ? `已创建并启动批次 #${response.batch.id}` : `已创建草稿批次 #${response.batch.id}`)
@@ -490,7 +606,9 @@ const ResourceOpsTransferCenterMain = () => {
             setDetailOpen(true)
             await loadBatches(1, batchPagination.pageSize)
           } catch (error) {
-            message.error(getErrorMessage(error, '创建批次失败'))
+            if (!(error as { response?: unknown })?.response) {
+              message.error(getErrorMessage(error, '创建批次失败'))
+            }
           } finally {
             setBatchCreating(false)
           }
@@ -498,32 +616,223 @@ const ResourceOpsTransferCenterMain = () => {
         confirmLoading={batchCreating}
         okText="确认创建"
         destroyOnHidden
+        width={920}
       >
-        <div className="resource-ops-transfer-modal-stack">
-          <Alert type="info" showIcon message={`本次将处理 ${selectedPreviewKeys.length} 个唯一源链`} description="创建后会进入现有 worker 队列执行，不会启用自动定时任务。" />
-          <div className="resource-ops-transfer-field">
-            <label>创建后立即启动</label>
-            <div className="resource-ops-transfer-inline-switch">
-              <Switch checked={batchCreateDraft.startImmediately} onChange={(checked) => setBatchCreateDraft((current) => ({ ...current, startImmediately: checked }))} />
-              <span>{batchCreateDraft.startImmediately ? '立即进入队列' : '先保存为草稿'}</span>
+        <div className="resource-ops-transfer-create-shell">
+          <div className="resource-ops-transfer-create-summary">
+            <div className="resource-ops-transfer-create-summary-item">
+              <span>本次处理</span>
+              <strong>{selectedPreviewKeys.length}</strong>
+              <small>个唯一源链</small>
+            </div>
+            <div className="resource-ops-transfer-create-summary-item">
+              <span>创建方式</span>
+              <strong>{batchCreateDraft.startImmediately ? '立即执行' : '草稿保存'}</strong>
+              <small>仍走现有 worker 队列</small>
+            </div>
+            <div className="resource-ops-transfer-create-summary-item">
+              <span>自动重试</span>
+              <strong>{formatRetryDelay(batchCreateDraft.retryDelaySeconds)}</strong>
+              <small>失败项也支持手动立即重试</small>
             </div>
           </div>
-          <div className="resource-ops-transfer-field">
-            <label>最大尝试次数</label>
-            <InputNumber min={1} max={10} style={{ width: '100%' }} value={batchCreateDraft.maxAttempts} onChange={(value) => setBatchCreateDraft((current) => ({ ...current, maxAttempts: Number(value || 1) }))} />
-          </div>
-          <div className="resource-ops-transfer-field">
-            <label>自动重试间隔</label>
-            <Select
-              options={RETRY_DELAY_OPTIONS}
-              value={batchCreateDraft.retryDelaySeconds}
-              onChange={(value) => setBatchCreateDraft((current) => ({ ...current, retryDelaySeconds: Number(value || 0) }))}
-            />
-            <div className="resource-ops-transfer-form-tip">
-              当前设置：{formatRetryDelay(batchCreateDraft.retryDelaySeconds)}。失败项仍然可以在批次详情里手动立即重试。
-            </div>
+
+          <div className="resource-ops-transfer-create-layout">
+            <section className="resource-ops-transfer-create-panel">
+              <div className="resource-ops-transfer-create-panel-head">
+                <div>
+                  <h4>执行策略</h4>
+                  <p>控制队列启动方式和失败重试规则。</p>
+                </div>
+              </div>
+              <div className="resource-ops-transfer-create-grid">
+                <div className="resource-ops-transfer-create-field resource-ops-transfer-create-field--wide">
+                  <label>{renderBatchCreateLabel('创建后立即启动', '打开后，批次创建成功会直接进入 worker 队列；关闭则先保存为草稿，稍后手动启动。')}</label>
+                  <div className="resource-ops-transfer-inline-switch resource-ops-transfer-create-switch">
+                    <Switch
+                      checked={batchCreateDraft.startImmediately}
+                      onChange={(checked) =>
+                        setBatchCreateDraft((current) => ({ ...current, startImmediately: checked }))
+                      }
+                    />
+                    <span>{batchCreateDraft.startImmediately ? '立即进入队列' : '先保存为草稿'}</span>
+                  </div>
+                </div>
+
+                <div className="resource-ops-transfer-create-field">
+                  <label>{renderBatchCreateLabel('最大尝试次数', '单条任务最多执行多少次，超过后会停止自动重试。')}</label>
+                  <InputNumber
+                    min={1}
+                    max={10}
+                    style={{ width: '100%' }}
+                    value={batchCreateDraft.maxAttempts}
+                    onChange={(value) =>
+                      setBatchCreateDraft((current) => ({ ...current, maxAttempts: Number(value || 1) }))
+                    }
+                  />
+                </div>
+
+                <div className="resource-ops-transfer-create-field">
+                  <label>{renderBatchCreateLabel('自动重试间隔', '失败项进入 retry_wait 后，按这个间隔自动再次尝试。')}</label>
+                  <Select
+                    options={RETRY_DELAY_OPTIONS}
+                    value={batchCreateDraft.retryDelaySeconds}
+                    onChange={(value) =>
+                      setBatchCreateDraft((current) => ({ ...current, retryDelaySeconds: Number(value || 0) }))
+                    }
+                  />
+                </div>
+              </div>
+            </section>
+
+            <section className="resource-ops-transfer-create-panel">
+              <div className="resource-ops-transfer-create-panel-head">
+                <div>
+                  <h4>目录与分享</h4>
+                  <p>控制落目录方式，以及最终对外分享的是哪一层。</p>
+                </div>
+              </div>
+              <div className="resource-ops-transfer-create-grid">
+                <div className="resource-ops-transfer-create-field">
+                  <label>{renderBatchCreateLabel('目录布局', '独立目录：每条源链直接落在账号根目录下。批次归档：先进入一个批次目录，再进入每条资源目录。')}</label>
+                  <Select
+                    options={TRANSFER_LAYOUT_OPTIONS}
+                    value={batchCreateDraft.transferLayout}
+                    onChange={(value) =>
+                      setBatchCreateDraft((current) => ({
+                        ...current,
+                        transferLayout: value as BatchCreateDraft['transferLayout'],
+                      }))
+                    }
+                  />
+                </div>
+
+                {batchCreateDraft.transferLayout === 'batch_archive' ? (
+                  <div className="resource-ops-transfer-create-field">
+                    <label>{renderBatchCreateLabel('批次目录名', '仅在“批次归档”模式下生效；留空则自动生成。')}</label>
+                    <Input
+                      value={batchCreateDraft.batchFolderName}
+                      placeholder="留空则自动生成，例如 batch-12"
+                      onChange={(event) =>
+                        setBatchCreateDraft((current) => ({
+                          ...current,
+                          batchFolderName: event.target.value,
+                        }))
+                      }
+                    />
+                  </div>
+                ) : null}
+
+                <div className="resource-ops-transfer-create-field">
+                  <label>{renderBatchCreateLabel('资源目录名', '自动生成时会带批次号和项目号；自定义模板时可用标题、日期、分享码等变量。')}</label>
+                  <Select
+                    options={ITEM_FOLDER_MODE_OPTIONS}
+                    value={batchCreateDraft.itemFolderMode}
+                    onChange={(value) =>
+                      setBatchCreateDraft((current) => ({
+                        ...current,
+                        itemFolderMode: value as BatchCreateDraft['itemFolderMode'],
+                      }))
+                    }
+                  />
+                </div>
+
+                {batchCreateDraft.itemFolderMode === 'custom' ? (
+                  <div className="resource-ops-transfer-create-field resource-ops-transfer-create-field--wide">
+                    <label>{renderBatchCreateLabel('资源目录模板', '可用变量：{title}、{title_slug}、{platform}、{batch_id}、{item_id}、{share_key}、{date}。')}</label>
+                    <Input
+                      value={batchCreateDraft.itemFolderTemplate}
+                      placeholder="例如：{date}-{title_slug}-{item_id}"
+                      onChange={(event) =>
+                        setBatchCreateDraft((current) => ({
+                          ...current,
+                          itemFolderTemplate: event.target.value,
+                        }))
+                      }
+                    />
+                  </div>
+                ) : null}
+
+                <div className="resource-ops-transfer-create-field resource-ops-transfer-create-field--wide">
+                  <label>{renderBatchCreateLabel('分享层级', '资源目录：默认分享系统生成的资源目录。原内容根目录：若资源目录下只有一个顶层内容，则优先直接分享该内容，否则自动回退。')}</label>
+                  <Select
+                    options={SHARE_TARGET_MODE_OPTIONS}
+                    value={batchCreateDraft.shareTargetMode}
+                    onChange={(value) =>
+                      setBatchCreateDraft((current) => ({
+                        ...current,
+                        shareTargetMode: value as BatchCreateDraft['shareTargetMode'],
+                      }))
+                    }
+                  />
+                </div>
+              </div>
+            </section>
+
+            <section className="resource-ops-transfer-create-panel resource-ops-transfer-create-panel--full">
+              <div className="resource-ops-transfer-create-panel-head">
+                <div>
+                  <h4>路径预览</h4>
+                  <p>这里展示“会把资源转存到哪里”和“最终会分享哪一层”。</p>
+                </div>
+              </div>
+              <div className="resource-ops-transfer-create-preview">
+                <div className="resource-ops-transfer-create-preview-row">
+                  <span>转存路径</span>
+                  <code>{batchPathPreview.transferPath}</code>
+                </div>
+                <div className="resource-ops-transfer-create-preview-row">
+                  <span>创建分享</span>
+                  <code>{batchPathPreview.sharePath}</code>
+                </div>
+                <div className="resource-ops-transfer-create-preview-note">{batchPathPreview.shareTip}</div>
+              </div>
+            </section>
           </div>
         </div>
+      </Modal>
+
+      <Modal
+        open={publishModalOpen}
+        title={publishingItem ? `发布到前台：${publishingItem.short_title}` : '发布到前台'}
+        onCancel={() => {
+          setPublishModalOpen(false)
+          setPublishingItem(null)
+          publishForm.resetFields()
+        }}
+        onOk={() => void handlePublishMessage()}
+        confirmLoading={publishingItemId !== null}
+        okText="确认发布"
+        destroyOnHidden
+      >
+        <Form form={publishForm} layout="vertical">
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginBottom: 16 }}
+            message="发布后会作为一条新消息进入前台列表"
+            description={
+              <div className="resource-ops-transfer-validation">
+                <small>优先复用转存回写后的链接；如果该条任务还没有新链接，则回退使用当前可用的原链接。</small>
+                {publishSourceHint ? <small>当前预计使用：{publishSourceHint.label} {'->'} {publishSourceHint.url}</small> : null}
+              </div>
+            }
+          />
+          <Form.Item label="标题" name="title" rules={[{ required: true, message: '请输入标题' }]}>
+            <Input placeholder="请输入前台展示标题" maxLength={255} />
+          </Form.Item>
+          <Form.Item label="简介" name="description">
+            <Input.TextArea rows={4} placeholder="可选，补充前台展示说明" maxLength={1000} />
+          </Form.Item>
+          <Form.Item label="标签" name="tags">
+            <Select
+              mode="tags"
+              tokenSeparators={[',', '，']}
+              placeholder="可选，输入后回车"
+              open={false}
+            />
+          </Form.Item>
+        </Form>
       </Modal>
     </div>
   )

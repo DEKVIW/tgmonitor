@@ -16,6 +16,7 @@ from .batches import (
     start_pan_transfer_batch,
 )
 from .preview import preview_manual_pan_transfer_selection
+from .publishing import publish_pan_transfer_batch_item_message
 from .validation import validate_pan_transfer_account
 from .worker import process_next_pan_transfer_item
 
@@ -32,6 +33,7 @@ __all__ = [
     "list_pan_transfer_batches",
     "process_next_pan_transfer_item",
     "preview_manual_pan_transfer_selection",
+    "publish_pan_transfer_batch_item_message",
     "retry_pan_transfer_batch",
     "start_pan_transfer_batch",
     "update_pan_transfer_account",

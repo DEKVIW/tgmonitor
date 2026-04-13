@@ -124,6 +124,26 @@ export interface PanTransferBatchCreateRequest extends PanTransferManualPreviewR
   start_immediately?: boolean
   max_attempts?: number | null
   retry_delay_seconds?: number | null
+  transfer_layout?: 'independent' | 'batch_archive' | string
+  batch_folder_name?: string | null
+  item_folder_mode?: 'auto' | 'custom' | string
+  item_folder_template?: string | null
+  share_target_mode?: 'resource_dir' | 'content_root' | string
+}
+
+export interface PanTransferMessagePublishRequest {
+  title: string
+  description?: string | null
+  tags?: string[]
+}
+
+export interface PanTransferMessagePublishResponse {
+  message_id: number
+  title: string
+  source_url: string
+  link_target_id?: number | null
+  published_at: string
+  reused_existing_target: boolean
 }
 
 export interface PanTransferReplacementLogItem {

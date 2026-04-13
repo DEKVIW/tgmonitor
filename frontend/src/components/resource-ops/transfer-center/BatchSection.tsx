@@ -22,6 +22,7 @@ const EXECUTION_STAGE_LABELS: Record<string, string> = {
   share: '分享',
   validate: '校验',
   replace: '回写',
+  publish: '发布',
   finish: '完成',
   general: '通用',
 }
@@ -150,6 +151,10 @@ const buildExecutionLogSummary = (log: ExecutionTimelineLog) => {
   if (message.startsWith('Link replacement failed:')) {
     return `回写失败 -> ${message.replace('Link replacement failed:', '').trim() || errorMessage || '未知错误'}`
   }
+  if (message.startsWith('Admin message published to feed')) {
+    const publishedMessageId = Number(payload.published_message_id || 0)
+    return publishedMessageId > 0 ? `已发布到前台 -> 消息 #${publishedMessageId}` : '已发布到前台'
+  }
   if (message.startsWith('Pan transfer item completed successfully')) {
     return '任务完成'
   }
@@ -186,6 +191,7 @@ type BatchSectionProps = {
   startingBatchId: number | null
   cancellingBatchId: number | null
   retryingBatchId: number | null
+  publishingItemId: number | null
   deletingBatchId: number | null
   clearingLogsBatchId: number | null
   detailOpen: boolean
@@ -203,6 +209,7 @@ type BatchSectionProps = {
   onRefreshDetail: (batchId: number) => void
   onSelectFailedKeys: (keys: Key[]) => void
   onClearLogs: (batchId: number) => void
+  onPublish: (item: PanTransferBatchItem) => void
 }
 
 const BatchSection = ({
@@ -212,6 +219,7 @@ const BatchSection = ({
   startingBatchId,
   cancellingBatchId,
   retryingBatchId,
+  publishingItemId,
   deletingBatchId,
   clearingLogsBatchId,
   detailOpen,
@@ -229,6 +237,7 @@ const BatchSection = ({
   onRefreshDetail,
   onSelectFailedKeys,
   onClearLogs,
+  onPublish,
 }: BatchSectionProps) => {
   const [terminalFilter, setTerminalFilter] = useState<TerminalFilter>('all')
   const [terminalItemFilter, setTerminalItemFilter] = useState<number | 'all'>('all')
@@ -491,16 +500,33 @@ const BatchSection = ({
     {
       title: '操作',
       key: 'item_actions',
-      width: 120,
+      width: 220,
       fixed: 'right',
-      render: (_, record) =>
-        record.transfer_status === 'failed' && detailData ? (
-          <Button size="small" loading={retryingBatchId === detailData.batch.id} onClick={() => onRetry(detailData.batch.id, [record.id])}>
-            立即重试
-          </Button>
-        ) : (
-          <Text type="secondary">-</Text>
-        ),
+      render: (_, record) => {
+        const canPublish = Boolean(record.new_link_target_url) || Boolean(record.new_share_url) || Boolean(record.original_url)
+        const canRetry = record.transfer_status === 'failed' && detailData
+        if (!canPublish && !canRetry) {
+          return <Text type="secondary">-</Text>
+        }
+        return (
+          <Space size={8} wrap>
+            {canRetry && detailData ? (
+              <Button
+                size="small"
+                loading={retryingBatchId === detailData.batch.id}
+                onClick={() => onRetry(detailData.batch.id, [record.id])}
+              >
+                立即重试
+              </Button>
+            ) : null}
+            {canPublish ? (
+              <Button size="small" loading={publishingItemId === record.id} onClick={() => onPublish(record)}>
+                发布到前台
+              </Button>
+            ) : null}
+          </Space>
+        )
+      },
     },
   ]
 

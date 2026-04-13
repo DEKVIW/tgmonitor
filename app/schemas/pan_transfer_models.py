@@ -227,6 +227,11 @@ class PanTransferBatchCreateRequest(PanTransferManualPreviewRequest):
     start_immediately: bool = True
     max_attempts: int | None = Field(default=3, ge=1, le=10)
     retry_delay_seconds: int | None = Field(default=600, ge=0, le=86400)
+    transfer_layout: str = Field(default="independent", min_length=1, max_length=32)
+    batch_folder_name: str | None = Field(default=None, max_length=120)
+    item_folder_mode: str = Field(default="auto", min_length=1, max_length=32)
+    item_folder_template: str | None = Field(default=None, max_length=120)
+    share_target_mode: str = Field(default="resource_dir", min_length=1, max_length=32)
 
     @field_validator("selected_link_target_ids")
     @classmethod
@@ -243,6 +248,76 @@ class PanTransferBatchCreateRequest(PanTransferManualPreviewRequest):
             seen.add(item_id)
             normalized.append(item_id)
         return normalized
+
+    @field_validator("transfer_layout", "item_folder_mode", "share_target_mode")
+    @classmethod
+    def validate_batch_mode_fields(cls, value: str, info) -> str:
+        normalized = _normalize_text(value, field_name=info.field_name).lower()
+        allowed_map = {
+            "transfer_layout": {"independent", "batch_archive"},
+            "item_folder_mode": {"auto", "custom"},
+            "share_target_mode": {"resource_dir", "content_root"},
+        }
+        if normalized not in allowed_map[info.field_name]:
+            raise ValueError(f"invalid {info.field_name}")
+        return normalized
+
+    @field_validator("batch_folder_name", "item_folder_template")
+    @classmethod
+    def validate_optional_folder_fields(cls, value: str | None, info) -> str | None:
+        if value is None:
+            return None
+        return _normalize_text(value, field_name=info.field_name, allow_empty=True) or None
+
+    @model_validator(mode="after")
+    def validate_batch_path_strategy(self) -> "PanTransferBatchCreateRequest":
+        if self.transfer_layout == "batch_archive" and not self.batch_folder_name:
+            self.batch_folder_name = None
+        if self.item_folder_mode == "custom" and not self.item_folder_template:
+            raise ValueError("item_folder_template is required when item_folder_mode is custom")
+        if self.item_folder_mode != "custom":
+            self.item_folder_template = None
+        return self
+
+
+class PanTransferMessagePublishRequest(PanTransferBaseModel):
+    title: str = Field(min_length=1, max_length=255)
+    description: str | None = Field(default=None, max_length=1000)
+    tags: list[str] = Field(default_factory=list)
+
+    @field_validator("title")
+    @classmethod
+    def validate_publish_title(cls, value: str) -> str:
+        return _normalize_text(value, field_name="title")
+
+    @field_validator("description")
+    @classmethod
+    def validate_publish_description(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _normalize_text(value, field_name="description", allow_empty=True) or None
+
+    @field_validator("tags")
+    @classmethod
+    def validate_publish_tags(cls, value: list[str]) -> list[str]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for raw_value in value:
+            cleaned = _normalize_text(raw_value, field_name="tags")
+            if cleaned in seen:
+                continue
+            seen.add(cleaned)
+            normalized.append(cleaned[:64])
+        return normalized
+
+
+class PanTransferMessagePublishResponse(PanTransferBaseModel):
+    message_id: int
+    title: str
+    source_url: str
+    link_target_id: int | None = None
+    published_at: datetime
+    reused_existing_target: bool = False
 
 
 class PanTransferReplacementLogItem(PanTransferBaseModel):

@@ -15,7 +15,7 @@ from app.models.models import (
 )
 
 from .accounts import get_recommended_accounts_by_platform
-from .common import dedupe_ints, normalize_positive_int, utcnow
+from .common import dedupe_ints, normalize_batch_path_strategy, normalize_positive_int, resolve_batch_item_storage_plan, utcnow
 from .constants import (
     DEFAULT_PAN_TRANSFER_MAX_ATTEMPTS,
     DEFAULT_PAN_TRANSFER_RETRY_DELAY_SECONDS,
@@ -32,7 +32,7 @@ from .constants import (
     PAN_TRANSFER_VALIDATION_STATUS_PENDING,
 )
 from .execution_logs import append_pan_transfer_execution_log
-from .preview import collect_manual_pan_transfer_candidates
+from .preview import collect_manual_pan_transfer_candidates, collect_manual_pan_transfer_candidates_for_link_targets
 from .queue import refresh_pan_transfer_batch_summary, reset_pan_transfer_batch_items
 
 
@@ -146,6 +146,11 @@ def create_manual_pan_transfer_batch(
     if selected_link_target_ids:
         selected_set = set(selected_link_target_ids)
         selected_items = [item for item in all_items if int(item.get("link_target_id") or 0) in selected_set]
+        if not selected_items:
+            selected_items = collect_manual_pan_transfer_candidates_for_link_targets(
+                session,
+                link_target_ids=selected_link_target_ids,
+            )
     else:
         selected_items = all_items
     if not selected_items:
@@ -165,6 +170,15 @@ def create_manual_pan_transfer_batch(
     max_attempts = max(1, int(normalize_positive_int(payload.get("max_attempts"), default=DEFAULT_PAN_TRANSFER_MAX_ATTEMPTS) or DEFAULT_PAN_TRANSFER_MAX_ATTEMPTS))
     retry_delay_seconds = _normalize_retry_delay_seconds(payload.get("retry_delay_seconds"))
     start_immediately = bool(payload.get("start_immediately", True))
+    path_strategy = normalize_batch_path_strategy(
+        {
+            "transfer_layout": payload.get("transfer_layout"),
+            "batch_folder_name": payload.get("batch_folder_name"),
+            "item_folder_mode": payload.get("item_folder_mode"),
+            "item_folder_template": payload.get("item_folder_template"),
+            "share_target_mode": payload.get("share_target_mode"),
+        }
+    )
     batch = PanTransferBatch(
         batch_type="manual",
         source_scope="message_selection",
@@ -185,6 +199,7 @@ def create_manual_pan_transfer_batch(
                 "max_attempts": max_attempts,
                 "retry_delay_seconds": retry_delay_seconds,
             },
+            "path_strategy": path_strategy,
         },
         result_json={},
         started_at=utcnow() if start_immediately else None,
@@ -192,6 +207,7 @@ def create_manual_pan_transfer_batch(
     session.add(batch)
     session.flush()
 
+    created_rows: list[tuple[PanTransferBatchItem, dict[str, Any], dict[str, Any]]] = []
     for item in selected_items:
         recommended_account = recommended_accounts[str(item.get("platform") or "")]
         row = PanTransferBatchItem(
@@ -214,8 +230,27 @@ def create_manual_pan_transfer_batch(
             max_attempts=max_attempts,
             extra_json={
                 "recommended_account_name": recommended_account.get("account_name"),
+                "path_strategy": path_strategy,
             },
         )
+        session.add(row)
+        created_rows.append((row, item, recommended_account))
+    session.flush()
+
+    for row, item, recommended_account in created_rows:
+        resolved_paths = resolve_batch_item_storage_plan(
+            default_save_root=str(recommended_account.get("default_save_root") or ""),
+            batch_id=int(batch.id),
+            item_id=int(row.id),
+            title=str(row.short_title or ""),
+            platform=str(row.platform or ""),
+            share_key=str(item.get("share_key") or "") or None,
+            strategy=path_strategy,
+        )
+        row.extra_json = {
+            **dict(row.extra_json or {}),
+            "resolved_paths": resolved_paths,
+        }
         session.add(row)
     session.flush()
 

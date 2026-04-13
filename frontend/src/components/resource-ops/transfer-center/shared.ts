@@ -16,6 +16,11 @@ export type BatchCreateDraft = {
   startImmediately: boolean
   maxAttempts: number
   retryDelaySeconds: number
+  transferLayout: 'independent' | 'batch_archive'
+  batchFolderName: string
+  itemFolderMode: 'auto' | 'custom'
+  itemFolderTemplate: string
+  shareTargetMode: 'resource_dir' | 'content_root'
 }
 
 export type BatchPagination = {
@@ -56,7 +61,27 @@ export const DEFAULT_BATCH_CREATE_DRAFT: BatchCreateDraft = {
   startImmediately: true,
   maxAttempts: 3,
   retryDelaySeconds: 10 * 60,
+  transferLayout: 'independent',
+  batchFolderName: '',
+  itemFolderMode: 'auto',
+  itemFolderTemplate: '',
+  shareTargetMode: 'resource_dir',
 }
+
+export const TRANSFER_LAYOUT_OPTIONS = [
+  { label: '独立目录', value: 'independent' },
+  { label: '批次归档', value: 'batch_archive' },
+]
+
+export const ITEM_FOLDER_MODE_OPTIONS = [
+  { label: '自动生成', value: 'auto' },
+  { label: '自定义名称', value: 'custom' },
+]
+
+export const SHARE_TARGET_MODE_OPTIONS = [
+  { label: '分享资源目录（默认）', value: 'resource_dir' },
+  { label: '优先分享原内容根目录', value: 'content_root' },
+]
 
 export const HEALTH_FILTER_OPTIONS = [
   { label: '全部', value: 'all' },
