@@ -4,6 +4,7 @@ import { Alert, Form, Input, InputNumber, Modal, Select, Space, Switch, message 
 import type { TablePaginationConfig } from 'antd/es/table'
 
 import {
+  cancelPanTransferBatch,
   createManualPanTransferBatch,
   createPanTransferAccount,
   deletePanTransferAccount,
@@ -67,6 +68,7 @@ const ResourceOpsTransferCenterMain = () => {
   const [batchLoading, setBatchLoading] = useState(false)
   const [batchPagination, setBatchPagination] = useState<BatchPagination>({ page: 1, pageSize: 10, total: 0 })
   const [startingBatchId, setStartingBatchId] = useState<number | null>(null)
+  const [cancellingBatchId, setCancellingBatchId] = useState<number | null>(null)
   const [retryingBatchId, setRetryingBatchId] = useState<number | null>(null)
   const [deletingBatchId, setDeletingBatchId] = useState<number | null>(null)
 
@@ -253,6 +255,21 @@ const ResourceOpsTransferCenterMain = () => {
     }
   }
 
+  const runBatchCancel = async (batchId: number) => {
+    setCancellingBatchId(batchId)
+    try {
+      const response = await cancelPanTransferBatch(batchId)
+      message.success(`批次 #${batchId} 已停止，当前处理中的任务会在本次尝试结束后退出`)
+      applyBatchDetail(response)
+      setDetailOpen(true)
+      await loadBatches(batchPagination.page, batchPagination.pageSize)
+    } catch (error) {
+      message.error(getErrorMessage(error, '停止批次失败'))
+    } finally {
+      setCancellingBatchId(null)
+    }
+  }
+
   return (
     <div className="resource-ops-transfer-stack">
       <AccountsSection
@@ -331,6 +348,7 @@ const ResourceOpsTransferCenterMain = () => {
         batchLoading={batchLoading}
         batchPagination={batchPagination}
         startingBatchId={startingBatchId}
+        cancellingBatchId={cancellingBatchId}
         retryingBatchId={retryingBatchId}
         deletingBatchId={deletingBatchId}
         detailOpen={detailOpen}
@@ -354,6 +372,7 @@ const ResourceOpsTransferCenterMain = () => {
             setStartingBatchId(null)
           }
         })()}
+        onCancel={(batchId) => void runBatchCancel(batchId)}
         onRetry={(batchId, itemIds) => void runBatchRetry(batchId, itemIds)}
         onDelete={(batchId) => void (async () => {
           setDeletingBatchId(batchId)

@@ -7,9 +7,10 @@ from ..constants import SUPPORTED_TRANSFER_PLATFORMS
 from .baidu import BaiduPanTransferProvider
 from .base import (
     PanTransferAccountValidationResult,
-    PanTransferExecutionResult,
     PanTransferProvider,
     PanTransferProviderError,
+    PanTransferShareResult,
+    PanTransferTransferResult,
 )
 from .quark import QuarkPanTransferProvider
 
@@ -39,9 +40,10 @@ def decrypt_account_credential(account: PanTransferAccount) -> str:
 
 __all__ = [
     "PanTransferAccountValidationResult",
-    "PanTransferExecutionResult",
     "PanTransferProvider",
     "PanTransferProviderError",
+    "PanTransferShareResult",
+    "PanTransferTransferResult",
     "SUPPORTED_TRANSFER_PLATFORMS",
     "decrypt_account_credential",
     "get_pan_transfer_provider",

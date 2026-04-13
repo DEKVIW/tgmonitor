@@ -1,5 +1,5 @@
 import type { Key } from 'react'
-import { Alert, Button, Card, Descriptions, Drawer, Empty, Popconfirm, Space, Table, Tag, Typography } from 'antd'
+import { Alert, Button, Card, Descriptions, Drawer, Empty, Popconfirm, Space, Table, Tag, Timeline, Typography } from 'antd'
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table'
 import type { PanTransferBatchDetailResponse, PanTransferBatchItem, PanTransferBatchSummaryItem } from '@/types/panTransfer'
 
@@ -14,11 +14,200 @@ import {
 
 const { Title, Paragraph, Text } = Typography
 
+const EXECUTION_LEVEL_META: Record<string, { color: string; label: string }> = {
+  debug: { color: 'default', label: '调试' },
+  info: { color: 'processing', label: '信息' },
+  warning: { color: 'warning', label: '警告' },
+  error: { color: 'error', label: '错误' },
+}
+
+const EXECUTION_STAGE_LABELS: Record<string, string> = {
+  transfer: '转存',
+  share: '分享',
+  validate: '校验',
+  replace: '回写',
+  finish: '完成',
+  general: '通用',
+}
+
+const formatExecutionStatus = (status: unknown) => {
+  const normalized = String(status || '').trim().toLowerCase()
+  if (normalized === 'valid') return '有效'
+  if (normalized === 'warning') return '存疑'
+  if (normalized === 'invalid') return '失效'
+  if (normalized === 'error') return '异常'
+  if (normalized === 'pending') return '待校验'
+  return normalized || '未知'
+}
+
+const buildExecutionLogSummary = (log: PanTransferBatchItem['execution_logs'][number]) => {
+  const message = String(log.message || '')
+  const payload = log.payload || {}
+  const folderName = String(payload.staging_folder_name || '')
+  const stagingRoot = String(payload.staging_root || '')
+  const fullPath = [stagingRoot, folderName].filter(Boolean).join('/')
+  const shareUrl = String(payload.new_share_url || '')
+
+  if (message.startsWith('Starting transfer to staging directory')) {
+    return fullPath ? `开始转存到暂存目录 ${fullPath}` : '开始转存到暂存目录'
+  }
+  if (message.startsWith('Transfer to staging completed')) {
+    return fullPath ? `转存成功，暂存目录已就绪：${fullPath}` : '转存成功，暂存目录已就绪'
+  }
+  if (message.startsWith('Transfer to staging failed:')) {
+    return `转存失败：${message.replace('Transfer to staging failed:', '').trim() || '未知错误'}`
+  }
+  if (message.startsWith('Skipping transfer and reusing existing staging snapshot')) {
+    return fullPath ? `跳过转存，复用已存在的暂存目录 ${fullPath}` : '跳过转存，复用已存在的暂存目录'
+  }
+  if (message.startsWith('Starting share creation for staging directory')) {
+    return '开始创建分享链接'
+  }
+  if (message.startsWith('Share creation completed')) {
+    return shareUrl ? `分享链接创建成功：${shareUrl}` : '分享链接创建成功'
+  }
+  if (message.startsWith('Share creation failed:')) {
+    return `创建分享链接失败：${message.replace('Share creation failed:', '').trim() || '未知错误'}`
+  }
+  if (message.startsWith('Validating newly created share URL')) {
+    return '开始校验新分享链接'
+  }
+  if (message.startsWith('Share URL validation finished with status:')) {
+    return `新分享链接校验完成：${formatExecutionStatus(message.split(':').pop())}`
+  }
+  if (message.startsWith('Share URL validation failed:')) {
+    return `新分享链接校验失败：${message.replace('Share URL validation failed:', '').trim() || '未知错误'}`
+  }
+  if (message.startsWith('Replacing old links with the new shared URL')) {
+    return '开始回写新链接到系统'
+  }
+  if (message.startsWith('Link replacement completed')) {
+    return '新链接回写成功'
+  }
+  if (message.startsWith('Link replacement failed:')) {
+    return `新链接回写失败：${message.replace('Link replacement failed:', '').trim() || '未知错误'}`
+  }
+  if (message.startsWith('Pan transfer item completed successfully')) {
+    return '任务完成'
+  }
+  if (message.startsWith('Pan transfer item failed:')) {
+    return `任务失败：${message.replace('Pan transfer item failed:', '').trim() || '未知错误'}`
+  }
+  if (message.startsWith('Batch cancelled')) {
+    return '批次已停止'
+  }
+  return message || '任务状态已更新'
+}
+
+type ExecutionTimelineLog = PanTransferBatchItem['execution_logs'][number] & {
+  batchItemId?: number
+  batchItemTitle?: string
+}
+
+const getExecutionLogColor = (log: ExecutionTimelineLog) => {
+  const message = String(log.message || '')
+  if (log.level === 'error' || message.includes(' failed')) return 'red'
+  if (log.level === 'warning') return 'orange'
+  if (
+    message.includes(' completed') ||
+    message.includes('completed successfully') ||
+    message.includes('finished with status: valid')
+  ) {
+    return 'green'
+  }
+  return 'blue'
+}
+
+const buildExecutionLogDetails = (log: ExecutionTimelineLog) => {
+  const payload = log.payload || {}
+  const details: string[] = []
+  const accountName = String(payload.account_name || '').trim()
+  const folderName = String(payload.staging_folder_name || '').trim()
+  const stagingRoot = String(payload.staging_root || '').trim()
+  const stagingFolderId = String(payload.staging_folder_id || '').trim()
+  const shareMode = String(payload.share_mode || '').trim().toLowerCase()
+  const sharePasscode = String(payload.share_passcode || '').trim()
+  const shareUrl = String(payload.new_share_url || '').trim()
+  const affectedMessageCount = Number(payload.affected_message_count || 0)
+  const affectedRefCount = Number(payload.affected_ref_count || 0)
+
+  if (accountName) details.push(`目标账号：${accountName}`)
+  if (stagingRoot || folderName) details.push(`暂存目录：${[stagingRoot, folderName].filter(Boolean).join('/')}`)
+  if (stagingFolderId) details.push(`暂存目录 ID：${stagingFolderId}`)
+  if (shareMode) details.push(`分享方式：${shareMode === 'private' ? '私密' : shareMode === 'public' ? '公开' : shareMode}`)
+  if (sharePasscode) details.push(`分享提取码：${sharePasscode}`)
+  if (shareUrl && !String(log.message || '').startsWith('Share creation completed')) details.push(`新分享链接：${shareUrl}`)
+  if (affectedMessageCount > 0) details.push(`影响消息数：${affectedMessageCount}`)
+  if (affectedRefCount > 0) details.push(`影响链接引用数：${affectedRefCount}`)
+  if (payload.retryable !== undefined) details.push(`是否可重试：${payload.retryable ? '是' : '否'}`)
+  if (payload.batch_cancelled === true) details.push('批次已停止，当前项不会再进入自动重试')
+
+  return details
+}
+
+const shouldShowExecutionPayload = (log: ExecutionTimelineLog) => {
+  const payload = log.payload || {}
+  return Object.keys(payload).length > 0 && (log.level === 'error' || log.level === 'warning')
+}
+
+type ExecutionTimelineProps = {
+  logs: ExecutionTimelineLog[]
+  emptyText: string
+  showItemTag?: boolean
+}
+
+const ExecutionTimelineList = ({ logs, emptyText, showItemTag = false }: ExecutionTimelineProps) => {
+  if (logs.length <= 0) {
+    return <Text type="secondary">{emptyText}</Text>
+  }
+
+  return (
+    <Timeline
+      className="resource-ops-transfer-timeline"
+      items={logs.map((log) => {
+        const levelMeta = EXECUTION_LEVEL_META[log.level] || { color: 'default', label: log.level }
+        const details = buildExecutionLogDetails(log)
+        return {
+          color: getExecutionLogColor(log),
+          children: (
+            <div className="resource-ops-transfer-timeline-entry">
+              <div className="resource-ops-transfer-timeline-header">
+                <Space wrap size={[6, 6]}>
+                  {showItemTag ? (
+                    <Tag className="resource-ops-transfer-timeline-item-tag">
+                      #{log.batchItemId} {log.batchItemTitle || '未命名资源'}
+                    </Tag>
+                  ) : null}
+                  <Tag>{EXECUTION_STAGE_LABELS[log.stage] || log.stage}</Tag>
+                  <Tag color={levelMeta.color}>{levelMeta.label}</Tag>
+                  <Text type="secondary">{formatDateTime(log.created_at)}</Text>
+                </Space>
+              </div>
+              <div className="resource-ops-transfer-timeline-summary">{buildExecutionLogSummary(log)}</div>
+              {details.length > 0 ? (
+                <div className="resource-ops-transfer-timeline-details">
+                  {details.map((detail, index) => (
+                    <div key={`${log.id}-detail-${index}`}>{detail}</div>
+                  ))}
+                </div>
+              ) : null}
+              {shouldShowExecutionPayload(log) ? (
+                <pre className="resource-ops-transfer-log-payload">{JSON.stringify(log.payload, null, 2)}</pre>
+              ) : null}
+            </div>
+          ),
+        }
+      })}
+    />
+  )
+}
+
 type BatchSectionProps = {
   batches: PanTransferBatchSummaryItem[]
   batchLoading: boolean
   batchPagination: { page: number; pageSize: number; total: number }
   startingBatchId: number | null
+  cancellingBatchId: number | null
   retryingBatchId: number | null
   deletingBatchId: number | null
   detailOpen: boolean
@@ -29,6 +218,7 @@ type BatchSectionProps = {
   onTableChange: (pagination: TablePaginationConfig) => void
   onOpenDetail: (batchId: number) => void
   onStart: (batchId: number) => void
+  onCancel: (batchId: number) => void
   onRetry: (batchId: number, itemIds?: number[]) => void
   onDelete: (batchId: number) => void
   onCloseDetail: () => void
@@ -41,6 +231,7 @@ const BatchSection = ({
   batchLoading,
   batchPagination,
   startingBatchId,
+  cancellingBatchId,
   retryingBatchId,
   deletingBatchId,
   detailOpen,
@@ -51,12 +242,29 @@ const BatchSection = ({
   onTableChange,
   onOpenDetail,
   onStart,
+  onCancel,
   onRetry,
   onDelete,
   onCloseDetail,
   onRefreshDetail,
   onSelectFailedKeys,
 }: BatchSectionProps) => {
+  const batchExecutionLogs: ExecutionTimelineLog[] = detailData
+    ? detailData.items
+        .flatMap((item) =>
+          item.execution_logs.map((log) => ({
+            ...log,
+            batchItemId: item.id,
+            batchItemTitle: item.short_title,
+          }))
+        )
+        .sort((left, right) => {
+          const leftTime = new Date(left.created_at).getTime()
+          const rightTime = new Date(right.created_at).getTime()
+          return leftTime - rightTime || left.id - right.id
+        })
+    : []
+
   const batchColumns: ColumnsType<PanTransferBatchSummaryItem> = [
     {
       title: '批次',
@@ -130,6 +338,11 @@ const BatchSection = ({
               onClick={() => onStart(record.id)}
             >
               启动
+            </Button>
+          ) : null}
+          {record.can_cancel ? (
+            <Button size="small" loading={cancellingBatchId === record.id} onClick={() => onCancel(record.id)}>
+              停止
             </Button>
           ) : null}
           {record.can_retry ? (
@@ -288,6 +501,11 @@ const BatchSection = ({
               <Button loading={detailLoading} onClick={() => onRefreshDetail(detailData.batch.id)}>
                 刷新明细
               </Button>
+              {detailData.batch.can_cancel ? (
+                <Button loading={cancellingBatchId === detailData.batch.id} onClick={() => onCancel(detailData.batch.id)}>
+                  停止批次
+                </Button>
+              ) : null}
               {detailData.batch.can_retry ? (
                 <Button
                   loading={retryingBatchId === detailData.batch.id}
@@ -361,6 +579,13 @@ const BatchSection = ({
               description="“新分享链接”表示转存平台刚生成的新链接，“当前生效链接”表示已经写回系统后的链接目标。管理员可在这里直接核对是否替换成功。"
             />
 
+            <Card size="small" title="批次执行时间线" className="resource-ops-transfer-log-card">
+              <Paragraph className="resource-ops-transfer-copy">
+                按真实执行顺序展示每个资源的转存、分享、校验和回写过程。排查“为什么失败”“卡在哪一步”时，优先看这里。
+              </Paragraph>
+              <ExecutionTimelineList logs={batchExecutionLogs} emptyText="暂无批次执行日志" showItemTag />
+            </Card>
+
             <Table
               rowKey="id"
               loading={detailLoading}
@@ -393,6 +618,11 @@ const BatchSection = ({
                         { key: 'validated', label: '最近校验时间', children: formatDateTime(record.last_validated_at) },
                         { key: 'started', label: '开始时间', children: formatDateTime(record.started_at) },
                         { key: 'finished', label: '结束时间', children: formatDateTime(record.finished_at) },
+                        {
+                          key: 'execution_log',
+                          label: '执行日志',
+                          children: <ExecutionTimelineList logs={record.execution_logs} emptyText="暂无执行日志" />,
+                        },
                         {
                           key: 'replacement_log',
                           label: '回写日志',

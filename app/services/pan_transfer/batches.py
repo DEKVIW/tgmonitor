@@ -4,12 +4,20 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.models.models import LinkTarget, PanTransferAccount, PanTransferBatch, PanTransferBatchItem, PanTransferReplacementLog
+from app.models.models import (
+    LinkTarget,
+    PanTransferAccount,
+    PanTransferBatch,
+    PanTransferBatchItem,
+    PanTransferExecutionLog,
+    PanTransferReplacementLog,
+)
 
 from .accounts import get_recommended_accounts_by_platform
 from .common import dedupe_ints, normalize_positive_int, utcnow
 from .constants import (
     DEFAULT_PAN_TRANSFER_MAX_ATTEMPTS,
+    PAN_TRANSFER_BATCH_STATUS_CANCELLED,
     PAN_TRANSFER_BATCH_STATUS_DRAFT,
     PAN_TRANSFER_BATCH_STATUS_RUNNING,
     PAN_TRANSFER_ITEM_STATUS_COMPLETED,
@@ -21,6 +29,7 @@ from .constants import (
     PAN_TRANSFER_SHARE_STATUS_PENDING,
     PAN_TRANSFER_VALIDATION_STATUS_PENDING,
 )
+from .execution_logs import append_pan_transfer_execution_log
 from .preview import collect_manual_pan_transfer_candidates
 from .queue import refresh_pan_transfer_batch_summary, reset_pan_transfer_batch_items
 
@@ -47,7 +56,8 @@ def _serialize_batch(batch: PanTransferBatch) -> dict[str, Any]:
         "created_at": batch.created_at,
         "updated_at": batch.updated_at,
         "can_retry": bool(int(batch.failed_item_count or 0) > 0),
-        "can_delete": status != PAN_TRANSFER_BATCH_STATUS_RUNNING,
+        "can_delete": active_count <= 0,
+        "can_cancel": status == PAN_TRANSFER_BATCH_STATUS_RUNNING and active_count > 0,
     }
 
 
@@ -92,6 +102,19 @@ def _serialize_batch_item(
         "extra_json": dict(item.extra_json or {}),
         "created_at": item.created_at,
         "updated_at": item.updated_at,
+    }
+
+
+def _serialize_execution_log(row: PanTransferExecutionLog) -> dict[str, Any]:
+    return {
+        "id": int(row.id),
+        "batch_id": int(row.batch_id),
+        "batch_item_id": int(row.batch_item_id),
+        "level": str(row.level or "info"),
+        "stage": str(row.stage or "general"),
+        "message": str(row.message or ""),
+        "payload": dict(row.payload or {}),
+        "created_at": row.created_at,
     }
 
 
@@ -246,6 +269,14 @@ def get_pan_transfer_batch_detail(session: Session, *, batch_id: int) -> dict[st
         if items
         else []
     )
+    execution_logs = (
+        session.query(PanTransferExecutionLog)
+        .filter(PanTransferExecutionLog.batch_item_id.in_(dedupe_ints(item.id for item in items)))
+        .order_by(PanTransferExecutionLog.created_at.asc(), PanTransferExecutionLog.id.asc())
+        .all()
+        if items
+        else []
+    )
     replacement_log_map: dict[int, list[dict[str, Any]]] = {}
     for row in replacement_logs:
         replacement_log_map.setdefault(int(row.batch_item_id), []).append(
@@ -262,6 +293,9 @@ def get_pan_transfer_batch_detail(session: Session, *, batch_id: int) -> dict[st
                 "created_at": row.created_at,
             }
         )
+    execution_log_map: dict[int, list[dict[str, Any]]] = {}
+    for row in execution_logs:
+        execution_log_map.setdefault(int(row.batch_item_id), []).append(_serialize_execution_log(row))
 
     return {
         "batch": _serialize_batch(batch),
@@ -273,6 +307,7 @@ def get_pan_transfer_batch_detail(session: Session, *, batch_id: int) -> dict[st
                     original_target=targets.get(int(item.link_target_id or 0)),
                     new_target=targets.get(int(item.new_link_target_id or 0)),
                 ),
+                "execution_logs": execution_log_map.get(int(item.id), []),
                 "replacement_logs": replacement_log_map.get(int(item.id), []),
             }
             for item in items
@@ -322,6 +357,75 @@ def retry_pan_transfer_batch(
     return get_pan_transfer_batch_detail(session, batch_id=int(batch_id))
 
 
+def cancel_pan_transfer_batch(
+    session: Session,
+    *,
+    batch_id: int,
+    cancelled_by: str | None = None,
+) -> dict[str, Any]:
+    batch = session.get(PanTransferBatch, int(batch_id))
+    if batch is None:
+        raise LookupError("batch not found")
+    refresh_pan_transfer_batch_summary(session, batch_id=int(batch_id))
+    if str(batch.status or "") != PAN_TRANSFER_BATCH_STATUS_RUNNING:
+        raise ValueError("only running batches can be cancelled")
+
+    now = utcnow()
+    items = (
+        session.query(PanTransferBatchItem)
+        .filter(PanTransferBatchItem.batch_id == int(batch_id))
+        .order_by(PanTransferBatchItem.id.asc())
+        .all()
+    )
+    cancelled_count = 0
+    processing_count = 0
+    for item in items:
+        item_status = str(item.transfer_status or "")
+        if item_status in {PAN_TRANSFER_ITEM_STATUS_QUEUED, PAN_TRANSFER_ITEM_STATUS_RETRY_WAIT}:
+            item.transfer_status = PAN_TRANSFER_ITEM_STATUS_FAILED
+            item.next_retry_at = None
+            item.locked_by = None
+            item.locked_at = None
+            item.finished_at = now
+            item.error_message = "Batch cancelled by admin"
+            session.add(item)
+            append_pan_transfer_execution_log(
+                session,
+                item=item,
+                stage="finish",
+                level="warning",
+                message="Batch cancelled before this item started or retried",
+                payload={"cancelled_by": str(cancelled_by or "") or None},
+            )
+            cancelled_count += 1
+        elif item_status == PAN_TRANSFER_ITEM_STATUS_PROCESSING:
+            processing_count += 1
+            append_pan_transfer_execution_log(
+                session,
+                item=item,
+                stage="finish",
+                level="warning",
+                message="Batch cancellation requested while item is processing; current attempt will finish first",
+                payload={"cancelled_by": str(cancelled_by or "") or None},
+            )
+
+    batch.status = PAN_TRANSFER_BATCH_STATUS_CANCELLED
+    batch.finished_at = now
+    batch.result_json = {
+        **dict(batch.result_json or {}),
+        "cancellation": {
+            "cancelled_at": now.isoformat() + "Z",
+            "cancelled_by": str(cancelled_by or "") or None,
+            "cancelled_item_count": cancelled_count,
+            "processing_item_count": processing_count,
+        },
+    }
+    session.add(batch)
+    session.flush()
+    refresh_pan_transfer_batch_summary(session, batch_id=int(batch_id))
+    return get_pan_transfer_batch_detail(session, batch_id=int(batch_id))
+
+
 def delete_pan_transfer_batch(session: Session, *, batch_id: int) -> dict[str, Any]:
     batch = session.get(PanTransferBatch, int(batch_id))
     if batch is None:
@@ -343,13 +447,18 @@ def delete_pan_transfer_batch(session: Session, *, batch_id: int) -> dict[str, A
         .first()
     )
     if active_exists:
-        raise ValueError("cannot delete a batch while transfer items are still active")
+        raise ValueError("cannot delete a batch while transfer items are still active; cancel it first or wait for the current processing item to finish")
 
     item_ids = [
         int(item_id)
         for (item_id,) in session.query(PanTransferBatchItem.id).filter(PanTransferBatchItem.batch_id == int(batch_id)).all()
     ]
     if item_ids:
+        (
+            session.query(PanTransferExecutionLog)
+            .filter(PanTransferExecutionLog.batch_item_id.in_(item_ids))
+            .delete(synchronize_session=False)
+        )
         (
             session.query(PanTransferReplacementLog)
             .filter(PanTransferReplacementLog.batch_item_id.in_(item_ids))

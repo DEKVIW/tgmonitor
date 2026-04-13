@@ -20,7 +20,6 @@ from app.models.models import (
 )
 from app.services.link_check.parser import canonical_target_key
 from app.services.resource_ops.catalog import (
-    _purge_orphan_link_targets,
     _refresh_link_target_daily_stats,
     flatten_message_links,
 )
@@ -322,7 +321,6 @@ def replace_pan_transfer_links(
     session.add(log_row)
     session.flush()
     _refresh_link_target_daily_stats(session, [int(old_target.id), int(new_target.id)])
-    _purge_orphan_link_targets(session, [int(old_target.id)])
     return {
         "new_link_target_id": int(new_target.id),
         "affected_message_count": affected_message_count,

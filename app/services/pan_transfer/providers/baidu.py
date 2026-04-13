@@ -12,9 +12,10 @@ from app.services.link_check.constants import PLATFORM_BAIDU
 
 from .base import (
     PanTransferAccountValidationResult,
-    PanTransferExecutionResult,
     PanTransferProvider,
     PanTransferProviderError,
+    PanTransferShareResult,
+    PanTransferTransferResult,
 )
 
 
@@ -323,7 +324,7 @@ class BaiduPanTransferProvider(PanTransferProvider):
             payload=result,
         )
 
-    async def transfer_and_share(
+    async def transfer_to_staging(
         self,
         *,
         credential_value: str,
@@ -332,11 +333,8 @@ class BaiduPanTransferProvider(PanTransferProvider):
         original_passcode: str | None,
         staging_root: str,
         staging_folder_name: str,
-        share_mode: str,
-        share_passcode: str | None,
-        share_expire_days: int | None,
         title_hint: str | None,
-    ) -> PanTransferExecutionResult:
+    ) -> PanTransferTransferResult:
         del account_name, title_hint
         async with _BaiduClient(credential_value) as client:
             bdstoken, validation_payload = await client.get_bdstoken()
@@ -388,17 +386,7 @@ class BaiduPanTransferProvider(PanTransferProvider):
             if folder_entry is None:
                 raise PanTransferProviderError("Baidu staging directory was not found after transfer")
 
-            final_share_passcode = share_passcode if share_mode == "private" else None
-            new_share_url = await client.create_share(
-                fs_id=str(folder_entry.get("fs_id") or ""),
-                bdstoken=bdstoken,
-                expire_days=share_expire_days,
-                passcode=final_share_passcode,
-            )
-            return PanTransferExecutionResult(
-                new_share_url=new_share_url,
-                share_title=staging_folder_name,
-                share_passcode=final_share_passcode,
+            return PanTransferTransferResult(
                 staging_root=parent_path or "/",
                 staging_folder_name=staging_folder_name,
                 staging_folder_id=str(folder_entry.get("fs_id") or "") or None,
@@ -409,5 +397,62 @@ class BaiduPanTransferProvider(PanTransferProvider):
                     "share_user_id": share_user_id,
                     "source_fs_id_count": len(fs_ids),
                     "transfer_target_path": target_path,
+                },
+            )
+
+    async def share_staging_target(
+        self,
+        *,
+        credential_value: str,
+        account_name: str,
+        staging_root: str,
+        staging_folder_name: str,
+        staging_folder_id: str | None,
+        share_mode: str,
+        share_passcode: str | None,
+        share_expire_days: int | None,
+        title_hint: str | None,
+    ) -> PanTransferShareResult:
+        del account_name
+        final_share_passcode = share_passcode if share_mode == "private" else None
+        async with _BaiduClient(credential_value) as client:
+            bdstoken, validation_payload = await client.get_bdstoken()
+            folder_id = str(staging_folder_id or "").strip()
+            if not folder_id:
+                parent_path = "/" + "/".join(part for part in str(staging_root or "").split("/") if part)
+                parent_path = parent_path if parent_path != "/" else "/"
+                rows = await client.list_dir(parent_path, bdstoken=bdstoken)
+                if isinstance(rows, int):
+                    raise PanTransferProviderError(f"Baidu failed to inspect staging directory: errno {rows}")
+                folder_entry = next(
+                    (
+                        row
+                        for row in rows
+                        if str(row.get("server_filename") or "") == staging_folder_name
+                        and int(row.get("isdir") or 0) == 1
+                    ),
+                    None,
+                )
+                if folder_entry is None:
+                    raise PanTransferProviderError("Baidu staging directory is missing", retryable=False)
+                folder_id = str(folder_entry.get("fs_id") or "").strip()
+            if not folder_id:
+                raise PanTransferProviderError("Baidu staging directory is missing fs_id", retryable=False)
+
+            new_share_url = await client.create_share(
+                fs_id=folder_id,
+                bdstoken=bdstoken,
+                expire_days=share_expire_days,
+                passcode=final_share_passcode,
+            )
+            return PanTransferShareResult(
+                new_share_url=new_share_url,
+                share_title=str(title_hint or staging_folder_name or "").strip() or staging_folder_name,
+                share_passcode=final_share_passcode,
+                staging_root=staging_root,
+                staging_folder_name=staging_folder_name,
+                staging_folder_id=folder_id,
+                payload={
+                    "validation": validation_payload,
                 },
             )

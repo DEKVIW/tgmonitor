@@ -59,6 +59,7 @@ export const DEFAULT_BATCH_CREATE_DRAFT: BatchCreateDraft = {
 export const BATCH_STATUS_META: Record<string, { color: string; label: string }> = {
   draft: { color: 'default', label: '草稿' },
   running: { color: 'processing', label: '执行中' },
+  cancelled: { color: 'default', label: '已停止' },
   completed: { color: 'success', label: '已完成' },
   completed_with_errors: { color: 'warning', label: '部分失败' },
   failed: { color: 'error', label: '全部失败' },

@@ -356,6 +356,19 @@ class PanTransferReplacementLog(Base):
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
 
 
+class PanTransferExecutionLog(Base):
+    __tablename__ = "pan_transfer_execution_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    batch_id = Column(Integer, ForeignKey("pan_transfer_batches.id"), nullable=False, index=True)
+    batch_item_id = Column(Integer, ForeignKey("pan_transfer_batch_items.id"), nullable=False, index=True)
+    level = Column(String(16), nullable=False, default="info", index=True)
+    stage = Column(String(32), nullable=False, default="general", index=True)
+    message = Column(Text, nullable=False, default="")
+    payload = Column(JSONB, nullable=False, default=dict)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+
 class Credential(Base):
     __tablename__ = "credentials"
 
@@ -818,6 +831,7 @@ def ensure_runtime_storage_tables() -> None:
                 PanTransferBatch.__table__,
                 PanTransferBatchItem.__table__,
                 PanTransferReplacementLog.__table__,
+                PanTransferExecutionLog.__table__,
             ],
         )
         ensure_message_monitor_source_columns()
@@ -1106,6 +1120,14 @@ def _ensure_pan_transfer_indexes() -> None:
         """
         CREATE INDEX IF NOT EXISTS ix_pan_transfer_replacement_logs_batch_item_created
         ON pan_transfer_replacement_logs (batch_item_id, created_at DESC)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_pan_transfer_execution_logs_batch_item_created
+        ON pan_transfer_execution_logs (batch_item_id, created_at DESC)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_pan_transfer_execution_logs_batch_stage_created
+        ON pan_transfer_execution_logs (batch_id, stage, created_at DESC)
         """,
     )
     with engine.begin() as connection:

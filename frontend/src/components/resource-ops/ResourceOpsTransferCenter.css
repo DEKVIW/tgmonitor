@@ -181,10 +181,48 @@
   gap: 12px;
 }
 
+.resource-ops-transfer-log-card .ant-card-body {
+  padding-top: 12px;
+}
+
 .resource-ops-transfer-log-list {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.resource-ops-transfer-timeline .ant-timeline-item-content {
+  inset-block-start: -2px;
+}
+
+.resource-ops-transfer-timeline-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-bottom: 4px;
+}
+
+.resource-ops-transfer-timeline-summary {
+  color: rgba(15, 23, 42, 0.92);
+  line-height: 1.6;
+  font-weight: 500;
+  word-break: break-word;
+}
+
+.resource-ops-transfer-timeline-details {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: rgba(15, 23, 42, 0.72);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.resource-ops-transfer-timeline-item-tag {
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .resource-ops-transfer-log-item {
@@ -192,6 +230,32 @@
   flex-wrap: wrap;
   gap: 8px 12px;
   align-items: center;
+}
+
+.resource-ops-transfer-log-entry {
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: #fff;
+}
+
+.resource-ops-transfer-log-message {
+  margin-top: 6px;
+  color: rgba(15, 23, 42, 0.88);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.resource-ops-transfer-log-payload {
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #f6f8fb;
+  color: rgba(15, 23, 42, 0.72);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-x: auto;
 }
 
 @media (max-width: 900px) {

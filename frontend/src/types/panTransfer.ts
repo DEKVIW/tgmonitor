@@ -136,6 +136,17 @@ export interface PanTransferReplacementLogItem {
   created_at: string
 }
 
+export interface PanTransferExecutionLogItem {
+  id: number
+  batch_id: number
+  batch_item_id: number
+  level: string
+  stage: string
+  message: string
+  payload: Record<string, unknown>
+  created_at: string
+}
+
 export interface PanTransferBatchItem {
   id: number
   batch_id: number
@@ -168,6 +179,7 @@ export interface PanTransferBatchItem {
   new_link_target_url?: string | null
   error_message?: string | null
   extra_json: Record<string, unknown>
+  execution_logs: PanTransferExecutionLogItem[]
   replacement_logs: PanTransferReplacementLogItem[]
   created_at: string
   updated_at: string
@@ -192,6 +204,7 @@ export interface PanTransferBatchSummaryItem {
   updated_at: string
   can_retry: boolean
   can_delete: boolean
+  can_cancel: boolean
 }
 
 export interface PanTransferBatchListResponse {

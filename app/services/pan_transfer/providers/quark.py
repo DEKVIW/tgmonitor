@@ -12,9 +12,10 @@ from app.services.link_check.constants import PLATFORM_QUARK
 
 from .base import (
     PanTransferAccountValidationResult,
-    PanTransferExecutionResult,
     PanTransferProvider,
     PanTransferProviderError,
+    PanTransferShareResult,
+    PanTransferTransferResult,
 )
 
 
@@ -144,6 +145,17 @@ class _QuarkClient:
             return []
         return [dict(row or {}) for row in rows]
 
+    @staticmethod
+    def _match_dir(rows: list[dict[str, Any]], *, folder_name: str) -> dict[str, Any] | None:
+        return next(
+            (
+                row
+                for row in rows
+                if str(row.get("file_name") or "") == folder_name and bool(row.get("dir"))
+            ),
+            None,
+        )
+
     async def create_dir(self, *, parent_id: str, folder_name: str) -> dict[str, Any]:
         payload = await self._request_json(
             "POST",
@@ -169,6 +181,48 @@ class _QuarkClient:
                 payload=payload,
             )
         return payload
+
+    async def ensure_dir(
+        self,
+        *,
+        parent_id: str,
+        folder_name: str,
+        lookup_retries: int = 8,
+    ) -> dict[str, Any]:
+        existing_rows = await self.list_dir(parent_id=parent_id)
+        existing_match = self._match_dir(existing_rows, folder_name=folder_name)
+        if existing_match is not None:
+            return existing_match
+
+        payload = await self.create_dir(parent_id=parent_id, folder_name=folder_name)
+        data = payload.get("data") or {}
+        if isinstance(data, dict):
+            created_fid = str(data.get("fid") or data.get("file_id") or "").strip()
+            if created_fid:
+                return {
+                    "fid": created_fid,
+                    "file_name": str(data.get("file_name") or folder_name),
+                    "dir": True,
+                }
+
+        last_rows: list[dict[str, Any]] = []
+        for _ in range(max(1, int(lookup_retries or 8))):
+            await asyncio.sleep(0.6)
+            rows = await self.list_dir(parent_id=parent_id)
+            last_rows = rows
+            matched = self._match_dir(rows, folder_name=folder_name)
+            if matched is not None:
+                return matched
+
+        raise PanTransferProviderError(
+            "Quark staging directory was not found after creation",
+            payload={
+                "parent_id": parent_id,
+                "folder_name": folder_name,
+                "create_payload": payload,
+                "visible_children": [str(row.get("file_name") or "") for row in last_rows[:20]],
+            },
+        )
 
     async def get_stoken(self, *, pwd_id: str, passcode: str | None) -> str:
         payload = await self._request_json(
@@ -282,10 +336,13 @@ class _QuarkClient:
                     "__t": str(int(random.random() * 10000000000000)),
                 },
             )
-            if str(payload.get("message") or "").lower() == "ok" and int((payload.get("data") or {}).get("status") or 0) == 2:
+            data = payload.get("data") or {}
+            status = int(data.get("status") or 0)
+            share_id = str(data.get("share_id") or "").strip()
+            if str(payload.get("message") or "").lower() == "ok" and (status == 2 or bool(share_id)):
                 return payload
             await asyncio.sleep(0.8)
-        raise PanTransferProviderError("Quark transfer task did not finish in time")
+        raise PanTransferProviderError("Quark task did not finish in time")
 
     async def create_share_task(
         self,
@@ -319,22 +376,26 @@ class _QuarkClient:
             raise PanTransferProviderError("Quark share task creation failed", payload=payload)
         return task_id
 
-    async def get_share_id(self, *, task_id: str) -> str:
-        payload = await self._request_json(
-            "GET",
-            "https://drive-pc.quark.cn/1/clouddrive/task",
-            params={
-                "pr": "ucpro",
-                "fr": "pc",
-                "uc_param_str": "",
-                "task_id": task_id,
-                "retry_index": "0",
-            },
-        )
-        share_id = str((payload.get("data") or {}).get("share_id") or "").strip()
-        if not share_id:
-            raise PanTransferProviderError("Quark share task did not return share_id", payload=payload)
-        return share_id
+    async def get_share_id(self, *, task_id: str, retries: int = 10) -> str:
+        last_payload: dict[str, Any] = {}
+        for retry_index in range(retries):
+            payload = await self._request_json(
+                "GET",
+                "https://drive-pc.quark.cn/1/clouddrive/task",
+                params={
+                    "pr": "ucpro",
+                    "fr": "pc",
+                    "uc_param_str": "",
+                    "task_id": task_id,
+                    "retry_index": str(retry_index),
+                },
+            )
+            last_payload = payload
+            share_id = str((payload.get("data") or {}).get("share_id") or "").strip()
+            if share_id:
+                return share_id
+            await asyncio.sleep(0.8)
+        raise PanTransferProviderError("Quark share task did not return share_id", payload=last_payload)
 
     async def publish_share(self, *, share_id: str) -> tuple[str, str | None]:
         payload = await self._request_json(
@@ -371,7 +432,7 @@ class QuarkPanTransferProvider(PanTransferProvider):
             payload=user_info,
         )
 
-    async def transfer_and_share(
+    async def transfer_to_staging(
         self,
         *,
         credential_value: str,
@@ -380,54 +441,19 @@ class QuarkPanTransferProvider(PanTransferProvider):
         original_passcode: str | None,
         staging_root: str,
         staging_folder_name: str,
-        share_mode: str,
-        share_passcode: str | None,
-        share_expire_days: int | None,
         title_hint: str | None,
-    ) -> PanTransferExecutionResult:
+    ) -> PanTransferTransferResult:
         del account_name
         async with _QuarkClient(credential_value) as client:
             validation_payload = await client.get_user_info()
             parent_id = "0"
             parent_path = "/"
             for segment in [part for part in str(staging_root or "").split("/") if part]:
-                rows = await client.list_dir(parent_id=parent_id)
-                matched = next(
-                    (
-                        row
-                        for row in rows
-                        if str(row.get("file_name") or "") == segment and bool(row.get("dir"))
-                    ),
-                    None,
-                )
-                if matched is None:
-                    await client.create_dir(parent_id=parent_id, folder_name=segment)
-                    rows = await client.list_dir(parent_id=parent_id)
-                    matched = next(
-                        (
-                            row
-                            for row in rows
-                            if str(row.get("file_name") or "") == segment and bool(row.get("dir"))
-                        ),
-                        None,
-                    )
-                if matched is None:
-                    raise PanTransferProviderError(f"Quark staging path segment not found: {segment}")
+                matched = await client.ensure_dir(parent_id=parent_id, folder_name=segment)
                 parent_id = str(matched.get("fid") or "")
                 parent_path = f"{parent_path.rstrip('/')}/{segment}"
 
-            await client.create_dir(parent_id=parent_id, folder_name=staging_folder_name)
-            staging_rows = await client.list_dir(parent_id=parent_id)
-            staging_folder = next(
-                (
-                    row
-                    for row in staging_rows
-                    if str(row.get("file_name") or "") == staging_folder_name and bool(row.get("dir"))
-                ),
-                None,
-            )
-            if staging_folder is None:
-                raise PanTransferProviderError("Quark staging directory was not found after creation")
+            staging_folder = await client.ensure_dir(parent_id=parent_id, folder_name=staging_folder_name)
 
             pwd_id = _extract_pwd_id(original_url)
             passcode = _extract_passcode(original_url, fallback=original_passcode)
@@ -453,20 +479,7 @@ class QuarkPanTransferProvider(PanTransferProvider):
                 target_parent_id=str(staging_folder.get("fid") or ""),
             )
             await client.wait_task(task_id=save_task_id)
-
-            share_task_id = await client.create_share_task(
-                fid=str(staging_folder.get("fid") or ""),
-                title=str(title_hint or staging_folder_name),
-                share_mode=share_mode,
-                share_passcode=share_passcode,
-                share_expire_days=share_expire_days,
-            )
-            share_id = await client.get_share_id(task_id=share_task_id)
-            new_share_url, resolved_passcode = await client.publish_share(share_id=share_id)
-            return PanTransferExecutionResult(
-                new_share_url=new_share_url,
-                share_title=str(title_hint or staging_folder_name),
-                share_passcode=resolved_passcode if share_mode == "private" else None,
+            return PanTransferTransferResult(
                 staging_root=parent_path,
                 staging_folder_name=staging_folder_name,
                 staging_folder_id=str(staging_folder.get("fid") or "") or None,
@@ -475,7 +488,66 @@ class QuarkPanTransferProvider(PanTransferProvider):
                     "pwd_id": pwd_id,
                     "saved_item_count": len(fid_list),
                     "save_task_id": save_task_id,
+                    "title_hint": str(title_hint or staging_folder_name),
+                },
+            )
+
+    async def share_staging_target(
+        self,
+        *,
+        credential_value: str,
+        account_name: str,
+        staging_root: str,
+        staging_folder_name: str,
+        staging_folder_id: str | None,
+        share_mode: str,
+        share_passcode: str | None,
+        share_expire_days: int | None,
+        title_hint: str | None,
+    ) -> PanTransferShareResult:
+        del account_name
+        async with _QuarkClient(credential_value) as client:
+            validation_payload = await client.get_user_info()
+            folder_id = str(staging_folder_id or "").strip()
+            if not folder_id:
+                parent_id = "0"
+                for segment in [part for part in str(staging_root or "").split("/") if part]:
+                    rows = await client.list_dir(parent_id=parent_id)
+                    matched = client._match_dir(rows, folder_name=segment)
+                    if matched is None:
+                        raise PanTransferProviderError(f"Quark staging path segment not found: {segment}", retryable=False)
+                    parent_id = str(matched.get("fid") or "")
+                rows = await client.list_dir(parent_id=parent_id)
+                folder = client._match_dir(rows, folder_name=staging_folder_name)
+                if folder is None:
+                    raise PanTransferProviderError("Quark staging directory is missing", retryable=False)
+                folder_id = str(folder.get("fid") or "").strip()
+            if not folder_id:
+                raise PanTransferProviderError("Quark staging directory is missing fid", retryable=False)
+
+            share_task_id = await client.create_share_task(
+                fid=folder_id,
+                title=str(title_hint or staging_folder_name),
+                share_mode=share_mode,
+                share_passcode=share_passcode,
+                share_expire_days=share_expire_days,
+            )
+            task_payload = await client.wait_task(task_id=share_task_id, retries=60)
+            share_id = str((task_payload.get("data") or {}).get("share_id") or "").strip()
+            if not share_id:
+                share_id = await client.get_share_id(task_id=share_task_id, retries=12)
+            new_share_url, resolved_passcode = await client.publish_share(share_id=share_id)
+            return PanTransferShareResult(
+                new_share_url=new_share_url,
+                share_title=str(title_hint or staging_folder_name),
+                share_passcode=resolved_passcode if share_mode == "private" else None,
+                staging_root=staging_root,
+                staging_folder_name=staging_folder_name,
+                staging_folder_id=folder_id,
+                payload={
+                    "validation": validation_payload,
                     "share_task_id": share_task_id,
                     "share_id": share_id,
+                    "task_payload": task_payload,
                 },
             )

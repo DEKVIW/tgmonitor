@@ -13,6 +13,7 @@ from .constants import (
     DEFAULT_PAN_TRANSFER_MAX_ATTEMPTS,
     DEFAULT_PAN_TRANSFER_RETRY_DELAY_SECONDS,
     DEFAULT_PAN_TRANSFER_STALE_LOCK_SECONDS,
+    PAN_TRANSFER_BATCH_STATUS_CANCELLED,
     PAN_TRANSFER_BATCH_STATUS_COMPLETED,
     PAN_TRANSFER_BATCH_STATUS_COMPLETED_WITH_ERRORS,
     PAN_TRANSFER_BATCH_STATUS_DRAFT,
@@ -54,7 +55,9 @@ def refresh_pan_transfer_batch_summary(session: Session, *, batch_id: int) -> Pa
     batch.total_link_target_count = total_count
 
     current_status = str(batch.status or "")
-    if total_count == 0 and current_status == PAN_TRANSFER_BATCH_STATUS_DRAFT:
+    if current_status == PAN_TRANSFER_BATCH_STATUS_CANCELLED:
+        next_status = PAN_TRANSFER_BATCH_STATUS_CANCELLED
+    elif total_count == 0 and current_status == PAN_TRANSFER_BATCH_STATUS_DRAFT:
         next_status = PAN_TRANSFER_BATCH_STATUS_DRAFT
     elif (
         current_status == PAN_TRANSFER_BATCH_STATUS_DRAFT
@@ -80,6 +83,7 @@ def refresh_pan_transfer_batch_summary(session: Session, *, batch_id: int) -> Pa
     if next_status == PAN_TRANSFER_BATCH_STATUS_RUNNING and batch.started_at is None:
         batch.started_at = now
     if next_status in {
+        PAN_TRANSFER_BATCH_STATUS_CANCELLED,
         PAN_TRANSFER_BATCH_STATUS_COMPLETED,
         PAN_TRANSFER_BATCH_STATUS_COMPLETED_WITH_ERRORS,
         PAN_TRANSFER_BATCH_STATUS_FAILED,
@@ -122,11 +126,19 @@ def recycle_stale_pan_transfer_locks(
     )
     recycled = 0
     for row in rows:
-        row.transfer_status = PAN_TRANSFER_ITEM_STATUS_QUEUED
+        batch = session.get(PanTransferBatch, int(row.batch_id))
+        if batch is not None and str(batch.status or "") == PAN_TRANSFER_BATCH_STATUS_CANCELLED:
+            row.transfer_status = PAN_TRANSFER_ITEM_STATUS_FAILED
+            row.next_retry_at = None
+            row.finished_at = utcnow()
+            row.error_message = "Batch was cancelled while the worker exited before finishing the current item"
+        else:
+            row.transfer_status = PAN_TRANSFER_ITEM_STATUS_QUEUED
         row.locked_by = None
         row.locked_at = None
         row.started_at = None
-        row.error_message = "Worker exited before finishing the transfer item"
+        if str(row.transfer_status or "") == PAN_TRANSFER_ITEM_STATUS_QUEUED:
+            row.error_message = "Worker exited before finishing the transfer item"
         session.add(row)
         recycled += 1
     if recycled:
@@ -206,13 +218,19 @@ def mark_pan_transfer_item_error(
     max_attempts: int | None = None,
 ) -> None:
     now = utcnow()
+    batch = session.get(PanTransferBatch, int(item.batch_id))
+    batch_cancelled = batch is not None and str(batch.status or "") == PAN_TRANSFER_BATCH_STATUS_CANCELLED
     item.attempt_count = max(1, int(item.attempt_count or 0) + 1)
     item.error_message = str(error_message or "Pan transfer execution failed").strip()[:2000]
     item.locked_by = None
     item.locked_at = None
     item.finished_at = now
     item.max_attempts = max(1, int(max_attempts or item.max_attempts or DEFAULT_PAN_TRANSFER_MAX_ATTEMPTS))
-    if retryable and int(item.attempt_count or 0) < int(item.max_attempts or DEFAULT_PAN_TRANSFER_MAX_ATTEMPTS):
+    if (
+        retryable
+        and not batch_cancelled
+        and int(item.attempt_count or 0) < int(item.max_attempts or DEFAULT_PAN_TRANSFER_MAX_ATTEMPTS)
+    ):
         item.transfer_status = PAN_TRANSFER_ITEM_STATUS_RETRY_WAIT
         item.next_retry_at = now + timedelta(seconds=max(60, int(retry_delay_seconds or DEFAULT_PAN_TRANSFER_RETRY_DELAY_SECONDS)))
     else:

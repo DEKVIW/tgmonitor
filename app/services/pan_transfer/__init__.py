@@ -6,6 +6,7 @@ from .accounts import (
     update_pan_transfer_account,
 )
 from .batches import (
+    cancel_pan_transfer_batch,
     create_manual_pan_transfer_batch,
     delete_pan_transfer_batch,
     get_pan_transfer_batch_detail,
@@ -20,6 +21,7 @@ from .worker import process_next_pan_transfer_item
 __all__ = [
     "create_pan_transfer_account",
     "create_manual_pan_transfer_batch",
+    "cancel_pan_transfer_batch",
     "delete_pan_transfer_account",
     "delete_pan_transfer_batch",
     "get_recommended_accounts_by_platform",

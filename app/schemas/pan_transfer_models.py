@@ -253,6 +253,17 @@ class PanTransferReplacementLogItem(PanTransferBaseModel):
     created_at: datetime
 
 
+class PanTransferExecutionLogItem(PanTransferBaseModel):
+    id: int
+    batch_id: int
+    batch_item_id: int
+    level: str
+    stage: str
+    message: str
+    payload: dict = Field(default_factory=dict)
+    created_at: datetime
+
+
 class PanTransferBatchItemResponse(PanTransferBaseModel):
     id: int
     batch_id: int
@@ -285,6 +296,7 @@ class PanTransferBatchItemResponse(PanTransferBaseModel):
     new_link_target_url: str | None = None
     error_message: str | None = None
     extra_json: dict = Field(default_factory=dict)
+    execution_logs: list[PanTransferExecutionLogItem] = Field(default_factory=list)
     replacement_logs: list[PanTransferReplacementLogItem] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
@@ -309,6 +321,7 @@ class PanTransferBatchSummaryItem(PanTransferBaseModel):
     updated_at: datetime
     can_retry: bool = False
     can_delete: bool = False
+    can_cancel: bool = False
 
 
 class PanTransferBatchListResponse(PanTransferBaseModel):
