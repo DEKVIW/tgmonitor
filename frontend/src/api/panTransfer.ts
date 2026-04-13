@@ -95,6 +95,11 @@ export const cancelPanTransferBatch = async (batchId: number): Promise<PanTransf
   return response.data
 }
 
+export const clearPanTransferBatchLogs = async (batchId: number): Promise<PanTransferBatchDetailResponse> => {
+  const response = await apiClient.post<PanTransferBatchDetailResponse>(`/admin/pan-transfer/batches/${batchId}/logs/clear`)
+  return response.data
+}
+
 export const startPanTransferBatch = async (batchId: number): Promise<PanTransferBatchDetailResponse> => {
   const response = await apiClient.post<PanTransferBatchDetailResponse>(`/admin/pan-transfer/batches/${batchId}/start`)
   return response.data

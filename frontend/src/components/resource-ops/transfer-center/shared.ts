@@ -9,12 +9,13 @@ export type PreviewDraft = {
   recentMessageCount: number
   range: [Dayjs, Dayjs] | null
   platforms: string[]
-  onlyHealthy: boolean
+  healthFilter: 'all' | 'healthy_only' | 'exclude_invalid'
 }
 
 export type BatchCreateDraft = {
   startImmediately: boolean
   maxAttempts: number
+  retryDelaySeconds: number
 }
 
 export type BatchPagination = {
@@ -48,13 +49,29 @@ export const DEFAULT_PREVIEW_DRAFT: PreviewDraft = {
   recentMessageCount: 200,
   range: null,
   platforms: [],
-  onlyHealthy: false,
+  healthFilter: 'all',
 }
 
 export const DEFAULT_BATCH_CREATE_DRAFT: BatchCreateDraft = {
   startImmediately: true,
   maxAttempts: 3,
+  retryDelaySeconds: 10 * 60,
 }
+
+export const HEALTH_FILTER_OPTIONS = [
+  { label: '全部', value: 'all' },
+  { label: '仅正常', value: 'healthy_only' },
+  { label: '排除失效', value: 'exclude_invalid' },
+]
+
+export const RETRY_DELAY_OPTIONS = [
+  { label: '不自动重试', value: 0 },
+  { label: '1 分钟', value: 60 },
+  { label: '5 分钟', value: 5 * 60 },
+  { label: '10 分钟', value: 10 * 60 },
+  { label: '30 分钟', value: 30 * 60 },
+  { label: '60 分钟', value: 60 * 60 },
+]
 
 export const BATCH_STATUS_META: Record<string, { color: string; label: string }> = {
   draft: { color: 'default', label: '草稿' },
@@ -93,6 +110,15 @@ export const HEALTH_META: Record<string, { color: string; label: string }> = {
   unknown: { color: 'default', label: '未知' },
 }
 
+export const formatRetryDelay = (value?: number | null) => {
+  const normalized = Math.max(0, Number(value || 0))
+  if (normalized <= 0) return '不自动重试'
+  if (normalized < 60) return `${normalized} 秒`
+  if (normalized % 3600 === 0) return `${normalized / 3600} 小时`
+  if (normalized % 60 === 0) return `${normalized / 60} 分钟`
+  return `${normalized} 秒`
+}
+
 export const formatDateTime = (value?: string | null) =>
   value ? formatServerDateTime(value, 'YYYY-MM-DD HH:mm', 'Asia/Shanghai') : '-'
 
@@ -109,7 +135,8 @@ export const buildPreviewPayload = (
   range_start: draft.selectionMode === 'time_range' && draft.range ? draft.range[0].format('YYYY-MM-DD') : undefined,
   range_end: draft.selectionMode === 'time_range' && draft.range ? draft.range[1].format('YYYY-MM-DD') : undefined,
   platforms: draft.platforms,
-  only_healthy: draft.onlyHealthy,
+  health_filter: draft.healthFilter,
+  only_healthy: draft.healthFilter === 'healthy_only',
   page: pagination?.page || 1,
   page_size: pagination?.pageSize || 50,
 })

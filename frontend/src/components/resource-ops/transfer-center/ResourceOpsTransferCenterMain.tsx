@@ -5,6 +5,7 @@ import type { TablePaginationConfig } from 'antd/es/table'
 
 import {
   cancelPanTransferBatch,
+  clearPanTransferBatchLogs,
   createManualPanTransferBatch,
   createPanTransferAccount,
   deletePanTransferAccount,
@@ -38,9 +39,11 @@ import {
   buildPreviewPayload,
   DEFAULT_BATCH_CREATE_DRAFT,
   DEFAULT_PREVIEW_DRAFT,
+  formatRetryDelay,
   getErrorMessage,
   PLATFORM_OPTIONS,
   PreviewDraft,
+  RETRY_DELAY_OPTIONS,
   SHARE_MODE_OPTIONS,
 } from './shared'
 import '../ResourceOpsTransferCenter.css'
@@ -71,6 +74,7 @@ const ResourceOpsTransferCenterMain = () => {
   const [cancellingBatchId, setCancellingBatchId] = useState<number | null>(null)
   const [retryingBatchId, setRetryingBatchId] = useState<number | null>(null)
   const [deletingBatchId, setDeletingBatchId] = useState<number | null>(null)
+  const [clearingLogsBatchId, setClearingLogsBatchId] = useState<number | null>(null)
 
   const [detailOpen, setDetailOpen] = useState(false)
   const [detailLoading, setDetailLoading] = useState(false)
@@ -270,6 +274,21 @@ const ResourceOpsTransferCenterMain = () => {
     }
   }
 
+  const runBatchClearLogs = async (batchId: number) => {
+    setClearingLogsBatchId(batchId)
+    try {
+      const response = await clearPanTransferBatchLogs(batchId)
+      message.success(`批次 #${batchId} 的执行日志已清理`)
+      applyBatchDetail(response)
+      setDetailOpen(true)
+      await loadBatches(batchPagination.page, batchPagination.pageSize)
+    } catch (error) {
+      message.error(getErrorMessage(error, '清理批次日志失败'))
+    } finally {
+      setClearingLogsBatchId(null)
+    }
+  }
+
   return (
     <div className="resource-ops-transfer-stack">
       <AccountsSection
@@ -351,6 +370,7 @@ const ResourceOpsTransferCenterMain = () => {
         cancellingBatchId={cancellingBatchId}
         retryingBatchId={retryingBatchId}
         deletingBatchId={deletingBatchId}
+        clearingLogsBatchId={clearingLogsBatchId}
         detailOpen={detailOpen}
         detailLoading={detailLoading}
         detailData={detailData}
@@ -398,6 +418,7 @@ const ResourceOpsTransferCenterMain = () => {
         }}
         onRefreshDetail={(batchId) => void loadBatchDetail(batchId, { open: false })}
         onSelectFailedKeys={setSelectedFailedItemKeys}
+        onClearLogs={(batchId) => void runBatchClearLogs(batchId)}
       />
 
       <Modal
@@ -442,6 +463,7 @@ const ResourceOpsTransferCenterMain = () => {
               selected_link_target_ids: selectedPreviewKeys.map((item) => Number(item)),
               start_immediately: batchCreateDraft.startImmediately,
               max_attempts: batchCreateDraft.maxAttempts,
+              retry_delay_seconds: batchCreateDraft.retryDelaySeconds,
             }
             const response = await createManualPanTransferBatch(payload)
             message.success(batchCreateDraft.startImmediately ? `已创建并启动批次 #${response.batch.id}` : `已创建草稿批次 #${response.batch.id}`)
@@ -472,6 +494,17 @@ const ResourceOpsTransferCenterMain = () => {
           <div className="resource-ops-transfer-field">
             <label>最大尝试次数</label>
             <InputNumber min={1} max={10} style={{ width: '100%' }} value={batchCreateDraft.maxAttempts} onChange={(value) => setBatchCreateDraft((current) => ({ ...current, maxAttempts: Number(value || 1) }))} />
+          </div>
+          <div className="resource-ops-transfer-field">
+            <label>自动重试间隔</label>
+            <Select
+              options={RETRY_DELAY_OPTIONS}
+              value={batchCreateDraft.retryDelaySeconds}
+              onChange={(value) => setBatchCreateDraft((current) => ({ ...current, retryDelaySeconds: Number(value || 0) }))}
+            />
+            <div className="resource-ops-transfer-form-tip">
+              当前设置：{formatRetryDelay(batchCreateDraft.retryDelaySeconds)}。失败项仍然可以在批次详情里手动立即重试。
+            </div>
           </div>
         </div>
       </Modal>

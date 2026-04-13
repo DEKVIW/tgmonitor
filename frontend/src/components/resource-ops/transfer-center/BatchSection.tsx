@@ -1,11 +1,14 @@
+import { useEffect, useMemo, useState } from 'react'
 import type { Key } from 'react'
-import { Alert, Button, Card, Descriptions, Drawer, Empty, Popconfirm, Space, Table, Tag, Timeline, Typography } from 'antd'
+import { Alert, Button, Card, Descriptions, Drawer, Empty, Popconfirm, Segmented, Select, Space, Table, Tag, Typography, message } from 'antd'
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table'
 import type { PanTransferBatchDetailResponse, PanTransferBatchItem, PanTransferBatchSummaryItem } from '@/types/panTransfer'
+import { formatServerDateTime } from '@/utils/dateTime'
 
 import {
   BATCH_STATUS_META,
   formatDateTime,
+  formatRetryDelay,
   getBatchSummary,
   ITEM_STATUS_META,
   REPLACEMENT_STATUS_META,
@@ -13,13 +16,6 @@ import {
 } from './shared'
 
 const { Title, Paragraph, Text } = Typography
-
-const EXECUTION_LEVEL_META: Record<string, { color: string; label: string }> = {
-  debug: { color: 'default', label: '调试' },
-  info: { color: 'processing', label: '信息' },
-  warning: { color: 'warning', label: '警告' },
-  error: { color: 'error', label: '错误' },
-}
 
 const EXECUTION_STAGE_LABELS: Record<string, string> = {
   transfer: '转存',
@@ -40,166 +36,126 @@ const formatExecutionStatus = (status: unknown) => {
   return normalized || '未知'
 }
 
-const buildExecutionLogSummary = (log: PanTransferBatchItem['execution_logs'][number]) => {
+type ExecutionTimelineLog = PanTransferBatchItem['execution_logs'][number] & {
+  batchItemId?: number
+  batchItemTitle?: string
+}
+
+type TerminalFilter = 'all' | 'error'
+
+const formatExecutionLogTime = (value?: string | null) =>
+  value ? formatServerDateTime(value, 'HH:mm:ss', 'Asia/Shanghai') : '--:--:--'
+
+const getExecutionLineStatus = (log: ExecutionTimelineLog) => {
+  const messageText = String(log.message || '').toLowerCase()
+  if (log.level === 'error' || messageText.includes(' failed')) return 'ERR'
+  if (log.level === 'warning') return 'WARN'
+  if (
+    messageText.includes(' completed') ||
+    messageText.includes('completed successfully') ||
+    messageText.includes('finished with status: valid')
+  ) {
+    return 'OK'
+  }
+  return 'INFO'
+}
+
+const buildExecutionLogSummary = (log: ExecutionTimelineLog) => {
   const message = String(log.message || '')
   const payload = log.payload || {}
   const folderName = String(payload.staging_folder_name || '')
   const stagingRoot = String(payload.staging_root || '')
   const fullPath = [stagingRoot, folderName].filter(Boolean).join('/')
   const shareUrl = String(payload.new_share_url || '')
+  const accountName = String(payload.account_name || '')
+  const shareMode = String(payload.share_mode || '')
+  const stagingFolderId = String(payload.staging_folder_id || '')
+  const errorMessage = String(payload.error_message || '').trim()
+  const affectedMessageCount = Number(payload.affected_message_count || 0)
+  const affectedRefCount = Number(payload.affected_ref_count || 0)
+  const retryDelaySeconds = Number(payload.retry_delay_seconds || 0)
+  const retryableText =
+    payload.retryable === true
+      ? retryDelaySeconds > 0
+        ? `${formatRetryDelay(retryDelaySeconds)}后自动重试`
+        : '可手动重试'
+      : payload.retryable === false
+        ? '不自动重试'
+        : ''
 
   if (message.startsWith('Starting transfer to staging directory')) {
-    return fullPath ? `开始转存到暂存目录 ${fullPath}` : '开始转存到暂存目录'
+    const pathText = fullPath || '未命名暂存目录'
+    return accountName ? `开始转存 -> ${pathText} (账号: ${accountName})` : `开始转存 -> ${pathText}`
   }
   if (message.startsWith('Transfer to staging completed')) {
-    return fullPath ? `转存成功，暂存目录已就绪：${fullPath}` : '转存成功，暂存目录已就绪'
+    if (stagingFolderId) return `转存成功 -> folder_id=${stagingFolderId}`
+    return fullPath ? `转存成功 -> ${fullPath}` : '转存成功'
   }
   if (message.startsWith('Transfer to staging failed:')) {
-    return `转存失败：${message.replace('Transfer to staging failed:', '').trim() || '未知错误'}`
+    return `转存失败 -> ${message.replace('Transfer to staging failed:', '').trim() || errorMessage || '未知错误'}`
   }
   if (message.startsWith('Skipping transfer and reusing existing staging snapshot')) {
-    return fullPath ? `跳过转存，复用已存在的暂存目录 ${fullPath}` : '跳过转存，复用已存在的暂存目录'
+    return fullPath ? `跳过转存，复用暂存目录 -> ${fullPath}` : '跳过转存，复用已有暂存目录'
   }
   if (message.startsWith('Starting share creation for staging directory')) {
-    return '开始创建分享链接'
+    const shareModeText = shareMode === 'private' ? 'private' : shareMode === 'public' ? 'public' : shareMode || 'unknown'
+    return `开始创建分享 -> mode=${shareModeText}`
   }
   if (message.startsWith('Share creation completed')) {
-    return shareUrl ? `分享链接创建成功：${shareUrl}` : '分享链接创建成功'
+    return shareUrl ? `分享创建成功 -> ${shareUrl}` : '分享创建成功'
   }
   if (message.startsWith('Share creation failed:')) {
-    return `创建分享链接失败：${message.replace('Share creation failed:', '').trim() || '未知错误'}`
+    return `分享创建失败 -> ${message.replace('Share creation failed:', '').trim() || errorMessage || '未知错误'}`
   }
   if (message.startsWith('Validating newly created share URL')) {
-    return '开始校验新分享链接'
+    return shareUrl ? `开始校验新分享 -> ${shareUrl}` : '开始校验新分享'
   }
   if (message.startsWith('Share URL validation finished with status:')) {
-    return `新分享链接校验完成：${formatExecutionStatus(message.split(':').pop())}`
+    return `校验完成 -> ${formatExecutionStatus(message.split(':').pop())}`
   }
   if (message.startsWith('Share URL validation failed:')) {
-    return `新分享链接校验失败：${message.replace('Share URL validation failed:', '').trim() || '未知错误'}`
+    return `校验失败 -> ${message.replace('Share URL validation failed:', '').trim() || errorMessage || '未知错误'}`
   }
   if (message.startsWith('Replacing old links with the new shared URL')) {
-    return '开始回写新链接到系统'
+    return shareUrl ? `开始回写 -> ${shareUrl}` : '开始回写'
   }
   if (message.startsWith('Link replacement completed')) {
-    return '新链接回写成功'
+    const impactText =
+      affectedMessageCount > 0 || affectedRefCount > 0
+        ? `影响消息=${affectedMessageCount} 引用=${affectedRefCount}`
+        : ''
+    return impactText ? `回写成功 -> ${impactText}` : '回写成功'
   }
   if (message.startsWith('Link replacement failed:')) {
-    return `新链接回写失败：${message.replace('Link replacement failed:', '').trim() || '未知错误'}`
+    return `回写失败 -> ${message.replace('Link replacement failed:', '').trim() || errorMessage || '未知错误'}`
   }
   if (message.startsWith('Pan transfer item completed successfully')) {
     return '任务完成'
   }
   if (message.startsWith('Pan transfer item failed:')) {
-    return `任务失败：${message.replace('Pan transfer item failed:', '').trim() || '未知错误'}`
+    const detail = message.replace('Pan transfer item failed:', '').trim() || errorMessage || '未知错误'
+    return retryableText ? `任务失败 -> ${detail} (${retryableText})` : `任务失败 -> ${detail}`
   }
   if (message.startsWith('Batch cancelled')) {
     return '批次已停止'
   }
-  return message || '任务状态已更新'
+  return message || errorMessage || '任务状态已更新'
 }
 
-type ExecutionTimelineLog = PanTransferBatchItem['execution_logs'][number] & {
-  batchItemId?: number
-  batchItemTitle?: string
+const buildExecutionTerminalLine = (log: ExecutionTimelineLog) => {
+  const stageLabel = EXECUTION_STAGE_LABELS[log.stage] || log.stage || '通用'
+  const statusLabel = getExecutionLineStatus(log)
+  const timeLabel = formatExecutionLogTime(log.created_at)
+  const scopeLabel = log.batchItemId ? `批次#${log.batch_id}/项#${log.batchItemId}` : `批次#${log.batch_id}`
+  return `[${timeLabel}] [${scopeLabel}] [${stageLabel}] [${statusLabel}] ${buildExecutionLogSummary(log)}`
 }
 
-const getExecutionLogColor = (log: ExecutionTimelineLog) => {
-  const message = String(log.message || '')
-  if (log.level === 'error' || message.includes(' failed')) return 'red'
-  if (log.level === 'warning') return 'orange'
-  if (
-    message.includes(' completed') ||
-    message.includes('completed successfully') ||
-    message.includes('finished with status: valid')
-  ) {
-    return 'green'
-  }
-  return 'blue'
-}
-
-const buildExecutionLogDetails = (log: ExecutionTimelineLog) => {
-  const payload = log.payload || {}
-  const details: string[] = []
-  const accountName = String(payload.account_name || '').trim()
-  const folderName = String(payload.staging_folder_name || '').trim()
-  const stagingRoot = String(payload.staging_root || '').trim()
-  const stagingFolderId = String(payload.staging_folder_id || '').trim()
-  const shareMode = String(payload.share_mode || '').trim().toLowerCase()
-  const sharePasscode = String(payload.share_passcode || '').trim()
-  const shareUrl = String(payload.new_share_url || '').trim()
-  const affectedMessageCount = Number(payload.affected_message_count || 0)
-  const affectedRefCount = Number(payload.affected_ref_count || 0)
-
-  if (accountName) details.push(`目标账号：${accountName}`)
-  if (stagingRoot || folderName) details.push(`暂存目录：${[stagingRoot, folderName].filter(Boolean).join('/')}`)
-  if (stagingFolderId) details.push(`暂存目录 ID：${stagingFolderId}`)
-  if (shareMode) details.push(`分享方式：${shareMode === 'private' ? '私密' : shareMode === 'public' ? '公开' : shareMode}`)
-  if (sharePasscode) details.push(`分享提取码：${sharePasscode}`)
-  if (shareUrl && !String(log.message || '').startsWith('Share creation completed')) details.push(`新分享链接：${shareUrl}`)
-  if (affectedMessageCount > 0) details.push(`影响消息数：${affectedMessageCount}`)
-  if (affectedRefCount > 0) details.push(`影响链接引用数：${affectedRefCount}`)
-  if (payload.retryable !== undefined) details.push(`是否可重试：${payload.retryable ? '是' : '否'}`)
-  if (payload.batch_cancelled === true) details.push('批次已停止，当前项不会再进入自动重试')
-
-  return details
-}
-
-const shouldShowExecutionPayload = (log: ExecutionTimelineLog) => {
-  const payload = log.payload || {}
-  return Object.keys(payload).length > 0 && (log.level === 'error' || log.level === 'warning')
-}
-
-type ExecutionTimelineProps = {
-  logs: ExecutionTimelineLog[]
-  emptyText: string
-  showItemTag?: boolean
-}
-
-const ExecutionTimelineList = ({ logs, emptyText, showItemTag = false }: ExecutionTimelineProps) => {
-  if (logs.length <= 0) {
-    return <Text type="secondary">{emptyText}</Text>
-  }
-
-  return (
-    <Timeline
-      className="resource-ops-transfer-timeline"
-      items={logs.map((log) => {
-        const levelMeta = EXECUTION_LEVEL_META[log.level] || { color: 'default', label: log.level }
-        const details = buildExecutionLogDetails(log)
-        return {
-          color: getExecutionLogColor(log),
-          children: (
-            <div className="resource-ops-transfer-timeline-entry">
-              <div className="resource-ops-transfer-timeline-header">
-                <Space wrap size={[6, 6]}>
-                  {showItemTag ? (
-                    <Tag className="resource-ops-transfer-timeline-item-tag">
-                      #{log.batchItemId} {log.batchItemTitle || '未命名资源'}
-                    </Tag>
-                  ) : null}
-                  <Tag>{EXECUTION_STAGE_LABELS[log.stage] || log.stage}</Tag>
-                  <Tag color={levelMeta.color}>{levelMeta.label}</Tag>
-                  <Text type="secondary">{formatDateTime(log.created_at)}</Text>
-                </Space>
-              </div>
-              <div className="resource-ops-transfer-timeline-summary">{buildExecutionLogSummary(log)}</div>
-              {details.length > 0 ? (
-                <div className="resource-ops-transfer-timeline-details">
-                  {details.map((detail, index) => (
-                    <div key={`${log.id}-detail-${index}`}>{detail}</div>
-                  ))}
-                </div>
-              ) : null}
-              {shouldShowExecutionPayload(log) ? (
-                <pre className="resource-ops-transfer-log-payload">{JSON.stringify(log.payload, null, 2)}</pre>
-              ) : null}
-            </div>
-          ),
-        }
-      })}
-    />
-  )
+const getTerminalLineClassName = (log: ExecutionTimelineLog) => {
+  const statusLabel = getExecutionLineStatus(log)
+  if (statusLabel === 'ERR') return 'resource-ops-transfer-terminal-line is-error'
+  if (statusLabel === 'WARN') return 'resource-ops-transfer-terminal-line is-warning'
+  if (statusLabel === 'OK') return 'resource-ops-transfer-terminal-line is-success'
+  return 'resource-ops-transfer-terminal-line'
 }
 
 type BatchSectionProps = {
@@ -210,6 +166,7 @@ type BatchSectionProps = {
   cancellingBatchId: number | null
   retryingBatchId: number | null
   deletingBatchId: number | null
+  clearingLogsBatchId: number | null
   detailOpen: boolean
   detailLoading: boolean
   detailData: PanTransferBatchDetailResponse | null
@@ -224,6 +181,7 @@ type BatchSectionProps = {
   onCloseDetail: () => void
   onRefreshDetail: (batchId: number) => void
   onSelectFailedKeys: (keys: Key[]) => void
+  onClearLogs: (batchId: number) => void
 }
 
 const BatchSection = ({
@@ -234,6 +192,7 @@ const BatchSection = ({
   cancellingBatchId,
   retryingBatchId,
   deletingBatchId,
+  clearingLogsBatchId,
   detailOpen,
   detailLoading,
   detailData,
@@ -248,22 +207,69 @@ const BatchSection = ({
   onCloseDetail,
   onRefreshDetail,
   onSelectFailedKeys,
+  onClearLogs,
 }: BatchSectionProps) => {
-  const batchExecutionLogs: ExecutionTimelineLog[] = detailData
-    ? detailData.items
-        .flatMap((item) =>
-          item.execution_logs.map((log) => ({
-            ...log,
-            batchItemId: item.id,
-            batchItemTitle: item.short_title,
-          }))
-        )
-        .sort((left, right) => {
-          const leftTime = new Date(left.created_at).getTime()
-          const rightTime = new Date(right.created_at).getTime()
-          return leftTime - rightTime || left.id - right.id
-        })
-    : []
+  const [terminalFilter, setTerminalFilter] = useState<TerminalFilter>('all')
+  const [terminalItemFilter, setTerminalItemFilter] = useState<number | 'all'>('all')
+  const [terminalCleared, setTerminalCleared] = useState(false)
+
+  const batchExecutionLogs = useMemo<ExecutionTimelineLog[]>(
+    () =>
+      detailData
+        ? detailData.items
+            .flatMap((item) =>
+              item.execution_logs.map((log) => ({
+                ...log,
+                batchItemId: item.id,
+                batchItemTitle: item.short_title,
+              }))
+            )
+            .sort((left, right) => {
+              const leftTime = new Date(left.created_at).getTime()
+              const rightTime = new Date(right.created_at).getTime()
+              return leftTime - rightTime || left.id - right.id
+            })
+        : [],
+    [detailData]
+  )
+
+  useEffect(() => {
+    setTerminalFilter('all')
+    setTerminalItemFilter('all')
+    setTerminalCleared(false)
+  }, [detailData?.batch.id, batchExecutionLogs.length])
+
+  const filteredBatchExecutionLogs = useMemo(
+    () =>
+      batchExecutionLogs.filter((log) => {
+        if (terminalFilter === 'error' && getExecutionLineStatus(log) !== 'ERR') {
+          return false
+        }
+        if (terminalItemFilter !== 'all' && log.batchItemId !== terminalItemFilter) {
+          return false
+        }
+        return true
+      }),
+    [batchExecutionLogs, terminalFilter, terminalItemFilter]
+  )
+
+  const terminalLines = useMemo(
+    () => filteredBatchExecutionLogs.map((log) => buildExecutionTerminalLine(log)),
+    [filteredBatchExecutionLogs]
+  )
+
+  const handleCopyTerminal = async () => {
+    if (terminalLines.length <= 0) {
+      message.info('当前没有可复制的日志')
+      return
+    }
+    try {
+      await navigator.clipboard.writeText(terminalLines.join('\n'))
+      message.success('已复制当前日志')
+    } catch {
+      message.error('复制日志失败，请检查浏览器权限')
+    }
+  }
 
   const batchColumns: ColumnsType<PanTransferBatchSummaryItem> = [
     {
@@ -295,6 +301,7 @@ const BatchSection = ({
             <small>
               成功 {record.success_item_count} / 失败 {record.failed_item_count} / 总计 {record.total_link_target_count}
             </small>
+            <small>自动重试 {formatRetryDelay(record.retry_delay_seconds)}</small>
           </div>
         )
       },
@@ -456,6 +463,20 @@ const BatchSection = ({
           <Text type="secondary">尚未回写</Text>
         ),
     },
+    {
+      title: '操作',
+      key: 'item_actions',
+      width: 120,
+      fixed: 'right',
+      render: (_, record) =>
+        record.transfer_status === 'failed' && detailData ? (
+          <Button size="small" loading={retryingBatchId === detailData.batch.id} onClick={() => onRetry(detailData.batch.id, [record.id])}>
+            立即重试
+          </Button>
+        ) : (
+          <Text type="secondary">-</Text>
+        ),
+    },
   ]
 
   return (
@@ -501,6 +522,13 @@ const BatchSection = ({
               <Button loading={detailLoading} onClick={() => onRefreshDetail(detailData.batch.id)}>
                 刷新明细
               </Button>
+              <Button
+                loading={clearingLogsBatchId === detailData.batch.id}
+                disabled={batchExecutionLogs.length <= 0}
+                onClick={() => onClearLogs(detailData.batch.id)}
+              >
+                清理日志
+              </Button>
               {detailData.batch.can_cancel ? (
                 <Button loading={cancellingBatchId === detailData.batch.id} onClick={() => onCancel(detailData.batch.id)}>
                   停止批次
@@ -542,6 +570,7 @@ const BatchSection = ({
                 { key: 'created_by', label: '创建人', children: detailData.batch.created_by || 'system' },
                 { key: 'count', label: '链接数量', children: detailData.batch.total_link_target_count },
                 { key: 'message_count', label: '覆盖消息数', children: detailData.batch.total_message_count },
+                { key: 'retry_delay', label: '自动重试间隔', children: formatRetryDelay(detailData.batch.retry_delay_seconds) },
                 { key: 'created_at', label: '创建时间', children: formatDateTime(detailData.batch.created_at) },
                 { key: 'finished_at', label: '结束时间', children: formatDateTime(detailData.batch.finished_at) },
               ]}
@@ -566,9 +595,11 @@ const BatchSection = ({
                 <small>共用现有 worker 队列执行</small>
               </div>
               <div className="resource-ops-transfer-summary-item">
-                <span>待重试</span>
-                <strong>{getBatchSummary(detailData.batch).retryWait}</strong>
-                <small>到达 next_retry_at 后会自动再试</small>
+                <span>待重试 / 间隔</span>
+                <strong>
+                  {getBatchSummary(detailData.batch).retryWait} / {formatRetryDelay(detailData.batch.retry_delay_seconds)}
+                </strong>
+                <small>{detailData.batch.retry_delay_seconds > 0 ? '失败项会按该间隔自动再试' : '关闭自动重试，仅支持手动立即重试'}</small>
               </div>
             </div>
 
@@ -579,11 +610,55 @@ const BatchSection = ({
               description="“新分享链接”表示转存平台刚生成的新链接，“当前生效链接”表示已经写回系统后的链接目标。管理员可在这里直接核对是否替换成功。"
             />
 
-            <Card size="small" title="批次执行时间线" className="resource-ops-transfer-log-card">
+            <Card size="small" title="执行终端" className="resource-ops-transfer-log-card">
               <Paragraph className="resource-ops-transfer-copy">
-                按真实执行顺序展示每个资源的转存、分享、校验和回写过程。排查“为什么失败”“卡在哪一步”时，优先看这里。
+                按真实执行顺序输出关键日志行。推荐先看这里定位“卡在哪一步”“失败原因是什么”，再决定是否立即重试或清理日志。
               </Paragraph>
-              <ExecutionTimelineList logs={batchExecutionLogs} emptyText="暂无批次执行日志" showItemTag />
+              <div className="resource-ops-transfer-terminal-toolbar">
+                <Segmented
+                  size="small"
+                  value={terminalFilter}
+                  options={[
+                    { label: '全部日志', value: 'all' },
+                    { label: '仅错误', value: 'error' },
+                  ]}
+                  onChange={(value) => setTerminalFilter(value as TerminalFilter)}
+                />
+                <Select
+                  size="small"
+                  className="resource-ops-transfer-terminal-select"
+                  value={terminalItemFilter}
+                  options={[
+                    { label: '全部任务项', value: 'all' },
+                    ...detailData.items.map((item) => ({
+                      label: `项 #${item.id} ${item.short_title}`,
+                      value: item.id,
+                    })),
+                  ]}
+                  onChange={(value) => setTerminalItemFilter(value as number | 'all')}
+                />
+                <Space size={8}>
+                  <Button size="small" onClick={() => setTerminalCleared(true)}>
+                    清空显示
+                  </Button>
+                  <Button size="small" onClick={() => void handleCopyTerminal()}>
+                    复制日志
+                  </Button>
+                </Space>
+              </div>
+              <div className="resource-ops-terminal resource-ops-transfer-terminal">
+                {terminalCleared ? (
+                  <div className="resource-ops-terminal-empty">已清空当前显示，刷新明细或切换批次可重新载入日志。</div>
+                ) : filteredBatchExecutionLogs.length > 0 ? (
+                  filteredBatchExecutionLogs.map((log) => (
+                    <div key={log.id} className={getTerminalLineClassName(log)}>
+                      {buildExecutionTerminalLine(log)}
+                    </div>
+                  ))
+                ) : (
+                  <div className="resource-ops-terminal-empty">当前筛选条件下暂无执行日志。</div>
+                )}
+              </div>
             </Card>
 
             <Table
@@ -621,31 +696,24 @@ const BatchSection = ({
                         {
                           key: 'execution_log',
                           label: '执行日志',
-                          children: <ExecutionTimelineList logs={record.execution_logs} emptyText="暂无执行日志" />,
-                        },
-                        {
-                          key: 'replacement_log',
-                          label: '回写日志',
                           children:
-                            record.replacement_logs.length > 0 ? (
-                              <div className="resource-ops-transfer-log-list">
-                                {record.replacement_logs.map((log) => (
-                                  <div key={log.id} className="resource-ops-transfer-log-item">
-                                    <Tag color={log.status === 'replaced' ? 'success' : log.status === 'skipped' ? 'default' : 'error'}>
-                                      {log.status}
-                                    </Tag>
-                                    <span>{formatDateTime(log.created_at)}</span>
-                                    <span>影响消息 {log.affected_message_count}</span>
-                                    {log.new_url ? (
-                                      <a href={log.new_url} target="_blank" rel="noreferrer">
-                                        查看新链接
-                                      </a>
-                                    ) : null}
-                                  </div>
-                                ))}
+                            record.execution_logs.length > 0 ? (
+                              <div className="resource-ops-terminal resource-ops-transfer-terminal resource-ops-transfer-terminal--compact">
+                                {record.execution_logs.map((log) => {
+                                  const terminalLog: ExecutionTimelineLog = {
+                                    ...log,
+                                    batchItemId: record.id,
+                                    batchItemTitle: record.short_title,
+                                  }
+                                  return (
+                                    <div key={log.id} className={getTerminalLineClassName(terminalLog)}>
+                                      {buildExecutionTerminalLine(terminalLog)}
+                                    </div>
+                                  )
+                                })}
                               </div>
                             ) : (
-                              <Text type="secondary">暂无回写日志</Text>
+                              <Text type="secondary">暂无执行日志</Text>
                             ),
                         },
                       ]}

@@ -17,6 +17,7 @@ from app.models.models import (
 
 from .accounts import get_recommended_accounts_by_platform
 from .constants import (
+    ALLOWED_TRANSFER_HEALTH_FILTERS,
     ALLOWED_TRANSFER_DIRECTIONS,
     ALLOWED_TRANSFER_SELECTION_MODES,
     TRANSFER_LINK_HEALTH_LABELS,
@@ -45,6 +46,15 @@ def _normalize_selection_mode(value: Any) -> str:
     normalized = _normalize_text(value or "recent_messages", max_length=32).lower()
     if normalized not in ALLOWED_TRANSFER_SELECTION_MODES:
         raise ValueError("selection_mode must be recent_messages or time_range")
+    return normalized
+
+
+def _normalize_health_filter(value: Any, *, only_healthy: bool = False) -> str:
+    if bool(only_healthy):
+        return "healthy_only"
+    normalized = _normalize_text(value or "all", max_length=32).lower()
+    if normalized not in ALLOWED_TRANSFER_HEALTH_FILTERS:
+        raise ValueError("health_filter must be one of: all, healthy_only, exclude_invalid")
     return normalized
 
 
@@ -124,11 +134,13 @@ def _collect_selected_message_ids(session: Session, payload: dict[str, Any]) -> 
 def collect_manual_pan_transfer_candidates(session: Session, payload: dict[str, Any]) -> dict[str, Any]:
     selected_message_ids, selection_summary = _collect_selected_message_ids(session, payload)
     platforms = _normalize_platform_filters(payload.get("platforms"))
-    only_healthy = bool(payload.get("only_healthy"))
+    health_filter = _normalize_health_filter(payload.get("health_filter"), only_healthy=bool(payload.get("only_healthy")))
+    only_healthy = health_filter == "healthy_only"
 
     empty_payload = {
         **selection_summary,
         "platforms": platforms,
+        "health_filter": health_filter,
         "only_healthy": only_healthy,
         "matched_link_ref_count": 0,
         "unique_link_target_count": 0,
@@ -209,7 +221,9 @@ def collect_manual_pan_transfer_candidates(session: Session, payload: dict[str, 
     items: list[dict[str, Any]] = []
     for row in query.all():
         latest_link_health = _classify_link_health(row.latest_is_valid)
-        if only_healthy and latest_link_health != "healthy":
+        if health_filter == "healthy_only" and latest_link_health != "healthy":
+            continue
+        if health_filter == "exclude_invalid" and latest_link_health == "invalid":
             continue
         recommended_account = account_map.get(row.platform)
         short_title = (
@@ -255,6 +269,7 @@ def collect_manual_pan_transfer_candidates(session: Session, payload: dict[str, 
     return {
         **selection_summary,
         "platforms": platforms,
+        "health_filter": health_filter,
         "only_healthy": only_healthy,
         "matched_link_ref_count": sum(int(item["source_ref_count"]) for item in items),
         "unique_link_target_count": len(items),

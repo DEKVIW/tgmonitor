@@ -7,6 +7,7 @@ from .accounts import (
 )
 from .batches import (
     cancel_pan_transfer_batch,
+    clear_pan_transfer_batch_logs,
     create_manual_pan_transfer_batch,
     delete_pan_transfer_batch,
     get_pan_transfer_batch_detail,
@@ -22,6 +23,7 @@ __all__ = [
     "create_pan_transfer_account",
     "create_manual_pan_transfer_batch",
     "cancel_pan_transfer_batch",
+    "clear_pan_transfer_batch_logs",
     "delete_pan_transfer_account",
     "delete_pan_transfer_batch",
     "get_recommended_accounts_by_platform",

@@ -51,16 +51,30 @@ def _iso_utc_now() -> str:
 
 
 def _extract_error_payload(exc: Exception) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
     if isinstance(exc, PanTransferProviderError):
-        return dict(exc.payload or {})
-    return {}
+        payload.update(dict(exc.payload or {}))
+    payload.setdefault("error_type", type(exc).__name__)
+    error_message = _describe_exception(exc)
+    if error_message:
+        payload.setdefault("error_message", error_message)
+    if exc.__cause__ is not None:
+        payload.setdefault(
+            "error_cause",
+            str(exc.__cause__).strip() or type(exc.__cause__).__name__,
+        )
+    return payload
 
 
-def _is_batch_cancelled(session: Session, *, batch_id: int) -> bool:
-    batch = session.get(PanTransferBatch, int(batch_id))
-    return batch is not None and str(batch.status or "") == PAN_TRANSFER_BATCH_STATUS_CANCELLED
-
-
+def _describe_exception(exc: Exception) -> str:
+    message = str(exc).strip()
+    if message:
+        return message
+    if exc.__cause__ is not None:
+        cause_message = str(exc.__cause__).strip()
+        if cause_message:
+            return f"{type(exc).__name__}: {cause_message}"
+    return type(exc).__name__
 def _get_staging_snapshot(item: PanTransferBatchItem) -> dict[str, Any] | None:
     snapshot = dict(item.extra_json or {}).get("staging_snapshot")
     if not isinstance(snapshot, dict):
@@ -192,11 +206,19 @@ async def _process_pan_transfer_item_async(
                     title_hint=str(share_request.get("title_hint") or "") or None,
                 )
             except Exception as exc:
+                error_detail = _describe_exception(exc)
+                error_payload = {
+                    "account_id": int(account.id),
+                    "account_name": str(account.account_name or ""),
+                    "staging_root": staging_root,
+                    "staging_folder_name": staging_folder_name,
+                    **_extract_error_payload(exc),
+                }
                 _mark_account_validation(
                     account,
                     ok=False,
-                    detail_message=str(exc),
-                    payload=_extract_error_payload(exc),
+                    detail_message=error_detail,
+                    payload=error_payload,
                 )
                 session.add(account)
                 session.flush()
@@ -205,8 +227,8 @@ async def _process_pan_transfer_item_async(
                     item=item,
                     stage="transfer",
                     level="error",
-                    message=f"Transfer to staging failed: {exc}",
-                    payload=_extract_error_payload(exc),
+                    message=f"Transfer to staging failed: {error_detail}",
+                    payload=error_payload,
                 )
                 raise
 
@@ -300,11 +322,21 @@ async def _process_pan_transfer_item_async(
                 title_hint=str((share_request or {}).get("title_hint") or "") or None,
             )
         except Exception as exc:
+            error_detail = _describe_exception(exc)
+            error_payload = {
+                "account_id": int(account.id),
+                "account_name": str(account.account_name or ""),
+                "staging_root": (staging_snapshot or {}).get("root"),
+                "staging_folder_name": (staging_snapshot or {}).get("folder_name"),
+                "staging_folder_id": (staging_snapshot or {}).get("folder_id"),
+                "share_mode": (share_request or {}).get("share_mode"),
+                **_extract_error_payload(exc),
+            }
             _mark_account_validation(
                 account,
                 ok=False,
-                detail_message=str(exc),
-                payload=_extract_error_payload(exc),
+                detail_message=error_detail,
+                payload=error_payload,
             )
             session.add(account)
             session.flush()
@@ -313,8 +345,8 @@ async def _process_pan_transfer_item_async(
                 item=item,
                 stage="share",
                 level="error",
-                message=f"Share creation failed: {exc}",
-                payload=_extract_error_payload(exc),
+                message=f"Share creation failed: {error_detail}",
+                payload=error_payload,
             )
             raise
 
@@ -372,12 +404,17 @@ async def _process_pan_transfer_item_async(
     try:
         validation_result = await validate_share_url(str(item.new_share_url or ""))
     except Exception as exc:
+        error_detail = _describe_exception(exc)
         append_pan_transfer_execution_log(
             session,
             item=item,
             stage="validate",
             level="error",
-            message=f"Share URL validation failed: {exc}",
+            message=f"Share URL validation failed: {error_detail}",
+            payload={
+                "new_share_url": str(item.new_share_url or ""),
+                **_extract_error_payload(exc),
+            },
         )
         raise
 
@@ -426,12 +463,17 @@ async def _process_pan_transfer_item_async(
                 session.add(item)
                 session.flush()
         except Exception as exc:
+            error_detail = _describe_exception(exc)
             append_pan_transfer_execution_log(
                 session,
                 item=item,
                 stage="replace",
                 level="error",
-                message=f"Link replacement failed: {exc}",
+                message=f"Link replacement failed: {error_detail}",
+                payload={
+                    "new_share_url": str(item.new_share_url or ""),
+                    **_extract_error_payload(exc),
+                },
             )
             raise
         append_pan_transfer_execution_log(
@@ -460,7 +502,10 @@ def process_next_pan_transfer_item(session: Session, *, worker_name: str) -> boo
         )
         return True
     except Exception as exc:
-        batch_cancelled = _is_batch_cancelled(session, batch_id=int(item.batch_id))
+        error_detail = _describe_exception(exc)
+        batch = session.get(PanTransferBatch, int(item.batch_id))
+        batch_cancelled = batch is not None and str(batch.status or "") == PAN_TRANSFER_BATCH_STATUS_CANCELLED
+        batch_retry_delay_seconds = int(batch.retry_delay_seconds or 0) if batch is not None else 0
         if str(item.new_share_url or "").strip() and str(item.share_status or "") != PAN_TRANSFER_SHARE_STATUS_SHARED:
             item.share_status = PAN_TRANSFER_SHARE_STATUS_SHARED
         if not str(item.new_share_url or "").strip():
@@ -481,17 +526,20 @@ def process_next_pan_transfer_item(session: Session, *, worker_name: str) -> boo
             item=item,
             stage="finish",
             level="error",
-            message=f"Pan transfer item failed: {exc}",
+            message=f"Pan transfer item failed: {error_detail}",
             payload={
                 "retryable": retryable,
                 "batch_cancelled": batch_cancelled,
+                "batch_id": int(item.batch_id),
+                "batch_item_id": int(item.id),
+                "retry_delay_seconds": batch_retry_delay_seconds,
                 **_extract_error_payload(exc),
             },
         )
         mark_pan_transfer_item_error(
             session,
             item=item,
-            error_message=str(exc),
+            error_message=error_detail,
             retryable=retryable,
         )
         return True

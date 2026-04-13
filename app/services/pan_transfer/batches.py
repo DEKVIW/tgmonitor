@@ -11,12 +11,14 @@ from app.models.models import (
     PanTransferBatchItem,
     PanTransferExecutionLog,
     PanTransferReplacementLog,
+    ensure_runtime_storage_tables,
 )
 
 from .accounts import get_recommended_accounts_by_platform
 from .common import dedupe_ints, normalize_positive_int, utcnow
 from .constants import (
     DEFAULT_PAN_TRANSFER_MAX_ATTEMPTS,
+    DEFAULT_PAN_TRANSFER_RETRY_DELAY_SECONDS,
     PAN_TRANSFER_BATCH_STATUS_CANCELLED,
     PAN_TRANSFER_BATCH_STATUS_DRAFT,
     PAN_TRANSFER_BATCH_STATUS_RUNNING,
@@ -34,6 +36,18 @@ from .preview import collect_manual_pan_transfer_candidates
 from .queue import refresh_pan_transfer_batch_summary, reset_pan_transfer_batch_items
 
 
+def _normalize_retry_delay_seconds(value: Any) -> int:
+    if value in (None, ""):
+        return int(DEFAULT_PAN_TRANSFER_RETRY_DELAY_SECONDS)
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("retry_delay_seconds must be an integer") from exc
+    if normalized < 0 or normalized > 86400:
+        raise ValueError("retry_delay_seconds must be between 0 and 86400")
+    return normalized
+
+
 def _serialize_batch(batch: PanTransferBatch) -> dict[str, Any]:
     summary = dict((batch.result_json or {}).get("summary") or {})
     status = str(batch.status or "")
@@ -48,6 +62,7 @@ def _serialize_batch(batch: PanTransferBatch) -> dict[str, Any]:
         "total_link_target_count": int(batch.total_link_target_count or 0),
         "success_item_count": int(batch.success_item_count or 0),
         "failed_item_count": int(batch.failed_item_count or 0),
+        "retry_delay_seconds": int(batch.retry_delay_seconds or 0),
         "active_item_count": active_count,
         "request_json": dict(batch.request_json or {}),
         "result_json": dict(batch.result_json or {}),
@@ -124,6 +139,7 @@ def create_manual_pan_transfer_batch(
     payload: dict[str, Any],
     created_by: str | None,
 ) -> dict[str, Any]:
+    ensure_runtime_storage_tables()
     candidate_result = collect_manual_pan_transfer_candidates(session, payload)
     selected_link_target_ids = dedupe_ints(payload.get("selected_link_target_ids") or [])
     all_items = list(candidate_result.get("items") or [])
@@ -147,6 +163,7 @@ def create_manual_pan_transfer_batch(
         raise ValueError(f"missing enabled pan transfer account for: {', '.join(missing_platforms)}")
 
     max_attempts = max(1, int(normalize_positive_int(payload.get("max_attempts"), default=DEFAULT_PAN_TRANSFER_MAX_ATTEMPTS) or DEFAULT_PAN_TRANSFER_MAX_ATTEMPTS))
+    retry_delay_seconds = _normalize_retry_delay_seconds(payload.get("retry_delay_seconds"))
     start_immediately = bool(payload.get("start_immediately", True))
     batch = PanTransferBatch(
         batch_type="manual",
@@ -155,6 +172,7 @@ def create_manual_pan_transfer_batch(
         created_by=created_by,
         total_message_count=sum(int(item.get("impact_message_count") or 0) for item in selected_items),
         total_link_target_count=len(selected_items),
+        retry_delay_seconds=retry_delay_seconds,
         request_json={
             "selection_payload": payload,
             "selection_summary": {
@@ -163,6 +181,10 @@ def create_manual_pan_transfer_batch(
                 if key != "items"
             },
             "selected_link_target_ids": [int(item.get("link_target_id") or 0) for item in selected_items],
+            "retry_policy": {
+                "max_attempts": max_attempts,
+                "retry_delay_seconds": retry_delay_seconds,
+            },
         },
         result_json={},
         started_at=utcnow() if start_immediately else None,
@@ -207,6 +229,7 @@ def list_pan_transfer_batches(
     page: int = 1,
     page_size: int = 20,
 ) -> dict[str, Any]:
+    ensure_runtime_storage_tables()
     safe_page = max(1, int(page or 1))
     safe_page_size = max(1, min(int(page_size or 20), 100))
     query = session.query(PanTransferBatch)
@@ -226,6 +249,7 @@ def list_pan_transfer_batches(
 
 
 def get_pan_transfer_batch_detail(session: Session, *, batch_id: int) -> dict[str, Any]:
+    ensure_runtime_storage_tables()
     batch = session.get(PanTransferBatch, int(batch_id))
     if batch is None:
         raise LookupError("batch not found")
@@ -316,6 +340,7 @@ def get_pan_transfer_batch_detail(session: Session, *, batch_id: int) -> dict[st
 
 
 def start_pan_transfer_batch(session: Session, *, batch_id: int) -> dict[str, Any]:
+    ensure_runtime_storage_tables()
     batch = session.get(PanTransferBatch, int(batch_id))
     if batch is None:
         raise LookupError("batch not found")
@@ -343,6 +368,7 @@ def retry_pan_transfer_batch(
     batch_id: int,
     item_ids: list[int] | None = None,
 ) -> dict[str, Any]:
+    ensure_runtime_storage_tables()
     batch = session.get(PanTransferBatch, int(batch_id))
     if batch is None:
         raise LookupError("batch not found")
@@ -363,6 +389,7 @@ def cancel_pan_transfer_batch(
     batch_id: int,
     cancelled_by: str | None = None,
 ) -> dict[str, Any]:
+    ensure_runtime_storage_tables()
     batch = session.get(PanTransferBatch, int(batch_id))
     if batch is None:
         raise LookupError("batch not found")
@@ -427,6 +454,7 @@ def cancel_pan_transfer_batch(
 
 
 def delete_pan_transfer_batch(session: Session, *, batch_id: int) -> dict[str, Any]:
+    ensure_runtime_storage_tables()
     batch = session.get(PanTransferBatch, int(batch_id))
     if batch is None:
         raise LookupError("batch not found")
@@ -475,3 +503,28 @@ def delete_pan_transfer_batch(session: Session, *, batch_id: int) -> dict[str, A
         "id": int(batch_id),
         "deleted": True,
     }
+
+
+def clear_pan_transfer_batch_logs(session: Session, *, batch_id: int) -> dict[str, Any]:
+    ensure_runtime_storage_tables()
+    batch = session.get(PanTransferBatch, int(batch_id))
+    if batch is None:
+        raise LookupError("batch not found")
+
+    item_ids = [
+        int(item_id)
+        for (item_id,) in session.query(PanTransferBatchItem.id).filter(PanTransferBatchItem.batch_id == int(batch_id)).all()
+    ]
+    if item_ids:
+        (
+            session.query(PanTransferExecutionLog)
+            .filter(PanTransferExecutionLog.batch_item_id.in_(item_ids))
+            .delete(synchronize_session=False)
+        )
+        (
+            session.query(PanTransferReplacementLog)
+            .filter(PanTransferReplacementLog.batch_item_id.in_(item_ids))
+            .delete(synchronize_session=False)
+        )
+    session.flush()
+    return get_pan_transfer_batch_detail(session, batch_id=int(batch_id))

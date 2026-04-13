@@ -15,6 +15,7 @@ ALLOWED_TRANSFER_ACCOUNT_AUTH_TYPES = {"cookie"}
 ALLOWED_TRANSFER_SHARE_MODES = {"private", "public"}
 ALLOWED_TRANSFER_SELECTION_MODES = {"recent_messages", "time_range"}
 ALLOWED_TRANSFER_DIRECTIONS = {"newest_first", "oldest_first"}
+ALLOWED_TRANSFER_HEALTH_FILTERS = {"all", "healthy_only", "exclude_invalid"}
 
 PAN_TRANSFER_BATCH_STATUS_DRAFT = "draft"
 PAN_TRANSFER_BATCH_STATUS_RUNNING = "running"

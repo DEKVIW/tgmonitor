@@ -191,38 +191,54 @@
   gap: 8px;
 }
 
-.resource-ops-transfer-timeline .ant-timeline-item-content {
-  inset-block-start: -2px;
-}
-
-.resource-ops-transfer-timeline-entry {
+.resource-ops-transfer-terminal-toolbar {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding-bottom: 4px;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
 }
 
-.resource-ops-transfer-timeline-summary {
-  color: rgba(15, 23, 42, 0.92);
-  line-height: 1.6;
-  font-weight: 500;
+.resource-ops-transfer-terminal-select {
+  min-width: 240px;
+  max-width: 420px;
+  flex: 1 1 260px;
+}
+
+.resource-ops-transfer-terminal {
+  min-height: 240px;
+}
+
+.resource-ops-transfer-terminal--compact {
+  min-height: 120px;
+  max-height: 220px;
+}
+
+.resource-ops-transfer-terminal-line {
+  white-space: pre-wrap;
   word-break: break-word;
 }
 
-.resource-ops-transfer-timeline-details {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  color: rgba(15, 23, 42, 0.72);
-  font-size: 12px;
-  line-height: 1.5;
+.resource-ops-transfer-terminal-line + .resource-ops-transfer-terminal-line {
+  margin-top: 4px;
 }
 
-.resource-ops-transfer-timeline-item-tag {
-  max-width: 360px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.resource-ops-transfer-terminal-line.is-error {
+  color: #fecaca;
+}
+
+.resource-ops-transfer-terminal-line.is-warning {
+  color: #fde68a;
+}
+
+.resource-ops-transfer-terminal-line.is-success {
+  color: #bbf7d0;
+}
+
+.resource-ops-transfer-terminal-meta {
+  font-size: 12px;
+  color: rgba(15, 23, 42, 0.6);
 }
 
 .resource-ops-transfer-log-item {

@@ -79,6 +79,7 @@ export interface PanTransferManualPreviewRequest {
   range_start?: string | null
   range_end?: string | null
   platforms?: string[]
+  health_filter?: 'all' | 'healthy_only' | 'exclude_invalid' | string
   only_healthy?: boolean
   page?: number
   page_size?: number
@@ -93,6 +94,7 @@ export interface PanTransferManualPreviewResponse {
   range_start?: string | null
   range_end?: string | null
   platforms: string[]
+  health_filter: string
   only_healthy: boolean
   matched_link_ref_count: number
   unique_link_target_count: number
@@ -121,6 +123,7 @@ export interface PanTransferBatchCreateRequest extends PanTransferManualPreviewR
   selected_link_target_ids?: number[]
   start_immediately?: boolean
   max_attempts?: number | null
+  retry_delay_seconds?: number | null
 }
 
 export interface PanTransferReplacementLogItem {
@@ -195,6 +198,7 @@ export interface PanTransferBatchSummaryItem {
   total_link_target_count: number
   success_item_count: number
   failed_item_count: number
+  retry_delay_seconds: number
   active_item_count: number
   request_json: Record<string, unknown>
   result_json: Record<string, unknown>

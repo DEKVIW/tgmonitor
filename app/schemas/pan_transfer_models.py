@@ -129,11 +129,12 @@ class PanTransferManualPreviewRequest(PanTransferBaseModel):
     range_start: str | None = Field(default=None, max_length=10)
     range_end: str | None = Field(default=None, max_length=10)
     platforms: list[str] = Field(default_factory=list)
+    health_filter: str = Field(default="all", min_length=1, max_length=32)
     only_healthy: bool = False
     page: int = Field(default=1, ge=1)
     page_size: int = Field(default=50, ge=1, le=200)
 
-    @field_validator("selection_mode", "direction")
+    @field_validator("selection_mode", "direction", "health_filter")
     @classmethod
     def validate_mode_fields(cls, value: str, info) -> str:
         return _normalize_text(value, field_name=info.field_name)
@@ -160,6 +161,8 @@ class PanTransferManualPreviewRequest(PanTransferBaseModel):
 
     @model_validator(mode="after")
     def validate_selection_payload(self) -> "PanTransferManualPreviewRequest":
+        if self.only_healthy:
+            self.health_filter = "healthy_only"
         if self.selection_mode == "recent_messages" and self.recent_message_count is None:
             raise ValueError("recent_message_count is required for recent_messages mode")
         if self.selection_mode == "time_range" and (not self.range_start or not self.range_end):
@@ -194,6 +197,7 @@ class PanTransferManualPreviewResponse(PanTransferBaseModel):
     range_start: str | None = None
     range_end: str | None = None
     platforms: list[str] = Field(default_factory=list)
+    health_filter: str = "all"
     only_healthy: bool = False
     matched_link_ref_count: int = 0
     unique_link_target_count: int = 0
@@ -222,6 +226,7 @@ class PanTransferBatchCreateRequest(PanTransferManualPreviewRequest):
     selected_link_target_ids: list[int] = Field(default_factory=list)
     start_immediately: bool = True
     max_attempts: int | None = Field(default=3, ge=1, le=10)
+    retry_delay_seconds: int | None = Field(default=600, ge=0, le=86400)
 
     @field_validator("selected_link_target_ids")
     @classmethod
@@ -312,6 +317,7 @@ class PanTransferBatchSummaryItem(PanTransferBaseModel):
     total_link_target_count: int = 0
     success_item_count: int = 0
     failed_item_count: int = 0
+    retry_delay_seconds: int = 600
     active_item_count: int = 0
     request_json: dict = Field(default_factory=dict)
     result_json: dict = Field(default_factory=dict)

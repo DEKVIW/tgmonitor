@@ -220,6 +220,7 @@ def mark_pan_transfer_item_error(
     now = utcnow()
     batch = session.get(PanTransferBatch, int(item.batch_id))
     batch_cancelled = batch is not None and str(batch.status or "") == PAN_TRANSFER_BATCH_STATUS_CANCELLED
+    retry_delay = int(batch.retry_delay_seconds or retry_delay_seconds or DEFAULT_PAN_TRANSFER_RETRY_DELAY_SECONDS) if batch is not None else int(retry_delay_seconds or DEFAULT_PAN_TRANSFER_RETRY_DELAY_SECONDS)
     item.attempt_count = max(1, int(item.attempt_count or 0) + 1)
     item.error_message = str(error_message or "Pan transfer execution failed").strip()[:2000]
     item.locked_by = None
@@ -229,10 +230,11 @@ def mark_pan_transfer_item_error(
     if (
         retryable
         and not batch_cancelled
+        and retry_delay > 0
         and int(item.attempt_count or 0) < int(item.max_attempts or DEFAULT_PAN_TRANSFER_MAX_ATTEMPTS)
     ):
         item.transfer_status = PAN_TRANSFER_ITEM_STATUS_RETRY_WAIT
-        item.next_retry_at = now + timedelta(seconds=max(60, int(retry_delay_seconds or DEFAULT_PAN_TRANSFER_RETRY_DELAY_SECONDS)))
+        item.next_retry_at = now + timedelta(seconds=retry_delay)
     else:
         item.transfer_status = PAN_TRANSFER_ITEM_STATUS_FAILED
         item.next_retry_at = None

@@ -23,6 +23,7 @@ from app.schemas.pan_transfer_models import (
 )
 from app.services.pan_transfer import (
     cancel_pan_transfer_batch,
+    clear_pan_transfer_batch_logs,
     create_pan_transfer_account,
     create_manual_pan_transfer_batch,
     delete_pan_transfer_account,
@@ -342,6 +343,34 @@ async def cancel_pan_transfer_batch_api(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to cancel pan transfer batch: {exc}",
+        ) from exc
+
+
+@router.post("/batches/{batch_id}/logs/clear", response_model=PanTransferBatchDetailResponse, summary="Clear batch execution logs")
+async def clear_pan_transfer_batch_logs_api(
+    batch_id: int,
+    current_user: dict[str, Any] = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+) -> PanTransferBatchDetailResponse:
+    del current_user
+    try:
+        result = clear_pan_transfer_batch_logs(db, batch_id=batch_id)
+        db.commit()
+        return PanTransferBatchDetailResponse(
+            batch=PanTransferBatchSummaryItem(**result["batch"]),
+            items=result["items"],
+        )
+    except LookupError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to clear pan transfer batch logs: {exc}",
         ) from exc
 
 

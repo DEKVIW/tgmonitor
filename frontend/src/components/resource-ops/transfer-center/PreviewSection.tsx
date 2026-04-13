@@ -1,11 +1,11 @@
 import type { Key } from 'react'
 import type { Dayjs } from 'dayjs'
-import { Alert, Button, Card, DatePicker, Empty, InputNumber, Segmented, Select, Switch, Table, Tag, Tooltip, Typography } from 'antd'
+import { Alert, Button, Card, DatePicker, Empty, InputNumber, Segmented, Select, Table, Tag, Tooltip, Typography } from 'antd'
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table'
 
 import type { PanTransferManualPreviewResponse, PanTransferPreviewItem } from '@/types/panTransfer'
 
-import { HEALTH_META, PLATFORM_OPTIONS, PreviewDraft } from './shared'
+import { HEALTH_FILTER_OPTIONS, HEALTH_META, PLATFORM_OPTIONS, PreviewDraft } from './shared'
 
 const { Title, Paragraph, Text } = Typography
 const { RangePicker } = DatePicker
@@ -181,19 +181,27 @@ const PreviewSection = ({
           />
         </div>
         <div className="resource-ops-transfer-field resource-ops-transfer-field--compact">
-          <label>只看健康源链</label>
-          <div className="resource-ops-transfer-inline-switch">
-            <Switch
-              checked={draft.onlyHealthy}
-              onChange={(checked) => onDraftChange((current) => ({ ...current, onlyHealthy: checked }))}
-            />
-            <span>仅保留校验正常</span>
-          </div>
+          <label>来源健康筛选</label>
+          <Select
+            value={draft.healthFilter}
+            options={HEALTH_FILTER_OPTIONS}
+            onChange={(value) =>
+              onDraftChange((current) => ({ ...current, healthFilter: value as PreviewDraft['healthFilter'] }))
+            }
+          />
         </div>
       </div>
 
       {previewData ? (
         <>
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginBottom: 16 }}
+            message="来源健康状态说明"
+            description="这里的“正常 / 失效 / 未知”来自系统里已有的历史链接检测结果，不是本次转存前的实时校验。建议优先使用“排除失效”，避免因为“未知”被全部过滤掉。"
+          />
+
           <div className="resource-ops-transfer-summary">
             <div className="resource-ops-transfer-summary-item">
               <span>命中消息</span>

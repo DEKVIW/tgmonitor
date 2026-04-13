@@ -294,6 +294,7 @@ class PanTransferBatch(Base):
     total_link_target_count = Column(Integer, nullable=False, default=0)
     success_item_count = Column(Integer, nullable=False, default=0)
     failed_item_count = Column(Integer, nullable=False, default=0)
+    retry_delay_seconds = Column(Integer, nullable=False, default=600)
     request_json = Column(JSONB, nullable=False, default=dict)
     result_json = Column(JSONB, nullable=False, default=dict)
     started_at = Column(DateTime, nullable=True)
@@ -1138,14 +1139,21 @@ def _ensure_pan_transfer_indexes() -> None:
 def _ensure_pan_transfer_columns() -> None:
     inspector = inspect(engine)
     try:
+        batch_columns = {column["name"] for column in inspector.get_columns("pan_transfer_batches")}
+    except Exception:
+        batch_columns = set()
+    try:
         item_columns = {column["name"] for column in inspector.get_columns("pan_transfer_batch_items")}
     except Exception:
         item_columns = set()
 
-    if not item_columns:
+    if not batch_columns and not item_columns:
         return
 
-    pending_alters = {
+    pending_batch_alters = {
+        "retry_delay_seconds": "ALTER TABLE pan_transfer_batches ADD COLUMN retry_delay_seconds INTEGER NOT NULL DEFAULT 600",
+    }
+    pending_item_alters = {
         "attempt_count": "ALTER TABLE pan_transfer_batch_items ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0",
         "max_attempts": "ALTER TABLE pan_transfer_batch_items ADD COLUMN max_attempts INTEGER NOT NULL DEFAULT 3",
         "next_retry_at": "ALTER TABLE pan_transfer_batch_items ADD COLUMN next_retry_at TIMESTAMP WITHOUT TIME ZONE",
@@ -1156,7 +1164,11 @@ def _ensure_pan_transfer_columns() -> None:
         "last_validated_at": "ALTER TABLE pan_transfer_batch_items ADD COLUMN last_validated_at TIMESTAMP WITHOUT TIME ZONE",
     }
     with engine.begin() as connection:
-        for column_name, sql in pending_alters.items():
+        for column_name, sql in pending_batch_alters.items():
+            if column_name in batch_columns:
+                continue
+            connection.execute(text(sql))
+        for column_name, sql in pending_item_alters.items():
             if column_name in item_columns:
                 continue
             connection.execute(text(sql))
