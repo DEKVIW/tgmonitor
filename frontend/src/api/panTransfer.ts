@@ -14,7 +14,9 @@ import type {
   PanTransferManualPublishRequest,
   PanTransferMessagePublishRequest,
   PanTransferMessagePublishResponse,
+  PanTransferPublishRecordItem,
   PanTransferPublishRecordListResponse,
+  PanTransferPublishRecordUpdateRequest,
   PanTransferBatchRetryRequest,
   PanTransferDeleteResponse,
   PanTransferManualPreviewRequest,
@@ -143,6 +145,28 @@ export const listPanTransferPublishRecords = async (
   const response = await apiClient.get<PanTransferPublishRecordListResponse>(
     `/admin/pan-transfer/publishes?page=${page}&page_size=${pageSize}`
   )
+  return response.data
+}
+
+export const updatePanTransferPublishRecord = async (
+  recordId: number,
+  payload: PanTransferPublishRecordUpdateRequest
+): Promise<PanTransferPublishRecordItem> => {
+  const response = await apiClient.put<PanTransferPublishRecordItem>(`/admin/pan-transfer/publishes/${recordId}`, payload)
+  return response.data
+}
+
+export const validatePanTransferPublishRecord = async (
+  recordId: number
+): Promise<PanTransferPublishRecordItem> => {
+  const response = await apiClient.post<PanTransferPublishRecordItem>(`/admin/pan-transfer/publishes/${recordId}/validate`)
+  return response.data
+}
+
+export const refreshPanTransferPublishRecordShare = async (
+  recordId: number
+): Promise<PanTransferPublishRecordItem> => {
+  const response = await apiClient.post<PanTransferPublishRecordItem>(`/admin/pan-transfer/publishes/${recordId}/refresh-share`)
   return response.data
 }
 

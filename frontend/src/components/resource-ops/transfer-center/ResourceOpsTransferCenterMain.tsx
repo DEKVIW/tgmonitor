@@ -99,11 +99,13 @@ const ResourceOpsTransferCenterMain = () => {
   const [detailOpen, setDetailOpen] = useState(false)
   const [detailLoading, setDetailLoading] = useState(false)
   const [detailData, setDetailData] = useState<PanTransferBatchDetailResponse | null>(null)
-  const [selectedFailedItemKeys, setSelectedFailedItemKeys] = useState<Key[]>([])
+  const [selectedDetailItemKeys, setSelectedDetailItemKeys] = useState<Key[]>([])
   const [publishModalOpen, setPublishModalOpen] = useState(false)
   const [publishingItem, setPublishingItem] = useState<PanTransferBatchItem | null>(null)
   const [publishingItemId, setPublishingItemId] = useState<number | null>(null)
+  const [bulkPublishing, setBulkPublishing] = useState(false)
   const [creatingFollowItemId, setCreatingFollowItemId] = useState<number | null>(null)
+  const [bulkCreatingFollow, setBulkCreatingFollow] = useState(false)
   const [followRefreshToken, setFollowRefreshToken] = useState(0)
   const [publishRefreshToken, setPublishRefreshToken] = useState(0)
 
@@ -137,8 +139,8 @@ const ResourceOpsTransferCenterMain = () => {
 
   const applyBatchDetail = (response: PanTransferBatchDetailResponse) => {
     setDetailData(response)
-    setSelectedFailedItemKeys((current) => {
-      const available = new Set(response.items.filter((item) => item.transfer_status === 'failed').map((item) => item.id))
+    setSelectedDetailItemKeys((current) => {
+      const available = new Set(response.items.map((item) => item.id))
       return current.filter((itemId) => available.has(Number(itemId)))
     })
   }
@@ -226,6 +228,19 @@ const ResourceOpsTransferCenterMain = () => {
     return null
   }, [publishingItem])
 
+  const getBatchItemPublishDefaults = (item: PanTransferBatchItem) => {
+    const snapshot = (item.extra_json?.source_message_snapshot as Record<string, unknown> | undefined) || {}
+    const snapshotDescription = typeof snapshot.description === 'string' ? snapshot.description.trim() : ''
+    const snapshotTags = Array.isArray(snapshot.tags)
+      ? snapshot.tags.filter((tag): tag is string => typeof tag === 'string').map((tag) => tag.trim()).filter(Boolean)
+      : []
+    return {
+      title: item.short_title || (typeof snapshot.title === 'string' ? snapshot.title : '') || '',
+      description: item.source_message_description || snapshotDescription || '',
+      tags: Array.isArray(item.source_message_tags) && item.source_message_tags.length > 0 ? item.source_message_tags : snapshotTags,
+    }
+  }
+
   const openCreateModal = () => {
     setEditingAccount(null)
     accountForm.resetFields()
@@ -265,10 +280,11 @@ const ResourceOpsTransferCenterMain = () => {
   const openPublishModal = (item: PanTransferBatchItem) => {
     setPublishingItem(item)
     publishForm.resetFields()
+    const defaults = getBatchItemPublishDefaults(item)
     publishForm.setFieldsValue({
-      title: item.short_title || '',
-      description: item.source_message_description || '',
-      tags: Array.isArray(item.source_message_tags) ? item.source_message_tags : [],
+      title: defaults.title,
+      description: defaults.description,
+      tags: defaults.tags,
     })
     setPublishModalOpen(true)
   }
@@ -430,6 +446,88 @@ const ResourceOpsTransferCenterMain = () => {
     }
   }
 
+  const handlePreview = async () => {
+    setPreviewLoading(true)
+    try {
+      const payload = buildPreviewPayload(previewDraft)
+      const response = await previewManualPanTransfer(payload)
+      setPreviewData(response)
+      setLastPreviewPayload(payload)
+      setSelectedPreviewKeys([])
+    } catch (error) {
+      message.error(getErrorMessage(error, '查询转存资源失败'))
+    } finally {
+      setPreviewLoading(false)
+    }
+  }
+
+  const handleBulkPublishSelected = async () => {
+    if (!detailData) return
+    const selectedSet = new Set(selectedDetailItemKeys.map((item) => Number(item)))
+    const selectedRows = detailData.items.filter((item) => selectedSet.has(item.id))
+    if (selectedRows.length <= 0) {
+      message.warning('请先选择要发布的资源')
+      return
+    }
+    setBulkPublishing(true)
+    let successCount = 0
+    let failureCount = 0
+    for (const item of selectedRows) {
+      try {
+        const defaults = getBatchItemPublishDefaults(item)
+        await publishPanTransferBatchItemMessage(item.batch_id, item.id, {
+          title: defaults.title,
+          description: defaults.description || null,
+          tags: defaults.tags,
+        })
+        successCount += 1
+      } catch {
+        failureCount += 1
+      }
+    }
+    setBulkPublishing(false)
+    if (successCount > 0) {
+      setPublishRefreshToken((current) => current + 1)
+      await loadBatchDetail(detailData.batch.id, { open: false })
+      await loadBatches(batchPagination.page, batchPagination.pageSize)
+    }
+    if (failureCount > 0) {
+      message.warning(`批量发布完成，成功 ${successCount} 条，失败 ${failureCount} 条`)
+    } else {
+      message.success(`已批量发布 ${successCount} 条资源到前台`)
+    }
+  }
+
+  const handleBulkCreateFollowSelected = async () => {
+    if (!detailData) return
+    const selectedSet = new Set(selectedDetailItemKeys.map((item) => Number(item)))
+    const selectedRows = detailData.items.filter((item) => selectedSet.has(item.id))
+    if (selectedRows.length <= 0) {
+      message.warning('请先选择要转为追更的资源')
+      return
+    }
+    setBulkCreatingFollow(true)
+    let successCount = 0
+    let failureCount = 0
+    for (const item of selectedRows) {
+      try {
+        await createPanTransferFollowTaskFromBatchItem(item.batch_id, item.id, {})
+        successCount += 1
+      } catch {
+        failureCount += 1
+      }
+    }
+    setBulkCreatingFollow(false)
+    if (successCount > 0) {
+      setFollowRefreshToken((current) => current + 1)
+    }
+    if (failureCount > 0) {
+      message.warning(`批量创建追更完成，成功 ${successCount} 条，失败 ${failureCount} 条`)
+    } else {
+      message.success(`已批量创建 ${successCount} 条追更任务`)
+    }
+  }
+
   return (
     <div className="resource-ops-transfer-stack">
       <Tabs
@@ -488,24 +586,7 @@ const ResourceOpsTransferCenterMain = () => {
                   previewLoading={previewLoading}
                   selectedPreviewKeys={selectedPreviewKeys}
                   onDraftChange={(updater) => setPreviewDraft((current) => updater(current))}
-                  onPreview={() => void (async () => {
-                    if (previewDraft.selectionMode === 'time_range' && !previewDraft.range) {
-                      message.warning('请选择时间范围')
-                      return
-                    }
-                    setPreviewLoading(true)
-                    try {
-                      const payload = buildPreviewPayload(previewDraft)
-                      const response = await previewManualPanTransfer(payload)
-                      setPreviewData(response)
-                      setLastPreviewPayload(payload)
-                      setSelectedPreviewKeys([])
-                    } catch (error) {
-                      message.error(getErrorMessage(error, '生成转存预览失败'))
-                    } finally {
-                      setPreviewLoading(false)
-                    }
-                  })()}
+                  onPreview={() => void handlePreview()}
                   onOpenCreateBatch={() => {
                     if (selectedPreviewKeys.length <= 0) {
                       message.warning('请先勾选要转存的链接')
@@ -532,7 +613,9 @@ const ResourceOpsTransferCenterMain = () => {
                   detailOpen={detailOpen}
                   detailLoading={detailLoading}
                   detailData={detailData}
-                  selectedFailedItemKeys={selectedFailedItemKeys}
+                  selectedItemKeys={selectedDetailItemKeys}
+                  bulkPublishing={bulkPublishing}
+                  bulkCreatingFollow={bulkCreatingFollow}
                   onRefresh={() => void loadBatches()}
                   onTableChange={(pagination) =>
                     void loadBatches(pagination.current || 1, pagination.pageSize || batchPagination.pageSize)
@@ -562,7 +645,7 @@ const ResourceOpsTransferCenterMain = () => {
                       if (detailData?.batch.id === batchId) {
                         setDetailOpen(false)
                         setDetailData(null)
-                        setSelectedFailedItemKeys([])
+                        setSelectedDetailItemKeys([])
                       }
                       const nextPage =
                         batchPagination.page > 1 && batches.length === 1 ? batchPagination.page - 1 : batchPagination.page
@@ -575,13 +658,15 @@ const ResourceOpsTransferCenterMain = () => {
                   })()}
                   onCloseDetail={() => {
                     setDetailOpen(false)
-                    setSelectedFailedItemKeys([])
+                    setSelectedDetailItemKeys([])
                   }}
                   onRefreshDetail={(batchId) => void loadBatchDetail(batchId, { open: false })}
-                  onSelectFailedKeys={setSelectedFailedItemKeys}
+                  onSelectItemKeys={setSelectedDetailItemKeys}
                   onClearLogs={(batchId) => void runBatchClearLogs(batchId)}
                   onPublish={(item) => openPublishModal(item)}
                   onCreateFollow={(item) => void handleCreateFollowTask(item)}
+                  onBulkPublish={() => void handleBulkPublishSelected()}
+                  onBulkCreateFollow={() => void handleBulkCreateFollowSelected()}
                 />
               </div>
             ),

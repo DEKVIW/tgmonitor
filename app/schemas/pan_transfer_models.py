@@ -128,6 +128,7 @@ class PanTransferManualPreviewRequest(PanTransferBaseModel):
     recent_message_count: int | None = Field(default=200, ge=1, le=3000)
     range_start: str | None = Field(default=None, max_length=10)
     range_end: str | None = Field(default=None, max_length=10)
+    search_keyword: str | None = Field(default=None, max_length=120)
     platforms: list[str] = Field(default_factory=list)
     health_filter: str = Field(default="all", min_length=1, max_length=32)
     only_healthy: bool = False
@@ -139,12 +140,12 @@ class PanTransferManualPreviewRequest(PanTransferBaseModel):
     def validate_mode_fields(cls, value: str, info) -> str:
         return _normalize_text(value, field_name=info.field_name)
 
-    @field_validator("range_start", "range_end")
+    @field_validator("range_start", "range_end", "search_keyword")
     @classmethod
     def validate_optional_dates(cls, value: str | None, info) -> str | None:
         if value is None:
             return None
-        return _normalize_text(value, field_name=info.field_name)
+        return _normalize_text(value, field_name=info.field_name, allow_empty=True) or None
 
     @field_validator("platforms")
     @classmethod
@@ -362,10 +363,19 @@ class PanTransferPublishRecordItem(PanTransferBaseModel):
     source_new_link_target_id: int | None = None
     platform: str
     source_url: str
+    source_original_url: str | None = None
+    current_share_url: str | None = None
     published_message_id: int | None = None
     published_title: str
     published_description: str | None = None
     published_tags: list[str] = Field(default_factory=list)
+    original_link_status: str | None = None
+    current_share_status: str | None = None
+    published_link_status: str | None = None
+    published_link_detail_message: str | None = None
+    published_link_checked_at: datetime | None = None
+    can_refresh_share: bool = False
+    can_edit: bool = True
     operator: str | None = None
     extra_json: dict = Field(default_factory=dict)
     published_at: datetime
@@ -378,6 +388,38 @@ class PanTransferPublishRecordListResponse(PanTransferBaseModel):
     page: int = 1
     page_size: int = 20
     total: int = 0
+
+
+class PanTransferPublishRecordUpdateRequest(PanTransferBaseModel):
+    source_url: str = Field(min_length=1, max_length=2000)
+    title: str = Field(min_length=1, max_length=255)
+    description: str | None = Field(default=None, max_length=1000)
+    tags: list[str] = Field(default_factory=list)
+
+    @field_validator("source_url", "title")
+    @classmethod
+    def validate_publish_record_required_text(cls, value: str, info) -> str:
+        return _normalize_text(value, field_name=info.field_name)
+
+    @field_validator("description")
+    @classmethod
+    def validate_publish_record_description(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _normalize_text(value, field_name="description", allow_empty=True) or None
+
+    @field_validator("tags")
+    @classmethod
+    def validate_publish_record_tags(cls, value: list[str]) -> list[str]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for raw_value in value:
+            cleaned = _normalize_text(raw_value, field_name="tags")
+            if cleaned in seen:
+                continue
+            seen.add(cleaned)
+            normalized.append(cleaned[:64])
+        return normalized
 
 
 class PanTransferFollowTaskCreateRequest(PanTransferBaseModel):

@@ -85,6 +85,32 @@
   margin-bottom: 16px;
 }
 
+.resource-ops-transfer-picker-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.resource-ops-transfer-picker-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-end;
+}
+
+.resource-ops-transfer-chip-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.resource-ops-transfer-chip-group .ant-tag {
+  margin-inline-end: 0;
+  border-radius: 999px;
+  padding-inline: 12px;
+  line-height: 28px;
+}
+
 .resource-ops-transfer-field {
   min-width: 160px;
   flex: 1 1 160px;
@@ -141,6 +167,12 @@
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+
+.resource-ops-transfer-tag-stack span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .resource-ops-transfer-account-cell {

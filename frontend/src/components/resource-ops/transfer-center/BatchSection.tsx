@@ -198,7 +198,9 @@ type BatchSectionProps = {
   detailOpen: boolean
   detailLoading: boolean
   detailData: PanTransferBatchDetailResponse | null
-  selectedFailedItemKeys: Key[]
+  selectedItemKeys: Key[]
+  bulkPublishing: boolean
+  bulkCreatingFollow: boolean
   onRefresh: () => void
   onTableChange: (pagination: TablePaginationConfig) => void
   onOpenDetail: (batchId: number) => void
@@ -208,10 +210,12 @@ type BatchSectionProps = {
   onDelete: (batchId: number) => void
   onCloseDetail: () => void
   onRefreshDetail: (batchId: number) => void
-  onSelectFailedKeys: (keys: Key[]) => void
+  onSelectItemKeys: (keys: Key[]) => void
   onClearLogs: (batchId: number) => void
   onPublish: (item: PanTransferBatchItem) => void
   onCreateFollow: (item: PanTransferBatchItem) => void
+  onBulkPublish: () => void
+  onBulkCreateFollow: () => void
 }
 
 const BatchSection = ({
@@ -228,7 +232,9 @@ const BatchSection = ({
   detailOpen,
   detailLoading,
   detailData,
-  selectedFailedItemKeys,
+  selectedItemKeys,
+  bulkPublishing,
+  bulkCreatingFollow,
   onRefresh,
   onTableChange,
   onOpenDetail,
@@ -238,10 +244,12 @@ const BatchSection = ({
   onDelete,
   onCloseDetail,
   onRefreshDetail,
-  onSelectFailedKeys,
+  onSelectItemKeys,
   onClearLogs,
   onPublish,
   onCreateFollow,
+  onBulkPublish,
+  onBulkCreateFollow,
 }: BatchSectionProps) => {
   const [terminalFilter, setTerminalFilter] = useState<TerminalFilter>('all')
   const [terminalItemFilter, setTerminalItemFilter] = useState<number | 'all'>('all')
@@ -291,6 +299,20 @@ const BatchSection = ({
     () => filteredBatchExecutionLogs.map((log) => buildExecutionTerminalLine(log)),
     [filteredBatchExecutionLogs]
   )
+
+  const selectedFailedCount = useMemo(() => {
+    if (!detailData || selectedItemKeys.length <= 0) return 0
+    const selectedSet = new Set(selectedItemKeys.map((item) => Number(item)))
+    return detailData.items.filter((item) => selectedSet.has(item.id) && item.transfer_status === 'failed').length
+  }, [detailData, selectedItemKeys])
+
+  const selectedFailedItemIds = useMemo(() => {
+    if (!detailData || selectedItemKeys.length <= 0) return []
+    const selectedSet = new Set(selectedItemKeys.map((item) => Number(item)))
+    return detailData.items
+      .filter((item) => selectedSet.has(item.id) && item.transfer_status === 'failed')
+      .map((item) => item.id)
+  }, [detailData, selectedItemKeys])
 
   const handleCopyTerminal = async () => {
     if (terminalLines.length <= 0) {
@@ -601,13 +623,19 @@ const BatchSection = ({
                   onClick={() =>
                     onRetry(
                       detailData.batch.id,
-                      selectedFailedItemKeys.length > 0 ? selectedFailedItemKeys.map((item) => Number(item)) : undefined
+                      selectedFailedCount > 0 ? selectedFailedItemIds : undefined
                     )
                   }
                 >
-                  {selectedFailedItemKeys.length > 0 ? `重试所选失败项 (${selectedFailedItemKeys.length})` : '重试全部失败项'}
+                  {selectedFailedCount > 0 ? `重试所选失败项 (${selectedFailedCount})` : '重试全部失败项'}
                 </Button>
               ) : null}
+              <Button disabled={selectedItemKeys.length <= 0} loading={bulkPublishing} onClick={onBulkPublish}>
+                批量发布到前台
+              </Button>
+              <Button disabled={selectedItemKeys.length <= 0} loading={bulkCreatingFollow} onClick={onBulkCreateFollow}>
+                批量转为追更
+              </Button>
             </Space>
           ) : null
         }
@@ -661,6 +689,11 @@ const BatchSection = ({
                   {getBatchSummary(detailData.batch).retryWait} / {formatRetryDelay(detailData.batch.retry_delay_seconds)}
                 </strong>
                 <small>{detailData.batch.retry_delay_seconds > 0 ? '失败项会按该间隔自动再试' : '关闭自动重试，仅支持手动立即重试'}</small>
+              </div>
+              <div className="resource-ops-transfer-summary-item">
+                <span>当前选择</span>
+                <strong>{selectedItemKeys.length}</strong>
+                <small>{selectedFailedCount > 0 ? `其中失败项 ${selectedFailedCount} 条，可直接重试` : '可用于批量发布或转为追更任务'}</small>
               </div>
             </div>
 
@@ -728,59 +761,9 @@ const BatchSection = ({
               dataSource={detailData.items}
               columns={detailColumns}
               rowSelection={{
-                selectedRowKeys: selectedFailedItemKeys,
-                onChange: (keys) => onSelectFailedKeys(keys),
-                getCheckboxProps: (record) => ({
-                  disabled: record.transfer_status !== 'failed',
-                }),
-              }}
-              expandable={{
-                expandedRowRender: (record) => (
-                  <div className="resource-ops-transfer-expanded">
-                    {record.error_message ? (
-                      <Alert
-                        type="error"
-                        showIcon
-                        message="最近错误"
-                        description={record.error_message}
-                        style={{ marginBottom: 12 }}
-                      />
-                    ) : null}
-                    <Descriptions
-                      size="small"
-                      column={1}
-                      bordered
-                      items={[
-                        { key: 'validated', label: '最近校验时间', children: formatDateTime(record.last_validated_at) },
-                        { key: 'started', label: '开始时间', children: formatDateTime(record.started_at) },
-                        { key: 'finished', label: '结束时间', children: formatDateTime(record.finished_at) },
-                        {
-                          key: 'execution_log',
-                          label: '执行日志',
-                          children:
-                            record.execution_logs.length > 0 ? (
-                              <div className="resource-ops-terminal resource-ops-transfer-terminal resource-ops-transfer-terminal--compact">
-                                {record.execution_logs.map((log) => {
-                                  const terminalLog: ExecutionTimelineLog = {
-                                    ...log,
-                                    batchItemId: record.id,
-                                    batchItemTitle: record.short_title,
-                                  }
-                                  return (
-                                    <div key={log.id} className={getTerminalLineClassName(terminalLog)}>
-                                      {buildExecutionTerminalLine(terminalLog)}
-                                    </div>
-                                  )
-                                })}
-                              </div>
-                            ) : (
-                              <Text type="secondary">暂无执行日志</Text>
-                            ),
-                        },
-                      ]}
-                    />
-                  </div>
-                ),
+                selectedRowKeys: selectedItemKeys,
+                preserveSelectedRowKeys: true,
+                onChange: (keys) => onSelectItemKeys(keys),
               }}
               pagination={false}
               scroll={{ x: 1550 }}

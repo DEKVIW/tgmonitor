@@ -28,8 +28,11 @@ from .follow_tasks import (
 from .preview import preview_manual_pan_transfer_selection
 from .publishing import (
     list_pan_transfer_publish_records,
+    refresh_pan_transfer_publish_record_share,
     publish_manual_pan_transfer_message,
     publish_pan_transfer_batch_item_message,
+    update_pan_transfer_publish_record,
+    validate_pan_transfer_publish_record,
 )
 from .validation import validate_pan_transfer_account
 from .worker import process_next_pan_transfer_item
@@ -57,9 +60,12 @@ __all__ = [
     "publish_manual_pan_transfer_message",
     "publish_pan_transfer_batch_item_message",
     "queue_pan_transfer_follow_task_check",
+    "refresh_pan_transfer_publish_record_share",
     "resume_pan_transfer_follow_task",
     "retry_pan_transfer_batch",
     "start_pan_transfer_batch",
+    "update_pan_transfer_publish_record",
     "update_pan_transfer_account",
+    "validate_pan_transfer_publish_record",
     "validate_pan_transfer_account",
 ]

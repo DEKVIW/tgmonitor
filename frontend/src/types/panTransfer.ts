@@ -78,6 +78,7 @@ export interface PanTransferManualPreviewRequest {
   recent_message_count?: number | null
   range_start?: string | null
   range_end?: string | null
+  search_keyword?: string | null
   platforms?: string[]
   health_filter?: 'all' | 'healthy_only' | 'exclude_invalid' | string
   only_healthy?: boolean
@@ -163,10 +164,19 @@ export interface PanTransferPublishRecordItem {
   source_new_link_target_id?: number | null
   platform: string
   source_url: string
+  source_original_url?: string | null
+  current_share_url?: string | null
   published_message_id?: number | null
   published_title: string
   published_description?: string | null
   published_tags: string[]
+  original_link_status?: string | null
+  current_share_status?: string | null
+  published_link_status?: string | null
+  published_link_detail_message?: string | null
+  published_link_checked_at?: string | null
+  can_refresh_share: boolean
+  can_edit: boolean
   operator?: string | null
   extra_json: Record<string, unknown>
   published_at: string
@@ -179,6 +189,13 @@ export interface PanTransferPublishRecordListResponse {
   page: number
   page_size: number
   total: number
+}
+
+export interface PanTransferPublishRecordUpdateRequest {
+  source_url: string
+  title: string
+  description?: string | null
+  tags?: string[]
 }
 
 export interface PanTransferFollowTaskCreateRequest {

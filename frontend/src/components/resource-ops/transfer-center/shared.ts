@@ -1,13 +1,9 @@
-import type { Dayjs } from 'dayjs'
-
 import type { PanTransferBatchSummaryItem, PanTransferManualPreviewRequest } from '@/types/panTransfer'
 import { formatServerDateTime } from '@/utils/dateTime'
 
 export type PreviewDraft = {
-  selectionMode: 'recent_messages' | 'time_range'
-  direction: 'newest_first' | 'oldest_first'
   recentMessageCount: number
-  range: [Dayjs, Dayjs] | null
+  searchKeyword: string
   platforms: string[]
   healthFilter: 'all' | 'healthy_only' | 'exclude_invalid'
 }
@@ -49,10 +45,8 @@ export const SHARE_MODE_OPTIONS = [
 ]
 
 export const DEFAULT_PREVIEW_DRAFT: PreviewDraft = {
-  selectionMode: 'recent_messages',
-  direction: 'newest_first',
   recentMessageCount: 200,
-  range: null,
+  searchKeyword: '',
   platforms: [],
   healthFilter: 'all',
 }
@@ -154,11 +148,10 @@ export const buildPreviewPayload = (
   draft: PreviewDraft,
   pagination?: { page?: number; pageSize?: number }
 ): PanTransferManualPreviewRequest => ({
-  selection_mode: draft.selectionMode,
-  direction: draft.direction,
-  recent_message_count: draft.selectionMode === 'recent_messages' ? draft.recentMessageCount : undefined,
-  range_start: draft.selectionMode === 'time_range' && draft.range ? draft.range[0].format('YYYY-MM-DD') : undefined,
-  range_end: draft.selectionMode === 'time_range' && draft.range ? draft.range[1].format('YYYY-MM-DD') : undefined,
+  selection_mode: 'recent_messages',
+  direction: 'newest_first',
+  recent_message_count: draft.recentMessageCount,
+  search_keyword: draft.searchKeyword.trim() || undefined,
   platforms: draft.platforms,
   health_filter: draft.healthFilter,
   only_healthy: draft.healthFilter === 'healthy_only',

@@ -70,6 +70,10 @@ def _normalize_platform_filters(values: Any) -> list[str]:
     return normalized
 
 
+def _normalize_search_keyword(value: Any) -> str:
+    return _normalize_text(value, max_length=120).lower()
+
+
 def _parse_date(value: Any, *, field_name: str) -> date:
     try:
         return datetime.strptime(str(value or "").strip(), "%Y-%m-%d").date()
@@ -278,6 +282,7 @@ def collect_manual_pan_transfer_candidates(session: Session, payload: dict[str, 
     platforms = _normalize_platform_filters(payload.get("platforms"))
     health_filter = _normalize_health_filter(payload.get("health_filter"), only_healthy=bool(payload.get("only_healthy")))
     only_healthy = health_filter == "healthy_only"
+    search_keyword = _normalize_search_keyword(payload.get("search_keyword"))
 
     empty_payload = {
         **selection_summary,
@@ -302,6 +307,20 @@ def collect_manual_pan_transfer_candidates(session: Session, payload: dict[str, 
         platforms=platforms,
         health_filter=health_filter,
     )
+    if search_keyword:
+        filtered_items: list[dict[str, Any]] = []
+        for item in items:
+            haystacks = [
+                item.get("short_title"),
+                item.get("latest_message_title"),
+                item.get("latest_message_description"),
+                item.get("work_title"),
+                item.get("original_url"),
+                item.get("share_key"),
+            ]
+            if any(search_keyword in _normalize_text(value).lower() for value in haystacks):
+                filtered_items.append(item)
+        items = filtered_items
 
     healthy_count = sum(1 for item in items if item["latest_link_health"] == "healthy")
     invalid_count = sum(1 for item in items if item["latest_link_health"] == "invalid")
