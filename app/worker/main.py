@@ -9,7 +9,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.models.models import engine, ensure_runtime_storage_tables
-from app.services.pan_transfer import process_next_pan_transfer_item
+from app.services.pan_transfer import process_next_pan_transfer_follow_task, process_next_pan_transfer_item
 from app.services.resource_ops.recognition_worker import (
     process_next_recognition_task,
     run_resource_ops_maintenance_if_due,
@@ -71,6 +71,7 @@ def main() -> None:
             while not _stop_event.is_set():
                 processed_recognition = False
                 processed_transfer = False
+                processed_follow_task = False
                 with Session(engine) as session:
                     try:
                         run_resource_ops_maintenance_if_due(session, worker_name=WORKER_NAME)
@@ -99,7 +100,16 @@ def main() -> None:
                         logger.exception("pan transfer worker iteration failed")
                         processed_transfer = False
 
-                processed = bool(processed_recognition or processed_transfer)
+                with Session(engine) as session:
+                    try:
+                        processed_follow_task = process_next_pan_transfer_follow_task(session, worker_name=WORKER_NAME)
+                        session.commit()
+                    except Exception:
+                        session.rollback()
+                        logger.exception("pan transfer follow-task worker iteration failed")
+                        processed_follow_task = False
+
+                processed = bool(processed_recognition or processed_transfer or processed_follow_task)
 
                 if _stop_event.wait(BUSY_SLEEP_SECONDS if processed else IDLE_SLEEP_SECONDS):
                     break

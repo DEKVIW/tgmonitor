@@ -4,6 +4,20 @@
   gap: 16px;
 }
 
+.resource-ops-transfer-tabs .ant-tabs-nav {
+  margin-bottom: 16px;
+}
+
+.resource-ops-transfer-tabs .ant-tabs-tab {
+  padding: 10px 14px;
+}
+
+.resource-ops-transfer-tab-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
 .resource-ops-transfer-card-head {
   display: flex;
   align-items: flex-start;

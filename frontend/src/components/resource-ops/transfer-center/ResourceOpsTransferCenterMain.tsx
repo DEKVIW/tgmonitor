@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { Key } from 'react'
-import { Alert, Form, Input, InputNumber, Modal, Select, Space, Switch, Tooltip, message } from 'antd'
+import { Alert, Form, Input, InputNumber, Modal, Select, Space, Switch, Tabs, Tooltip, message } from 'antd'
 import type { TablePaginationConfig } from 'antd/es/table'
 import { QuestionCircleOutlined } from '@ant-design/icons'
 
 import {
   cancelPanTransferBatch,
   clearPanTransferBatchLogs,
+  createPanTransferFollowTaskFromBatchItem,
   createManualPanTransferBatch,
   createPanTransferAccount,
   deletePanTransferAccount,
@@ -36,6 +37,8 @@ import type {
 
 import AccountsSection from './AccountsSection'
 import BatchSection from './BatchSection'
+import FollowTasksSection from './FollowTasksSection'
+import PublishSection from './PublishSection'
 import PreviewSection from './PreviewSection'
 import {
   BatchCreateDraft,
@@ -65,6 +68,7 @@ const renderBatchCreateLabel = (label: string, tip: string) => (
 )
 
 const ResourceOpsTransferCenterMain = () => {
+  const [activeTab, setActiveTab] = useState('accounts')
   const [accounts, setAccounts] = useState<PanTransferAccountItem[]>([])
   const [accountsLoading, setAccountsLoading] = useState(false)
   const [accountModalOpen, setAccountModalOpen] = useState(false)
@@ -99,6 +103,9 @@ const ResourceOpsTransferCenterMain = () => {
   const [publishModalOpen, setPublishModalOpen] = useState(false)
   const [publishingItem, setPublishingItem] = useState<PanTransferBatchItem | null>(null)
   const [publishingItemId, setPublishingItemId] = useState<number | null>(null)
+  const [creatingFollowItemId, setCreatingFollowItemId] = useState<number | null>(null)
+  const [followRefreshToken, setFollowRefreshToken] = useState(0)
+  const [publishRefreshToken, setPublishRefreshToken] = useState(0)
 
   const [accountForm] = Form.useForm()
   const [publishForm] = Form.useForm()
@@ -188,15 +195,15 @@ const ResourceOpsTransferCenterMain = () => {
     }
     folderParts.push(itemFolderName)
     const resourceDirPath = folderParts.join('/')
-    const transferPath = `${resourceDirPath}/<原内容>`
+    const transferPath = `${resourceDirPath}/<原分享目录或文件>`
     const sharePath =
       batchCreateDraft.shareTargetMode === 'content_root'
-        ? `${resourceDirPath}/<原内容根目录>`
+        ? `${resourceDirPath}/<原分享目录或文件根目录>`
         : resourceDirPath
     const shareTip =
       batchCreateDraft.shareTargetMode === 'content_root'
-        ? '若资源目录下只有 1 个顶层内容，则直接分享该内容；否则自动回退为分享资源目录。'
-        : '默认分享资源目录，原内容会作为其下级目录保留。'
+        ? '若资源目录下只有 1 个顶层目录或文件，则直接分享该层；否则自动回退为分享资源目录。'
+        : '默认分享资源目录，原分享目录或文件会保留在该目录下一层。'
     return {
       itemFolderName,
       transferPath,
@@ -260,8 +267,8 @@ const ResourceOpsTransferCenterMain = () => {
     publishForm.resetFields()
     publishForm.setFieldsValue({
       title: item.short_title || '',
-      description: '',
-      tags: [],
+      description: item.source_message_description || '',
+      tags: Array.isArray(item.source_message_tags) ? item.source_message_tags : [],
     })
     setPublishModalOpen(true)
   }
@@ -398,6 +405,7 @@ const ResourceOpsTransferCenterMain = () => {
       setPublishModalOpen(false)
       setPublishingItem(null)
       publishForm.resetFields()
+      setPublishRefreshToken((current) => current + 1)
       await loadBatchDetail(publishingItem.batch_id, { open: false })
       await loadBatches(batchPagination.page, batchPagination.pageSize)
     } catch (error) {
@@ -408,138 +416,187 @@ const ResourceOpsTransferCenterMain = () => {
     }
   }
 
+  const handleCreateFollowTask = async (item: PanTransferBatchItem) => {
+    setCreatingFollowItemId(item.id)
+    try {
+      const response = await createPanTransferFollowTaskFromBatchItem(item.batch_id, item.id, {})
+      message.success(`已创建追更任务 #${response.task.id}`)
+      setActiveTab('follow')
+      setFollowRefreshToken((current) => current + 1)
+    } catch (error) {
+      message.error(getErrorMessage(error, '创建追更任务失败'))
+    } finally {
+      setCreatingFollowItemId(null)
+    }
+  }
+
   return (
     <div className="resource-ops-transfer-stack">
-      <AccountsSection
-        accounts={accounts}
-        accountsLoading={accountsLoading}
-        validatingAccountId={validatingAccountId}
-        deletingAccountId={deletingAccountId}
-        missingPlatforms={missingPlatforms}
-        onRefresh={() => void loadAccounts()}
-        onCreate={openCreateModal}
-        onEdit={openEditModal}
-        onValidate={(account) => void (async () => {
-          setValidatingAccountId(account.id)
-          try {
-            await validatePanTransferAccount(account.id)
-            message.success(`${account.account_name} 校验完成`)
-            await loadAccounts()
-          } catch (error) {
-            message.error(getErrorMessage(error, '账号校验失败'))
-          } finally {
-            setValidatingAccountId(null)
-          }
-        })()}
-        onDelete={(account) => void (async () => {
-          setDeletingAccountId(account.id)
-          try {
-            await deletePanTransferAccount(account.id)
-            message.success('账号已删除')
-            await loadAccounts()
-          } catch (error) {
-            message.error(getErrorMessage(error, '删除账号失败'))
-          } finally {
-            setDeletingAccountId(null)
-          }
-        })()}
-      />
+      <Tabs
+        activeKey={activeTab}
+        onChange={setActiveTab}
+        className="resource-ops-transfer-tabs"
+        items={[
+          {
+            key: 'accounts',
+            label: '网盘账号',
+            children: (
+              <AccountsSection
+                accounts={accounts}
+                accountsLoading={accountsLoading}
+                validatingAccountId={validatingAccountId}
+                deletingAccountId={deletingAccountId}
+                missingPlatforms={missingPlatforms}
+                onRefresh={() => void loadAccounts()}
+                onCreate={openCreateModal}
+                onEdit={openEditModal}
+                onValidate={(account) => void (async () => {
+                  setValidatingAccountId(account.id)
+                  try {
+                    await validatePanTransferAccount(account.id)
+                    message.success(`${account.account_name} 校验完成`)
+                    await loadAccounts()
+                  } catch (error) {
+                    message.error(getErrorMessage(error, '账号校验失败'))
+                  } finally {
+                    setValidatingAccountId(null)
+                  }
+                })()}
+                onDelete={(account) => void (async () => {
+                  setDeletingAccountId(account.id)
+                  try {
+                    await deletePanTransferAccount(account.id)
+                    message.success('账号已删除')
+                    await loadAccounts()
+                  } catch (error) {
+                    message.error(getErrorMessage(error, '删除账号失败'))
+                  } finally {
+                    setDeletingAccountId(null)
+                  }
+                })()}
+              />
+            ),
+          },
+          {
+            key: 'batches',
+            label: '批量转存',
+            children: (
+              <div className="resource-ops-transfer-tab-stack">
+                <PreviewSection
+                  draft={previewDraft}
+                  previewData={previewData}
+                  previewLoading={previewLoading}
+                  selectedPreviewKeys={selectedPreviewKeys}
+                  onDraftChange={(updater) => setPreviewDraft((current) => updater(current))}
+                  onPreview={() => void (async () => {
+                    if (previewDraft.selectionMode === 'time_range' && !previewDraft.range) {
+                      message.warning('请选择时间范围')
+                      return
+                    }
+                    setPreviewLoading(true)
+                    try {
+                      const payload = buildPreviewPayload(previewDraft)
+                      const response = await previewManualPanTransfer(payload)
+                      setPreviewData(response)
+                      setLastPreviewPayload(payload)
+                      setSelectedPreviewKeys([])
+                    } catch (error) {
+                      message.error(getErrorMessage(error, '生成转存预览失败'))
+                    } finally {
+                      setPreviewLoading(false)
+                    }
+                  })()}
+                  onOpenCreateBatch={() => {
+                    if (selectedPreviewKeys.length <= 0) {
+                      message.warning('请先勾选要转存的链接')
+                      return
+                    }
+                    setBatchCreateDraft(DEFAULT_BATCH_CREATE_DRAFT)
+                    setBatchCreateModalOpen(true)
+                  }}
+                  onSelectionChange={setSelectedPreviewKeys}
+                  onTableChange={(pagination) => void refreshPreviewPage(pagination)}
+                />
 
-      <PreviewSection
-        draft={previewDraft}
-        previewData={previewData}
-        previewLoading={previewLoading}
-        selectedPreviewKeys={selectedPreviewKeys}
-        onDraftChange={(updater) => setPreviewDraft((current) => updater(current))}
-        onPreview={() => void (async () => {
-          if (previewDraft.selectionMode === 'time_range' && !previewDraft.range) {
-            message.warning('请选择时间范围')
-            return
-          }
-          setPreviewLoading(true)
-          try {
-            const payload = buildPreviewPayload(previewDraft)
-            const response = await previewManualPanTransfer(payload)
-            setPreviewData(response)
-            setLastPreviewPayload(payload)
-            setSelectedPreviewKeys([])
-          } catch (error) {
-            message.error(getErrorMessage(error, '生成转存预览失败'))
-          } finally {
-            setPreviewLoading(false)
-          }
-        })()}
-        onOpenCreateBatch={() => {
-          if (selectedPreviewKeys.length <= 0) {
-            message.warning('请先勾选要转存的链接')
-            return
-          }
-          setBatchCreateDraft(DEFAULT_BATCH_CREATE_DRAFT)
-          setBatchCreateModalOpen(true)
-        }}
-        onSelectionChange={setSelectedPreviewKeys}
-        onTableChange={(pagination) => void refreshPreviewPage(pagination)}
-      />
-
-      <BatchSection
-        batches={batches}
-        batchLoading={batchLoading}
-        batchPagination={batchPagination}
-        startingBatchId={startingBatchId}
-        cancellingBatchId={cancellingBatchId}
-        retryingBatchId={retryingBatchId}
-        deletingBatchId={deletingBatchId}
-        clearingLogsBatchId={clearingLogsBatchId}
-        detailOpen={detailOpen}
-        detailLoading={detailLoading}
-        detailData={detailData}
-        selectedFailedItemKeys={selectedFailedItemKeys}
-        publishingItemId={publishingItemId}
-        onRefresh={() => void loadBatches()}
-        onTableChange={(pagination) => void loadBatches(pagination.current || 1, pagination.pageSize || batchPagination.pageSize)}
-        onOpenDetail={(batchId) => void loadBatchDetail(batchId, { open: true })}
-        onStart={(batchId) => void (async () => {
-          setStartingBatchId(batchId)
-          try {
-            const response = await startPanTransferBatch(batchId)
-            message.success(`批次 #${batchId} 已启动`)
-            applyBatchDetail(response)
-            setDetailOpen(true)
-            await loadBatches(batchPagination.page, batchPagination.pageSize)
-          } catch (error) {
-            message.error(getErrorMessage(error, '启动批次失败'))
-          } finally {
-            setStartingBatchId(null)
-          }
-        })()}
-        onCancel={(batchId) => void runBatchCancel(batchId)}
-        onRetry={(batchId, itemIds) => void runBatchRetry(batchId, itemIds)}
-        onDelete={(batchId) => void (async () => {
-          setDeletingBatchId(batchId)
-          try {
-            await deletePanTransferBatch(batchId)
-            message.success(`批次 #${batchId} 已删除`)
-            if (detailData?.batch.id === batchId) {
-              setDetailOpen(false)
-              setDetailData(null)
-              setSelectedFailedItemKeys([])
-            }
-            const nextPage = batchPagination.page > 1 && batches.length === 1 ? batchPagination.page - 1 : batchPagination.page
-            await loadBatches(nextPage, batchPagination.pageSize)
-          } catch (error) {
-            message.error(getErrorMessage(error, '删除批次失败'))
-          } finally {
-            setDeletingBatchId(null)
-          }
-        })()}
-        onCloseDetail={() => {
-          setDetailOpen(false)
-          setSelectedFailedItemKeys([])
-        }}
-        onRefreshDetail={(batchId) => void loadBatchDetail(batchId, { open: false })}
-        onSelectFailedKeys={setSelectedFailedItemKeys}
-        onClearLogs={(batchId) => void runBatchClearLogs(batchId)}
-        onPublish={(item) => openPublishModal(item)}
+                <BatchSection
+                  batches={batches}
+                  batchLoading={batchLoading}
+                  batchPagination={batchPagination}
+                  startingBatchId={startingBatchId}
+                  cancellingBatchId={cancellingBatchId}
+                  retryingBatchId={retryingBatchId}
+                  publishingItemId={publishingItemId}
+                  creatingFollowItemId={creatingFollowItemId}
+                  deletingBatchId={deletingBatchId}
+                  clearingLogsBatchId={clearingLogsBatchId}
+                  detailOpen={detailOpen}
+                  detailLoading={detailLoading}
+                  detailData={detailData}
+                  selectedFailedItemKeys={selectedFailedItemKeys}
+                  onRefresh={() => void loadBatches()}
+                  onTableChange={(pagination) =>
+                    void loadBatches(pagination.current || 1, pagination.pageSize || batchPagination.pageSize)
+                  }
+                  onOpenDetail={(batchId) => void loadBatchDetail(batchId, { open: true })}
+                  onStart={(batchId) => void (async () => {
+                    setStartingBatchId(batchId)
+                    try {
+                      const response = await startPanTransferBatch(batchId)
+                      message.success(`批次 #${batchId} 已启动`)
+                      applyBatchDetail(response)
+                      setDetailOpen(true)
+                      await loadBatches(batchPagination.page, batchPagination.pageSize)
+                    } catch (error) {
+                      message.error(getErrorMessage(error, '启动批次失败'))
+                    } finally {
+                      setStartingBatchId(null)
+                    }
+                  })()}
+                  onCancel={(batchId) => void runBatchCancel(batchId)}
+                  onRetry={(batchId, itemIds) => void runBatchRetry(batchId, itemIds)}
+                  onDelete={(batchId) => void (async () => {
+                    setDeletingBatchId(batchId)
+                    try {
+                      await deletePanTransferBatch(batchId)
+                      message.success(`批次 #${batchId} 已删除`)
+                      if (detailData?.batch.id === batchId) {
+                        setDetailOpen(false)
+                        setDetailData(null)
+                        setSelectedFailedItemKeys([])
+                      }
+                      const nextPage =
+                        batchPagination.page > 1 && batches.length === 1 ? batchPagination.page - 1 : batchPagination.page
+                      await loadBatches(nextPage, batchPagination.pageSize)
+                    } catch (error) {
+                      message.error(getErrorMessage(error, '删除批次失败'))
+                    } finally {
+                      setDeletingBatchId(null)
+                    }
+                  })()}
+                  onCloseDetail={() => {
+                    setDetailOpen(false)
+                    setSelectedFailedItemKeys([])
+                  }}
+                  onRefreshDetail={(batchId) => void loadBatchDetail(batchId, { open: false })}
+                  onSelectFailedKeys={setSelectedFailedItemKeys}
+                  onClearLogs={(batchId) => void runBatchClearLogs(batchId)}
+                  onPublish={(item) => openPublishModal(item)}
+                  onCreateFollow={(item) => void handleCreateFollowTask(item)}
+                />
+              </div>
+            ),
+          },
+          {
+            key: 'follow',
+            label: '追更同步',
+            children: <FollowTasksSection refreshToken={followRefreshToken} />,
+          },
+          {
+            key: 'publish',
+            label: '运营发布',
+            children: <PublishSection refreshToken={publishRefreshToken} />,
+          },
+        ]}
       />
 
       <Modal
@@ -754,7 +811,7 @@ const ResourceOpsTransferCenterMain = () => {
                 ) : null}
 
                 <div className="resource-ops-transfer-create-field resource-ops-transfer-create-field--wide">
-                  <label>{renderBatchCreateLabel('分享层级', '资源目录：默认分享系统生成的资源目录。原内容根目录：若资源目录下只有一个顶层内容，则优先直接分享该内容，否则自动回退。')}</label>
+                  <label>{renderBatchCreateLabel('分享层级', '资源目录：默认分享系统生成的资源目录。原分享目录或文件：若资源目录下只有一个顶层目录或文件，则优先直接分享该层，否则自动回退。')}</label>
                   <Select
                     options={SHARE_TARGET_MODE_OPTIONS}
                     value={batchCreateDraft.shareTargetMode}

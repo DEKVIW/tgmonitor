@@ -80,7 +80,7 @@ export const ITEM_FOLDER_MODE_OPTIONS = [
 
 export const SHARE_TARGET_MODE_OPTIONS = [
   { label: '分享资源目录（默认）', value: 'resource_dir' },
-  { label: '优先分享原内容根目录', value: 'content_root' },
+  { label: '优先分享原分享目录或文件', value: 'content_root' },
 ]
 
 export const HEALTH_FILTER_OPTIONS = [

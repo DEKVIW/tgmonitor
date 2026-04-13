@@ -146,6 +146,113 @@ export interface PanTransferMessagePublishResponse {
   reused_existing_target: boolean
 }
 
+export interface PanTransferManualPublishRequest {
+  platform: string
+  source_url: string
+  title: string
+  description?: string | null
+  tags?: string[]
+}
+
+export interface PanTransferPublishRecordItem {
+  id: number
+  source_type: string
+  source_batch_id?: number | null
+  source_batch_item_id?: number | null
+  source_link_target_id?: number | null
+  source_new_link_target_id?: number | null
+  platform: string
+  source_url: string
+  published_message_id?: number | null
+  published_title: string
+  published_description?: string | null
+  published_tags: string[]
+  operator?: string | null
+  extra_json: Record<string, unknown>
+  published_at: string
+  created_at: string
+  updated_at: string
+}
+
+export interface PanTransferPublishRecordListResponse {
+  items: PanTransferPublishRecordItem[]
+  page: number
+  page_size: number
+  total: number
+}
+
+export interface PanTransferFollowTaskCreateRequest {
+  task_name?: string | null
+  check_interval_minutes?: number | null
+}
+
+export interface PanTransferFollowTaskLogItem {
+  id: number
+  task_id: number
+  level: string
+  stage: string
+  message: string
+  payload: Record<string, unknown>
+  created_at: string
+}
+
+export interface PanTransferFollowTaskItem {
+  id: number
+  task_name: string
+  status: string
+  task_state: string
+  platform: string
+  source_batch_id?: number | null
+  source_batch_item_id?: number | null
+  source_link_target_id?: number | null
+  source_url: string
+  source_share_key?: string | null
+  topic_key: string
+  topic_title: string
+  work_id?: number | null
+  work_title?: string | null
+  target_account_id?: number | null
+  target_account_name?: string | null
+  fixed_save_path: string
+  transfer_layout: string
+  batch_folder_name?: string | null
+  item_folder_mode: string
+  item_folder_template?: string | null
+  share_target_mode: string
+  current_share_url?: string | null
+  current_share_link_target_id?: number | null
+  source_link_status: string
+  current_share_status: string
+  last_change_type?: string | null
+  last_candidate_link_target_id?: number | null
+  last_candidate_url?: string | null
+  last_candidate_title?: string | null
+  last_candidate_message_time?: string | null
+  check_interval_minutes: number
+  last_checked_at?: string | null
+  next_check_at?: string | null
+  locked_by?: string | null
+  locked_at?: string | null
+  last_error_message?: string | null
+  extra_json: Record<string, unknown>
+  created_by?: string | null
+  updated_by?: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface PanTransferFollowTaskListResponse {
+  items: PanTransferFollowTaskItem[]
+  page: number
+  page_size: number
+  total: number
+}
+
+export interface PanTransferFollowTaskDetailResponse {
+  task: PanTransferFollowTaskItem
+  logs: PanTransferFollowTaskLogItem[]
+}
+
 export interface PanTransferReplacementLogItem {
   id: number
   old_link_target_id: number
@@ -183,6 +290,8 @@ export interface PanTransferBatchItem {
   source_message_count: number
   source_ref_count: number
   latest_message_title?: string | null
+  source_message_description?: string | null
+  source_message_tags: string[]
   latest_message_time?: string | null
   latest_link_health: string
   transfer_status: string

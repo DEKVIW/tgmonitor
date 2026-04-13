@@ -8,8 +8,13 @@ import type {
   PanTransferBatchCreateRequest,
   PanTransferBatchDetailResponse,
   PanTransferBatchListResponse,
+  PanTransferFollowTaskCreateRequest,
+  PanTransferFollowTaskDetailResponse,
+  PanTransferFollowTaskListResponse,
+  PanTransferManualPublishRequest,
   PanTransferMessagePublishRequest,
   PanTransferMessagePublishResponse,
+  PanTransferPublishRecordListResponse,
   PanTransferBatchRetryRequest,
   PanTransferDeleteResponse,
   PanTransferManualPreviewRequest,
@@ -121,5 +126,91 @@ export const publishPanTransferBatchItemMessage = async (
     `/admin/pan-transfer/batches/${batchId}/items/${itemId}/publish`,
     payload
   )
+  return response.data
+}
+
+export const publishManualPanTransferMessage = async (
+  payload: PanTransferManualPublishRequest
+): Promise<PanTransferMessagePublishResponse> => {
+  const response = await apiClient.post<PanTransferMessagePublishResponse>('/admin/pan-transfer/publishes/manual', payload)
+  return response.data
+}
+
+export const listPanTransferPublishRecords = async (
+  page = 1,
+  pageSize = 20
+): Promise<PanTransferPublishRecordListResponse> => {
+  const response = await apiClient.get<PanTransferPublishRecordListResponse>(
+    `/admin/pan-transfer/publishes?page=${page}&page_size=${pageSize}`
+  )
+  return response.data
+}
+
+export const createPanTransferFollowTaskFromBatchItem = async (
+  batchId: number,
+  itemId: number,
+  payload: PanTransferFollowTaskCreateRequest = {}
+): Promise<PanTransferFollowTaskDetailResponse> => {
+  const response = await apiClient.post<PanTransferFollowTaskDetailResponse>(
+    `/admin/pan-transfer/batches/${batchId}/items/${itemId}/follow`,
+    payload
+  )
+  return response.data
+}
+
+export const listPanTransferFollowTasks = async (
+  page = 1,
+  pageSize = 20,
+  status?: string
+): Promise<PanTransferFollowTaskListResponse> => {
+  const params = new URLSearchParams({
+    page: String(page),
+    page_size: String(pageSize),
+  })
+  if (status) {
+    params.set('status', status)
+  }
+  const response = await apiClient.get<PanTransferFollowTaskListResponse>(
+    `/admin/pan-transfer/follow-tasks?${params.toString()}`
+  )
+  return response.data
+}
+
+export const getPanTransferFollowTaskDetail = async (
+  taskId: number
+): Promise<PanTransferFollowTaskDetailResponse> => {
+  const response = await apiClient.get<PanTransferFollowTaskDetailResponse>(`/admin/pan-transfer/follow-tasks/${taskId}`)
+  return response.data
+}
+
+export const queuePanTransferFollowTaskCheck = async (
+  taskId: number
+): Promise<PanTransferFollowTaskDetailResponse> => {
+  const response = await apiClient.post<PanTransferFollowTaskDetailResponse>(
+    `/admin/pan-transfer/follow-tasks/${taskId}/queue`
+  )
+  return response.data
+}
+
+export const pausePanTransferFollowTask = async (
+  taskId: number
+): Promise<PanTransferFollowTaskDetailResponse> => {
+  const response = await apiClient.post<PanTransferFollowTaskDetailResponse>(
+    `/admin/pan-transfer/follow-tasks/${taskId}/pause`
+  )
+  return response.data
+}
+
+export const resumePanTransferFollowTask = async (
+  taskId: number
+): Promise<PanTransferFollowTaskDetailResponse> => {
+  const response = await apiClient.post<PanTransferFollowTaskDetailResponse>(
+    `/admin/pan-transfer/follow-tasks/${taskId}/resume`
+  )
+  return response.data
+}
+
+export const deletePanTransferFollowTask = async (taskId: number): Promise<PanTransferDeleteResponse> => {
+  const response = await apiClient.delete<PanTransferDeleteResponse>(`/admin/pan-transfer/follow-tasks/${taskId}`)
   return response.data
 }

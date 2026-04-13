@@ -186,6 +186,7 @@ python -m app.scripts.init_users --remove-user username
 
 - 非 Docker 生产部署：看 `DEPLOY.md`
 - Docker / Compose：看 `docker/docker-compose.yml`
+- 转存中心详细使用说明：看 `docs/转存中心使用说明.md`
 
 `DEPLOY.md` 已按当前项目形态维护，核心是：
 

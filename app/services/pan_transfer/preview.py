@@ -142,6 +142,7 @@ def _build_manual_candidate_items(
             latest_ref.display_text.label("display_text"),
             latest_message.title.label("latest_message_title"),
             latest_message.description.label("latest_message_description"),
+            latest_message.tags.label("latest_message_tags"),
             latest_health.is_valid.label("latest_is_valid"),
             latest_health.error_reason.label("latest_health_reason"),
             work.canonical_title.label("work_title"),
@@ -191,6 +192,12 @@ def _build_manual_candidate_items(
                 "source_ref_count": int(row.source_ref_count or 0),
                 "latest_message_time": row.latest_message_time,
                 "latest_message_title": _normalize_text(row.latest_message_title, max_length=255) or None,
+                "latest_message_description": _normalize_text(row.latest_message_description, max_length=1000) or None,
+                "latest_message_tags": [
+                    _normalize_text(tag, max_length=64)
+                    for tag in list(row.latest_message_tags or [])
+                    if _normalize_text(tag, max_length=64)
+                ],
                 "work_title": _normalize_text(row.work_title, max_length=255) or None,
                 "recommended_account_id": recommended_account.get("id") if recommended_account else None,
                 "recommended_account_name": recommended_account.get("account_name") if recommended_account else None,

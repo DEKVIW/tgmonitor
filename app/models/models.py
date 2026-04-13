@@ -370,6 +370,87 @@ class PanTransferExecutionLog(Base):
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
 
 
+class PanTransferPublishRecord(Base):
+    __tablename__ = "pan_transfer_publish_records"
+
+    id = Column(Integer, primary_key=True, index=True)
+    source_type = Column(String(32), nullable=False, default="batch_item", index=True)
+    source_batch_id = Column(Integer, nullable=True, index=True)
+    source_batch_item_id = Column(Integer, nullable=True, index=True)
+    source_link_target_id = Column(Integer, nullable=True, index=True)
+    source_new_link_target_id = Column(Integer, nullable=True, index=True)
+    platform = Column(String(64), nullable=False, default="", index=True)
+    source_url = Column(Text, nullable=False)
+    published_message_id = Column(Integer, nullable=True, index=True)
+    published_title = Column(String(255), nullable=False, default="")
+    published_description = Column(Text, nullable=True)
+    published_tags = Column(JSONB, nullable=False, default=list)
+    operator = Column(String(128), nullable=True, index=True)
+    extra_json = Column(JSONB, nullable=False, default=dict)
+    published_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class PanTransferSyncTask(Base):
+    __tablename__ = "pan_transfer_sync_tasks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    task_name = Column(String(255), nullable=False, default="")
+    status = Column(String(32), nullable=False, default="active", index=True)
+    task_state = Column(String(32), nullable=False, default="idle", index=True)
+    platform = Column(String(64), nullable=False, default="", index=True)
+    source_batch_id = Column(Integer, nullable=True, index=True)
+    source_batch_item_id = Column(Integer, nullable=True, index=True)
+    source_link_target_id = Column(Integer, nullable=True, index=True)
+    source_url = Column(Text, nullable=False)
+    source_share_key = Column(String(255), nullable=True, index=True)
+    topic_key = Column(String(160), nullable=False, default="", index=True)
+    topic_title = Column(String(255), nullable=False, default="")
+    work_id = Column(Integer, nullable=True, index=True)
+    work_title = Column(String(255), nullable=True)
+    target_account_id = Column(Integer, nullable=True, index=True)
+    target_account_name = Column(String(128), nullable=True)
+    fixed_save_path = Column(String(512), nullable=False, default="")
+    transfer_layout = Column(String(32), nullable=False, default="independent")
+    batch_folder_name = Column(String(120), nullable=True)
+    item_folder_mode = Column(String(32), nullable=False, default="auto")
+    item_folder_template = Column(String(120), nullable=True)
+    share_target_mode = Column(String(32), nullable=False, default="resource_dir")
+    current_share_url = Column(Text, nullable=True)
+    current_share_link_target_id = Column(Integer, nullable=True, index=True)
+    source_link_status = Column(String(32), nullable=False, default="unknown", index=True)
+    current_share_status = Column(String(32), nullable=False, default="unknown", index=True)
+    last_change_type = Column(String(32), nullable=True, index=True)
+    last_candidate_link_target_id = Column(Integer, nullable=True, index=True)
+    last_candidate_url = Column(Text, nullable=True)
+    last_candidate_title = Column(String(255), nullable=True)
+    last_candidate_message_time = Column(DateTime, nullable=True, index=True)
+    check_interval_minutes = Column(Integer, nullable=False, default=360)
+    last_checked_at = Column(DateTime, nullable=True, index=True)
+    next_check_at = Column(DateTime, nullable=True, index=True)
+    locked_by = Column(String(128), nullable=True, index=True)
+    locked_at = Column(DateTime, nullable=True, index=True)
+    last_error_message = Column(Text, nullable=True)
+    extra_json = Column(JSONB, nullable=False, default=dict)
+    created_by = Column(String(128), nullable=True, index=True)
+    updated_by = Column(String(128), nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class PanTransferSyncTaskLog(Base):
+    __tablename__ = "pan_transfer_sync_task_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    task_id = Column(Integer, ForeignKey("pan_transfer_sync_tasks.id"), nullable=False, index=True)
+    level = Column(String(16), nullable=False, default="info", index=True)
+    stage = Column(String(32), nullable=False, default="general", index=True)
+    message = Column(Text, nullable=False, default="")
+    payload = Column(JSONB, nullable=False, default=dict)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+
 class Credential(Base):
     __tablename__ = "credentials"
 
@@ -833,6 +914,9 @@ def ensure_runtime_storage_tables() -> None:
                 PanTransferBatchItem.__table__,
                 PanTransferReplacementLog.__table__,
                 PanTransferExecutionLog.__table__,
+                PanTransferPublishRecord.__table__,
+                PanTransferSyncTask.__table__,
+                PanTransferSyncTaskLog.__table__,
             ],
         )
         ensure_message_monitor_source_columns()
@@ -1129,6 +1213,30 @@ def _ensure_pan_transfer_indexes() -> None:
         """
         CREATE INDEX IF NOT EXISTS ix_pan_transfer_execution_logs_batch_stage_created
         ON pan_transfer_execution_logs (batch_id, stage, created_at DESC)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_pan_transfer_publish_records_published_at
+        ON pan_transfer_publish_records (published_at DESC, id DESC)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_pan_transfer_publish_records_source_batch_item
+        ON pan_transfer_publish_records (source_batch_item_id, published_at DESC)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_pan_transfer_sync_tasks_status_next_check
+        ON pan_transfer_sync_tasks (status, next_check_at ASC, updated_at DESC)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_pan_transfer_sync_tasks_work_updated
+        ON pan_transfer_sync_tasks (work_id, updated_at DESC)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_pan_transfer_sync_tasks_source_link
+        ON pan_transfer_sync_tasks (source_link_target_id, updated_at DESC)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_pan_transfer_sync_task_logs_task_created
+        ON pan_transfer_sync_task_logs (task_id, created_at DESC)
         """,
     )
     with engine.begin() as connection:

@@ -83,6 +83,7 @@ def _serialize_batch_item(
     original_target: LinkTarget | None,
     new_target: LinkTarget | None,
 ) -> dict[str, Any]:
+    source_message_snapshot = dict(item.extra_json or {}).get("source_message_snapshot") or {}
     return {
         "id": int(item.id),
         "batch_id": int(item.batch_id),
@@ -96,6 +97,12 @@ def _serialize_batch_item(
         "source_message_count": int(item.source_message_count or 0),
         "source_ref_count": int(item.source_ref_count or 0),
         "latest_message_title": str(item.latest_message_title or "") or None,
+        "source_message_description": str(source_message_snapshot.get("description") or "") or None,
+        "source_message_tags": [
+            str(tag).strip()
+            for tag in list(source_message_snapshot.get("tags") or [])
+            if str(tag).strip()
+        ],
         "latest_message_time": item.latest_message_time,
         "latest_link_health": str(item.latest_link_health or "unknown"),
         "transfer_status": str(item.transfer_status or ""),
@@ -231,6 +238,11 @@ def create_manual_pan_transfer_batch(
             extra_json={
                 "recommended_account_name": recommended_account.get("account_name"),
                 "path_strategy": path_strategy,
+                "source_message_snapshot": {
+                    "title": item.get("latest_message_title"),
+                    "description": item.get("latest_message_description"),
+                    "tags": list(item.get("latest_message_tags") or []),
+                },
             },
         )
         session.add(row)

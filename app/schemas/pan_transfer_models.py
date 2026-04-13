@@ -320,6 +320,145 @@ class PanTransferMessagePublishResponse(PanTransferBaseModel):
     reused_existing_target: bool = False
 
 
+class PanTransferManualPublishRequest(PanTransferBaseModel):
+    platform: str = Field(min_length=1, max_length=64)
+    source_url: str = Field(min_length=1, max_length=2000)
+    title: str = Field(min_length=1, max_length=255)
+    description: str | None = Field(default=None, max_length=1000)
+    tags: list[str] = Field(default_factory=list)
+
+    @field_validator("platform", "source_url", "title")
+    @classmethod
+    def validate_manual_publish_text(cls, value: str, info) -> str:
+        return _normalize_text(value, field_name=info.field_name)
+
+    @field_validator("description")
+    @classmethod
+    def validate_manual_publish_description(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _normalize_text(value, field_name="description", allow_empty=True) or None
+
+    @field_validator("tags")
+    @classmethod
+    def validate_manual_publish_tags(cls, value: list[str]) -> list[str]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for raw_value in value:
+            cleaned = _normalize_text(raw_value, field_name="tags")
+            if cleaned in seen:
+                continue
+            seen.add(cleaned)
+            normalized.append(cleaned[:64])
+        return normalized
+
+
+class PanTransferPublishRecordItem(PanTransferBaseModel):
+    id: int
+    source_type: str
+    source_batch_id: int | None = None
+    source_batch_item_id: int | None = None
+    source_link_target_id: int | None = None
+    source_new_link_target_id: int | None = None
+    platform: str
+    source_url: str
+    published_message_id: int | None = None
+    published_title: str
+    published_description: str | None = None
+    published_tags: list[str] = Field(default_factory=list)
+    operator: str | None = None
+    extra_json: dict = Field(default_factory=dict)
+    published_at: datetime
+    created_at: datetime
+    updated_at: datetime
+
+
+class PanTransferPublishRecordListResponse(PanTransferBaseModel):
+    items: list[PanTransferPublishRecordItem] = Field(default_factory=list)
+    page: int = 1
+    page_size: int = 20
+    total: int = 0
+
+
+class PanTransferFollowTaskCreateRequest(PanTransferBaseModel):
+    task_name: str | None = Field(default=None, max_length=255)
+    check_interval_minutes: int | None = Field(default=360, ge=15, le=10080)
+
+    @field_validator("task_name")
+    @classmethod
+    def validate_follow_task_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _normalize_text(value, field_name="task_name", allow_empty=True) or None
+
+
+class PanTransferFollowTaskLogItem(PanTransferBaseModel):
+    id: int
+    task_id: int
+    level: str
+    stage: str
+    message: str
+    payload: dict = Field(default_factory=dict)
+    created_at: datetime
+
+
+class PanTransferFollowTaskItem(PanTransferBaseModel):
+    id: int
+    task_name: str
+    status: str
+    task_state: str
+    platform: str
+    source_batch_id: int | None = None
+    source_batch_item_id: int | None = None
+    source_link_target_id: int | None = None
+    source_url: str
+    source_share_key: str | None = None
+    topic_key: str
+    topic_title: str
+    work_id: int | None = None
+    work_title: str | None = None
+    target_account_id: int | None = None
+    target_account_name: str | None = None
+    fixed_save_path: str
+    transfer_layout: str
+    batch_folder_name: str | None = None
+    item_folder_mode: str
+    item_folder_template: str | None = None
+    share_target_mode: str
+    current_share_url: str | None = None
+    current_share_link_target_id: int | None = None
+    source_link_status: str
+    current_share_status: str
+    last_change_type: str | None = None
+    last_candidate_link_target_id: int | None = None
+    last_candidate_url: str | None = None
+    last_candidate_title: str | None = None
+    last_candidate_message_time: datetime | None = None
+    check_interval_minutes: int
+    last_checked_at: datetime | None = None
+    next_check_at: datetime | None = None
+    locked_by: str | None = None
+    locked_at: datetime | None = None
+    last_error_message: str | None = None
+    extra_json: dict = Field(default_factory=dict)
+    created_by: str | None = None
+    updated_by: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class PanTransferFollowTaskListResponse(PanTransferBaseModel):
+    items: list[PanTransferFollowTaskItem] = Field(default_factory=list)
+    page: int = 1
+    page_size: int = 20
+    total: int = 0
+
+
+class PanTransferFollowTaskDetailResponse(PanTransferBaseModel):
+    task: PanTransferFollowTaskItem
+    logs: list[PanTransferFollowTaskLogItem] = Field(default_factory=list)
+
+
 class PanTransferReplacementLogItem(PanTransferBaseModel):
     id: int
     old_link_target_id: int
@@ -357,6 +496,8 @@ class PanTransferBatchItemResponse(PanTransferBaseModel):
     source_message_count: int = 0
     source_ref_count: int = 0
     latest_message_title: str | None = None
+    source_message_description: str | None = None
+    source_message_tags: list[str] = Field(default_factory=list)
     latest_message_time: datetime | None = None
     latest_link_health: str
     transfer_status: str

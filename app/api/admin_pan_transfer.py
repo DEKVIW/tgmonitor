@@ -15,8 +15,14 @@ from app.schemas.pan_transfer_models import (
     PanTransferBatchCreateRequest,
     PanTransferBatchDetailResponse,
     PanTransferBatchListResponse,
+    PanTransferFollowTaskCreateRequest,
+    PanTransferFollowTaskDetailResponse,
+    PanTransferFollowTaskListResponse,
+    PanTransferManualPublishRequest,
     PanTransferMessagePublishRequest,
     PanTransferMessagePublishResponse,
+    PanTransferPublishRecordItem,
+    PanTransferPublishRecordListResponse,
     PanTransferBatchRetryRequest,
     PanTransferBatchSummaryItem,
     PanTransferDeleteResponse,
@@ -27,15 +33,24 @@ from app.services.pan_transfer import (
     cancel_pan_transfer_batch,
     clear_pan_transfer_batch_logs,
     create_pan_transfer_account,
+    create_pan_transfer_follow_task_from_batch_item,
     create_manual_pan_transfer_batch,
     delete_pan_transfer_account,
     delete_pan_transfer_batch,
+    delete_pan_transfer_follow_task,
     get_pan_transfer_batch_detail,
+    get_pan_transfer_follow_task_detail,
     list_pan_transfer_accounts,
     list_pan_transfer_batches,
+    list_pan_transfer_follow_tasks,
+    list_pan_transfer_publish_records,
+    pause_pan_transfer_follow_task,
+    publish_manual_pan_transfer_message,
     publish_pan_transfer_batch_item_message,
     preview_manual_pan_transfer_selection,
+    queue_pan_transfer_follow_task_check,
     retry_pan_transfer_batch,
+    resume_pan_transfer_follow_task,
     start_pan_transfer_batch,
     update_pan_transfer_account,
     validate_pan_transfer_account,
@@ -382,6 +397,232 @@ async def publish_pan_transfer_batch_item_message_api(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to publish pan transfer batch item: {exc}",
+        ) from exc
+
+
+@router.post(
+    "/publishes/manual",
+    response_model=PanTransferMessagePublishResponse,
+    summary="Publish a manual message to the frontend feed",
+)
+async def publish_manual_pan_transfer_message_api(
+    payload: PanTransferManualPublishRequest,
+    current_user: dict[str, Any] = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+) -> PanTransferMessagePublishResponse:
+    try:
+        result = publish_manual_pan_transfer_message(
+            db,
+            payload=payload.model_dump(),
+            operator=str(current_user.get("username") or current_user.get("account") or "admin"),
+        )
+        db.commit()
+        return PanTransferMessagePublishResponse(**result)
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to publish manual message: {exc}",
+        ) from exc
+
+
+@router.get("/publishes", response_model=PanTransferPublishRecordListResponse, summary="List pan transfer publish records")
+async def list_pan_transfer_publish_records_api(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    current_user: dict[str, Any] = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+) -> PanTransferPublishRecordListResponse:
+    del current_user
+    try:
+        result = list_pan_transfer_publish_records(db, page=page, page_size=page_size)
+        return PanTransferPublishRecordListResponse(
+            items=[PanTransferPublishRecordItem(**item) for item in result["items"]],
+            page=result["page"],
+            page_size=result["page_size"],
+            total=result["total"],
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to list publish records: {exc}",
+        ) from exc
+
+
+@router.post(
+    "/batches/{batch_id}/items/{item_id}/follow",
+    response_model=PanTransferFollowTaskDetailResponse,
+    summary="Create a follow task from a pan transfer batch item",
+)
+async def create_pan_transfer_follow_task_from_batch_item_api(
+    batch_id: int,
+    item_id: int,
+    payload: PanTransferFollowTaskCreateRequest,
+    current_user: dict[str, Any] = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+) -> PanTransferFollowTaskDetailResponse:
+    try:
+        result = create_pan_transfer_follow_task_from_batch_item(
+            db,
+            batch_id=batch_id,
+            item_id=item_id,
+            payload=payload.model_dump(exclude_unset=True),
+            created_by=str(current_user.get("username") or current_user.get("account") or "admin"),
+        )
+        db.commit()
+        return PanTransferFollowTaskDetailResponse(**result)
+    except LookupError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create follow task: {exc}",
+        ) from exc
+
+
+@router.get("/follow-tasks", response_model=PanTransferFollowTaskListResponse, summary="List follow tasks")
+async def list_pan_transfer_follow_tasks_api(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    status_filter: str | None = Query(default=None, alias="status"),
+    current_user: dict[str, Any] = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+) -> PanTransferFollowTaskListResponse:
+    del current_user
+    try:
+        result = list_pan_transfer_follow_tasks(db, page=page, page_size=page_size, status=status_filter)
+        return PanTransferFollowTaskListResponse(**result)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to list follow tasks: {exc}",
+        ) from exc
+
+
+@router.get("/follow-tasks/{task_id}", response_model=PanTransferFollowTaskDetailResponse, summary="Get follow task detail")
+async def get_pan_transfer_follow_task_detail_api(
+    task_id: int,
+    current_user: dict[str, Any] = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+) -> PanTransferFollowTaskDetailResponse:
+    del current_user
+    try:
+        result = get_pan_transfer_follow_task_detail(db, task_id=task_id)
+        return PanTransferFollowTaskDetailResponse(**result)
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load follow task detail: {exc}",
+        ) from exc
+
+
+@router.post("/follow-tasks/{task_id}/queue", response_model=PanTransferFollowTaskDetailResponse, summary="Queue a follow task for immediate check")
+async def queue_pan_transfer_follow_task_check_api(
+    task_id: int,
+    current_user: dict[str, Any] = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+) -> PanTransferFollowTaskDetailResponse:
+    try:
+        result = queue_pan_transfer_follow_task_check(
+            db,
+            task_id=task_id,
+            operator=str(current_user.get("username") or current_user.get("account") or "admin"),
+        )
+        db.commit()
+        return PanTransferFollowTaskDetailResponse(**result)
+    except LookupError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to queue follow task: {exc}",
+        ) from exc
+
+
+@router.post("/follow-tasks/{task_id}/pause", response_model=PanTransferFollowTaskDetailResponse, summary="Pause a follow task")
+async def pause_pan_transfer_follow_task_api(
+    task_id: int,
+    current_user: dict[str, Any] = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+) -> PanTransferFollowTaskDetailResponse:
+    try:
+        result = pause_pan_transfer_follow_task(
+            db,
+            task_id=task_id,
+            operator=str(current_user.get("username") or current_user.get("account") or "admin"),
+        )
+        db.commit()
+        return PanTransferFollowTaskDetailResponse(**result)
+    except LookupError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to pause follow task: {exc}",
+        ) from exc
+
+
+@router.post("/follow-tasks/{task_id}/resume", response_model=PanTransferFollowTaskDetailResponse, summary="Resume a follow task")
+async def resume_pan_transfer_follow_task_api(
+    task_id: int,
+    current_user: dict[str, Any] = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+) -> PanTransferFollowTaskDetailResponse:
+    try:
+        result = resume_pan_transfer_follow_task(
+            db,
+            task_id=task_id,
+            operator=str(current_user.get("username") or current_user.get("account") or "admin"),
+        )
+        db.commit()
+        return PanTransferFollowTaskDetailResponse(**result)
+    except LookupError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to resume follow task: {exc}",
+        ) from exc
+
+
+@router.delete("/follow-tasks/{task_id}", response_model=PanTransferDeleteResponse, summary="Delete a follow task")
+async def delete_pan_transfer_follow_task_api(
+    task_id: int,
+    current_user: dict[str, Any] = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+) -> PanTransferDeleteResponse:
+    del current_user
+    try:
+        result = delete_pan_transfer_follow_task(db, task_id=task_id)
+        db.commit()
+        return PanTransferDeleteResponse(id=result["id"], platform="follow_task", deleted=True)
+    except LookupError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete follow task: {exc}",
         ) from exc
 
 

@@ -192,6 +192,7 @@ type BatchSectionProps = {
   cancellingBatchId: number | null
   retryingBatchId: number | null
   publishingItemId: number | null
+  creatingFollowItemId: number | null
   deletingBatchId: number | null
   clearingLogsBatchId: number | null
   detailOpen: boolean
@@ -210,6 +211,7 @@ type BatchSectionProps = {
   onSelectFailedKeys: (keys: Key[]) => void
   onClearLogs: (batchId: number) => void
   onPublish: (item: PanTransferBatchItem) => void
+  onCreateFollow: (item: PanTransferBatchItem) => void
 }
 
 const BatchSection = ({
@@ -220,6 +222,7 @@ const BatchSection = ({
   cancellingBatchId,
   retryingBatchId,
   publishingItemId,
+  creatingFollowItemId,
   deletingBatchId,
   clearingLogsBatchId,
   detailOpen,
@@ -238,6 +241,7 @@ const BatchSection = ({
   onSelectFailedKeys,
   onClearLogs,
   onPublish,
+  onCreateFollow,
 }: BatchSectionProps) => {
   const [terminalFilter, setTerminalFilter] = useState<TerminalFilter>('all')
   const [terminalItemFilter, setTerminalItemFilter] = useState<number | 'all'>('all')
@@ -504,8 +508,9 @@ const BatchSection = ({
       fixed: 'right',
       render: (_, record) => {
         const canPublish = Boolean(record.new_link_target_url) || Boolean(record.new_share_url) || Boolean(record.original_url)
+        const canCreateFollow = Boolean(record.original_url)
         const canRetry = record.transfer_status === 'failed' && detailData
-        if (!canPublish && !canRetry) {
+        if (!canPublish && !canRetry && !canCreateFollow) {
           return <Text type="secondary">-</Text>
         }
         return (
@@ -522,6 +527,11 @@ const BatchSection = ({
             {canPublish ? (
               <Button size="small" loading={publishingItemId === record.id} onClick={() => onPublish(record)}>
                 发布到前台
+              </Button>
+            ) : null}
+            {canCreateFollow ? (
+              <Button size="small" loading={creatingFollowItemId === record.id} onClick={() => onCreateFollow(record)}>
+                转为追更任务
               </Button>
             ) : null}
           </Space>
