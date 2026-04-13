@@ -38,19 +38,24 @@ const AccountsSection = ({
       title: '平台 / 账号',
       dataIndex: 'account_name',
       key: 'account_name',
+      width: 180,
       render: (_, record) => (
-        <div className="resource-ops-transfer-title-cell">
-          <span className="resource-ops-transfer-title-main">{record.account_name}</span>
-          <span className="resource-ops-transfer-title-sub">{record.platform}</span>
+        <div className="resource-ops-transfer-title-cell resource-ops-transfer-account-cell">
+          <span className="resource-ops-transfer-title-main resource-ops-transfer-account-main" title={record.account_name}>
+            {record.account_name}
+          </span>
+          <span className="resource-ops-transfer-title-sub resource-ops-transfer-account-sub" title={record.platform}>
+            {record.platform}
+          </span>
         </div>
       ),
     },
     {
       title: '默认策略',
       key: 'strategy',
-      width: 240,
+      width: 210,
       render: (_, record) => (
-        <div className="resource-ops-transfer-tag-stack">
+        <div className="resource-ops-transfer-tag-stack resource-ops-transfer-account-tags">
           <Tag color={record.default_share_mode === 'public' ? 'blue' : 'default'}>
             {record.default_share_mode === 'public' ? '转存后分享' : '仅转存'}
           </Tag>
@@ -62,12 +67,12 @@ const AccountsSection = ({
     {
       title: '凭据与校验',
       key: 'validation',
-      width: 280,
+      width: 248,
       render: (_, record) => {
         const validated = Boolean(record.last_validated_at)
         const ok = validated && !record.last_error_message
         return (
-          <div className="resource-ops-transfer-validation">
+          <div className="resource-ops-transfer-validation resource-ops-transfer-account-validation">
             <Space wrap size={[6, 6]}>
               <Tag color={record.is_enabled ? 'success' : 'default'}>{record.is_enabled ? '启用' : '停用'}</Tag>
               <Tag color={record.credential_configured ? 'processing' : 'warning'}>
@@ -86,9 +91,9 @@ const AccountsSection = ({
     {
       title: '操作',
       key: 'actions',
-      width: 210,
+      width: 176,
       render: (_, record) => (
-        <Space wrap>
+        <Space wrap size={[6, 6]} className="resource-ops-transfer-account-actions">
           <Button
             size="small"
             icon={<CheckCircleOutlined />}
@@ -168,7 +173,7 @@ const AccountsSection = ({
         dataSource={accounts}
         columns={columns}
         pagination={false}
-        scroll={{ x: 1100 }}
+        scroll={{ x: 920 }}
         locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无转存账号" /> }}
       />
     </Card>

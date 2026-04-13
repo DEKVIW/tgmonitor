@@ -116,8 +116,10 @@ const ResourceOpsTransferCenterMain = () => {
     })
   }
 
-  const loadBatchDetail = async (batchId: number, options?: { open?: boolean }) => {
-    setDetailLoading(true)
+  const loadBatchDetail = async (batchId: number, options?: { open?: boolean; silent?: boolean }) => {
+    if (!(options?.silent ?? false)) {
+      setDetailLoading(true)
+    }
     try {
       const response = await getPanTransferBatchDetail(batchId)
       applyBatchDetail(response)
@@ -127,13 +129,28 @@ const ResourceOpsTransferCenterMain = () => {
     } catch (error) {
       message.error(getErrorMessage(error, '加载批次明细失败'))
     } finally {
-      setDetailLoading(false)
+      if (!(options?.silent ?? false)) {
+        setDetailLoading(false)
+      }
     }
   }
 
   useEffect(() => {
     void Promise.all([loadAccounts(), loadBatches(1, batchPagination.pageSize)])
   }, [])
+
+  useEffect(() => {
+    if (!detailOpen || !detailData || detailData.batch.status !== 'running') {
+      return
+    }
+
+    const batchId = detailData.batch.id
+    const timer = window.setInterval(() => {
+      void loadBatchDetail(batchId, { open: false, silent: true })
+    }, 4000)
+
+    return () => window.clearInterval(timer)
+  }, [detailOpen, detailData?.batch.id, detailData?.batch.status])
 
   const missingPlatforms = useMemo(() => {
     const enabledPlatforms = new Set(accounts.filter((item) => item.is_enabled).map((item) => item.platform))

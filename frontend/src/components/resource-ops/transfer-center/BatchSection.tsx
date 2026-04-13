@@ -46,6 +46,27 @@ type TerminalFilter = 'all' | 'error'
 const formatExecutionLogTime = (value?: string | null) =>
   value ? formatServerDateTime(value, 'HH:mm:ss', 'Asia/Shanghai') : '--:--:--'
 
+const normalizeTitleText = (value?: string | null) =>
+  String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s\u3000]+/g, '')
+    .replace(/[()（）\[\]【】\-_.,:;!?'"]/g, '')
+
+const shouldHideSubtitle = (mainTitle?: string | null, subtitle?: string | null) => {
+  const normalizedMain = normalizeTitleText(mainTitle)
+  const normalizedSubtitle = normalizeTitleText(subtitle)
+  if (!normalizedMain || !normalizedSubtitle) {
+    return false
+  }
+  if (normalizedMain === normalizedSubtitle) {
+    return true
+  }
+  const shorter = normalizedMain.length <= normalizedSubtitle.length ? normalizedMain : normalizedSubtitle
+  const longer = normalizedMain.length > normalizedSubtitle.length ? normalizedMain : normalizedSubtitle
+  return shorter.length >= 10 && longer.includes(shorter) && longer.length - shorter.length <= 8
+}
+
 const getExecutionLineStatus = (log: ExecutionTimelineLog) => {
   const messageText = String(log.message || '').toLowerCase()
   if (log.level === 'error' || messageText.includes(' failed')) return 'ERR'
@@ -379,14 +400,18 @@ const BatchSection = ({
       dataIndex: 'short_title',
       key: 'short_title',
       width: 260,
-      render: (_, record) => (
-        <div className="resource-ops-transfer-title-cell">
-          <span className="resource-ops-transfer-title-main">{record.short_title}</span>
-          <span className="resource-ops-transfer-title-sub">
-            {record.latest_message_title || `${record.source_message_count} 条消息受影响`}
-          </span>
-        </div>
-      ),
+      render: (_, record) => {
+        const subtitle = shouldHideSubtitle(record.short_title, record.latest_message_title)
+          ? ''
+          : record.latest_message_title || `${record.source_message_count} 条消息受影响`
+
+        return (
+          <div className="resource-ops-transfer-title-cell">
+            <span className="resource-ops-transfer-title-main">{record.short_title}</span>
+            {subtitle ? <span className="resource-ops-transfer-title-sub">{subtitle}</span> : null}
+          </div>
+        )
+      },
     },
     {
       title: '状态',
