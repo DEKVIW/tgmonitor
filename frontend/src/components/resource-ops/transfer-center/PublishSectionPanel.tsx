@@ -491,7 +491,6 @@ const PublishSectionPanel = ({ refreshToken }: PublishSectionProps) => {
               {record.published_title}
             </button>
           </Tooltip>
-          <span className="resource-ops-transfer-title-sub">{record.source_type === 'manual' ? '手动发布' : '批次发布'}{record.source_batch_item_id ? ` · 批次项 #${record.source_batch_item_id}` : ''}</span>
         </div>
       ),
     },

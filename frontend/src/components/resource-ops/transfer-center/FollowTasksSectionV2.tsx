@@ -1,15 +1,18 @@
 import { useEffect, useMemo, useState, type Key } from 'react'
 import {
+  CopyOutlined,
   DeleteOutlined,
   EyeOutlined,
   FolderOpenOutlined,
+  LinkOutlined,
   PauseCircleOutlined,
   PlayCircleOutlined,
   SearchOutlined,
   SwapOutlined,
   SyncOutlined,
 } from '@ant-design/icons'
-import { Alert, Button, Card, Checkbox, Descriptions, Drawer, Empty, Modal, Popconfirm, Segmented, Space, Table, Tag, Tooltip, Typography, message } from 'antd'
+import { Alert, Button, Card, Checkbox, Descriptions, Drawer, Dropdown, Empty, Modal, Popconfirm, Segmented, Space, Table, Tag, Tooltip, Typography, message } from 'antd'
+import type { MenuProps } from 'antd'
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table'
 
 import {
@@ -66,6 +69,7 @@ const TASK_STATE_META: Record<string, { color: string; label: string }> = {
 }
 
 const LINK_STATUS_META: Record<string, { color: string; label: string }> = {
+  pending_check: { color: 'default', label: '待巡检' },
   valid: { color: 'success', label: '有效' },
   healthy: { color: 'success', label: '有效' },
   warning: { color: 'warning', label: '存疑' },
@@ -87,6 +91,12 @@ const FOLLOW_CHANGE_LABELS: Record<string, string> = {
 const DIRECTORY_ROOT_LABELS: Record<FollowSyncSourceKind, string> = {
   current: '当前原链',
   candidate: '候选原链',
+}
+
+const LINK_ROOT_LABELS: Record<FollowLinkChip['key'], string> = {
+  source: '原链',
+  candidate: '候选原链',
+  share: '新分享',
 }
 
 const formatDateTime = (value?: string | null, format = 'YYYY-MM-DD HH:mm') =>
@@ -120,6 +130,7 @@ const renderLinkStatus = (value?: string | null) => {
 
 const getLinkChipMeta = (value?: string | null) => {
   const normalized = String(value || '').toLowerCase()
+  if (normalized === 'pending_check') return { tone: 'muted', label: '待巡检' }
   if (normalized === 'healthy' || normalized === 'valid') return { tone: 'success', label: '有效' }
   if (normalized === 'warning') return { tone: 'warning', label: '存疑' }
   if (normalized === 'invalid' || normalized === 'error') return { tone: 'danger', label: normalized === 'error' ? '异常' : '失效' }
@@ -139,6 +150,55 @@ const openLink = (url: string) => {
   window.open(url, '_blank', 'noopener,noreferrer')
 }
 
+const copyText = async (value: string, successText: string) => {
+  try {
+    await navigator.clipboard.writeText(value)
+    message.success(successText)
+  } catch {
+    message.error('复制失败，请检查浏览器权限')
+  }
+}
+
+const getFollowScheduleLine = (record: PanTransferFollowTaskItem) => {
+  if (record.task_state === 'checking') {
+    return '当前正在执行巡检'
+  }
+  if (record.task_state === 'queued' && record.next_check_at) {
+    return `已加入巡检队列 ${formatDateTime(record.next_check_at)}`
+  }
+  if (record.task_state === 'sync_queued') {
+    return '同步批次已排队，等待 worker 处理'
+  }
+  if (record.next_check_at) {
+    return `下次自动巡检 ${formatDateTime(record.next_check_at)}`
+  }
+  return '未安排下一次巡检'
+}
+
+const getFollowStatusSummary = (record: PanTransferFollowTaskItem) => {
+  if (record.last_error_message) {
+    return '最近一次巡检或同步出现异常'
+  }
+  if (record.task_state === 'sync_queued') {
+    return '同步批次已排队，等待 worker 处理'
+  }
+  if (record.task_state === 'candidate_found') {
+    return FOLLOW_CHANGE_LABELS.candidate_found
+  }
+  if (record.task_state === 'source_invalid') {
+    return FOLLOW_CHANGE_LABELS.source_invalid
+  }
+  if (record.task_state === 'share_invalid') {
+    return FOLLOW_CHANGE_LABELS.share_invalid
+  }
+  if (!record.last_checked_at) {
+    if (record.task_state === 'checking') return '首次巡检进行中'
+    if (record.task_state === 'queued') return '等待首次巡检'
+    return '尚未完成首次巡检'
+  }
+  return FOLLOW_CHANGE_LABELS[record.last_change_type || ''] || '最近一次巡检已完成'
+}
+
 const buildFollowLinkItems = (record: PanTransferFollowTaskItem): FollowLinkChip[] => {
   const items: FollowLinkChip[] = []
   if (record.source_url) {
@@ -146,8 +206,16 @@ const buildFollowLinkItems = (record: PanTransferFollowTaskItem): FollowLinkChip
       key: 'source',
       label: '原链',
       url: record.source_url,
-      status: record.source_link_status,
-      detail: '当前绑定原链',
+      status:
+        !record.last_checked_at && String(record.source_link_status || '').toLowerCase() === 'unknown'
+          ? 'pending_check'
+          : record.source_link_status,
+      detail: [
+        '当前绑定原链',
+        record.last_checked_at ? `最近巡检 ${formatDateTime(record.last_checked_at)}` : '等待首次巡检',
+      ]
+        .filter(Boolean)
+        .join('\n'),
     })
   }
   if (record.last_candidate_url) {
@@ -164,8 +232,16 @@ const buildFollowLinkItems = (record: PanTransferFollowTaskItem): FollowLinkChip
       key: 'share',
       label: '新分享',
       url: record.current_share_url,
-      status: record.current_share_status,
-      detail: record.publish_record_title ? `已绑定前台：${record.publish_record_title}` : '当前对外分享',
+      status:
+        !record.last_checked_at && String(record.current_share_status || '').toLowerCase() === 'unknown'
+          ? 'pending_check'
+          : record.current_share_status,
+      detail: [
+        record.publish_record_title ? `已绑定前台：${record.publish_record_title}` : '当前对外分享',
+        record.last_checked_at ? `最近巡检 ${formatDateTime(record.last_checked_at)}` : '等待首次巡检',
+      ]
+        .filter(Boolean)
+        .join('\n'),
     })
   }
   return items
@@ -250,6 +326,12 @@ const FollowTasksSectionV2 = ({ refreshToken }: FollowTasksSectionProps) => {
   const [manualPreviewTrail, setManualPreviewTrail] = useState<DirectoryTrailItem[]>([])
   const [manualSelectedRowKeys, setManualSelectedRowKeys] = useState<Key[]>([])
   const [manualSelectedEntries, setManualSelectedEntries] = useState<PanTransferLinkDirectoryEntry[]>([])
+  const [directoryOpen, setDirectoryOpen] = useState(false)
+  const [directoryLoading, setDirectoryLoading] = useState(false)
+  const [directoryTitle, setDirectoryTitle] = useState('')
+  const [directoryData, setDirectoryData] = useState<PanTransferLinkDirectoryPreviewResponse | null>(null)
+  const [directoryLink, setDirectoryLink] = useState<FollowLinkChip | null>(null)
+  const [directoryTrail, setDirectoryTrail] = useState<DirectoryTrailItem[]>([])
 
   const loadTasks = async (page = pagination.page, pageSize = pagination.pageSize, filter = statusFilter) => {
     setLoading(true)
@@ -323,6 +405,36 @@ const FollowTasksSectionV2 = ({ refreshToken }: FollowTasksSectionProps) => {
     } finally {
       setManualPreviewLoading(false)
     }
+  }
+
+  const openDirectoryAt = async (item: FollowLinkChip, trail: DirectoryTrailItem[]) => {
+    setDirectoryOpen(true)
+    setDirectoryLoading(true)
+    setDirectoryLink(item)
+    setDirectoryTrail(trail)
+    setDirectoryTitle(LINK_ROOT_LABELS[item.key])
+    try {
+      const current = trail[trail.length - 1]
+      const response = await previewPanTransferLinkDirectory({
+        url: item.url,
+        entry_id: current?.entryId || undefined,
+        entry_path: current?.entryPath || undefined,
+        entry_name: current?.label || undefined,
+      })
+      setDirectoryData(response)
+      setDirectoryTrail(buildDirectoryTrail(LINK_ROOT_LABELS[item.key], trail, response))
+    } catch (error) {
+      setDirectoryOpen(false)
+      message.error(getErrorMessage(error, '目录预览失败'))
+    } finally {
+      setDirectoryLoading(false)
+    }
+  }
+
+  const handleLinkMenuClick = async (actionKey: string, item: FollowLinkChip) => {
+    if (actionKey === 'open') return openLink(item.url)
+    if (actionKey === 'copy') return copyText(item.url, '已复制链接')
+    if (actionKey === 'preview') return openDirectoryAt(item, [{ key: 'root', label: LINK_ROOT_LABELS[item.key] }])
   }
 
   const openManualSyncModal = async (
@@ -443,26 +555,26 @@ const FollowTasksSectionV2 = ({ refreshToken }: FollowTasksSectionProps) => {
 
   const columns: ColumnsType<PanTransferFollowTaskItem> = [
     {
-      title: '追更资源',
+      title: '资源',
       key: 'task_name',
       width: 320,
       render: (_, record) => {
         const mainTitle = record.work_title || record.topic_title || record.task_name || `追更任务 #${record.id}`
-        const showTaskName = record.task_name && record.task_name !== mainTitle
         return (
-          <div className="resource-ops-transfer-title-cell">
-            <span className="resource-ops-transfer-title-main">{mainTitle}</span>
-            <span className="resource-ops-transfer-title-sub">{`${record.platform || '-'} · 任务 #${record.id}`}</span>
-            <span className="resource-ops-transfer-title-sub">
-              {showTaskName
-                ? `跟踪名：${record.task_name}`
-                : record.publish_record_title
-                  ? `前台：${record.publish_record_title}`
-                  : '未绑定前台记录'}
-            </span>
-          </div>
+          <Tooltip title={mainTitle}>
+            <div className="resource-ops-transfer-title-cell">
+              <span className="resource-ops-transfer-title-main">{mainTitle}</span>
+            </div>
+          </Tooltip>
         )
       },
+    },
+    {
+      title: '网盘',
+      dataIndex: 'platform',
+      key: 'platform',
+      width: 92,
+      render: (value: string) => <Tag>{value || '-'}</Tag>,
     },
     {
       title: '目标',
@@ -472,7 +584,6 @@ const FollowTasksSectionV2 = ({ refreshToken }: FollowTasksSectionProps) => {
         <div className="resource-ops-transfer-validation">
           <small>{record.target_account_name || '未指定账号'}</small>
           <small title={record.fixed_save_path}>{record.fixed_save_path || '未记录固定目录'}</small>
-          <small>{`分享层级：${record.share_target_mode === 'content_root' ? '原内容目录/文件' : '资源目录'}`}</small>
         </div>
       ),
     },
@@ -485,32 +596,44 @@ const FollowTasksSectionV2 = ({ refreshToken }: FollowTasksSectionProps) => {
             {buildFollowLinkItems(record).map((item) => {
               const statusMeta = getLinkChipMeta(item.status)
               const tip = [item.url, item.detail].filter(Boolean).join('\n')
+              const menu: MenuProps = {
+                items: [
+                  { key: 'open', icon: <LinkOutlined />, label: '访问链接' },
+                  { key: 'copy', icon: <CopyOutlined />, label: '复制链接' },
+                  { key: 'preview', icon: <EyeOutlined />, label: '查看目录' },
+                ],
+                onClick: ({ key }) => {
+                  void handleLinkMenuClick(String(key), item)
+                },
+              }
               return (
-                <Tooltip key={`${item.key}-${item.url}`} title={tip}>
-                  <button
-                    type="button"
-                    className="resource-ops-transfer-link-chip"
-                    onClick={() => openLink(item.url)}
-                  >
-                    <span className="resource-ops-transfer-link-chip-label">{item.label}</span>
-                    <span className={`resource-ops-transfer-link-chip-status is-${statusMeta.tone}`}>{statusMeta.label}</span>
-                  </button>
-                </Tooltip>
+                <Dropdown key={`${item.key}-${item.url}`} menu={menu} trigger={['contextMenu']}>
+                  <Tooltip title={tip}>
+                    <button
+                      type="button"
+                      className="resource-ops-transfer-link-chip"
+                      onClick={() => openLink(item.url)}
+                    >
+                      <span className="resource-ops-transfer-link-chip-label">{item.label}</span>
+                      <span className={`resource-ops-transfer-link-chip-status is-${statusMeta.tone}`}>{statusMeta.label}</span>
+                    </button>
+                  </Tooltip>
+                </Dropdown>
               )
             })}
           </div>
-          <small>点击标签可直接访问对应链接</small>
+          <small>左键访问，右键可复制或查看目录</small>
         </div>
       ),
     },
     {
-      title: '同步',
+      title: '巡检',
       key: 'sync_meta',
       width: 220,
       render: (_, record) => (
         <div className="resource-ops-transfer-validation resource-ops-transfer-validation--publish-meta">
           <small>{`上次巡检 ${formatDateTime(record.last_checked_at)}`}</small>
-          <small>{`下次巡检 ${formatDateTime(record.next_check_at)}`}</small>
+          <small>{getFollowScheduleLine(record)}</small>
           {record.last_sync_batch_id ? (
             <small>{`最近同步 #${record.last_sync_batch_id} · ${record.last_sync_source_kind === 'candidate' ? '候选原链' : '当前原链'}`}</small>
           ) : (
@@ -532,10 +655,12 @@ const FollowTasksSectionV2 = ({ refreshToken }: FollowTasksSectionProps) => {
             <Tag color={(TASK_STATE_META[record.task_state] || { color: 'default' }).color}>
               {(TASK_STATE_META[record.task_state] || { label: record.task_state }).label}
             </Tag>
-            {renderLinkStatus(record.source_link_status)}
-            {record.current_share_url ? renderLinkStatus(record.current_share_status) : null}
+            {String(record.source_link_status || '').toLowerCase() !== 'unknown' ? renderLinkStatus(record.source_link_status) : null}
+            {record.current_share_url && String(record.current_share_status || '').toLowerCase() !== 'unknown'
+              ? renderLinkStatus(record.current_share_status)
+              : null}
           </Space>
-          <small>{FOLLOW_CHANGE_LABELS[record.last_change_type || ''] || '等待首次巡检'}</small>
+          <small>{getFollowStatusSummary(record)}</small>
           {record.last_candidate_title ? <small>{`候选：${record.last_candidate_title}`}</small> : null}
           {record.last_error_message ? <small className="is-error">{record.last_error_message}</small> : null}
         </div>
@@ -733,17 +858,64 @@ const FollowTasksSectionV2 = ({ refreshToken }: FollowTasksSectionProps) => {
       render: (value?: string | null) => formatDateTime(value),
     },
   ]
+  const directoryColumns: ColumnsType<PanTransferLinkDirectoryEntry> = [
+    {
+      title: '名称',
+      dataIndex: 'name',
+      key: 'name',
+      render: (_, entry) =>
+        entry.is_dir ? (
+          <button
+            type="button"
+            className="resource-ops-transfer-directory-link"
+            onClick={() => {
+              if (!directoryLink) return
+              void openDirectoryAt(directoryLink, [
+                ...directoryTrail,
+                {
+                  key: entry.entry_id || entry.path || `${entry.name}-${directoryTrail.length}-${entry.is_dir ? 'dir' : 'file'}`,
+                  label: entry.name,
+                  entryId: entry.entry_id,
+                  entryPath: entry.path,
+                },
+              ])
+            }}
+          >
+            {entry.name}
+          </button>
+        ) : (
+          <span className="resource-ops-transfer-directory-name">{entry.name}</span>
+        ),
+    },
+    {
+      title: '类型',
+      dataIndex: 'is_dir',
+      key: 'is_dir',
+      width: 88,
+      render: (value: boolean) => <Tag color={value ? 'processing' : 'default'}>{value ? '目录' : '文件'}</Tag>,
+    },
+    {
+      title: '大小',
+      dataIndex: 'size_bytes',
+      key: 'size_bytes',
+      width: 120,
+      align: 'right',
+      render: (value?: number | null) => formatSize(value),
+    },
+    {
+      title: '更新时间',
+      dataIndex: 'updated_at',
+      key: 'updated_at',
+      width: 160,
+      render: (value?: string | null) => formatDateTime(value),
+    },
+  ]
 
   return (
     <>
       <Card className="resource-ops-panel-card">
         <div className="resource-ops-transfer-card-head">
-          <div>
-            <Title level={4}>追更同步</Title>
-            <Paragraph className="resource-ops-transfer-copy">
-              这里按“追更资源”来管理持续更新任务，表格重点展示资源标题、当前原链/候选/新分享三路链接、同步状态和快捷操作，方便你像运营发布那样快速扫表处理。
-            </Paragraph>
-          </div>
+          <Title level={4}>追更同步</Title>
           <Space>
             <Button onClick={() => void loadTasks(pagination.page, pagination.pageSize, statusFilter)}>
               刷新
@@ -759,14 +931,6 @@ const FollowTasksSectionV2 = ({ refreshToken }: FollowTasksSectionProps) => {
             />
           </Space>
         </div>
-
-        <Alert
-          type="info"
-          showIcon
-          style={{ marginBottom: 16 }}
-          message="追更同步已经切换到资源表视角"
-          description="标题列聚焦资源本身，链接列收纳原链/候选/新分享，状态列只保留最关键的巡检与异常信息，操作列可直接巡检、同步、手动选择同步、暂停或删除。"
-        />
 
         <div className="resource-ops-transfer-summary">
           <div className="resource-ops-transfer-summary-item">
@@ -1060,7 +1224,6 @@ const FollowTasksSectionV2 = ({ refreshToken }: FollowTasksSectionProps) => {
                 <div className="resource-ops-follow-sync-meta">
                   <span>目标资源目录</span>
                   <small title={detailTask.fixed_save_path}>{detailTask.fixed_save_path || '-'}</small>
-                  <small>{`分享层级：${detailTask.share_target_mode === 'content_root' ? '原内容目录/文件' : '资源目录'}`}</small>
                 </div>
 
                 <div className="resource-ops-follow-sync-meta">
@@ -1224,6 +1387,67 @@ const FollowTasksSectionV2 = ({ refreshToken }: FollowTasksSectionProps) => {
         ) : (
           <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前没有可操作的追更任务" />
         )}
+      </Modal>
+
+      <Modal
+        open={directoryOpen}
+        title={directoryTitle ? `${directoryTitle}目录预览` : '目录预览'}
+        onCancel={() => {
+          setDirectoryOpen(false)
+          setDirectoryData(null)
+          setDirectoryLink(null)
+          setDirectoryTrail([])
+        }}
+        footer={null}
+        width={820}
+        destroyOnHidden
+      >
+        <div className="resource-ops-transfer-modal-stack">
+          <Paragraph className="resource-ops-transfer-copy">
+            支持继续点进子目录查看结构，不会改动当前追更任务、原链或新分享。
+          </Paragraph>
+          <div className="resource-ops-transfer-directory-meta">
+            {directoryData ? (
+              <>
+                <Tag>{directoryData.platform}</Tag>
+                <Tag color="processing">共 {directoryData.item_count} 项</Tag>
+                {directoryData.truncated ? <Tag color="warning">仅显示前 {directoryData.items.length} 项</Tag> : null}
+              </>
+            ) : null}
+          </div>
+          <div className="resource-ops-transfer-directory-breadcrumbs">
+            {directoryTrail.map((item, index) => (
+              <button
+                key={item.key}
+                type="button"
+                className="resource-ops-transfer-directory-crumb"
+                onClick={() => {
+                  if (!directoryLink) return
+                  void openDirectoryAt(directoryLink, directoryTrail.slice(0, index + 1))
+                }}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+          <Table
+            size="small"
+            rowKey={(entry) => entry.entry_id || entry.path || `${entry.name}-${entry.is_dir ? 'dir' : 'file'}`}
+            loading={directoryLoading}
+            columns={directoryColumns}
+            dataSource={directoryData?.items || []}
+            pagination={false}
+            scroll={{ y: 420 }}
+            locale={{
+              emptyText: (
+                <Empty
+                  image={Empty.PRESENTED_IMAGE_SIMPLE}
+                  description={directoryData?.message || '当前目录为空'}
+                />
+              ),
+            }}
+          />
+        </div>
       </Modal>
     </>
   )
