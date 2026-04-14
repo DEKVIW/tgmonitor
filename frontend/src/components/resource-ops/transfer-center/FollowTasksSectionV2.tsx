@@ -1,5 +1,15 @@
 import { useEffect, useMemo, useState, type Key } from 'react'
-import { Alert, Button, Card, Checkbox, Descriptions, Drawer, Empty, Modal, Popconfirm, Segmented, Space, Table, Tag, Typography, message } from 'antd'
+import {
+  DeleteOutlined,
+  EyeOutlined,
+  FolderOpenOutlined,
+  PauseCircleOutlined,
+  PlayCircleOutlined,
+  SearchOutlined,
+  SwapOutlined,
+  SyncOutlined,
+} from '@ant-design/icons'
+import { Alert, Button, Card, Checkbox, Descriptions, Drawer, Empty, Modal, Popconfirm, Segmented, Space, Table, Tag, Tooltip, Typography, message } from 'antd'
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table'
 
 import {
@@ -23,7 +33,7 @@ import { formatServerDateTime } from '@/utils/dateTime'
 
 import { getErrorMessage } from './shared'
 
-const { Title, Paragraph, Text, Link } = Typography
+const { Title, Paragraph, Link } = Typography
 
 type FollowTasksSectionProps = {
   refreshToken: number
@@ -106,6 +116,59 @@ const renderLinkStatus = (value?: string | null) => {
     label: value || '未知',
   }
   return <Tag color={meta.color}>{meta.label}</Tag>
+}
+
+const getLinkChipMeta = (value?: string | null) => {
+  const normalized = String(value || '').toLowerCase()
+  if (normalized === 'healthy' || normalized === 'valid') return { tone: 'success', label: '有效' }
+  if (normalized === 'warning') return { tone: 'warning', label: '存疑' }
+  if (normalized === 'invalid' || normalized === 'error') return { tone: 'danger', label: normalized === 'error' ? '异常' : '失效' }
+  return { tone: 'muted', label: '未知' }
+}
+
+type FollowLinkChip = {
+  key: 'source' | 'candidate' | 'share'
+  label: string
+  url: string
+  status?: string | null
+  detail?: string | null
+}
+
+const openLink = (url: string) => {
+  if (!url) return
+  window.open(url, '_blank', 'noopener,noreferrer')
+}
+
+const buildFollowLinkItems = (record: PanTransferFollowTaskItem): FollowLinkChip[] => {
+  const items: FollowLinkChip[] = []
+  if (record.source_url) {
+    items.push({
+      key: 'source',
+      label: '原链',
+      url: record.source_url,
+      status: record.source_link_status,
+      detail: '当前绑定原链',
+    })
+  }
+  if (record.last_candidate_url) {
+    items.push({
+      key: 'candidate',
+      label: '候选',
+      url: record.last_candidate_url,
+      status: record.task_state === 'candidate_found' ? 'warning' : 'unknown',
+      detail: [record.last_candidate_title, record.last_candidate_message_time ? `发现于 ${formatDateTime(record.last_candidate_message_time)}` : ''].filter(Boolean).join('\n'),
+    })
+  }
+  if (record.current_share_url) {
+    items.push({
+      key: 'share',
+      label: '新分享',
+      url: record.current_share_url,
+      status: record.current_share_status,
+      detail: record.publish_record_title ? `已绑定前台：${record.publish_record_title}` : '当前对外分享',
+    })
+  }
+  return items
 }
 
 const buildDirectoryTrail = (
@@ -380,80 +443,86 @@ const FollowTasksSectionV2 = ({ refreshToken }: FollowTasksSectionProps) => {
 
   const columns: ColumnsType<PanTransferFollowTaskItem> = [
     {
-      title: '任务',
-      dataIndex: 'task_name',
+      title: '追更资源',
       key: 'task_name',
-      width: 220,
-      render: (_, record) => (
-        <div className="resource-ops-transfer-title-cell">
-          <span className="resource-ops-transfer-title-main">{record.task_name}</span>
-          <span className="resource-ops-transfer-title-sub">
-            {record.work_title || record.topic_title || `任务 #${record.id}`}
-          </span>
-        </div>
-      ),
+      width: 320,
+      render: (_, record) => {
+        const mainTitle = record.work_title || record.topic_title || record.task_name || `追更任务 #${record.id}`
+        const showTaskName = record.task_name && record.task_name !== mainTitle
+        return (
+          <div className="resource-ops-transfer-title-cell">
+            <span className="resource-ops-transfer-title-main">{mainTitle}</span>
+            <span className="resource-ops-transfer-title-sub">{`${record.platform || '-'} · 任务 #${record.id}`}</span>
+            <span className="resource-ops-transfer-title-sub">
+              {showTaskName
+                ? `跟踪名：${record.task_name}`
+                : record.publish_record_title
+                  ? `前台：${record.publish_record_title}`
+                  : '未绑定前台记录'}
+            </span>
+          </div>
+        )
+      },
     },
     {
-      title: '平台',
-      dataIndex: 'platform',
-      key: 'platform',
-      width: 96,
-      render: (value) => <Tag>{value}</Tag>,
-    },
-    {
-      title: '原链',
-      dataIndex: 'source_url',
-      key: 'source_url',
-      width: 240,
-      render: (value: string) => (
-        <a href={value} target="_blank" rel="noreferrer" className="resource-ops-transfer-url" title={value}>
-          {value}
-        </a>
-      ),
-    },
-    {
-      title: '目标账号 / 目录',
+      title: '目标',
       key: 'target',
       width: 220,
       render: (_, record) => (
         <div className="resource-ops-transfer-validation">
           <small>{record.target_account_name || '未指定账号'}</small>
           <small title={record.fixed_save_path}>{record.fixed_save_path || '未记录固定目录'}</small>
+          <small>{`分享层级：${record.share_target_mode === 'content_root' ? '原内容目录/文件' : '资源目录'}`}</small>
         </div>
       ),
     },
     {
-      title: '当前对外分享',
-      dataIndex: 'current_share_url',
-      key: 'current_share_url',
-      width: 240,
-      render: (value?: string | null) =>
-        value ? (
-          <a href={value} target="_blank" rel="noreferrer" className="resource-ops-transfer-url" title={value}>
-            {value}
-          </a>
-        ) : (
-          <Text type="secondary">尚未记录</Text>
-        ),
+      title: '链接',
+      key: 'links',
+      render: (_, record) => (
+        <div className="resource-ops-transfer-link-stack">
+          <div className="resource-ops-transfer-link-row">
+            {buildFollowLinkItems(record).map((item) => {
+              const statusMeta = getLinkChipMeta(item.status)
+              const tip = [item.url, item.detail].filter(Boolean).join('\n')
+              return (
+                <Tooltip key={`${item.key}-${item.url}`} title={tip}>
+                  <button
+                    type="button"
+                    className="resource-ops-transfer-link-chip"
+                    onClick={() => openLink(item.url)}
+                  >
+                    <span className="resource-ops-transfer-link-chip-label">{item.label}</span>
+                    <span className={`resource-ops-transfer-link-chip-status is-${statusMeta.tone}`}>{statusMeta.label}</span>
+                  </button>
+                </Tooltip>
+              )
+            })}
+          </div>
+          <small>点击标签可直接访问对应链接</small>
+        </div>
+      ),
     },
     {
-      title: '原链状态',
-      dataIndex: 'source_link_status',
-      key: 'source_link_status',
-      width: 110,
-      render: (value) => renderLinkStatus(value),
+      title: '同步',
+      key: 'sync_meta',
+      width: 220,
+      render: (_, record) => (
+        <div className="resource-ops-transfer-validation resource-ops-transfer-validation--publish-meta">
+          <small>{`上次巡检 ${formatDateTime(record.last_checked_at)}`}</small>
+          <small>{`下次巡检 ${formatDateTime(record.next_check_at)}`}</small>
+          {record.last_sync_batch_id ? (
+            <small>{`最近同步 #${record.last_sync_batch_id} · ${record.last_sync_source_kind === 'candidate' ? '候选原链' : '当前原链'}`}</small>
+          ) : (
+            <small>还没有人工同步记录</small>
+          )}
+        </div>
+      ),
     },
     {
-      title: '新分享状态',
-      dataIndex: 'current_share_status',
-      key: 'current_share_status',
-      width: 110,
-      render: (value) => renderLinkStatus(value),
-    },
-    {
-      title: '最近变化',
-      key: 'last_change_type',
-      width: 240,
+      title: '状态',
+      key: 'state',
+      width: 260,
       render: (_, record) => (
         <div className="resource-ops-transfer-validation">
           <Space wrap size={[6, 6]}>
@@ -463,95 +532,118 @@ const FollowTasksSectionV2 = ({ refreshToken }: FollowTasksSectionProps) => {
             <Tag color={(TASK_STATE_META[record.task_state] || { color: 'default' }).color}>
               {(TASK_STATE_META[record.task_state] || { label: record.task_state }).label}
             </Tag>
+            {renderLinkStatus(record.source_link_status)}
+            {record.current_share_url ? renderLinkStatus(record.current_share_status) : null}
           </Space>
           <small>{FOLLOW_CHANGE_LABELS[record.last_change_type || ''] || '等待首次巡检'}</small>
-          {record.last_candidate_title ? <small>{record.last_candidate_title}</small> : null}
-          {record.last_sync_batch_id ? <small>{`最近同步批次 #${record.last_sync_batch_id}`}</small> : null}
-        </div>
-      ),
-    },
-    {
-      title: '巡检时间',
-      key: 'sync_time',
-      width: 180,
-      render: (_, record) => (
-        <div className="resource-ops-transfer-validation">
-          <small>上次巡检 {formatDateTime(record.last_checked_at)}</small>
-          <small>下次巡检 {formatDateTime(record.next_check_at)}</small>
+          {record.last_candidate_title ? <small>{`候选：${record.last_candidate_title}`}</small> : null}
+          {record.last_error_message ? <small className="is-error">{record.last_error_message}</small> : null}
         </div>
       ),
     },
     {
       title: '操作',
       key: 'actions',
-      width: 230,
+      width: 170,
       fixed: 'right',
       render: (_, record) => (
-        <Space wrap size={[6, 6]}>
-          <Button size="small" onClick={() => void loadTaskDetail(record.id, { open: true })}>
-            详情
-          </Button>
-          <Button
-            size="small"
-            loading={queueingTaskId === record.id}
-            disabled={record.status !== 'active'}
-            onClick={() => void (async () => {
-              setQueueingTaskId(record.id)
-              try {
-                const response = await queuePanTransferFollowTaskCheck(record.id)
-                setDetailData((current) => (current?.task.id === record.id ? response : current))
-                message.success(`追更任务 #${record.id} 已加入立即巡检队列`)
-                await loadTasks(pagination.page, pagination.pageSize, statusFilter)
-              } catch (error) {
-                message.error(getErrorMessage(error, '加入巡检队列失败'))
-              } finally {
-                setQueueingTaskId(null)
-              }
-            })()}
-          >
-            立即巡检
-          </Button>
+        <div className="resource-ops-transfer-action-grid resource-ops-transfer-action-grid--wide">
+          <Tooltip title="查看详情">
+            <Button size="small" type="text" icon={<EyeOutlined />} onClick={() => void loadTaskDetail(record.id, { open: true })} />
+          </Tooltip>
+          <Tooltip title="立即巡检">
+            <Button
+              size="small"
+              type="text"
+              icon={<SearchOutlined />}
+              loading={queueingTaskId === record.id}
+              disabled={record.status !== 'active'}
+              onClick={() => void (async () => {
+                setQueueingTaskId(record.id)
+                try {
+                  const response = await queuePanTransferFollowTaskCheck(record.id)
+                  setDetailData((current) => (current?.task.id === record.id ? response : current))
+                  message.success(`追更任务 #${record.id} 已加入立即巡检队列`)
+                  await loadTasks(pagination.page, pagination.pageSize, statusFilter)
+                } catch (error) {
+                  message.error(getErrorMessage(error, '加入巡检队列失败'))
+                } finally {
+                  setQueueingTaskId(null)
+                }
+              })()}
+            />
+          </Tooltip>
+          <Tooltip title="同步当前原链">
+            <Button
+              size="small"
+              type="text"
+              icon={<SyncOutlined />}
+              loading={syncingTaskKey === `${record.id}:current`}
+              onClick={() => void triggerFollowSync(record.id, 'current')}
+            />
+          </Tooltip>
+          <Tooltip title={record.last_candidate_url ? '应用候选并同步' : '当前没有候选原链'}>
+            <Button
+              size="small"
+              type="text"
+              icon={<SwapOutlined />}
+              disabled={!record.last_candidate_url}
+              loading={syncingTaskKey === `${record.id}:candidate`}
+              onClick={() => void triggerFollowSync(record.id, 'candidate')}
+            />
+          </Tooltip>
+          <Tooltip title="手动选择同步">
+            <Button
+              size="small"
+              type="text"
+              icon={<FolderOpenOutlined />}
+              onClick={() => void openManualSyncModal(record, record.last_candidate_url ? 'candidate' : 'current')}
+            />
+          </Tooltip>
           {record.status === 'active' ? (
-            <Button
-              size="small"
-              loading={togglingTaskId === record.id}
-              onClick={() => void (async () => {
-                setTogglingTaskId(record.id)
-                try {
-                  const response = await pausePanTransferFollowTask(record.id)
-                  setDetailData((current) => (current?.task.id === record.id ? response : current))
-                  message.success(`追更任务 #${record.id} 已暂停`)
-                  await loadTasks(pagination.page, pagination.pageSize, statusFilter)
-                } catch (error) {
-                  message.error(getErrorMessage(error, '暂停追更任务失败'))
-                } finally {
-                  setTogglingTaskId(null)
-                }
-              })()}
-            >
-              暂停
-            </Button>
+            <Tooltip title="暂停追更">
+              <Button
+                size="small"
+                type="text"
+                icon={<PauseCircleOutlined />}
+                loading={togglingTaskId === record.id}
+                onClick={() => void (async () => {
+                  setTogglingTaskId(record.id)
+                  try {
+                    const response = await pausePanTransferFollowTask(record.id)
+                    setDetailData((current) => (current?.task.id === record.id ? response : current))
+                    message.success(`追更任务 #${record.id} 已暂停`)
+                    await loadTasks(pagination.page, pagination.pageSize, statusFilter)
+                  } catch (error) {
+                    message.error(getErrorMessage(error, '暂停追更任务失败'))
+                  } finally {
+                    setTogglingTaskId(null)
+                  }
+                })()}
+              />
+            </Tooltip>
           ) : (
-            <Button
-              size="small"
-              type="primary"
-              loading={togglingTaskId === record.id}
-              onClick={() => void (async () => {
-                setTogglingTaskId(record.id)
-                try {
-                  const response = await resumePanTransferFollowTask(record.id)
-                  setDetailData((current) => (current?.task.id === record.id ? response : current))
-                  message.success(`追更任务 #${record.id} 已恢复`)
-                  await loadTasks(pagination.page, pagination.pageSize, statusFilter)
-                } catch (error) {
-                  message.error(getErrorMessage(error, '恢复追更任务失败'))
-                } finally {
-                  setTogglingTaskId(null)
-                }
-              })()}
-            >
-              恢复
-            </Button>
+            <Tooltip title="恢复追更">
+              <Button
+                size="small"
+                type="text"
+                icon={<PlayCircleOutlined />}
+                loading={togglingTaskId === record.id}
+                onClick={() => void (async () => {
+                  setTogglingTaskId(record.id)
+                  try {
+                    const response = await resumePanTransferFollowTask(record.id)
+                    setDetailData((current) => (current?.task.id === record.id ? response : current))
+                    message.success(`追更任务 #${record.id} 已恢复`)
+                    await loadTasks(pagination.page, pagination.pageSize, statusFilter)
+                  } catch (error) {
+                    message.error(getErrorMessage(error, '恢复追更任务失败'))
+                  } finally {
+                    setTogglingTaskId(null)
+                  }
+                })()}
+              />
+            </Tooltip>
           )}
           <Popconfirm
             title={`确认删除追更任务 #${record.id} 吗？`}
@@ -574,11 +666,11 @@ const FollowTasksSectionV2 = ({ refreshToken }: FollowTasksSectionProps) => {
               }
             })()}
           >
-            <Button size="small" danger loading={deletingTaskId === record.id}>
-              删除
-            </Button>
+            <Tooltip title="删除追更任务">
+              <Button size="small" type="text" danger icon={<DeleteOutlined />} loading={deletingTaskId === record.id} />
+            </Tooltip>
           </Popconfirm>
-        </Space>
+        </div>
       ),
     },
   ]
@@ -649,19 +741,32 @@ const FollowTasksSectionV2 = ({ refreshToken }: FollowTasksSectionProps) => {
           <div>
             <Title level={4}>追更同步</Title>
             <Paragraph className="resource-ops-transfer-copy">
-              跟踪已经完成转存的资源，持续巡检原链、当前对外分享以及最新候选原链。当前版本先把“绑定前台记录、同步当前原链、应用候选原链并同步、同步后自动回写前台链接”这条主链路打通。
+              这里按“追更资源”来管理持续更新任务，表格重点展示资源标题、当前原链/候选/新分享三路链接、同步状态和快捷操作，方便你像运营发布那样快速扫表处理。
             </Paragraph>
           </div>
-          <Segmented
-            value={statusFilter}
-            options={[
-              { label: '全部任务', value: 'all' },
-              { label: '启用中', value: 'active' },
-              { label: '已暂停', value: 'paused' },
-            ]}
-            onChange={(value) => setStatusFilter(value as FollowStatusFilter)}
-          />
+          <Space>
+            <Button onClick={() => void loadTasks(pagination.page, pagination.pageSize, statusFilter)}>
+              刷新
+            </Button>
+            <Segmented
+              value={statusFilter}
+              options={[
+                { label: '全部任务', value: 'all' },
+                { label: '启用中', value: 'active' },
+                { label: '已暂停', value: 'paused' },
+              ]}
+              onChange={(value) => setStatusFilter(value as FollowStatusFilter)}
+            />
+          </Space>
         </div>
+
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="追更同步已经切换到资源表视角"
+          description="标题列聚焦资源本身，链接列收纳原链/候选/新分享，状态列只保留最关键的巡检与异常信息，操作列可直接巡检、同步、手动选择同步、暂停或删除。"
+        />
 
         <div className="resource-ops-transfer-summary">
           <div className="resource-ops-transfer-summary-item">
@@ -701,7 +806,7 @@ const FollowTasksSectionV2 = ({ refreshToken }: FollowTasksSectionProps) => {
             total: pagination.total,
             showSizeChanger: true,
           }}
-          scroll={{ x: 1860 }}
+          scroll={{ x: 'max-content' }}
           locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无追更任务" /> }}
         />
       </Card>
