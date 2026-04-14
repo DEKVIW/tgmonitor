@@ -264,6 +264,19 @@
   min-width: 0;
 }
 
+.resource-ops-transfer-title-button {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
 .resource-ops-transfer-title-main {
   display: block;
   font-weight: 600;

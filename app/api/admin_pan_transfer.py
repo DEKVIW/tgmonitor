@@ -38,6 +38,7 @@ from app.schemas.pan_transfer_models import (
 from app.services.pan_transfer import (
     cancel_pan_transfer_batch,
     clear_pan_transfer_batch_logs,
+    clear_pan_transfer_follow_task_candidate,
     create_pan_transfer_account,
     create_pan_transfer_follow_task_from_batch_item,
     create_pan_transfer_follow_sync_batch,
@@ -906,6 +907,35 @@ async def resume_pan_transfer_follow_task_api(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to resume follow task: {exc}",
+        ) from exc
+
+
+@router.post(
+    "/follow-tasks/{task_id}/candidate/clear",
+    response_model=PanTransferFollowTaskDetailResponse,
+    summary="Clear the stored candidate source for a follow task",
+)
+async def clear_pan_transfer_follow_task_candidate_api(
+    task_id: int,
+    current_user: dict[str, Any] = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+) -> PanTransferFollowTaskDetailResponse:
+    try:
+        result = clear_pan_transfer_follow_task_candidate(
+            db,
+            task_id=task_id,
+            operator=str(current_user.get("username") or current_user.get("account") or "admin"),
+        )
+        db.commit()
+        return PanTransferFollowTaskDetailResponse(**result)
+    except LookupError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to clear follow task candidate: {exc}",
         ) from exc
 
 

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type Key } from 'react'
 import {
+  CloseCircleOutlined,
   CopyOutlined,
   DeleteOutlined,
   EyeOutlined,
@@ -16,6 +17,7 @@ import type { MenuProps } from 'antd'
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table'
 
 import {
+  clearPanTransferFollowTaskCandidate,
   createPanTransferFollowSyncBatch,
   deletePanTransferFollowTask,
   getPanTransferFollowTaskDetail,
@@ -130,6 +132,7 @@ const renderLinkStatus = (value?: string | null) => {
 
 const getLinkChipMeta = (value?: string | null) => {
   const normalized = String(value || '').toLowerCase()
+  if (normalized === 'candidate_pending') return { tone: 'warning', label: '待处理' }
   if (normalized === 'pending_check') return { tone: 'muted', label: '待巡检' }
   if (normalized === 'healthy' || normalized === 'valid') return { tone: 'success', label: '有效' }
   if (normalized === 'warning') return { tone: 'warning', label: '存疑' }
@@ -223,7 +226,7 @@ const buildFollowLinkItems = (record: PanTransferFollowTaskItem): FollowLinkChip
       key: 'candidate',
       label: '候选',
       url: record.last_candidate_url,
-      status: record.task_state === 'candidate_found' ? 'warning' : 'unknown',
+      status: 'candidate_pending',
       detail: [record.last_candidate_title, record.last_candidate_message_time ? `发现于 ${formatDateTime(record.last_candidate_message_time)}` : ''].filter(Boolean).join('\n'),
     })
   }
@@ -311,6 +314,7 @@ const FollowTasksSectionV2 = ({ refreshToken }: FollowTasksSectionProps) => {
   const [pagination, setPagination] = useState({ page: 1, pageSize: 10, total: 0 })
   const [queueingTaskId, setQueueingTaskId] = useState<number | null>(null)
   const [togglingTaskId, setTogglingTaskId] = useState<number | null>(null)
+  const [clearingCandidateTaskId, setClearingCandidateTaskId] = useState<number | null>(null)
   const [deletingTaskId, setDeletingTaskId] = useState<number | null>(null)
   const [syncingTaskKey, setSyncingTaskKey] = useState<string | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
@@ -502,6 +506,20 @@ const FollowTasksSectionV2 = ({ refreshToken }: FollowTasksSectionProps) => {
     }
   }
 
+  const clearCandidate = async (taskId: number) => {
+    setClearingCandidateTaskId(taskId)
+    try {
+      const response = await clearPanTransferFollowTaskCandidate(taskId)
+      setDetailData((current) => (current?.task.id === taskId ? response : current))
+      message.success(`已清空追更任务 #${taskId} 的候选原链`)
+      await loadTasks(pagination.page, pagination.pageSize, statusFilter)
+    } catch (error) {
+      message.error(getErrorMessage(error, '清空候选原链失败'))
+    } finally {
+      setClearingCandidateTaskId(null)
+    }
+  }
+
   const manualSelectionEntries = useMemo<PanTransferFollowTaskSyncSelectionEntry[]>(
     () =>
       manualSelectedEntries.map((entry) => ({
@@ -557,13 +575,26 @@ const FollowTasksSectionV2 = ({ refreshToken }: FollowTasksSectionProps) => {
     {
       title: '资源',
       key: 'task_name',
-      width: 320,
+      width: 260,
       render: (_, record) => {
         const mainTitle = record.work_title || record.topic_title || record.task_name || `追更任务 #${record.id}`
         return (
-          <Tooltip title={mainTitle}>
+          <Tooltip
+            title={
+              <div>
+                <div>{mainTitle}</div>
+                <div>点击复制标题</div>
+              </div>
+            }
+          >
             <div className="resource-ops-transfer-title-cell">
-              <span className="resource-ops-transfer-title-main">{mainTitle}</span>
+              <button
+                type="button"
+                className="resource-ops-transfer-title-button"
+                onClick={() => void copyText(mainTitle, '已复制资源标题')}
+              >
+                <span className="resource-ops-transfer-title-main">{mainTitle}</span>
+              </button>
             </div>
           </Tooltip>
         )
@@ -645,7 +676,7 @@ const FollowTasksSectionV2 = ({ refreshToken }: FollowTasksSectionProps) => {
     {
       title: '状态',
       key: 'state',
-      width: 260,
+      width: 220,
       render: (_, record) => (
         <div className="resource-ops-transfer-validation">
           <Space wrap size={[6, 6]}>
@@ -655,13 +686,9 @@ const FollowTasksSectionV2 = ({ refreshToken }: FollowTasksSectionProps) => {
             <Tag color={(TASK_STATE_META[record.task_state] || { color: 'default' }).color}>
               {(TASK_STATE_META[record.task_state] || { label: record.task_state }).label}
             </Tag>
-            {String(record.source_link_status || '').toLowerCase() !== 'unknown' ? renderLinkStatus(record.source_link_status) : null}
-            {record.current_share_url && String(record.current_share_status || '').toLowerCase() !== 'unknown'
-              ? renderLinkStatus(record.current_share_status)
-              : null}
           </Space>
           <small>{getFollowStatusSummary(record)}</small>
-          {record.last_candidate_title ? <small>{`候选：${record.last_candidate_title}`}</small> : null}
+          {record.last_candidate_url ? <small>当前存在待处理候选原链</small> : null}
           {record.last_error_message ? <small className="is-error">{record.last_error_message}</small> : null}
         </div>
       ),
@@ -715,6 +742,16 @@ const FollowTasksSectionV2 = ({ refreshToken }: FollowTasksSectionProps) => {
               disabled={!record.last_candidate_url}
               loading={syncingTaskKey === `${record.id}:candidate`}
               onClick={() => void triggerFollowSync(record.id, 'candidate')}
+            />
+          </Tooltip>
+          <Tooltip title={record.last_candidate_url ? '清空候选原链' : '当前没有候选原链'}>
+            <Button
+              size="small"
+              type="text"
+              icon={<CloseCircleOutlined />}
+              disabled={!record.last_candidate_url}
+              loading={clearingCandidateTaskId === record.id}
+              onClick={() => void clearCandidate(record.id)}
             />
           </Tooltip>
           <Tooltip title="手动选择同步">
@@ -1122,6 +1159,16 @@ const FollowTasksSectionV2 = ({ refreshToken }: FollowTasksSectionProps) => {
                   <Link href={detailTask.last_candidate_url || undefined} target="_blank" title={detailTask.last_candidate_url || undefined}>
                     {detailTask.last_candidate_url}
                   </Link>
+                  <div className="resource-ops-follow-sync-actions">
+                    <Button
+                      size="small"
+                      icon={<CloseCircleOutlined />}
+                      loading={clearingCandidateTaskId === detailTask.id}
+                      onClick={() => void clearCandidate(detailTask.id)}
+                    >
+                      清空候选
+                    </Button>
+                  </div>
                 </div>
               ) : (
                 <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前还没有候选原链" />

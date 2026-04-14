@@ -588,6 +588,44 @@ def resume_pan_transfer_follow_task(
     return get_pan_transfer_follow_task_detail(session, task_id=int(task.id))
 
 
+def clear_pan_transfer_follow_task_candidate(
+    session: Session,
+    *,
+    task_id: int,
+    operator: str | None,
+    reason: str | None = None,
+) -> dict[str, Any]:
+    ensure_runtime_storage_tables()
+    task = _get_follow_task(session, task_id=task_id)
+    if not task.last_candidate_url and task.last_candidate_link_target_id is None:
+        return get_pan_transfer_follow_task_detail(session, task_id=int(task.id))
+
+    previous_candidate_payload = {
+        "link_target_id": int(task.last_candidate_link_target_id) if task.last_candidate_link_target_id is not None else None,
+        "url": str(task.last_candidate_url or ""),
+        "title": str(task.last_candidate_title or "") or None,
+        "latest_message_time": task.last_candidate_message_time,
+        "reason": _normalize_text(reason, max_length=64) or "manual_clear",
+    }
+    _clear_follow_task_candidate_fields(task)
+    _apply_follow_task_state_without_candidate(task)
+    task.updated_by = _normalize_text(operator, max_length=128) or task.updated_by
+    session.add(task)
+    session.flush()
+    _append_follow_task_log(
+        session,
+        task=task,
+        stage="candidate",
+        message="Cleared the stored candidate source",
+        payload={
+            **previous_candidate_payload,
+            "operator": _normalize_text(operator, max_length=128) or None,
+        },
+    )
+    session.flush()
+    return get_pan_transfer_follow_task_detail(session, task_id=int(task.id))
+
+
 def delete_pan_transfer_follow_task(session: Session, *, task_id: int) -> dict[str, Any]:
     ensure_runtime_storage_tables()
     task = _get_follow_task(session, task_id=task_id)
@@ -737,6 +775,31 @@ async def _safe_validate_url(url: str | None) -> dict[str, Any]:
         }
 
 
+def _is_healthy_link_status(value: Any) -> bool:
+    normalized = _normalize_text(value, max_length=32).lower()
+    return normalized in {"valid", "healthy"}
+
+
+def _clear_follow_task_candidate_fields(task: PanTransferSyncTask) -> None:
+    task.last_candidate_link_target_id = None
+    task.last_candidate_url = None
+    task.last_candidate_title = None
+    task.last_candidate_message_time = None
+
+
+def _apply_follow_task_state_without_candidate(task: PanTransferSyncTask) -> None:
+    if _normalize_text(task.source_link_status, max_length=32).lower() == "invalid":
+        task.task_state = PAN_TRANSFER_SYNC_STATE_SOURCE_INVALID
+        task.last_change_type = "source_invalid"
+        return
+    if task.current_share_url and _normalize_text(task.current_share_status, max_length=32).lower() == "invalid":
+        task.task_state = PAN_TRANSFER_SYNC_STATE_SHARE_INVALID
+        task.last_change_type = "share_invalid"
+        return
+    task.task_state = PAN_TRANSFER_SYNC_STATE_IDLE
+    task.last_change_type = "no_change"
+
+
 async def _process_pan_transfer_follow_task_async(
     session: Session,
     *,
@@ -781,58 +844,116 @@ async def _process_pan_transfer_follow_task_async(
         payload=dict(share_status),
     )
 
+    if task.last_candidate_url:
+        existing_candidate_payload = {
+            "link_target_id": int(task.last_candidate_link_target_id) if task.last_candidate_link_target_id is not None else None,
+            "url": str(task.last_candidate_url or ""),
+            "title": str(task.last_candidate_title or "") or None,
+            "latest_message_time": task.last_candidate_message_time,
+        }
+        existing_candidate_status = await _safe_validate_url(task.last_candidate_url)
+        normalized_existing_candidate_status = _normalize_text(
+            existing_candidate_status.get("status"), max_length=32
+        ).lower() or "unknown"
+        if not _is_healthy_link_status(normalized_existing_candidate_status):
+            _clear_follow_task_candidate_fields(task)
+            session.add(task)
+            session.flush()
+            _append_follow_task_log(
+                session,
+                task=task,
+                stage="candidate",
+                level="warning",
+                message=(
+                    "Removed the stored candidate source because link validation "
+                    f"finished with status: {normalized_existing_candidate_status}"
+                ),
+                payload={
+                    **existing_candidate_payload,
+                    "candidate_status": normalized_existing_candidate_status,
+                    "candidate_detail_message": existing_candidate_status.get("detail_message"),
+                },
+            )
+
+    candidate_discarded = False
     candidate = _find_follow_candidate_by_work(session, task=task) or _find_follow_candidate_by_topic_title(session, task=task)
     if candidate is not None:
-        task.task_state = PAN_TRANSFER_SYNC_STATE_CANDIDATE_FOUND
-        task.last_change_type = "candidate_found"
-        task.last_candidate_link_target_id = int(candidate["link_target_id"])
-        task.last_candidate_url = str(candidate["url"])
-        task.last_candidate_title = str(candidate["title"])
-        task.last_candidate_message_time = candidate.get("latest_message_time")
-        session.add(task)
-        session.flush()
-        _append_follow_task_log(
-            session,
-            task=task,
-            stage="candidate",
-            message="Detected a recent candidate source link for this tracked resource",
-            payload=dict(candidate),
-        )
-    elif task.source_link_status == "invalid":
-        task.task_state = PAN_TRANSFER_SYNC_STATE_SOURCE_INVALID
-        task.last_change_type = "source_invalid"
-        session.add(task)
-        session.flush()
-        _append_follow_task_log(
-            session,
-            task=task,
-            stage="candidate",
-            level="warning",
-            message="No new candidate found and the current source link is invalid",
-        )
-    elif task.current_share_url and task.current_share_status == "invalid":
-        task.task_state = PAN_TRANSFER_SYNC_STATE_SHARE_INVALID
-        task.last_change_type = "share_invalid"
-        session.add(task)
-        session.flush()
-        _append_follow_task_log(
-            session,
-            task=task,
-            stage="candidate",
-            level="warning",
-            message="No new candidate found and the current outward share is invalid",
-        )
-    else:
-        task.task_state = PAN_TRANSFER_SYNC_STATE_IDLE
-        task.last_change_type = "no_change"
-        session.add(task)
-        session.flush()
-        _append_follow_task_log(
-            session,
-            task=task,
-            stage="candidate",
-            message="No recent candidate source link was found for this check",
-        )
+        candidate_status = await _safe_validate_url(str(candidate.get("url") or ""))
+        normalized_candidate_status = _normalize_text(candidate_status.get("status"), max_length=32).lower() or "unknown"
+        if _is_healthy_link_status(normalized_candidate_status):
+            task.task_state = PAN_TRANSFER_SYNC_STATE_CANDIDATE_FOUND
+            task.last_change_type = "candidate_found"
+            task.last_candidate_link_target_id = int(candidate["link_target_id"])
+            task.last_candidate_url = str(candidate["url"])
+            task.last_candidate_title = str(candidate["title"])
+            task.last_candidate_message_time = candidate.get("latest_message_time")
+            session.add(task)
+            session.flush()
+            _append_follow_task_log(
+                session,
+                task=task,
+                stage="candidate",
+                message="Detected a recent candidate source link for this tracked resource",
+                payload={
+                    **dict(candidate),
+                    "candidate_status": normalized_candidate_status,
+                },
+            )
+        else:
+            candidate_discarded = True
+            _append_follow_task_log(
+                session,
+                task=task,
+                stage="candidate",
+                level="warning",
+                message=(
+                    "Discarded a detected candidate source because link validation "
+                    f"finished with status: {normalized_candidate_status}"
+                ),
+                payload={
+                    **dict(candidate),
+                    "candidate_status": normalized_candidate_status,
+                    "candidate_detail_message": candidate_status.get("detail_message"),
+                },
+            )
+            candidate = None
+    if candidate is None:
+        if task.source_link_status == "invalid":
+            task.task_state = PAN_TRANSFER_SYNC_STATE_SOURCE_INVALID
+            task.last_change_type = "source_invalid"
+            session.add(task)
+            session.flush()
+            _append_follow_task_log(
+                session,
+                task=task,
+                stage="candidate",
+                level="warning",
+                message="No new candidate found and the current source link is invalid",
+            )
+        elif task.current_share_url and task.current_share_status == "invalid":
+            task.task_state = PAN_TRANSFER_SYNC_STATE_SHARE_INVALID
+            task.last_change_type = "share_invalid"
+            session.add(task)
+            session.flush()
+            _append_follow_task_log(
+                session,
+                task=task,
+                stage="candidate",
+                level="warning",
+                message="No new candidate found and the current outward share is invalid",
+            )
+        else:
+            task.task_state = PAN_TRANSFER_SYNC_STATE_IDLE
+            task.last_change_type = "no_change"
+            session.add(task)
+            session.flush()
+            if not candidate_discarded:
+                _append_follow_task_log(
+                    session,
+                    task=task,
+                    stage="candidate",
+                    message="No recent candidate source link was found for this check",
+                )
 
 
 def process_next_pan_transfer_follow_task(session: Session, *, worker_name: str) -> bool:
