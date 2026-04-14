@@ -55,6 +55,7 @@ import type {
   PanTransferPublishRecordUpdateRequest,
   PanTransferPublishRuleUpdateRequest,
 } from '@/types/panTransfer'
+import { formatServerDateTime } from '@/utils/dateTime'
 
 import { PLATFORM_OPTIONS, formatDateTime, getErrorMessage } from './shared'
 
@@ -112,6 +113,54 @@ const SORT_FIELD_MAP: Record<string, string> = {
 
 const getLinkStatusMeta = (value?: string | null) =>
   LINK_STATUS_META[String(value || '').toLowerCase()] || LINK_STATUS_META.unknown
+
+const formatPublishedAt = (value?: string | null) =>
+  value ? formatServerDateTime(value, 'YYYY-MM-DD HH:mm', 'Asia/Shanghai', true) : '-'
+
+const buildDirectoryTrail = (
+  fallbackLabel: string,
+  trail: DirectoryTrailItem[],
+  response: PanTransferLinkDirectoryPreviewResponse
+): DirectoryTrailItem[] => {
+  const rootItem: DirectoryTrailItem = {
+    key: 'root',
+    label: fallbackLabel,
+  }
+  const baseTrail = trail.length > 0 ? [...trail] : [rootItem]
+  if (baseTrail[0]?.key !== 'root') {
+    baseTrail.unshift(rootItem)
+  }
+  const currentEntryId = response.current_entry_id || null
+  const currentEntryPath = response.current_path || null
+  const currentLabel = response.current_name || baseTrail[baseTrail.length - 1]?.label || fallbackLabel
+  if (!currentEntryId && !currentEntryPath) {
+    return [{ ...rootItem, label: currentLabel || fallbackLabel }]
+  }
+  const currentKey = currentEntryId || currentEntryPath || currentLabel
+  const nextItem: DirectoryTrailItem = {
+    key: currentKey,
+    label: currentLabel,
+    entryId: currentEntryId,
+    entryPath: currentEntryPath,
+  }
+  const existingIndex = baseTrail.findIndex(
+    (item) =>
+      item.key === currentKey ||
+      (Boolean(currentEntryId) && item.entryId === currentEntryId) ||
+      (Boolean(currentEntryPath) && item.entryPath === currentEntryPath)
+  )
+  if (existingIndex >= 0) {
+    return [...baseTrail.slice(0, existingIndex), { ...baseTrail[existingIndex], ...nextItem }]
+  }
+  const lastItem = baseTrail[baseTrail.length - 1]
+  if (
+    (lastItem?.entryId || null) === currentEntryId &&
+    (lastItem?.entryPath || null) === currentEntryPath
+  ) {
+    return [...baseTrail.slice(0, -1), { ...lastItem, ...nextItem }]
+  }
+  return [...baseTrail, nextItem]
+}
 
 const formatSize = (value?: number | null) => {
   if (!value || value <= 0) return '-'
@@ -238,7 +287,6 @@ const PublishSectionPanel = ({ refreshToken }: PublishSectionProps) => {
       enabled: Boolean(rule.enabled),
       weekdays: Array.isArray(rule.weekdays) ? rule.weekdays.filter((value): value is number => typeof value === 'number') : [],
       time_of_day: typeof rule.time_of_day === 'string' ? rule.time_of_day : '09:00',
-      timezone: typeof rule.timezone === 'string' ? rule.timezone : 'Asia/Shanghai',
     })
     setRuleOpen(true)
   }
@@ -258,6 +306,7 @@ const PublishSectionPanel = ({ refreshToken }: PublishSectionProps) => {
         entry_name: current?.label || undefined,
       })
       setDirectoryData(response)
+      setDirectoryTrail(buildDirectoryTrail(item.label, trail, response))
     } catch (error) {
       setDirectoryOpen(false)
       message.error(getErrorMessage(error, '目录预览失败'))
@@ -380,7 +429,7 @@ const PublishSectionPanel = ({ refreshToken }: PublishSectionProps) => {
         enabled: Boolean(values.enabled),
         weekdays: Array.isArray(values.weekdays) ? values.weekdays : [],
         time_of_day: values.time_of_day || null,
-        timezone: values.timezone || 'Asia/Shanghai',
+        timezone: 'Asia/Shanghai',
       }
       await updatePanTransferPublishRule(ruleRecord.id, payload)
       message.success(payload.enabled ? '发布规则已保存' : '发布规则已关闭')
@@ -446,11 +495,24 @@ const PublishSectionPanel = ({ refreshToken }: PublishSectionProps) => {
         </div>
       ),
     },
-    { title: '发布', key: 'publish_meta', width: 164, sorter: true, render: (_, record) => <div className="resource-ops-transfer-validation"><small>最近发布 {formatDateTime(record.published_at)}</small><small>发布次数 {record.publish_count || 1}</small>{record.publish_rule_enabled ? <small>规则 {record.publish_rule_summary || '已启用'}</small> : null}{record.next_publish_at ? <small>下次 {formatDateTime(record.next_publish_at)}</small> : null}</div> },
+    {
+      title: '发布',
+      key: 'publish_meta',
+      width: 220,
+      sorter: true,
+      render: (_, record) => (
+        <div className="resource-ops-transfer-validation resource-ops-transfer-validation--publish-meta">
+          <small>最近发布 {formatPublishedAt(record.published_at)}</small>
+          <small>发布次数 {record.publish_count || 1}</small>
+          {record.publish_rule_enabled ? <small>规则 {record.publish_rule_summary || '已启用'}</small> : null}
+          {record.next_publish_at ? <small>下次 {formatDateTime(record.next_publish_at)}</small> : null}
+        </div>
+      ),
+    },
     {
       title: '链接',
       key: 'links',
-      width: 420,
+      width: 292,
       render: (_, record) => (
         <div className="resource-ops-transfer-link-stack">
           <Space size={[6, 6]} wrap>{buildLinkItems(record).map((item) => {
@@ -514,11 +576,11 @@ const PublishSectionPanel = ({ refreshToken }: PublishSectionProps) => {
             <Button danger disabled={selectedRecords.length <= 0} loading={batchActionLoading === 'delete'} onClick={() => void handleBatchAction('delete')}>批量删除</Button>
           </Space>
         </div>
-        <Table rowKey="id" style={{ marginTop: 16 }} loading={loading} dataSource={records} columns={columns} rowSelection={{ selectedRowKeys, onChange: setSelectedRowKeys }} onChange={(tablePagination: TablePaginationConfig, _, sorter) => { const resolvedSorter = Array.isArray(sorter) ? sorter[0] : sorter; setQuery((current) => ({ ...current, page: tablePagination.current || 1, pageSize: tablePagination.pageSize || current.pageSize, sortBy: resolvedSorter && typeof resolvedSorter.field === 'string' ? SORT_FIELD_MAP[resolvedSorter.field] || 'published_at' : current.sortBy, sortOrder: resolvedSorter?.order === 'ascend' ? 'asc' : resolvedSorter?.order === 'descend' ? 'desc' : current.sortOrder })) }} pagination={{ current: query.page, pageSize: query.pageSize, total, showSizeChanger: true }} scroll={{ x: 1360 }} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无运营发布资源" /> }} />
+        <Table rowKey="id" style={{ marginTop: 16 }} loading={loading} dataSource={records} columns={columns} rowSelection={{ selectedRowKeys, onChange: setSelectedRowKeys }} onChange={(tablePagination: TablePaginationConfig, _, sorter) => { const resolvedSorter = Array.isArray(sorter) ? sorter[0] : sorter; setQuery((current) => ({ ...current, page: tablePagination.current || 1, pageSize: tablePagination.pageSize || current.pageSize, sortBy: resolvedSorter && typeof resolvedSorter.field === 'string' ? SORT_FIELD_MAP[resolvedSorter.field] || 'published_at' : current.sortBy, sortOrder: resolvedSorter?.order === 'ascend' ? 'asc' : resolvedSorter?.order === 'descend' ? 'desc' : current.sortOrder })) }} pagination={{ current: query.page, pageSize: query.pageSize, total, showSizeChanger: true }} scroll={{ x: 1280 }} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无运营发布资源" /> }} />
       </Card>
       <Modal open={manualOpen} title="手动新建发布" onCancel={() => setManualOpen(false)} onOk={() => void handleManualPublish()} confirmLoading={manualSaving} okText="确认发布" destroyOnHidden><Form form={manualForm} layout="vertical"><Form.Item label="平台" name="platform" rules={[{ required: true, message: '请选择平台' }]}><Select options={PLATFORM_OPTIONS} /></Form.Item><Form.Item label="分享链接" name="source_url" rules={[{ required: true, message: '请输入分享链接' }]}><Input placeholder="请输入前台最终要展示的链接" /></Form.Item><Form.Item label="标题" name="title" rules={[{ required: true, message: '请输入标题' }]}><Input maxLength={255} placeholder="请输入前台展示标题" /></Form.Item><Form.Item label="描述" name="description"><Input.TextArea rows={4} maxLength={1000} placeholder="可选，补充发布说明" /></Form.Item><Form.Item label="标签" name="tags"><Select mode="tags" tokenSeparators={[',', '，']} open={false} placeholder="可选，输入后回车" /></Form.Item></Form></Modal>
       <Modal open={editOpen} title={editingRecord ? `编辑发布：${editingRecord.published_title}` : '编辑发布'} onCancel={() => { setEditOpen(false); setEditingRecord(null); editForm.resetFields() }} onOk={() => void handleEditPublish()} confirmLoading={editSaving} okText="保存修改" destroyOnHidden><Form form={editForm} layout="vertical"><Form.Item label="前台链接" name="source_url" rules={[{ required: true, message: '请输入前台链接' }]}><Input placeholder="这里修改的是前台当前对外展示的链接" /></Form.Item><Form.Item label="标题" name="title" rules={[{ required: true, message: '请输入标题' }]}><Input maxLength={255} /></Form.Item><Form.Item label="描述" name="description"><Input.TextArea rows={4} maxLength={1000} /></Form.Item><Form.Item label="标签" name="tags"><Select mode="tags" tokenSeparators={[',', '，']} open={false} placeholder="输入后回车" /></Form.Item></Form></Modal>
-      <Modal open={ruleOpen} title={ruleRecord ? `发布规则：${ruleRecord.published_title}` : '发布规则'} onCancel={() => { setRuleOpen(false); setRuleRecord(null); ruleForm.resetFields() }} onOk={() => void handleSaveRule()} confirmLoading={ruleSaving} okText="保存规则" destroyOnHidden><Form form={ruleForm} layout="vertical"><Form.Item name="enabled" valuePropName="checked"><Checkbox>启用循环发布</Checkbox></Form.Item><Form.Item label="发布星期" name="weekdays"><Checkbox.Group options={WEEKDAY_OPTIONS} /></Form.Item><Form.Item label="发布时间" name="time_of_day" rules={[{ pattern: /^([01]\d|2[0-3]):([0-5]\d)$/, message: '请使用 HH:MM，例如 09:30' }]}><Input placeholder="09:00" /></Form.Item><Form.Item label="时区" name="timezone"><Input placeholder="Asia/Shanghai" /></Form.Item></Form></Modal>
+      <Modal open={ruleOpen} title={ruleRecord ? `发布规则：${ruleRecord.published_title}` : '发布规则'} onCancel={() => { setRuleOpen(false); setRuleRecord(null); ruleForm.resetFields() }} onOk={() => void handleSaveRule()} confirmLoading={ruleSaving} okText="保存规则" destroyOnHidden><Form form={ruleForm} layout="vertical"><Paragraph className="resource-ops-transfer-copy">发布规则默认按中国时间执行，无需单独填写时区。</Paragraph><Form.Item name="enabled" valuePropName="checked"><Checkbox>启用循环发布</Checkbox></Form.Item><Form.Item label="发布星期" name="weekdays"><Checkbox.Group options={WEEKDAY_OPTIONS} /></Form.Item><Form.Item label="发布时间" name="time_of_day" rules={[{ pattern: /^([01]\d|2[0-3]):([0-5]\d)$/, message: '请使用 HH:MM，例如 09:30' }]}><Input placeholder="09:00" /></Form.Item></Form></Modal>
       <Modal open={directoryOpen} title={directoryTitle ? `${directoryTitle}目录预览` : '目录预览'} onCancel={() => { setDirectoryOpen(false); setDirectoryData(null); setDirectoryLink(null); setDirectoryTrail([]) }} footer={null} width={820} destroyOnHidden><div className="resource-ops-transfer-modal-stack"><Paragraph className="resource-ops-transfer-copy">支持在目录里继续点进子目录查看，像资源管理器一样逐层下钻，不会改动任何现有链接或发布记录。</Paragraph><div className="resource-ops-transfer-directory-meta">{directoryData ? <><Tag>{directoryData.platform}</Tag><Tag color="processing">共 {directoryData.item_count} 项</Tag>{directoryData.truncated ? <Tag color="warning">仅显示前 {directoryData.items.length} 项</Tag> : null}</> : null}</div><div className="resource-ops-transfer-directory-breadcrumbs">{directoryTrail.map((item, index) => <button key={item.key} type="button" className="resource-ops-transfer-directory-crumb" onClick={() => { if (!directoryLink) return; void openDirectoryAt(directoryLink, directoryTrail.slice(0, index + 1)) }}>{item.label}</button>)}</div><Table size="small" rowKey={(entry) => entry.entry_id || entry.path || `${entry.name}-${entry.is_dir ? 'dir' : 'file'}`} loading={directoryLoading} columns={directoryColumns} dataSource={directoryData?.items || []} pagination={false} scroll={{ y: 420 }} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={directoryData?.message || '当前目录为空'} /> }} /></div></Modal>
     </>
   )

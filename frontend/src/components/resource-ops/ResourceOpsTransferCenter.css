@@ -162,8 +162,12 @@
 .resource-ops-transfer-link-stack {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
   min-width: 0;
+}
+
+.resource-ops-transfer-link-stack .ant-space {
+  width: 100%;
 }
 
 .resource-ops-transfer-link-chip {
@@ -171,7 +175,7 @@
   align-items: center;
   gap: 6px;
   max-width: 100%;
-  padding: 5px 9px;
+  padding: 4px 8px;
   border: 1px solid rgba(15, 23, 42, 0.12);
   border-radius: 999px;
   background: #fff;
@@ -184,6 +188,11 @@
 }
 
 .resource-ops-transfer-link-chip-label {
+  min-width: 0;
+  max-width: 68px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: rgba(15, 23, 42, 0.88);
   font-size: 12px;
   font-weight: 600;
@@ -310,6 +319,16 @@
   -webkit-line-clamp: 2;
   line-clamp: 2;
   word-break: break-word;
+}
+
+.resource-ops-transfer-validation--publish-meta small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  word-break: normal;
+  line-clamp: unset;
+  -webkit-line-clamp: unset;
 }
 
 .resource-ops-transfer-validation small.is-error {

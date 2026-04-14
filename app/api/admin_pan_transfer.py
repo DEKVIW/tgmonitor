@@ -452,7 +452,12 @@ async def preview_pan_transfer_link_directory_api(
 ) -> PanTransferLinkDirectoryPreviewResponse:
     del current_user
     try:
-        result = await preview_pan_transfer_link_directory(url=payload.url)
+        result = await preview_pan_transfer_link_directory(
+            url=payload.url,
+            entry_id=payload.entry_id,
+            entry_path=payload.entry_path,
+            entry_name=payload.entry_name,
+        )
         return PanTransferLinkDirectoryPreviewResponse(**result)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc

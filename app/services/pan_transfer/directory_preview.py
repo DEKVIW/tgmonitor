@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from typing import Any
-from urllib.parse import parse_qs, quote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 import aiohttp
 
@@ -126,12 +127,21 @@ def _build_entry(
     }
 
 
-def _extract_quark_share_id(url: str) -> tuple[str, str | None]:
+def _extract_quark_share_id(url: str) -> tuple[str, str | None, str, str | None]:
     parsed = urlparse(str(url or "").strip())
     parts = [part for part in (parsed.path or "").split("/") if part]
     if len(parts) >= 2 and parts[0] == "s" and parts[1]:
         pwd = str((parse_qs(parsed.query).get("pwd") or [""])[0]).strip() or None
-        return parts[1], pwd
+        current_entry_id = "0"
+        current_entry_name: str | None = None
+        for part in parts[2:]:
+            match = re.match(r"^(?P<fid>[0-9a-fA-F]{32})(?:-(?P<name>.+))?$", part)
+            if not match:
+                continue
+            current_entry_id = str(match.group("fid") or "0")
+            encoded_name = str(match.group("name") or "").strip()
+            current_entry_name = unquote(encoded_name).replace("*101", "-") or None
+        return parts[1], pwd, current_entry_id, current_entry_name
     raise ValueError("无法解析夸克分享链接")
 
 
@@ -141,8 +151,13 @@ async def _preview_quark_directory(
     entry_id: str | None = None,
     entry_name: str | None = None,
 ) -> dict[str, Any]:
-    pwd_id, passcode = _extract_quark_share_id(url)
-    current_entry_id = _normalize_text(entry_id, max_length=255) or "0"
+    pwd_id, passcode, parsed_entry_id, parsed_entry_name = _extract_quark_share_id(url)
+    current_entry_id = _normalize_text(entry_id, max_length=255) or parsed_entry_id or "0"
+    current_entry_name = (
+        _normalize_text(entry_name, max_length=255)
+        or _normalize_text(parsed_entry_name, max_length=255)
+        or None
+    )
     async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30), headers=_QUARK_HEADERS) as session:
         status_code, token_payload = await _request_json(
             session,
@@ -178,7 +193,12 @@ async def _preview_quark_directory(
                     "force": "0",
                     "_page": str(page),
                     "_size": "50",
-                    "_sort": "file_type:asc,file_name:asc",
+                    "_fetch_banner": "0",
+                    "_fetch_share": "1",
+                    "_fetch_total": "1",
+                    "_sort": "file_type:asc,updated_at:desc",
+                    "ver": "2",
+                    "fetch_share_full_path": "1",
                 },
             )
             if detail_status != 200:
@@ -217,7 +237,7 @@ async def _preview_quark_directory(
             "truncated": truncated or max(total_count, len(items)) > len(items),
             "current_entry_id": None if current_entry_id == "0" else current_entry_id,
             "current_path": None,
-            "current_name": _normalize_text(entry_name, max_length=255) or None,
+            "current_name": current_entry_name,
             "items": items,
             "message": None if items else "目录为空",
         }
