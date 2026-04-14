@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta
+import logging
+from collections.abc import Mapping
+from datetime import date, datetime, time, timedelta
 from typing import Any
 
 from sqlalchemy import func, or_
@@ -23,6 +25,9 @@ from app.services.resource_ops import get_work_binding_lookup
 
 from .common import normalize_relative_path, utcnow
 from .validation import validate_share_url
+
+
+logger = logging.getLogger(__name__)
 
 
 PAN_TRANSFER_SYNC_STATUS_ACTIVE = "active"
@@ -93,6 +98,28 @@ def _next_check_time(*, interval_minutes: int) -> Any:
     return utcnow() + timedelta(minutes=max(PAN_TRANSFER_SYNC_MIN_INTERVAL_MINUTES, int(interval_minutes or PAN_TRANSFER_SYNC_DEFAULT_INTERVAL_MINUTES)))
 
 
+def _serialize_json_value(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, datetime):
+        text = value.isoformat()
+        return f"{text}Z" if value.tzinfo is None else text
+    if isinstance(value, (date, time)):
+        return value.isoformat()
+    if isinstance(value, Mapping):
+        return {str(key): _serialize_json_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_serialize_json_value(item) for item in value]
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return _normalize_text(value, max_length=4000) or repr(value)
+
+
+def _normalize_log_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
+    normalized = _serialize_json_value(payload or {})
+    return normalized if isinstance(normalized, dict) else {"value": normalized}
+
+
 def _append_follow_task_log(
     session: Session,
     *,
@@ -102,16 +129,30 @@ def _append_follow_task_log(
     level: str = "info",
     payload: dict[str, Any] | None = None,
 ) -> None:
-    session.add(
-        PanTransferSyncTaskLog(
-            task_id=int(task.id),
-            level=_normalize_text(level, max_length=16) or "info",
-            stage=_normalize_text(stage, max_length=32) or "general",
-            message=_normalize_text(message, max_length=4000),
-            payload=dict(payload or {}),
+    normalized_payload = _normalize_log_payload(payload)
+    normalized_stage = _normalize_text(stage, max_length=32) or "general"
+    normalized_message = _normalize_text(message, max_length=4000)
+    try:
+        with session.begin_nested():
+            session.add(
+                PanTransferSyncTaskLog(
+                    task_id=int(task.id),
+                    level=_normalize_text(level, max_length=16) or "info",
+                    stage=normalized_stage,
+                    message=normalized_message,
+                    payload=normalized_payload,
+                )
+            )
+            session.flush()
+    except Exception as exc:
+        logger.warning(
+            "failed to append follow task log task_id=%s stage=%s message=%s payload=%s error=%s",
+            int(task.id),
+            normalized_stage,
+            normalized_message,
+            normalized_payload,
+            _normalize_text(exc, max_length=1000) or type(exc).__name__,
         )
-    )
-    session.flush()
 
 
 def _serialize_follow_task_log(row: PanTransferSyncTaskLog) -> dict[str, Any]:
