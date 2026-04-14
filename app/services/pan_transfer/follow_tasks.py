@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy import func, or_
@@ -13,6 +13,7 @@ from app.models.models import (
     MessageLinkRef,
     PanTransferAccount,
     PanTransferBatchItem,
+    PanTransferPublishRecord,
     PanTransferSyncTask,
     PanTransferSyncTaskLog,
     ResourceWorkBinding,
@@ -31,6 +32,7 @@ PAN_TRANSFER_SYNC_STATE_IDLE = "idle"
 PAN_TRANSFER_SYNC_STATE_QUEUED = "queued"
 PAN_TRANSFER_SYNC_STATE_CHECKING = "checking"
 PAN_TRANSFER_SYNC_STATE_CANDIDATE_FOUND = "candidate_found"
+PAN_TRANSFER_SYNC_STATE_SYNC_QUEUED = "sync_queued"
 PAN_TRANSFER_SYNC_STATE_SOURCE_INVALID = "source_invalid"
 PAN_TRANSFER_SYNC_STATE_SHARE_INVALID = "share_invalid"
 PAN_TRANSFER_SYNC_STATE_ERROR = "error"
@@ -51,6 +53,26 @@ def _normalize_text(value: Any, *, max_length: int | None = None) -> str:
     if max_length is not None and len(text) > max_length:
         text = text[:max_length].strip()
     return text
+
+
+def _normalize_optional_int(value: Any) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError):
+        return None
+    return normalized if normalized > 0 else None
+
+
+def _parse_datetime(value: Any) -> datetime | None:
+    text = _normalize_text(value)
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
 
 
 def _normalize_interval_minutes(value: Any) -> int:
@@ -104,7 +126,77 @@ def _serialize_follow_task_log(row: PanTransferSyncTaskLog) -> dict[str, Any]:
     }
 
 
+def _build_task_automation_config(raw_value: Any) -> dict[str, Any]:
+    raw = dict(raw_value or {}) if isinstance(raw_value, dict) else {}
+    switch_source_mode = _normalize_text(raw.get("switch_source_mode"), max_length=64).lower() or "source_invalid_only"
+    if switch_source_mode not in {"disabled", "source_invalid_only", "candidate_preferred"}:
+        switch_source_mode = "source_invalid_only"
+    return {
+        "enabled": bool(raw.get("enabled")),
+        "switch_source_mode": switch_source_mode,
+        "reuse_existing_share_if_valid": bool(raw.get("reuse_existing_share_if_valid", True)),
+        "update_publish_record": bool(raw.get("update_publish_record", True)),
+    }
+
+
+def _build_follow_publish_binding_snapshot(row: PanTransferPublishRecord | None) -> dict[str, Any]:
+    if row is None:
+        return {}
+    return {
+        "record_id": int(row.id),
+        "published_title": _normalize_text(row.published_title, max_length=255) or None,
+        "published_message_id": int(row.published_message_id) if row.published_message_id is not None else None,
+        "published_at": row.published_at.isoformat() if row.published_at is not None else None,
+        "source_url": _normalize_text(row.source_url) or None,
+    }
+
+
+def _sync_follow_task_publish_binding(
+    task: PanTransferSyncTask,
+    *,
+    publish_record: PanTransferPublishRecord | None,
+) -> None:
+    extra_json = dict(task.extra_json or {})
+    extra_json["publish_binding"] = _build_follow_publish_binding_snapshot(publish_record)
+    task.publish_record_id = int(publish_record.id) if publish_record is not None else None
+    task.extra_json = extra_json
+
+
+def _find_follow_task_publish_record(
+    session: Session,
+    *,
+    task: PanTransferSyncTask,
+) -> PanTransferPublishRecord | None:
+    if task.publish_record_id is not None:
+        row = session.get(PanTransferPublishRecord, int(task.publish_record_id))
+        if row is not None:
+            return row
+    if task.source_batch_item_id is None:
+        return None
+    return (
+        session.query(PanTransferPublishRecord)
+        .filter(PanTransferPublishRecord.source_batch_item_id == int(task.source_batch_item_id))
+        .order_by(PanTransferPublishRecord.updated_at.desc(), PanTransferPublishRecord.id.desc())
+        .first()
+    )
+
+
+def bind_follow_task_publish_record(
+    session: Session,
+    *,
+    task: PanTransferSyncTask,
+) -> PanTransferPublishRecord | None:
+    publish_record = _find_follow_task_publish_record(session, task=task)
+    _sync_follow_task_publish_binding(task, publish_record=publish_record)
+    session.add(task)
+    session.flush()
+    return publish_record
+
+
 def _serialize_follow_task(row: PanTransferSyncTask) -> dict[str, Any]:
+    extra_json = dict(row.extra_json or {})
+    publish_binding = dict(extra_json.get("publish_binding") or {})
+    last_sync = dict(extra_json.get("last_sync") or {})
     return {
         "id": int(row.id),
         "task_name": str(row.task_name or ""),
@@ -120,6 +212,11 @@ def _serialize_follow_task(row: PanTransferSyncTask) -> dict[str, Any]:
         "topic_title": str(row.topic_title or ""),
         "work_id": int(row.work_id) if row.work_id is not None else None,
         "work_title": str(row.work_title or "") or None,
+        "publish_record_id": int(row.publish_record_id) if row.publish_record_id is not None else _normalize_optional_int(publish_binding.get("record_id")),
+        "publish_record_title": _normalize_text(publish_binding.get("published_title"), max_length=255) or None,
+        "publish_record_message_id": _normalize_optional_int(publish_binding.get("published_message_id")),
+        "publish_record_published_at": _parse_datetime(publish_binding.get("published_at")),
+        "publish_record_source_url": _normalize_text(publish_binding.get("source_url")) or None,
         "target_account_id": int(row.target_account_id) if row.target_account_id is not None else None,
         "target_account_name": str(row.target_account_name or "") or None,
         "fixed_save_path": str(row.fixed_save_path or ""),
@@ -143,7 +240,11 @@ def _serialize_follow_task(row: PanTransferSyncTask) -> dict[str, Any]:
         "locked_by": str(row.locked_by or "") or None,
         "locked_at": row.locked_at,
         "last_error_message": str(row.last_error_message or "") or None,
-        "extra_json": dict(row.extra_json or {}),
+        "last_sync_batch_id": _normalize_optional_int(last_sync.get("batch_id")),
+        "last_sync_batch_item_id": _normalize_optional_int(last_sync.get("batch_item_id")),
+        "last_sync_source_kind": _normalize_text(last_sync.get("source_kind"), max_length=32) or None,
+        "last_sync_started_at": _parse_datetime(last_sync.get("started_at")),
+        "extra_json": extra_json,
         "created_by": str(row.created_by or "") or None,
         "updated_by": str(row.updated_by or "") or None,
         "created_at": row.created_at,
@@ -305,6 +406,12 @@ def create_pan_transfer_follow_task_from_batch_item(
     current_share_status = _normalize_text(share_validation.get("status"), max_length=32).lower() or (
         _normalize_text(item.latest_link_health, max_length=32).lower() if current_share_url == source_url else "unknown"
     )
+    publish_record = (
+        session.query(PanTransferPublishRecord)
+        .filter(PanTransferPublishRecord.source_batch_item_id == int(item.id))
+        .order_by(PanTransferPublishRecord.updated_at.desc(), PanTransferPublishRecord.id.desc())
+        .first()
+    )
     task = PanTransferSyncTask(
         task_name=task_name,
         status=PAN_TRANSFER_SYNC_STATUS_ACTIVE,
@@ -319,6 +426,7 @@ def create_pan_transfer_follow_task_from_batch_item(
         topic_title=str(topic_payload["topic_title"]),
         work_id=int(topic_payload["work_id"]) if topic_payload["work_id"] is not None else None,
         work_title=str(topic_payload["work_title"] or "") or None,
+        publish_record_id=int(publish_record.id) if publish_record is not None else None,
         target_account_id=int(item.target_account_id) if item.target_account_id is not None else None,
         target_account_name=_normalize_text(getattr(account, "account_name", None), max_length=128) or _normalize_text(extra_json.get("recommended_account_name"), max_length=128) or None,
         fixed_save_path=fixed_save_path,
@@ -337,6 +445,8 @@ def create_pan_transfer_follow_task_from_batch_item(
             "source_message_snapshot": dict(extra_json.get("source_message_snapshot") or {}),
             "path_strategy": path_strategy,
             "resolved_paths": resolved_paths,
+            "publish_binding": _build_follow_publish_binding_snapshot(publish_record),
+            "automation": _build_task_automation_config((payload or {}).get("automation")),
             "created_from_batch_item": {
                 "batch_id": int(item.batch_id),
                 "item_id": int(item.id),

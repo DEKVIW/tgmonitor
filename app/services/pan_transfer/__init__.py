@@ -17,6 +17,7 @@ from .batches import (
     start_pan_transfer_batch,
 )
 from .follow_tasks import (
+    bind_follow_task_publish_record,
     create_pan_transfer_follow_task_from_batch_item,
     delete_pan_transfer_follow_task,
     get_pan_transfer_follow_task_detail,
@@ -26,6 +27,7 @@ from .follow_tasks import (
     queue_pan_transfer_follow_task_check,
     resume_pan_transfer_follow_task,
 )
+from .follow_sync import create_pan_transfer_follow_sync_batch
 from .preview import preview_manual_pan_transfer_selection
 from .publishing import (
     archive_pan_transfer_publish_record,
@@ -67,8 +69,10 @@ __all__ = [
     "preview_pan_transfer_link_directory",
     "preview_manual_pan_transfer_selection",
     "archive_pan_transfer_publish_record",
+    "bind_follow_task_publish_record",
     "publish_manual_pan_transfer_message",
     "publish_pan_transfer_batch_item_message",
+    "create_pan_transfer_follow_sync_batch",
     "queue_pan_transfer_follow_task_check",
     "refresh_pan_transfer_publish_record_share",
     "republish_pan_transfer_publish_record",

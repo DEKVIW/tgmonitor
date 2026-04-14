@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import time
@@ -89,6 +90,111 @@ def _parse_transfer_payload(response_text: str) -> tuple[str, str, list[str]]:
     if not share_ids or not user_ids or not fs_ids:
         raise PanTransferProviderError("Unable to parse transfer parameters from Baidu share page", retryable=False)
     return share_ids[0], user_ids[0], fs_ids
+
+
+def _extract_share_access_context(url: str) -> tuple[str, bool, str | None]:
+    parsed = urlparse(str(url or "").strip())
+    path = parsed.path or ""
+    passcode = str((parse_qs(parsed.query).get("pwd") or [""])[0]).strip() or None
+    if path.startswith("/s/"):
+        parts = [part for part in path.split("/") if part]
+        if len(parts) >= 2:
+            return parts[1], True, passcode
+    if path.startswith("/share/init"):
+        share_key = str((parse_qs(parsed.query).get("surl") or [""])[0]).strip()
+        if share_key:
+            return share_key, False, passcode
+    raise PanTransferProviderError("Unable to parse Baidu share key from URL", retryable=False)
+
+
+def _build_share_list_short_url(share_key: str, *, requires_prefix_strip: bool) -> str:
+    if requires_prefix_strip and share_key.startswith("1") and len(share_key) > 1:
+        return share_key[1:]
+    return share_key
+
+
+def _normalize_source_selection(raw_value: dict[str, Any] | None) -> dict[str, Any] | None:
+    raw = dict(raw_value or {})
+    selected_entries = raw.get("selected_entries")
+    if not isinstance(selected_entries, list) or not selected_entries:
+        return None
+    normalized_entries: list[dict[str, Any]] = []
+    for row in selected_entries:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("name") or "").strip()
+        if not name:
+            continue
+        normalized_entries.append(
+            {
+                "name": name,
+                "is_dir": bool(row.get("is_dir")),
+                "entry_id": str(row.get("entry_id") or "").strip() or None,
+                "path": str(row.get("path") or "").strip() or None,
+            }
+        )
+    if not normalized_entries:
+        return None
+    return {
+        "parent_entry_id": str(raw.get("parent_entry_id") or "").strip() or None,
+        "parent_path": str(raw.get("parent_path") or "").strip() or None,
+        "parent_name": str(raw.get("parent_name") or "").strip() or None,
+        "selected_entries": normalized_entries,
+    }
+
+
+def _select_baidu_share_items(
+    rows: list[dict[str, Any]],
+    *,
+    source_selection: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    selection = _normalize_source_selection(source_selection)
+    if selection is None:
+        return [dict(row or {}) for row in rows if str(row.get("fs_id") or "").strip()]
+
+    available_rows = [dict(row or {}) for row in rows if str(row.get("fs_id") or "").strip()]
+    selected_rows: list[dict[str, Any]] = []
+    missing_entries: list[str] = []
+    for entry in selection["selected_entries"]:
+        entry_id = str(entry.get("entry_id") or "").strip()
+        entry_path = str(entry.get("path") or "").strip()
+        entry_name = str(entry.get("name") or "").strip()
+        entry_is_dir = bool(entry.get("is_dir"))
+        matched = next(
+            (row for row in available_rows if entry_id and str(row.get("fs_id") or "").strip() == entry_id),
+            None,
+        )
+        if matched is None:
+            matched = next(
+                (row for row in available_rows if entry_path and str(row.get("path") or "").strip() == entry_path),
+                None,
+            )
+        if matched is None:
+            matched = next(
+                (
+                    row
+                    for row in available_rows
+                    if str(row.get("server_filename") or "").strip() == entry_name
+                    and int(row.get("isdir") or 0) == (1 if entry_is_dir else 0)
+                ),
+                None,
+            )
+        if matched is None:
+            missing_entries.append(entry_name or entry_path or entry_id or "unknown")
+            continue
+        selected_rows.append(matched)
+
+    if missing_entries:
+        raise PanTransferProviderError(
+            "Selected Baidu share entries were not found in the current directory",
+            retryable=False,
+            payload={
+                "missing_entries": missing_entries,
+                "available_entries": [str(row.get("server_filename") or "") for row in available_rows[:50]],
+            },
+        )
+
+    return selected_rows
 
 
 class _BaiduClient:
@@ -199,6 +305,45 @@ class _BaiduClient:
                 raise PanTransferProviderError(f"Baidu share page request failed with HTTP {response.status}")
             return body
 
+    async def list_share_dir(
+        self,
+        *,
+        share_key: str,
+        requires_prefix_strip: bool,
+        dir_path: str | None,
+    ) -> list[dict[str, Any]]:
+        short_url = _build_share_list_short_url(share_key, requires_prefix_strip=requires_prefix_strip)
+        payload = await self._request_json(
+            "GET",
+            "https://pan.baidu.com/share/list",
+            params={
+                "web": "1",
+                "app_id": "250528",
+                "desc": "1",
+                "showempty": "0",
+                "page": "1",
+                "num": "200",
+                "order": "time",
+                "shorturl": short_url,
+                "root": "0" if dir_path else "1",
+                "dir": dir_path or "",
+                "view_mode": "1",
+                "channel": "chunlei",
+                "clienttype": "0",
+            },
+        )
+        errno = int(payload.get("errno") or 0)
+        if errno != 0:
+            raise PanTransferProviderError(
+                f"Baidu share directory read failed: errno {errno}",
+                retryable=False,
+                payload=payload,
+            )
+        rows = payload.get("list")
+        if isinstance(rows, list):
+            return [dict(row or {}) for row in rows]
+        return []
+
     async def list_dir(self, path: str, *, bdstoken: str) -> list[dict[str, Any]] | int:
         payload = await self._request_json(
             "GET",
@@ -237,6 +382,35 @@ class _BaiduClient:
             },
         )
         return int(payload.get("errno") or 0)
+
+    async def delete_files(self, *, paths: list[str], bdstoken: str) -> dict[str, Any]:
+        normalized_paths = [str(path or "").strip() for path in paths if str(path or "").strip()]
+        if not normalized_paths:
+            return {}
+        payload = await self._request_json(
+            "POST",
+            "https://pan.baidu.com/api/filemanager",
+            params={
+                "opera": "delete",
+                "async": "2",
+                "onnest": "fail",
+                "bdstoken": bdstoken,
+                "channel": "chunlei",
+                "web": "1",
+                "clienttype": "0",
+                "app_id": "250528",
+            },
+            data={
+                "filelist": json.dumps(normalized_paths, ensure_ascii=False),
+            },
+        )
+        errno = int(payload.get("errno") or 0)
+        if errno != 0:
+            raise PanTransferProviderError(
+                f"Baidu failed to delete existing contents: errno {errno}",
+                payload=payload,
+            )
+        return payload
 
     async def transfer_file(
         self,
@@ -334,16 +508,36 @@ class BaiduPanTransferProvider(PanTransferProvider):
         staging_root: str,
         staging_folder_name: str,
         title_hint: str | None,
+        source_selection: dict[str, Any] | None = None,
+        clear_existing_contents: bool = False,
     ) -> PanTransferTransferResult:
         del account_name, title_hint
         async with _BaiduClient(credential_value) as client:
             bdstoken, validation_payload = await client.get_bdstoken()
             share_key = _extract_share_key(original_url)
-            if original_passcode:
-                await client.verify_pass_code(share_key=share_key, passcode=original_passcode, bdstoken=bdstoken)
+            share_access_key, requires_prefix_strip, url_passcode = _extract_share_access_context(original_url)
+            resolved_passcode = original_passcode or url_passcode
+            if resolved_passcode:
+                await client.verify_pass_code(share_key=share_key, passcode=resolved_passcode, bdstoken=bdstoken)
 
             response_text = await client.get_transfer_page(url=original_url)
             share_id, share_user_id, fs_ids = _parse_transfer_payload(response_text)
+            normalized_selection = _normalize_source_selection(source_selection)
+            if normalized_selection is not None:
+                share_rows = await client.list_share_dir(
+                    share_key=share_access_key,
+                    requires_prefix_strip=requires_prefix_strip,
+                    dir_path=str(normalized_selection.get("parent_path") or "").strip() or None,
+                )
+                selected_rows = _select_baidu_share_items(share_rows, source_selection=normalized_selection)
+                if not selected_rows:
+                    raise PanTransferProviderError("Baidu share has no transferable content", retryable=False)
+                fs_ids = [
+                    str(row.get("fs_id") or "").strip()
+                    for row in selected_rows
+                    if str(row.get("fs_id") or "").strip()
+                ]
+
             parent_path = "/" + "/".join(part for part in str(staging_root or "").split("/") if part)
             parent_path = parent_path if parent_path != "/" else ""
 
@@ -361,6 +555,42 @@ class BaiduPanTransferProvider(PanTransferProvider):
             errno = await client.create_dir(target_path, bdstoken=bdstoken)
             if errno not in {0, -8}:
                 raise PanTransferProviderError(f"Baidu failed to prepare staging directory: errno {errno}")
+
+            if clear_existing_contents:
+                existing_rows = await client.list_dir(target_path, bdstoken=bdstoken)
+                if isinstance(existing_rows, int):
+                    raise PanTransferProviderError(
+                        f"Baidu failed to inspect staging contents before replacement: errno {existing_rows}"
+                    )
+                existing_paths = [
+                    str(row.get("path") or "").strip()
+                    for row in existing_rows
+                    if str(row.get("path") or "").strip()
+                ]
+                if existing_paths:
+                    await client.delete_files(paths=existing_paths, bdstoken=bdstoken)
+                    for _ in range(12):
+                        await asyncio.sleep(0.8)
+                        remaining_rows = await client.list_dir(target_path, bdstoken=bdstoken)
+                        if isinstance(remaining_rows, int):
+                            raise PanTransferProviderError(
+                                f"Baidu failed to verify staging cleanup: errno {remaining_rows}"
+                            )
+                        remaining_paths = {
+                            str(row.get("path") or "").strip()
+                            for row in remaining_rows
+                            if str(row.get("path") or "").strip()
+                        }
+                        if not remaining_paths.intersection(existing_paths):
+                            break
+                    else:
+                        raise PanTransferProviderError(
+                            "Baidu existing staging contents were not cleared in time",
+                            payload={
+                                "target_path": target_path,
+                                "remaining_entry_count": len(existing_paths),
+                            },
+                        )
 
             await client.transfer_file(
                 share_id=share_id,
@@ -397,6 +627,10 @@ class BaiduPanTransferProvider(PanTransferProvider):
                     "share_user_id": share_user_id,
                     "source_fs_id_count": len(fs_ids),
                     "transfer_target_path": target_path,
+                    "selection_applied": normalized_selection is not None,
+                    "selection_parent_path": (normalized_selection or {}).get("parent_path"),
+                    "selected_entry_count": len(fs_ids),
+                    "clear_existing_contents": bool(clear_existing_contents),
                 },
             )
 

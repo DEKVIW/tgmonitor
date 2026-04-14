@@ -191,7 +191,7 @@ const buildLinkItems = (record: PanTransferPublishRecordItem): PublishLinkChip[]
   const items: PublishLinkChip[] = []
   if (record.source_original_url) items.push({ key: 'original', label: '原链', url: record.source_original_url, status: record.original_link_status, detailMessage: record.original_link_detail_message, checkedAt: record.original_link_checked_at })
   if (record.current_share_url) items.push({ key: 'current_share', label: '新分享', url: record.current_share_url, status: record.current_share_status, detailMessage: record.current_share_detail_message, checkedAt: record.current_share_checked_at })
-  if (record.source_url) items.push({ key: 'published', label: '前台使用', url: record.source_url, status: record.published_link_status, detailMessage: record.published_link_detail_message, checkedAt: record.published_link_checked_at })
+  if (record.source_url) items.push({ key: 'published', label: '前台', url: record.source_url, status: record.published_link_status, detailMessage: record.published_link_detail_message, checkedAt: record.published_link_checked_at })
   return items
 }
 
@@ -512,20 +512,19 @@ const PublishSectionPanel = ({ refreshToken }: PublishSectionProps) => {
     {
       title: '链接',
       key: 'links',
-      width: 292,
       render: (_, record) => (
         <div className="resource-ops-transfer-link-stack">
-          <Space size={[6, 6]} wrap>{buildLinkItems(record).map((item) => {
+          <div className="resource-ops-transfer-link-row">{buildLinkItems(record).map((item) => {
             const statusMeta = getLinkStatusMeta(item.status)
             const menu: MenuProps = { items: [{ key: 'open', icon: <LinkOutlined />, label: '访问链接' }, { key: 'copy', icon: <CopyOutlined />, label: '复制链接' }, { key: 'preview', icon: <EyeOutlined />, label: '查看目录' }], onClick: ({ key }) => { void handleLinkMenuClick(String(key), item) } }
             const tip = [item.url, item.detailMessage, item.checkedAt ? `校验: ${formatDateTime(item.checkedAt)}` : ''].filter(Boolean).join('\n')
             return <Dropdown key={`${item.key}-${item.url}`} menu={menu} trigger={['contextMenu']}><Tooltip title={tip}><button type="button" className="resource-ops-transfer-link-chip" onClick={() => openLink(item.url)}><span className="resource-ops-transfer-link-chip-label">{item.label}</span><span className={`resource-ops-transfer-link-chip-status is-${statusMeta.tone}`}>{statusMeta.label}</span></button></Tooltip></Dropdown>
-          })}</Space>
+          })}</div>
           <small>左键访问，右键可复制或查看目录</small>
         </div>
       ),
     },
-    { title: '点击', dataIndex: 'published_clicks_total', key: 'published_clicks_total', width: 92, align: 'right', sorter: true, render: (value: number) => <div className="resource-ops-transfer-number-stack resource-ops-transfer-number-stack--compact"><strong>{value || 0}</strong><small>前台点击</small></div> },
+    { title: '点击', dataIndex: 'published_clicks_total', key: 'published_clicks_total', width: 84, align: 'right', sorter: true, render: (value: number) => <div className="resource-ops-transfer-number-stack resource-ops-transfer-number-stack--compact"><strong>{value || 0}</strong></div> },
     { title: '网盘', dataIndex: 'platform', key: 'platform', width: 90, sorter: true, render: (value: string) => <Tag>{value || '-'}</Tag> },
     { title: '操作人', dataIndex: 'operator', key: 'operator', width: 120, render: (value?: string | null) => <Text>{value || '-'}</Text> },
     {
@@ -576,7 +575,7 @@ const PublishSectionPanel = ({ refreshToken }: PublishSectionProps) => {
             <Button danger disabled={selectedRecords.length <= 0} loading={batchActionLoading === 'delete'} onClick={() => void handleBatchAction('delete')}>批量删除</Button>
           </Space>
         </div>
-        <Table rowKey="id" style={{ marginTop: 16 }} loading={loading} dataSource={records} columns={columns} rowSelection={{ selectedRowKeys, onChange: setSelectedRowKeys }} onChange={(tablePagination: TablePaginationConfig, _, sorter) => { const resolvedSorter = Array.isArray(sorter) ? sorter[0] : sorter; setQuery((current) => ({ ...current, page: tablePagination.current || 1, pageSize: tablePagination.pageSize || current.pageSize, sortBy: resolvedSorter && typeof resolvedSorter.field === 'string' ? SORT_FIELD_MAP[resolvedSorter.field] || 'published_at' : current.sortBy, sortOrder: resolvedSorter?.order === 'ascend' ? 'asc' : resolvedSorter?.order === 'descend' ? 'desc' : current.sortOrder })) }} pagination={{ current: query.page, pageSize: query.pageSize, total, showSizeChanger: true }} scroll={{ x: 1280 }} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无运营发布资源" /> }} />
+        <Table rowKey="id" style={{ marginTop: 16 }} loading={loading} dataSource={records} columns={columns} rowSelection={{ selectedRowKeys, onChange: setSelectedRowKeys }} onChange={(tablePagination: TablePaginationConfig, _, sorter) => { const resolvedSorter = Array.isArray(sorter) ? sorter[0] : sorter; setQuery((current) => ({ ...current, page: tablePagination.current || 1, pageSize: tablePagination.pageSize || current.pageSize, sortBy: resolvedSorter && typeof resolvedSorter.field === 'string' ? SORT_FIELD_MAP[resolvedSorter.field] || 'published_at' : current.sortBy, sortOrder: resolvedSorter?.order === 'ascend' ? 'asc' : resolvedSorter?.order === 'descend' ? 'desc' : current.sortOrder })) }} pagination={{ current: query.page, pageSize: query.pageSize, total, showSizeChanger: true }} scroll={{ x: 'max-content' }} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无运营发布资源" /> }} />
       </Card>
       <Modal open={manualOpen} title="手动新建发布" onCancel={() => setManualOpen(false)} onOk={() => void handleManualPublish()} confirmLoading={manualSaving} okText="确认发布" destroyOnHidden><Form form={manualForm} layout="vertical"><Form.Item label="平台" name="platform" rules={[{ required: true, message: '请选择平台' }]}><Select options={PLATFORM_OPTIONS} /></Form.Item><Form.Item label="分享链接" name="source_url" rules={[{ required: true, message: '请输入分享链接' }]}><Input placeholder="请输入前台最终要展示的链接" /></Form.Item><Form.Item label="标题" name="title" rules={[{ required: true, message: '请输入标题' }]}><Input maxLength={255} placeholder="请输入前台展示标题" /></Form.Item><Form.Item label="描述" name="description"><Input.TextArea rows={4} maxLength={1000} placeholder="可选，补充发布说明" /></Form.Item><Form.Item label="标签" name="tags"><Select mode="tags" tokenSeparators={[',', '，']} open={false} placeholder="可选，输入后回车" /></Form.Item></Form></Modal>
       <Modal open={editOpen} title={editingRecord ? `编辑发布：${editingRecord.published_title}` : '编辑发布'} onCancel={() => { setEditOpen(false); setEditingRecord(null); editForm.resetFields() }} onOk={() => void handleEditPublish()} confirmLoading={editSaving} okText="保存修改" destroyOnHidden><Form form={editForm} layout="vertical"><Form.Item label="前台链接" name="source_url" rules={[{ required: true, message: '请输入前台链接' }]}><Input placeholder="这里修改的是前台当前对外展示的链接" /></Form.Item><Form.Item label="标题" name="title" rules={[{ required: true, message: '请输入标题' }]}><Input maxLength={255} /></Form.Item><Form.Item label="描述" name="description"><Input.TextArea rows={4} maxLength={1000} /></Form.Item><Form.Item label="标签" name="tags"><Select mode="tags" tokenSeparators={[',', '，']} open={false} placeholder="输入后回车" /></Form.Item></Form></Modal>

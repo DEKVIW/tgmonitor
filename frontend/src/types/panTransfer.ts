@@ -249,6 +249,26 @@ export interface PanTransferPublishRuleUpdateRequest {
 export interface PanTransferFollowTaskCreateRequest {
   task_name?: string | null
   check_interval_minutes?: number | null
+  automation?: Record<string, unknown>
+}
+
+export interface PanTransferFollowTaskSyncSelectionEntry {
+  name: string
+  is_dir: boolean
+  entry_id?: string | null
+  path?: string | null
+}
+
+export interface PanTransferFollowTaskSyncRequest {
+  source_kind?: 'current' | 'candidate' | string
+  sync_mode?: 'standard' | 'incremental' | 'replace_all' | string
+  selected_entries?: PanTransferFollowTaskSyncSelectionEntry[]
+  selection_parent_entry_id?: string | null
+  selection_parent_path?: string | null
+  selection_parent_name?: string | null
+  confirm_full_replace?: boolean
+  reuse_existing_share_if_valid?: boolean
+  update_publish_record?: boolean
 }
 
 export interface PanTransferFollowTaskLogItem {
@@ -276,6 +296,11 @@ export interface PanTransferFollowTaskItem {
   topic_title: string
   work_id?: number | null
   work_title?: string | null
+  publish_record_id?: number | null
+  publish_record_title?: string | null
+  publish_record_message_id?: number | null
+  publish_record_published_at?: string | null
+  publish_record_source_url?: string | null
   target_account_id?: number | null
   target_account_name?: string | null
   fixed_save_path: string
@@ -299,6 +324,10 @@ export interface PanTransferFollowTaskItem {
   locked_by?: string | null
   locked_at?: string | null
   last_error_message?: string | null
+  last_sync_batch_id?: number | null
+  last_sync_batch_item_id?: number | null
+  last_sync_source_kind?: string | null
+  last_sync_started_at?: string | null
   extra_json: Record<string, unknown>
   created_by?: string | null
   updated_by?: string | null
@@ -316,6 +345,13 @@ export interface PanTransferFollowTaskListResponse {
 export interface PanTransferFollowTaskDetailResponse {
   task: PanTransferFollowTaskItem
   logs: PanTransferFollowTaskLogItem[]
+}
+
+export interface PanTransferFollowTaskSyncResponse {
+  task: PanTransferFollowTaskItem
+  batch_id: number
+  batch_item_id: number
+  started: boolean
 }
 
 export interface PanTransferReplacementLogItem {

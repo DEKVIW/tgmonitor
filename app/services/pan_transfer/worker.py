@@ -24,6 +24,7 @@ from .constants import (
     PAN_TRANSFER_SHARE_STATUS_FAILED,
     PAN_TRANSFER_SHARE_STATUS_PENDING,
     PAN_TRANSFER_SHARE_STATUS_SHARED,
+    PAN_TRANSFER_VALIDATION_STATUS_ERROR,
     PAN_TRANSFER_VALIDATION_STATUS_INVALID,
     PAN_TRANSFER_VALIDATION_STATUS_PENDING,
 )
@@ -110,6 +111,27 @@ def _get_share_request(item: PanTransferBatchItem) -> dict[str, Any] | None:
     normalized = dict(share_request)
     normalized["share_target_mode"] = _normalize_share_target_mode(normalized.get("share_target_mode"))
     return normalized
+
+
+def _get_follow_sync_context(item: PanTransferBatchItem) -> dict[str, Any] | None:
+    raw_value = dict(item.extra_json or {}).get("follow_sync_context")
+    return dict(raw_value) if isinstance(raw_value, dict) else None
+
+
+def _get_source_selection(item: PanTransferBatchItem) -> dict[str, Any] | None:
+    raw_value = dict(item.extra_json or {}).get("source_selection")
+    if not isinstance(raw_value, dict):
+        return None
+    selected_entries = raw_value.get("selected_entries")
+    if not isinstance(selected_entries, list) or not selected_entries:
+        return None
+    return {
+        "parent_entry_id": str(raw_value.get("parent_entry_id") or "").strip() or None,
+        "parent_path": str(raw_value.get("parent_path") or "").strip() or None,
+        "parent_name": str(raw_value.get("parent_name") or "").strip() or None,
+        "selected_entries": [dict(row or {}) for row in selected_entries if isinstance(row, dict)],
+        "selected_count": int(raw_value.get("selected_count") or len(selected_entries) or 0),
+    }
 
 
 def _get_item_execution_plan(
@@ -236,6 +258,10 @@ async def _process_pan_transfer_item_async(
 
     staging_snapshot = _get_staging_snapshot(item)
     share_request = _get_share_request(item)
+    follow_sync_context = _get_follow_sync_context(item)
+    source_selection = _get_source_selection(item)
+    sync_mode = str((follow_sync_context or {}).get("sync_mode") or "standard").strip().lower() or "standard"
+    clear_existing_contents = bool((follow_sync_context or {}).get("clear_existing_contents"))
 
     if not str(item.new_share_url or "").strip():
         if staging_snapshot is None:
@@ -263,6 +289,10 @@ async def _process_pan_transfer_item_async(
                     "batch_folder_name": execution_plan.get("batch_folder_name"),
                     "share_target_mode": execution_plan.get("share_target_mode"),
                     "path_source": execution_plan.get("source"),
+                    "sync_mode": sync_mode,
+                    "selected_entry_count": int((source_selection or {}).get("selected_count") or 0),
+                    "selection_parent_path": (source_selection or {}).get("parent_path"),
+                    "clear_existing_contents": clear_existing_contents,
                 },
             )
             try:
@@ -274,6 +304,8 @@ async def _process_pan_transfer_item_async(
                     staging_root=staging_root,
                     staging_folder_name=staging_folder_name,
                     title_hint=str(share_request.get("title_hint") or "") or None,
+                    source_selection=source_selection,
+                    clear_existing_contents=clear_existing_contents,
                 )
             except Exception as exc:
                 error_detail = _describe_exception(exc)
@@ -287,6 +319,10 @@ async def _process_pan_transfer_item_async(
                     "batch_folder_name": execution_plan.get("batch_folder_name"),
                     "share_target_mode": execution_plan.get("share_target_mode"),
                     "path_source": execution_plan.get("source"),
+                    "sync_mode": sync_mode,
+                    "selected_entry_count": int((source_selection or {}).get("selected_count") or 0),
+                    "selection_parent_path": (source_selection or {}).get("parent_path"),
+                    "clear_existing_contents": clear_existing_contents,
                     **_extract_error_payload(exc),
                 }
                 _mark_account_validation(
@@ -348,6 +384,10 @@ async def _process_pan_transfer_item_async(
                     "transfer_layout": execution_plan.get("transfer_layout"),
                     "batch_folder_name": execution_plan.get("batch_folder_name"),
                     "share_target_mode": execution_plan.get("share_target_mode"),
+                    "sync_mode": sync_mode,
+                    "selected_entry_count": int((source_selection or {}).get("selected_count") or 0),
+                    "selection_parent_path": (source_selection or {}).get("parent_path"),
+                    "clear_existing_contents": clear_existing_contents,
                     "provider_payload": dict(transfer_result.payload or {}),
                 },
             )
@@ -376,109 +416,213 @@ async def _process_pan_transfer_item_async(
                     "batch_folder_name": execution_plan.get("batch_folder_name"),
                     "share_target_mode": execution_plan.get("share_target_mode"),
                     "path_source": execution_plan.get("source"),
+                    "sync_mode": sync_mode,
+                    "selected_entry_count": int((source_selection or {}).get("selected_count") or 0),
+                    "selection_parent_path": (source_selection or {}).get("parent_path"),
+                    "clear_existing_contents": clear_existing_contents,
                 },
             )
 
         item.share_status = PAN_TRANSFER_SHARE_STATUS_PENDING
         session.add(item)
         session.flush()
-        append_pan_transfer_execution_log(
-            session,
-            item=item,
-            stage="share",
-            message="Starting share creation for staging directory",
-            payload={
-                "staging_root": staging_snapshot.get("root") if staging_snapshot else None,
-                "staging_folder_name": staging_snapshot.get("folder_name") if staging_snapshot else None,
-                "staging_folder_id": staging_snapshot.get("folder_id") if staging_snapshot else None,
-                "share_mode": share_request.get("share_mode") if share_request else None,
-                "share_target_mode": share_request.get("share_target_mode") if share_request else execution_plan.get("share_target_mode"),
-            },
+
+        requested_share_target_mode = str((share_request or {}).get("share_target_mode") or execution_plan.get("share_target_mode") or DEFAULT_SHARE_TARGET_MODE)
+        requested_existing_share_url = (
+            str((follow_sync_context or {}).get("existing_share_url") or "").strip() or None
         )
-        try:
-            share_result = await provider.share_staging_target(
-                credential_value=credential_value,
-                account_name=str(account.account_name or ""),
-                staging_root=normalize_relative_path(str((staging_snapshot or {}).get("root") or "")),
-                staging_folder_name=str((staging_snapshot or {}).get("folder_name") or ""),
-                staging_folder_id=str((staging_snapshot or {}).get("folder_id") or "") or None,
-                share_target_mode=str((share_request or {}).get("share_target_mode") or execution_plan.get("share_target_mode") or DEFAULT_SHARE_TARGET_MODE),
-                share_mode=str((share_request or {}).get("share_mode") or "public"),
-                share_passcode=str((share_request or {}).get("share_passcode") or "").strip() or None,
-                share_expire_days=(share_request or {}).get("share_expire_days"),
-                title_hint=str((share_request or {}).get("title_hint") or "") or None,
+        can_reuse_existing_share = (
+            follow_sync_context is not None
+            and bool(follow_sync_context.get("reuse_existing_share_if_valid"))
+            and bool(requested_existing_share_url)
+            and _normalize_share_target_mode((follow_sync_context or {}).get("share_target_mode")) == SHARE_TARGET_RESOURCE_DIR
+            and _normalize_share_target_mode(requested_share_target_mode) == SHARE_TARGET_RESOURCE_DIR
+        )
+
+        reused_existing_share = False
+        if can_reuse_existing_share and requested_existing_share_url:
+            append_pan_transfer_execution_log(
+                session,
+                item=item,
+                stage="share",
+                message="Checking whether the existing share URL can be reused",
+                payload={
+                    "existing_share_url": requested_existing_share_url,
+                    "share_target_mode": requested_share_target_mode,
+                },
             )
-        except Exception as exc:
-            error_detail = _describe_exception(exc)
-            error_payload = {
-                "account_id": int(account.id),
-                "account_name": str(account.account_name or ""),
-                "staging_root": (staging_snapshot or {}).get("root"),
-                "staging_folder_name": (staging_snapshot or {}).get("folder_name"),
-                "staging_folder_id": (staging_snapshot or {}).get("folder_id"),
-                "share_mode": (share_request or {}).get("share_mode"),
-                "share_target_mode": (share_request or {}).get("share_target_mode") or execution_plan.get("share_target_mode"),
-                **_extract_error_payload(exc),
-            }
+            try:
+                reuse_validation_result = await validate_share_url(requested_existing_share_url)
+            except Exception as exc:
+                append_pan_transfer_execution_log(
+                    session,
+                    item=item,
+                    stage="share",
+                    level="warning",
+                    message=f"Existing share URL check failed, will create a new share instead: {_describe_exception(exc)}",
+                    payload={
+                        "existing_share_url": requested_existing_share_url,
+                        **_extract_error_payload(exc),
+                    },
+                )
+            else:
+                reuse_validation_status = str(reuse_validation_result.get("status") or "").strip().lower()
+                if reuse_validation_status not in {PAN_TRANSFER_VALIDATION_STATUS_INVALID, PAN_TRANSFER_VALIDATION_STATUS_ERROR}:
+                    item.new_share_url = requested_existing_share_url
+                    item.share_status = PAN_TRANSFER_SHARE_STATUS_SHARED
+                    _mark_account_validation(
+                        account,
+                        ok=True,
+                        detail_message="Validated during share reuse",
+                        payload=dict(reuse_validation_result or {}),
+                    )
+                    _merge_extra_json(
+                        item,
+                        {
+                            "share_reuse": {
+                                "reused": True,
+                                "share_url": requested_existing_share_url,
+                                "checked_at": _iso_utc_now(),
+                                "validation_result": dict(reuse_validation_result or {}),
+                            },
+                            "share_snapshot": {
+                                "new_share_url": requested_existing_share_url,
+                                "share_title": str((share_request or {}).get("title_hint") or item.short_title or ""),
+                                "share_passcode": None,
+                                "shared_at": _iso_utc_now(),
+                                "share_target_mode": requested_share_target_mode,
+                                "payload": {
+                                    "reused_existing_share": True,
+                                },
+                            },
+                        },
+                    )
+                    session.add(account)
+                    session.add(item)
+                    session.flush()
+                    append_pan_transfer_execution_log(
+                        session,
+                        item=item,
+                        stage="share",
+                        message="Existing share URL is still valid and will be reused",
+                        payload={
+                            "new_share_url": requested_existing_share_url,
+                            "share_target_mode": requested_share_target_mode,
+                            "validation_result": dict(reuse_validation_result or {}),
+                        },
+                    )
+                    reused_existing_share = True
+                else:
+                    append_pan_transfer_execution_log(
+                        session,
+                        item=item,
+                        stage="share",
+                        level="warning",
+                        message="Existing share URL is not valid and a new share will be created",
+                        payload={
+                            "existing_share_url": requested_existing_share_url,
+                            "validation_result": dict(reuse_validation_result or {}),
+                        },
+                    )
+
+        if not reused_existing_share:
+            append_pan_transfer_execution_log(
+                session,
+                item=item,
+                stage="share",
+                message="Starting share creation for staging directory",
+                payload={
+                    "staging_root": staging_snapshot.get("root") if staging_snapshot else None,
+                    "staging_folder_name": staging_snapshot.get("folder_name") if staging_snapshot else None,
+                    "staging_folder_id": staging_snapshot.get("folder_id") if staging_snapshot else None,
+                    "share_mode": share_request.get("share_mode") if share_request else None,
+                    "share_target_mode": requested_share_target_mode,
+                },
+            )
+            try:
+                share_result = await provider.share_staging_target(
+                    credential_value=credential_value,
+                    account_name=str(account.account_name or ""),
+                    staging_root=normalize_relative_path(str((staging_snapshot or {}).get("root") or "")),
+                    staging_folder_name=str((staging_snapshot or {}).get("folder_name") or ""),
+                    staging_folder_id=str((staging_snapshot or {}).get("folder_id") or "") or None,
+                    share_target_mode=requested_share_target_mode,
+                    share_mode=str((share_request or {}).get("share_mode") or "public"),
+                    share_passcode=str((share_request or {}).get("share_passcode") or "").strip() or None,
+                    share_expire_days=(share_request or {}).get("share_expire_days"),
+                    title_hint=str((share_request or {}).get("title_hint") or "") or None,
+                )
+            except Exception as exc:
+                error_detail = _describe_exception(exc)
+                error_payload = {
+                    "account_id": int(account.id),
+                    "account_name": str(account.account_name or ""),
+                    "staging_root": (staging_snapshot or {}).get("root"),
+                    "staging_folder_name": (staging_snapshot or {}).get("folder_name"),
+                    "staging_folder_id": (staging_snapshot or {}).get("folder_id"),
+                    "share_mode": (share_request or {}).get("share_mode"),
+                    "share_target_mode": requested_share_target_mode,
+                    **_extract_error_payload(exc),
+                }
+                _mark_account_validation(
+                    account,
+                    ok=False,
+                    detail_message=error_detail,
+                    payload=error_payload,
+                )
+                session.add(account)
+                session.flush()
+                append_pan_transfer_execution_log(
+                    session,
+                    item=item,
+                    stage="share",
+                    level="error",
+                    message=f"Share creation failed: {error_detail}",
+                    payload=error_payload,
+                )
+                raise
+
+            item.new_share_url = share_result.new_share_url
+            item.share_status = PAN_TRANSFER_SHARE_STATUS_SHARED
             _mark_account_validation(
                 account,
-                ok=False,
-                detail_message=error_detail,
-                payload=error_payload,
+                ok=True,
+                detail_message="Validated during share creation",
+                payload=dict(share_result.payload or {}),
+            )
+            _merge_extra_json(
+                item,
+                {
+                    "share_title": share_result.share_title,
+                    "share_passcode": share_result.share_passcode,
+                    "provider_payload": dict(share_result.payload or {}),
+                    "share_payload": dict(share_result.payload or {}),
+                    "share_snapshot": {
+                        "new_share_url": share_result.new_share_url,
+                        "share_title": share_result.share_title,
+                        "share_passcode": share_result.share_passcode,
+                        "shared_at": _iso_utc_now(),
+                        "share_target_mode": requested_share_target_mode,
+                        "payload": dict(share_result.payload or {}),
+                    },
+                },
             )
             session.add(account)
+            session.add(item)
             session.flush()
             append_pan_transfer_execution_log(
                 session,
                 item=item,
                 stage="share",
-                level="error",
-                message=f"Share creation failed: {error_detail}",
-                payload=error_payload,
-            )
-            raise
-
-        item.new_share_url = share_result.new_share_url
-        item.share_status = PAN_TRANSFER_SHARE_STATUS_SHARED
-        _mark_account_validation(
-            account,
-            ok=True,
-            detail_message="Validated during share creation",
-            payload=dict(share_result.payload or {}),
-        )
-        _merge_extra_json(
-            item,
-            {
-                "share_title": share_result.share_title,
-                "share_passcode": share_result.share_passcode,
-                "provider_payload": dict(share_result.payload or {}),
-                "share_payload": dict(share_result.payload or {}),
-                "share_snapshot": {
+                message="Share creation completed",
+                payload={
                     "new_share_url": share_result.new_share_url,
                     "share_title": share_result.share_title,
                     "share_passcode": share_result.share_passcode,
-                    "shared_at": _iso_utc_now(),
-                    "share_target_mode": str((share_request or {}).get("share_target_mode") or execution_plan.get("share_target_mode") or DEFAULT_SHARE_TARGET_MODE),
-                    "payload": dict(share_result.payload or {}),
+                    "share_target_mode": requested_share_target_mode,
+                    "provider_payload": dict(share_result.payload or {}),
                 },
-            },
-        )
-        session.add(account)
-        session.add(item)
-        session.flush()
-        append_pan_transfer_execution_log(
-            session,
-            item=item,
-            stage="share",
-            message="Share creation completed",
-            payload={
-                "new_share_url": share_result.new_share_url,
-                "share_title": share_result.share_title,
-                "share_passcode": share_result.share_passcode,
-                "share_target_mode": str((share_request or {}).get("share_target_mode") or execution_plan.get("share_target_mode") or DEFAULT_SHARE_TARGET_MODE),
-                "provider_payload": dict(share_result.payload or {}),
-            },
-        )
+            )
     elif str(item.share_status or "") != PAN_TRANSFER_SHARE_STATUS_SHARED:
         item.share_status = PAN_TRANSFER_SHARE_STATUS_SHARED
         session.add(item)
@@ -584,6 +728,20 @@ def process_next_pan_transfer_item(session: Session, *, worker_name: str) -> boo
     try:
         asyncio.run(_process_pan_transfer_item_async(session, item=item, worker_name=worker_name))
         mark_pan_transfer_item_success(session, item=item)
+        try:
+            from .follow_sync import handle_follow_sync_item_success
+
+            with session.begin_nested():
+                handle_follow_sync_item_success(session, item=item, worker_name=worker_name)
+        except Exception as exc:
+            append_pan_transfer_execution_log(
+                session,
+                item=item,
+                stage="follow",
+                level="warning",
+                message=f"Follow-sync post-processing failed: {_describe_exception(exc)}",
+                payload=_extract_error_payload(exc),
+            )
         append_pan_transfer_execution_log(
             session,
             item=item,
@@ -632,4 +790,23 @@ def process_next_pan_transfer_item(session: Session, *, worker_name: str) -> boo
             error_message=error_detail,
             retryable=retryable,
         )
+        try:
+            from .follow_sync import handle_follow_sync_item_failure
+
+            with session.begin_nested():
+                handle_follow_sync_item_failure(
+                    session,
+                    item=item,
+                    worker_name=worker_name,
+                    error_message=error_detail,
+                )
+        except Exception as follow_exc:
+            append_pan_transfer_execution_log(
+                session,
+                item=item,
+                stage="follow",
+                level="warning",
+                message=f"Follow-sync failure hook failed: {_describe_exception(follow_exc)}",
+                payload=_extract_error_payload(follow_exc),
+            )
         return True

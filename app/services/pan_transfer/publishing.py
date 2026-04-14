@@ -15,6 +15,7 @@ from app.models.models import (
     PanTransferAccount,
     PanTransferBatchItem,
     PanTransferPublishRecord,
+    PanTransferSyncTask,
     ensure_runtime_storage_tables,
 )
 from app.services.resource_ops import ensure_message_link_refs_for_messages
@@ -959,6 +960,69 @@ def update_pan_transfer_publish_record(
     return _serialize_publish_record(session, row)
 
 
+def sync_pan_transfer_publish_record_source_url(
+    session: Session,
+    *,
+    record_id: int,
+    source_url: str,
+    operator: str | None,
+    validation_result: dict[str, Any] | None = None,
+    sync_payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    ensure_runtime_storage_tables()
+    row = _get_publish_record_row(session, record_id=record_id)
+    message = _get_publish_record_message(session, row=row)
+    if message is None:
+        raise LookupError("published frontend message not found")
+
+    normalized_source_url = _normalize_text(source_url)
+    if not normalized_source_url:
+        raise ValueError("source_url cannot be empty")
+
+    publish_platform = _detect_platform_from_url(normalized_source_url, fallback=str(row.platform or ""))
+    publish_title = _normalize_text(getattr(message, "title", None), max_length=255) or _normalize_text(row.published_title, max_length=255)
+    message.links = _build_publish_links_payload(
+        platform=publish_platform,
+        source_url=normalized_source_url,
+        title=publish_title or "资源分享",
+    )
+    message.netdisk_types = _build_message_netdisk_types(publish_platform)
+    session.add(message)
+    refs_by_message, _ = ensure_message_link_refs_for_messages(session, [message])
+    published_refs = refs_by_message.get(int(message.id), [])
+    published_link_target_id = int(published_refs[0].link_target_id) if published_refs else None
+
+    validation_snapshot = (
+        _build_published_validation_snapshot(validation_result)
+        if isinstance(validation_result, dict) and validation_result
+        else {}
+    )
+    extra_json = dict(row.extra_json or {})
+    extra_json["published_link_target_id"] = published_link_target_id
+    extra_json["current_share_url"] = normalized_source_url
+    if validation_snapshot:
+        extra_json["current_share_validation"] = validation_snapshot
+        extra_json["published_link_validation"] = validation_snapshot
+    sync_history = list(extra_json.get("follow_sync_history") or [])
+    sync_entry = {
+        "operator": _normalize_text(operator, max_length=128) or None,
+        "source_url": normalized_source_url,
+        "updated_at": utcnow().isoformat() + "Z",
+        "payload": dict(sync_payload or {}),
+    }
+    sync_history.append(sync_entry)
+    extra_json["last_follow_sync"] = dict(sync_entry)
+    extra_json["follow_sync_history"] = sync_history[-20:]
+
+    row.platform = publish_platform
+    row.source_url = normalized_source_url
+    row.operator = _normalize_text(operator, max_length=128) or row.operator
+    row.extra_json = extra_json
+    session.add(row)
+    session.flush()
+    return _serialize_publish_record(session, row)
+
+
 async def validate_pan_transfer_publish_record(
     session: Session,
     *,
@@ -1479,7 +1543,7 @@ def publish_pan_transfer_batch_item_message(
     session.add(item)
     session.flush()
 
-    _create_publish_record(
+    publish_record = _create_publish_record(
         session,
         source_type="batch_item",
         platform=created["platform"],
@@ -1502,6 +1566,21 @@ def publish_pan_transfer_batch_item_message(
         },
     )
 
+    follow_task = None
+    try:
+        from .follow_tasks import bind_follow_task_publish_record
+
+        follow_task = (
+            session.query(PanTransferSyncTask)
+            .filter(PanTransferSyncTask.source_batch_item_id == int(item.id))
+            .order_by(PanTransferSyncTask.updated_at.desc(), PanTransferSyncTask.id.desc())
+            .first()
+        )
+        if follow_task is not None:
+            bind_follow_task_publish_record(session, task=follow_task)
+    except Exception:
+        follow_task = None
+
     append_pan_transfer_execution_log(
         session,
         item=item,
@@ -1514,6 +1593,8 @@ def publish_pan_transfer_batch_item_message(
             "published_link_target_id": created["published_link_target_id"],
             "reused_existing_target": created["reused_existing_target"],
             "operator": _normalize_text(operator, max_length=128) or "admin",
+            "publish_record_id": int(publish_record.id),
+            "follow_task_id": int(follow_task.id) if follow_task is not None else None,
         },
     )
 

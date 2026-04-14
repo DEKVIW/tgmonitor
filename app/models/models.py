@@ -409,6 +409,7 @@ class PanTransferSyncTask(Base):
     topic_title = Column(String(255), nullable=False, default="")
     work_id = Column(Integer, nullable=True, index=True)
     work_title = Column(String(255), nullable=True)
+    publish_record_id = Column(Integer, nullable=True, index=True)
     target_account_id = Column(Integer, nullable=True, index=True)
     target_account_name = Column(String(128), nullable=True)
     fixed_save_path = Column(String(512), nullable=False, default="")
@@ -1254,8 +1255,12 @@ def _ensure_pan_transfer_columns() -> None:
         item_columns = {column["name"] for column in inspector.get_columns("pan_transfer_batch_items")}
     except Exception:
         item_columns = set()
+    try:
+        sync_task_columns = {column["name"] for column in inspector.get_columns("pan_transfer_sync_tasks")}
+    except Exception:
+        sync_task_columns = set()
 
-    if not batch_columns and not item_columns:
+    if not batch_columns and not item_columns and not sync_task_columns:
         return
 
     pending_batch_alters = {
@@ -1271,6 +1276,9 @@ def _ensure_pan_transfer_columns() -> None:
         "finished_at": "ALTER TABLE pan_transfer_batch_items ADD COLUMN finished_at TIMESTAMP WITHOUT TIME ZONE",
         "last_validated_at": "ALTER TABLE pan_transfer_batch_items ADD COLUMN last_validated_at TIMESTAMP WITHOUT TIME ZONE",
     }
+    pending_sync_task_alters = {
+        "publish_record_id": "ALTER TABLE pan_transfer_sync_tasks ADD COLUMN publish_record_id INTEGER",
+    }
     with engine.begin() as connection:
         for column_name, sql in pending_batch_alters.items():
             if column_name in batch_columns:
@@ -1278,6 +1286,10 @@ def _ensure_pan_transfer_columns() -> None:
             connection.execute(text(sql))
         for column_name, sql in pending_item_alters.items():
             if column_name in item_columns:
+                continue
+            connection.execute(text(sql))
+        for column_name, sql in pending_sync_task_alters.items():
+            if column_name in sync_task_columns:
                 continue
             connection.execute(text(sql))
 

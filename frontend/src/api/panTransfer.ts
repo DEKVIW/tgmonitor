@@ -11,6 +11,8 @@ import type {
   PanTransferFollowTaskCreateRequest,
   PanTransferFollowTaskDetailResponse,
   PanTransferFollowTaskListResponse,
+  PanTransferFollowTaskSyncRequest,
+  PanTransferFollowTaskSyncResponse,
   PanTransferLinkDirectoryPreviewRequest,
   PanTransferLinkDirectoryPreviewResponse,
   PanTransferManualPublishRequest,
@@ -270,6 +272,17 @@ export const queuePanTransferFollowTaskCheck = async (
 ): Promise<PanTransferFollowTaskDetailResponse> => {
   const response = await apiClient.post<PanTransferFollowTaskDetailResponse>(
     `/admin/pan-transfer/follow-tasks/${taskId}/queue`
+  )
+  return response.data
+}
+
+export const createPanTransferFollowSyncBatch = async (
+  taskId: number,
+  payload: PanTransferFollowTaskSyncRequest
+): Promise<PanTransferFollowTaskSyncResponse> => {
+  const response = await apiClient.post<PanTransferFollowTaskSyncResponse>(
+    `/admin/pan-transfer/follow-tasks/${taskId}/sync`,
+    payload
   )
   return response.data
 }

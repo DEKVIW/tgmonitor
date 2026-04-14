@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator, model_validator
+
+
+_SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 
 
 def _serialize_datetime(value: datetime) -> str:
@@ -11,6 +15,14 @@ def _serialize_datetime(value: datetime) -> str:
     else:
         normalized = value.astimezone(timezone.utc)
     return normalized.isoformat().replace("+00:00", "Z")
+
+
+def _serialize_shanghai_local_datetime(value: datetime) -> str:
+    if value.tzinfo is None:
+        normalized = value.replace(tzinfo=_SHANGHAI_TZ)
+    else:
+        normalized = value.astimezone(_SHANGHAI_TZ)
+    return normalized.isoformat()
 
 
 def _normalize_text(value: str | None, *, field_name: str, allow_empty: bool = False) -> str:
@@ -320,6 +332,10 @@ class PanTransferMessagePublishResponse(PanTransferBaseModel):
     published_at: datetime
     reused_existing_target: bool = False
 
+    @field_serializer("published_at")
+    def serialize_published_at(self, value: datetime) -> str:
+        return _serialize_shanghai_local_datetime(value)
+
 
 class PanTransferManualPublishRequest(PanTransferBaseModel):
     platform: str = Field(min_length=1, max_length=64)
@@ -435,6 +451,10 @@ class PanTransferPublishRecordItem(PanTransferBaseModel):
     created_at: datetime
     updated_at: datetime
 
+    @field_serializer("published_at")
+    def serialize_published_at(self, value: datetime) -> str:
+        return _serialize_shanghai_local_datetime(value)
+
 
 class PanTransferPublishRecordListResponse(PanTransferBaseModel):
     items: list[PanTransferPublishRecordItem] = Field(default_factory=list)
@@ -529,6 +549,7 @@ class PanTransferPublishRuleUpdateRequest(PanTransferBaseModel):
 class PanTransferFollowTaskCreateRequest(PanTransferBaseModel):
     task_name: str | None = Field(default=None, max_length=255)
     check_interval_minutes: int | None = Field(default=360, ge=15, le=10080)
+    automation: dict = Field(default_factory=dict)
 
     @field_validator("task_name")
     @classmethod
@@ -536,6 +557,88 @@ class PanTransferFollowTaskCreateRequest(PanTransferBaseModel):
         if value is None:
             return None
         return _normalize_text(value, field_name="task_name", allow_empty=True) or None
+
+
+class PanTransferFollowTaskSyncSelectionEntry(PanTransferBaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    is_dir: bool = False
+    entry_id: str | None = Field(default=None, max_length=255)
+    path: str | None = Field(default=None, max_length=1024)
+
+    @field_validator("name")
+    @classmethod
+    def validate_selection_name(cls, value: str) -> str:
+        return _normalize_text(value, field_name="name")
+
+    @field_validator("entry_id", "path")
+    @classmethod
+    def validate_optional_selection_text(cls, value: str | None, info) -> str | None:
+        if value is None:
+            return None
+        return _normalize_text(value, field_name=info.field_name, allow_empty=True) or None
+
+
+class PanTransferFollowTaskSyncRequest(PanTransferBaseModel):
+    source_kind: str = Field(default="current", min_length=1, max_length=32)
+    sync_mode: str = Field(default="standard", min_length=1, max_length=32)
+    selected_entries: list[PanTransferFollowTaskSyncSelectionEntry] = Field(default_factory=list)
+    selection_parent_entry_id: str | None = Field(default=None, max_length=255)
+    selection_parent_path: str | None = Field(default=None, max_length=1024)
+    selection_parent_name: str | None = Field(default=None, max_length=255)
+    confirm_full_replace: bool = False
+    reuse_existing_share_if_valid: bool = True
+    update_publish_record: bool = True
+
+    @field_validator("source_kind", "sync_mode")
+    @classmethod
+    def validate_follow_sync_mode_fields(cls, value: str, info) -> str:
+        normalized = _normalize_text(value, field_name=info.field_name).lower()
+        allowed_map = {
+            "source_kind": {"current", "candidate"},
+            "sync_mode": {"standard", "incremental", "replace_all"},
+        }
+        if normalized not in allowed_map[info.field_name]:
+            raise ValueError(f"invalid {info.field_name}")
+        return normalized
+
+    @field_validator("selection_parent_entry_id", "selection_parent_path", "selection_parent_name")
+    @classmethod
+    def validate_follow_sync_parent_text(cls, value: str | None, info) -> str | None:
+        if value is None:
+            return None
+        return _normalize_text(value, field_name=info.field_name, allow_empty=True) or None
+
+    @field_validator("selected_entries")
+    @classmethod
+    def validate_selected_entries(
+        cls,
+        value: list[PanTransferFollowTaskSyncSelectionEntry],
+    ) -> list[PanTransferFollowTaskSyncSelectionEntry]:
+        normalized: list[PanTransferFollowTaskSyncSelectionEntry] = []
+        seen: set[tuple[str, str, str]] = set()
+        for entry in value:
+            entry_id = str(entry.entry_id or "").strip()
+            path = str(entry.path or "").strip()
+            dedupe_key = (entry_id, path, f"{entry.name}:{int(entry.is_dir)}")
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            normalized.append(entry)
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_follow_sync_payload(self) -> "PanTransferFollowTaskSyncRequest":
+        if self.sync_mode == "standard":
+            if self.selected_entries:
+                raise ValueError("selected_entries are only supported for incremental or replace_all mode")
+            if self.confirm_full_replace:
+                raise ValueError("confirm_full_replace is only supported for replace_all mode")
+            return self
+        if not self.selected_entries:
+            raise ValueError("selected_entries cannot be empty for manual follow sync")
+        if self.sync_mode == "replace_all" and not self.confirm_full_replace:
+            raise ValueError("confirm_full_replace is required for replace_all mode")
+        return self
 
 
 class PanTransferFollowTaskLogItem(PanTransferBaseModel):
@@ -563,6 +666,11 @@ class PanTransferFollowTaskItem(PanTransferBaseModel):
     topic_title: str
     work_id: int | None = None
     work_title: str | None = None
+    publish_record_id: int | None = None
+    publish_record_title: str | None = None
+    publish_record_message_id: int | None = None
+    publish_record_published_at: datetime | None = None
+    publish_record_source_url: str | None = None
     target_account_id: int | None = None
     target_account_name: str | None = None
     fixed_save_path: str
@@ -586,11 +694,21 @@ class PanTransferFollowTaskItem(PanTransferBaseModel):
     locked_by: str | None = None
     locked_at: datetime | None = None
     last_error_message: str | None = None
+    last_sync_batch_id: int | None = None
+    last_sync_batch_item_id: int | None = None
+    last_sync_source_kind: str | None = None
+    last_sync_started_at: datetime | None = None
     extra_json: dict = Field(default_factory=dict)
     created_by: str | None = None
     updated_by: str | None = None
     created_at: datetime
     updated_at: datetime
+
+    @field_serializer("publish_record_published_at")
+    def serialize_publish_record_published_at(self, value: datetime | None) -> str | None:
+        if value is None:
+            return None
+        return _serialize_shanghai_local_datetime(value)
 
 
 class PanTransferFollowTaskListResponse(PanTransferBaseModel):
@@ -603,6 +721,13 @@ class PanTransferFollowTaskListResponse(PanTransferBaseModel):
 class PanTransferFollowTaskDetailResponse(PanTransferBaseModel):
     task: PanTransferFollowTaskItem
     logs: list[PanTransferFollowTaskLogItem] = Field(default_factory=list)
+
+
+class PanTransferFollowTaskSyncResponse(PanTransferBaseModel):
+    task: PanTransferFollowTaskItem
+    batch_id: int
+    batch_item_id: int
+    started: bool = True
 
 
 class PanTransferReplacementLogItem(PanTransferBaseModel):

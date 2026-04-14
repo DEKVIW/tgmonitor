@@ -57,6 +57,8 @@ class PanTransferProvider:
         staging_root: str,
         staging_folder_name: str,
         title_hint: str | None,
+        source_selection: dict[str, Any] | None = None,
+        clear_existing_contents: bool = False,
     ) -> PanTransferTransferResult:
         raise NotImplementedError
 

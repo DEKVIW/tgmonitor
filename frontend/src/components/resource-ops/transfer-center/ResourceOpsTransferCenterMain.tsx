@@ -37,7 +37,7 @@ import type {
 
 import AccountsSection from './AccountsSection'
 import BatchSection from './BatchSection'
-import FollowTasksSection from './FollowTasksSection'
+import FollowTasksSection from './FollowTasksSectionV2'
 import PublishSection from './PublishSectionPanel'
 import PreviewSection from './PreviewSection'
 import {

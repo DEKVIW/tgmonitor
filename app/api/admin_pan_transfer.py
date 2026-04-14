@@ -18,6 +18,8 @@ from app.schemas.pan_transfer_models import (
     PanTransferFollowTaskCreateRequest,
     PanTransferFollowTaskDetailResponse,
     PanTransferFollowTaskListResponse,
+    PanTransferFollowTaskSyncRequest,
+    PanTransferFollowTaskSyncResponse,
     PanTransferLinkDirectoryPreviewRequest,
     PanTransferLinkDirectoryPreviewResponse,
     PanTransferManualPublishRequest,
@@ -38,6 +40,7 @@ from app.services.pan_transfer import (
     clear_pan_transfer_batch_logs,
     create_pan_transfer_account,
     create_pan_transfer_follow_task_from_batch_item,
+    create_pan_transfer_follow_sync_batch,
     create_manual_pan_transfer_batch,
     delete_pan_transfer_account,
     delete_pan_transfer_batch,
@@ -819,6 +822,40 @@ async def queue_pan_transfer_follow_task_check_api(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to queue follow task: {exc}",
+        ) from exc
+
+
+@router.post(
+    "/follow-tasks/{task_id}/sync",
+    response_model=PanTransferFollowTaskSyncResponse,
+    summary="Create a follow sync batch from the tracked resource",
+)
+async def create_pan_transfer_follow_sync_batch_api(
+    task_id: int,
+    payload: PanTransferFollowTaskSyncRequest,
+    current_user: dict[str, Any] = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+) -> PanTransferFollowTaskSyncResponse:
+    try:
+        result = create_pan_transfer_follow_sync_batch(
+            db,
+            task_id=task_id,
+            payload=payload.model_dump(),
+            operator=str(current_user.get("username") or current_user.get("account") or "admin"),
+        )
+        db.commit()
+        return PanTransferFollowTaskSyncResponse(**result)
+    except LookupError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create follow sync batch: {exc}",
         ) from exc
 
 

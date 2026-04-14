@@ -62,6 +62,83 @@ def _map_share_expire_days(days: int | None) -> int:
     return 4
 
 
+def _normalize_source_selection(raw_value: dict[str, Any] | None) -> dict[str, Any] | None:
+    raw = dict(raw_value or {})
+    selected_entries = raw.get("selected_entries")
+    if not isinstance(selected_entries, list) or not selected_entries:
+        return None
+    normalized_entries: list[dict[str, Any]] = []
+    for row in selected_entries:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("name") or "").strip()
+        if not name:
+            continue
+        normalized_entries.append(
+            {
+                "name": name,
+                "is_dir": bool(row.get("is_dir")),
+                "entry_id": str(row.get("entry_id") or "").strip() or None,
+                "path": str(row.get("path") or "").strip() or None,
+            }
+        )
+    if not normalized_entries:
+        return None
+    return {
+        "parent_entry_id": str(raw.get("parent_entry_id") or "").strip() or None,
+        "parent_path": str(raw.get("parent_path") or "").strip() or None,
+        "parent_name": str(raw.get("parent_name") or "").strip() or None,
+        "selected_entries": normalized_entries,
+    }
+
+
+def _select_quark_share_items(
+    rows: list[dict[str, Any]],
+    *,
+    source_selection: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    selection = _normalize_source_selection(source_selection)
+    if selection is None:
+        return [dict(row or {}) for row in rows if str(row.get("fid") or "").strip()]
+
+    selected_rows: list[dict[str, Any]] = []
+    missing_entries: list[str] = []
+    available_rows = [dict(row or {}) for row in rows if str(row.get("fid") or "").strip()]
+    for entry in selection["selected_entries"]:
+        entry_id = str(entry.get("entry_id") or "").strip()
+        entry_name = str(entry.get("name") or "").strip()
+        entry_is_dir = bool(entry.get("is_dir"))
+        matched = next(
+            (row for row in available_rows if entry_id and str(row.get("fid") or "").strip() == entry_id),
+            None,
+        )
+        if matched is None:
+            matched = next(
+                (
+                    row
+                    for row in available_rows
+                    if str(row.get("file_name") or "").strip() == entry_name and bool(row.get("dir")) == entry_is_dir
+                ),
+                None,
+            )
+        if matched is None:
+            missing_entries.append(entry_name or entry_id or "unknown")
+            continue
+        selected_rows.append(matched)
+
+    if missing_entries:
+        raise PanTransferProviderError(
+            "Selected Quark share entries were not found in the current directory",
+            retryable=False,
+            payload={
+                "missing_entries": missing_entries,
+                "available_entries": [str(row.get("file_name") or "") for row in available_rows[:50]],
+            },
+        )
+
+    return selected_rows
+
+
 class _QuarkClient:
     def __init__(self, cookie_value: str) -> None:
         self.cookie_value = _normalize_cookie(cookie_value)
@@ -121,7 +198,7 @@ class _QuarkClient:
             raise PanTransferProviderError("Quark credential validation failed", retryable=False, payload=payload)
         return data
 
-    async def list_dir(self, *, parent_id: str) -> list[dict[str, Any]]:
+    async def list_dir(self, *, parent_id: str, page: int = 1, page_size: int = 200) -> list[dict[str, Any]]:
         payload = await self._request_json(
             "GET",
             "https://drive-pc.quark.cn/1/clouddrive/file/sort",
@@ -130,8 +207,8 @@ class _QuarkClient:
                 "fr": "pc",
                 "uc_param_str": "",
                 "pdir_fid": parent_id,
-                "_page": "1",
-                "_size": "200",
+                "_page": str(max(1, int(page))),
+                "_size": str(max(1, min(int(page_size or 200), 200))),
                 "_fetch_total": "false",
                 "_fetch_sub_dirs": "1",
                 "_sort": "file_type:asc,file_name:asc",
@@ -144,6 +221,19 @@ class _QuarkClient:
         if not isinstance(rows, list):
             return []
         return [dict(row or {}) for row in rows]
+
+    async def list_dir_all(self, *, parent_id: str, page_size: int = 200) -> list[dict[str, Any]]:
+        page = 1
+        rows: list[dict[str, Any]] = []
+        while True:
+            current_rows = await self.list_dir(parent_id=parent_id, page=page, page_size=page_size)
+            if not current_rows:
+                break
+            rows.extend(current_rows)
+            if len(current_rows) < max(1, min(int(page_size or 200), 200)):
+                break
+            page += 1
+        return rows
 
     @staticmethod
     def _match_dir(rows: list[dict[str, Any]], *, folder_name: str) -> dict[str, Any] | None:
@@ -198,7 +288,7 @@ class _QuarkClient:
         folder_name: str,
         lookup_retries: int = 8,
     ) -> dict[str, Any]:
-        existing_rows = await self.list_dir(parent_id=parent_id)
+        existing_rows = await self.list_dir_all(parent_id=parent_id)
         existing_match = self._match_dir(existing_rows, folder_name=folder_name)
         if existing_match is not None:
             return existing_match
@@ -217,7 +307,7 @@ class _QuarkClient:
         last_rows: list[dict[str, Any]] = []
         for _ in range(max(1, int(lookup_retries or 8))):
             await asyncio.sleep(0.6)
-            rows = await self.list_dir(parent_id=parent_id)
+            rows = await self.list_dir_all(parent_id=parent_id)
             last_rows = rows
             matched = self._match_dir(rows, folder_name=folder_name)
             if matched is not None:
@@ -259,7 +349,7 @@ class _QuarkClient:
             )
         return token
 
-    async def get_share_detail(self, *, pwd_id: str, stoken: str) -> list[dict[str, Any]]:
+    async def get_share_detail(self, *, pwd_id: str, stoken: str, parent_id: str = "0") -> list[dict[str, Any]]:
         page = 1
         file_list: list[dict[str, Any]] = []
         while True:
@@ -272,7 +362,7 @@ class _QuarkClient:
                     "uc_param_str": "",
                     "pwd_id": pwd_id,
                     "stoken": stoken,
-                    "pdir_fid": "0",
+                    "pdir_fid": parent_id,
                     "force": "0",
                     "_page": str(page),
                     "_size": "50",
@@ -304,6 +394,7 @@ class _QuarkClient:
         fid_list: list[str],
         fid_token_list: list[str],
         target_parent_id: str,
+        source_parent_id: str = "0",
     ) -> str:
         payload = await self._request_json(
             "POST",
@@ -321,7 +412,7 @@ class _QuarkClient:
                 "to_pdir_fid": target_parent_id,
                 "pwd_id": pwd_id,
                 "stoken": stoken,
-                "pdir_fid": "0",
+                "pdir_fid": source_parent_id,
                 "scene": "link",
             },
         )
@@ -329,6 +420,32 @@ class _QuarkClient:
         if not task_id:
             raise PanTransferProviderError("Quark transfer task creation failed", payload=payload)
         return task_id
+
+    async def delete_entries(self, *, file_ids: list[str]) -> dict[str, Any]:
+        normalized_ids = [str(file_id or "").strip() for file_id in file_ids if str(file_id or "").strip()]
+        if not normalized_ids:
+            return {}
+        payload = await self._request_json(
+            "POST",
+            "https://drive-pc.quark.cn/1/clouddrive/file/delete",
+            params={
+                "pr": "ucpro",
+                "fr": "pc",
+                "uc_param_str": "",
+            },
+            json_payload={
+                "action_type": 2,
+                "filelist": normalized_ids,
+                "exclude_fids": [],
+            },
+        )
+        code = int(payload.get("code") or 0)
+        if code != 0:
+            raise PanTransferProviderError(
+                f"Quark failed to delete existing contents: code {code}",
+                payload=payload,
+            )
+        return payload
 
     async def wait_task(self, *, task_id: str, retries: int = 50) -> dict[str, Any]:
         for retry_index in range(retries):
@@ -451,6 +568,8 @@ class QuarkPanTransferProvider(PanTransferProvider):
         staging_root: str,
         staging_folder_name: str,
         title_hint: str | None,
+        source_selection: dict[str, Any] | None = None,
+        clear_existing_contents: bool = False,
     ) -> PanTransferTransferResult:
         del account_name
         async with _QuarkClient(credential_value) as client:
@@ -463,18 +582,52 @@ class QuarkPanTransferProvider(PanTransferProvider):
                 parent_path = f"{parent_path.rstrip('/')}/{segment}"
 
             staging_folder = await client.ensure_dir(parent_id=parent_id, folder_name=staging_folder_name)
+            staging_folder_id = str(staging_folder.get("fid") or "").strip()
+            if not staging_folder_id:
+                raise PanTransferProviderError("Quark staging directory is missing fid", retryable=False)
 
             pwd_id = _extract_pwd_id(original_url)
             passcode = _extract_passcode(original_url, fallback=original_passcode)
             stoken = await client.get_stoken(pwd_id=pwd_id, passcode=passcode)
-            share_items = await client.get_share_detail(pwd_id=pwd_id, stoken=stoken)
+            normalized_selection = _normalize_source_selection(source_selection)
+            selection_parent_id = str((normalized_selection or {}).get("parent_entry_id") or "").strip() or "0"
+            share_items = await client.get_share_detail(pwd_id=pwd_id, stoken=stoken, parent_id=selection_parent_id)
             if not share_items:
                 raise PanTransferProviderError("Quark share has no transferable content", retryable=False)
 
-            fid_list = [str(item.get("fid") or "") for item in share_items if str(item.get("fid") or "").strip()]
+            selected_share_items = _select_quark_share_items(share_items, source_selection=normalized_selection)
+            if not selected_share_items:
+                raise PanTransferProviderError("Quark share has no transferable content", retryable=False)
+
+            if clear_existing_contents:
+                existing_rows = await client.list_dir_all(parent_id=staging_folder_id)
+                existing_ids = [str(row.get("fid") or "").strip() for row in existing_rows if str(row.get("fid") or "").strip()]
+                if existing_ids:
+                    await client.delete_entries(file_ids=existing_ids)
+                    for _ in range(12):
+                        await asyncio.sleep(0.8)
+                        remaining_rows = await client.list_dir_all(parent_id=staging_folder_id)
+                        remaining_ids = {
+                            str(row.get("fid") or "").strip()
+                            for row in remaining_rows
+                            if str(row.get("fid") or "").strip()
+                        }
+                        if not remaining_ids.intersection(existing_ids):
+                            break
+                    else:
+                        raise PanTransferProviderError(
+                            "Quark existing staging contents were not cleared in time",
+                            payload={
+                                "staging_folder_id": staging_folder_id,
+                                "staging_folder_name": staging_folder_name,
+                                "remaining_entry_count": len(existing_ids),
+                            },
+                        )
+
+            fid_list = [str(item.get("fid") or "") for item in selected_share_items if str(item.get("fid") or "").strip()]
             fid_token_list = [
                 str(item.get("share_fid_token") or "")
-                for item in share_items
+                for item in selected_share_items
                 if str(item.get("share_fid_token") or "").strip()
             ]
             if not fid_list or len(fid_list) != len(fid_token_list):
@@ -485,19 +638,24 @@ class QuarkPanTransferProvider(PanTransferProvider):
                 stoken=stoken,
                 fid_list=fid_list,
                 fid_token_list=fid_token_list,
-                target_parent_id=str(staging_folder.get("fid") or ""),
+                target_parent_id=staging_folder_id,
+                source_parent_id=selection_parent_id,
             )
             await client.wait_task(task_id=save_task_id)
             return PanTransferTransferResult(
                 staging_root=parent_path,
                 staging_folder_name=staging_folder_name,
-                staging_folder_id=str(staging_folder.get("fid") or "") or None,
+                staging_folder_id=staging_folder_id or None,
                 payload={
                     "validation": validation_payload,
                     "pwd_id": pwd_id,
                     "saved_item_count": len(fid_list),
                     "save_task_id": save_task_id,
                     "title_hint": str(title_hint or staging_folder_name),
+                    "selection_applied": normalized_selection is not None,
+                    "selection_parent_id": None if selection_parent_id == "0" else selection_parent_id,
+                    "selected_entry_count": len(fid_list),
+                    "clear_existing_contents": bool(clear_existing_contents),
                 },
             )
 
@@ -522,12 +680,12 @@ class QuarkPanTransferProvider(PanTransferProvider):
             if not folder_id:
                 parent_id = "0"
                 for segment in [part for part in str(staging_root or "").split("/") if part]:
-                    rows = await client.list_dir(parent_id=parent_id)
+                    rows = await client.list_dir_all(parent_id=parent_id)
                     matched = client._match_dir(rows, folder_name=segment)
                     if matched is None:
                         raise PanTransferProviderError(f"Quark staging path segment not found: {segment}", retryable=False)
                     parent_id = str(matched.get("fid") or "")
-                rows = await client.list_dir(parent_id=parent_id)
+                rows = await client.list_dir_all(parent_id=parent_id)
                 folder = client._match_dir(rows, folder_name=staging_folder_name)
                 if folder is None:
                     raise PanTransferProviderError("Quark staging directory is missing", retryable=False)
@@ -540,7 +698,7 @@ class QuarkPanTransferProvider(PanTransferProvider):
             share_target_name = str(title_hint or staging_folder_name)
             share_target_fallback_reason = None
             if str(share_target_mode or "").strip().lower() == "content_root":
-                rows = await client.list_dir(parent_id=folder_id)
+                rows = await client.list_dir_all(parent_id=folder_id)
                 content_root, fallback_reason = client._resolve_content_root(rows)
                 if content_root is not None:
                     share_target_id = str(content_root.get("fid") or "").strip() or folder_id
