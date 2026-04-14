@@ -11,6 +11,8 @@ import type {
   PanTransferFollowTaskCreateRequest,
   PanTransferFollowTaskDetailResponse,
   PanTransferFollowTaskListResponse,
+  PanTransferLinkDirectoryPreviewRequest,
+  PanTransferLinkDirectoryPreviewResponse,
   PanTransferManualPublishRequest,
   PanTransferMessagePublishRequest,
   PanTransferMessagePublishResponse,
@@ -135,6 +137,16 @@ export const publishManualPanTransferMessage = async (
   payload: PanTransferManualPublishRequest
 ): Promise<PanTransferMessagePublishResponse> => {
   const response = await apiClient.post<PanTransferMessagePublishResponse>('/admin/pan-transfer/publishes/manual', payload)
+  return response.data
+}
+
+export const previewPanTransferLinkDirectory = async (
+  payload: PanTransferLinkDirectoryPreviewRequest
+): Promise<PanTransferLinkDirectoryPreviewResponse> => {
+  const response = await apiClient.post<PanTransferLinkDirectoryPreviewResponse>(
+    '/admin/pan-transfer/link-preview',
+    payload
+  )
   return response.data
 }
 

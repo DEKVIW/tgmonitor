@@ -155,6 +155,28 @@ export interface PanTransferManualPublishRequest {
   tags?: string[]
 }
 
+export interface PanTransferLinkDirectoryPreviewRequest {
+  url: string
+}
+
+export interface PanTransferLinkDirectoryEntry {
+  name: string
+  is_dir: boolean
+  size_bytes?: number | null
+  updated_at?: string | null
+  entry_id?: string | null
+}
+
+export interface PanTransferLinkDirectoryPreviewResponse {
+  url: string
+  platform: string
+  supported: boolean
+  item_count: number
+  truncated: boolean
+  message?: string | null
+  items: PanTransferLinkDirectoryEntry[]
+}
+
 export interface PanTransferPublishRecordItem {
   id: number
   source_type: string
@@ -166,6 +188,7 @@ export interface PanTransferPublishRecordItem {
   source_url: string
   source_original_url?: string | null
   current_share_url?: string | null
+  published_link_target_id?: number | null
   published_message_id?: number | null
   published_title: string
   published_description?: string | null
@@ -175,6 +198,7 @@ export interface PanTransferPublishRecordItem {
   published_link_status?: string | null
   published_link_detail_message?: string | null
   published_link_checked_at?: string | null
+  published_clicks_total: number
   can_refresh_share: boolean
   can_edit: boolean
   operator?: string | null

@@ -354,6 +354,33 @@ class PanTransferManualPublishRequest(PanTransferBaseModel):
         return normalized
 
 
+class PanTransferLinkDirectoryPreviewRequest(PanTransferBaseModel):
+    url: str = Field(min_length=1, max_length=2000)
+
+    @field_validator("url")
+    @classmethod
+    def validate_preview_url(cls, value: str) -> str:
+        return _normalize_text(value, field_name="url")
+
+
+class PanTransferLinkDirectoryEntry(PanTransferBaseModel):
+    name: str
+    is_dir: bool = False
+    size_bytes: int | None = None
+    updated_at: datetime | None = None
+    entry_id: str | None = None
+
+
+class PanTransferLinkDirectoryPreviewResponse(PanTransferBaseModel):
+    url: str
+    platform: str
+    supported: bool = True
+    item_count: int = 0
+    truncated: bool = False
+    message: str | None = None
+    items: list[PanTransferLinkDirectoryEntry] = Field(default_factory=list)
+
+
 class PanTransferPublishRecordItem(PanTransferBaseModel):
     id: int
     source_type: str
@@ -365,6 +392,7 @@ class PanTransferPublishRecordItem(PanTransferBaseModel):
     source_url: str
     source_original_url: str | None = None
     current_share_url: str | None = None
+    published_link_target_id: int | None = None
     published_message_id: int | None = None
     published_title: str
     published_description: str | None = None
@@ -374,6 +402,7 @@ class PanTransferPublishRecordItem(PanTransferBaseModel):
     published_link_status: str | None = None
     published_link_detail_message: str | None = None
     published_link_checked_at: datetime | None = None
+    published_clicks_total: int = 0
     can_refresh_share: bool = False
     can_edit: bool = True
     operator: str | None = None

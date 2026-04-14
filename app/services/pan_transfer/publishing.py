@@ -4,11 +4,13 @@ from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.models import (
     LinkCheckDetails,
     LinkTarget,
+    LinkTargetDailyStat,
     Message,
     PanTransferAccount,
     PanTransferBatchItem,
@@ -244,7 +246,42 @@ def _resolve_published_link_status(
     return _build_link_health_snapshot(session, url=published_url)
 
 
-def _serialize_publish_record(session: Session, row: PanTransferPublishRecord) -> dict[str, Any]:
+def _normalize_optional_int(value: Any) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError):
+        return None
+    return normalized if normalized > 0 else None
+
+
+def _load_click_totals(session: Session, *, link_target_ids: list[int]) -> dict[int, int]:
+    normalized_ids = sorted({int(item_id) for item_id in link_target_ids if int(item_id) > 0})
+    if not normalized_ids:
+        return {}
+    rows = (
+        session.query(
+            LinkTargetDailyStat.link_target_id.label("link_target_id"),
+            func.sum(LinkTargetDailyStat.click_count).label("clicks_total"),
+        )
+        .filter(LinkTargetDailyStat.link_target_id.in_(normalized_ids))
+        .group_by(LinkTargetDailyStat.link_target_id)
+        .all()
+    )
+    return {
+        int(row.link_target_id): int(row.clicks_total or 0)
+        for row in rows
+        if getattr(row, "link_target_id", None) is not None
+    }
+
+
+def _serialize_publish_record(
+    session: Session,
+    row: PanTransferPublishRecord,
+    *,
+    click_totals: dict[int, int] | None = None,
+) -> dict[str, Any]:
     extra_json = dict(row.extra_json or {})
     batch_item = _get_publish_record_batch_item(session, row=row)
     message = _get_publish_record_message(session, row=row)
@@ -263,6 +300,19 @@ def _serialize_publish_record(session: Session, row: PanTransferPublishRecord) -
     original_snapshot = _build_link_health_snapshot(session, url=source_original_url)
     current_share_snapshot = _build_link_health_snapshot(session, url=current_share_url)
     published_snapshot = _resolve_published_link_status(session, row=row, published_url=published_url)
+    published_link_target_id = _normalize_optional_int(extra_json.get("published_link_target_id"))
+    if published_link_target_id is None and published_url:
+        published_target = _find_existing_target_for_url(session, url=published_url)
+        published_link_target_id = int(published_target.id) if published_target is not None else None
+    if published_link_target_id is None:
+        published_clicks_total = 0
+    elif click_totals is None:
+        published_clicks_total = _load_click_totals(session, link_target_ids=[published_link_target_id]).get(
+            published_link_target_id,
+            0,
+        )
+    else:
+        published_clicks_total = int(click_totals.get(published_link_target_id, 0))
 
     can_refresh_share = False
     if batch_item is not None and batch_item.target_account_id is not None and _get_staging_snapshot(batch_item) is not None:
@@ -281,6 +331,7 @@ def _serialize_publish_record(session: Session, row: PanTransferPublishRecord) -
         "source_url": published_url or "",
         "source_original_url": source_original_url,
         "current_share_url": current_share_url,
+        "published_link_target_id": published_link_target_id,
         "published_message_id": int(row.published_message_id) if row.published_message_id is not None else None,
         "published_title": _normalize_text(getattr(message, "title", None), max_length=255) or str(row.published_title or ""),
         "published_description": _normalize_text(getattr(message, "description", None), max_length=1000) or (_normalize_text(row.published_description, max_length=1000) or None),
@@ -290,6 +341,7 @@ def _serialize_publish_record(session: Session, row: PanTransferPublishRecord) -
         "published_link_status": published_snapshot["status"],
         "published_link_detail_message": published_snapshot["detail_message"],
         "published_link_checked_at": published_snapshot["checked_at"],
+        "published_clicks_total": published_clicks_total,
         "can_refresh_share": can_refresh_share,
         "can_edit": message is not None,
         "operator": _normalize_text(row.operator, max_length=128) or None,
@@ -413,8 +465,21 @@ def list_pan_transfer_publish_records(
         .limit(safe_page_size)
         .all()
     )
+    published_link_target_ids: list[int] = []
+    for row in rows:
+        extra_json = dict(row.extra_json or {})
+        published_link_target_id = _normalize_optional_int(extra_json.get("published_link_target_id"))
+        if published_link_target_id is None:
+            message = _get_publish_record_message(session, row=row)
+            published_url = _extract_primary_url_from_links(getattr(message, "links", None)) or _normalize_text(row.source_url) or None
+            if published_url:
+                published_target = _find_existing_target_for_url(session, url=published_url)
+                published_link_target_id = int(published_target.id) if published_target is not None else None
+        if published_link_target_id is not None:
+            published_link_target_ids.append(published_link_target_id)
+    click_totals = _load_click_totals(session, link_target_ids=published_link_target_ids)
     return {
-        "items": [_serialize_publish_record(session, row) for row in rows],
+        "items": [_serialize_publish_record(session, row, click_totals=click_totals) for row in rows],
         "page": safe_page,
         "page_size": safe_page_size,
         "total": total,

@@ -144,6 +144,81 @@
   color: rgba(0, 0, 0, 0.65);
 }
 
+.resource-ops-transfer-title-copy {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: rgba(15, 23, 42, 0.92);
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resource-ops-transfer-link-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.resource-ops-transfer-link-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 5px 9px;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  border-radius: 999px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.resource-ops-transfer-link-chip:hover {
+  border-color: rgba(22, 119, 255, 0.45);
+  background: #f8fbff;
+}
+
+.resource-ops-transfer-link-chip-label {
+  color: rgba(15, 23, 42, 0.88);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.resource-ops-transfer-link-chip-status {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+
+.resource-ops-transfer-link-chip-status.is-success {
+  background: #f6ffed;
+  color: #389e0d;
+}
+
+.resource-ops-transfer-link-chip-status.is-warning {
+  background: #fffbe6;
+  color: #d48806;
+}
+
+.resource-ops-transfer-link-chip-status.is-danger {
+  background: #fff1f0;
+  color: #cf1322;
+}
+
+.resource-ops-transfer-link-chip-status.is-muted {
+  background: #f5f5f5;
+  color: rgba(0, 0, 0, 0.45);
+}
+
 .resource-ops-transfer-title-cell {
   display: flex;
   flex-direction: column;
@@ -250,6 +325,14 @@
 .resource-ops-transfer-number-stack strong {
   font-size: 16px;
   line-height: 1.1;
+}
+
+.resource-ops-transfer-number-stack--compact {
+  align-items: flex-end;
+}
+
+.resource-ops-transfer-number-stack--compact strong {
+  font-size: 18px;
 }
 
 .resource-ops-transfer-number-stack small {
@@ -485,6 +568,34 @@
 
 .resource-ops-transfer-terminal-line.is-success {
   color: #bbf7d0;
+}
+
+.resource-ops-transfer-action-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 28px);
+  gap: 4px;
+  justify-content: start;
+}
+
+.resource-ops-transfer-action-grid .ant-btn {
+  width: 28px;
+  min-width: 28px;
+  padding-inline: 0;
+}
+
+.resource-ops-transfer-directory-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.resource-ops-transfer-directory-name {
+  color: rgba(15, 23, 42, 0.86);
+}
+
+.resource-ops-transfer-directory-name.is-dir {
+  color: #1677ff;
+  font-weight: 600;
 }
 
 .resource-ops-transfer-terminal-meta {

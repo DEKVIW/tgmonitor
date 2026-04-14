@@ -18,6 +18,8 @@ from app.schemas.pan_transfer_models import (
     PanTransferFollowTaskCreateRequest,
     PanTransferFollowTaskDetailResponse,
     PanTransferFollowTaskListResponse,
+    PanTransferLinkDirectoryPreviewRequest,
+    PanTransferLinkDirectoryPreviewResponse,
     PanTransferManualPublishRequest,
     PanTransferMessagePublishRequest,
     PanTransferMessagePublishResponse,
@@ -48,6 +50,7 @@ from app.services.pan_transfer import (
     pause_pan_transfer_follow_task,
     publish_manual_pan_transfer_message,
     publish_pan_transfer_batch_item_message,
+    preview_pan_transfer_link_directory,
     preview_manual_pan_transfer_selection,
     queue_pan_transfer_follow_task_check,
     refresh_pan_transfer_publish_record_share,
@@ -430,6 +433,28 @@ async def publish_manual_pan_transfer_message_api(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to publish manual message: {exc}",
+        ) from exc
+
+
+@router.post(
+    "/link-preview",
+    response_model=PanTransferLinkDirectoryPreviewResponse,
+    summary="Preview the top-level directory of a public share link",
+)
+async def preview_pan_transfer_link_directory_api(
+    payload: PanTransferLinkDirectoryPreviewRequest,
+    current_user: dict[str, Any] = Depends(get_admin_user),
+) -> PanTransferLinkDirectoryPreviewResponse:
+    del current_user
+    try:
+        result = await preview_pan_transfer_link_directory(url=payload.url)
+        return PanTransferLinkDirectoryPreviewResponse(**result)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to preview link directory: {exc}",
         ) from exc
 
 

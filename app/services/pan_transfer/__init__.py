@@ -5,6 +5,7 @@ from .accounts import (
     list_pan_transfer_accounts,
     update_pan_transfer_account,
 )
+from .directory_preview import preview_pan_transfer_link_directory
 from .batches import (
     cancel_pan_transfer_batch,
     clear_pan_transfer_batch_logs,
@@ -56,6 +57,7 @@ __all__ = [
     "pause_pan_transfer_follow_task",
     "process_next_pan_transfer_item",
     "process_next_pan_transfer_follow_task",
+    "preview_pan_transfer_link_directory",
     "preview_manual_pan_transfer_selection",
     "publish_manual_pan_transfer_message",
     "publish_pan_transfer_batch_item_message",
