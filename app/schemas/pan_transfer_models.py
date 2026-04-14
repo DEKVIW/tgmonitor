@@ -356,11 +356,21 @@ class PanTransferManualPublishRequest(PanTransferBaseModel):
 
 class PanTransferLinkDirectoryPreviewRequest(PanTransferBaseModel):
     url: str = Field(min_length=1, max_length=2000)
+    entry_id: str | None = Field(default=None, max_length=255)
+    entry_path: str | None = Field(default=None, max_length=1024)
+    entry_name: str | None = Field(default=None, max_length=255)
 
     @field_validator("url")
     @classmethod
     def validate_preview_url(cls, value: str) -> str:
         return _normalize_text(value, field_name="url")
+
+    @field_validator("entry_id", "entry_path", "entry_name")
+    @classmethod
+    def validate_optional_preview_text(cls, value: str | None, info) -> str | None:
+        if value is None:
+            return None
+        return _normalize_text(value, field_name=info.field_name, allow_empty=True) or None
 
 
 class PanTransferLinkDirectoryEntry(PanTransferBaseModel):
@@ -369,6 +379,7 @@ class PanTransferLinkDirectoryEntry(PanTransferBaseModel):
     size_bytes: int | None = None
     updated_at: datetime | None = None
     entry_id: str | None = None
+    path: str | None = None
 
 
 class PanTransferLinkDirectoryPreviewResponse(PanTransferBaseModel):
@@ -377,6 +388,9 @@ class PanTransferLinkDirectoryPreviewResponse(PanTransferBaseModel):
     supported: bool = True
     item_count: int = 0
     truncated: bool = False
+    current_entry_id: str | None = None
+    current_path: str | None = None
+    current_name: str | None = None
     message: str | None = None
     items: list[PanTransferLinkDirectoryEntry] = Field(default_factory=list)
 
@@ -398,14 +412,24 @@ class PanTransferPublishRecordItem(PanTransferBaseModel):
     published_description: str | None = None
     published_tags: list[str] = Field(default_factory=list)
     original_link_status: str | None = None
+    original_link_detail_message: str | None = None
+    original_link_checked_at: datetime | None = None
     current_share_status: str | None = None
+    current_share_detail_message: str | None = None
+    current_share_checked_at: datetime | None = None
     published_link_status: str | None = None
     published_link_detail_message: str | None = None
     published_link_checked_at: datetime | None = None
     published_clicks_total: int = 0
+    publish_count: int = 1
     can_refresh_share: bool = False
     can_edit: bool = True
     operator: str | None = None
+    is_archived: bool = False
+    archived_at: datetime | None = None
+    publish_rule_enabled: bool = False
+    publish_rule_summary: str | None = None
+    next_publish_at: datetime | None = None
     extra_json: dict = Field(default_factory=dict)
     published_at: datetime
     created_at: datetime
@@ -449,6 +473,57 @@ class PanTransferPublishRecordUpdateRequest(PanTransferBaseModel):
             seen.add(cleaned)
             normalized.append(cleaned[:64])
         return normalized
+
+
+class PanTransferPublishRuleUpdateRequest(PanTransferBaseModel):
+    enabled: bool = False
+    weekdays: list[int] = Field(default_factory=list)
+    time_of_day: str | None = Field(default=None, max_length=5)
+    timezone: str = Field(default="Asia/Shanghai", min_length=1, max_length=64)
+
+    @field_validator("weekdays")
+    @classmethod
+    def validate_publish_rule_weekdays(cls, value: list[int]) -> list[int]:
+        normalized = sorted({int(day) for day in value})
+        for day in normalized:
+            if day < 1 or day > 7:
+                raise ValueError("weekdays must use 1-7 (Mon-Sun)")
+        return normalized
+
+    @field_validator("time_of_day")
+    @classmethod
+    def validate_publish_rule_time_of_day(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = _normalize_text(value, field_name="time_of_day", allow_empty=True)
+        if not normalized:
+            return None
+        parts = normalized.split(":")
+        if len(parts) != 2:
+            raise ValueError("time_of_day must use HH:MM")
+        try:
+            hour = int(parts[0])
+            minute = int(parts[1])
+        except ValueError as exc:
+            raise ValueError("time_of_day must use HH:MM") from exc
+        if hour < 0 or hour > 23 or minute < 0 or minute > 59:
+            raise ValueError("time_of_day must use HH:MM")
+        return f"{hour:02d}:{minute:02d}"
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_publish_rule_timezone(cls, value: str) -> str:
+        return _normalize_text(value, field_name="timezone")
+
+    @model_validator(mode="after")
+    def validate_publish_rule(self) -> "PanTransferPublishRuleUpdateRequest":
+        if not self.enabled:
+            return self
+        if not self.weekdays:
+            raise ValueError("weekdays cannot be empty when publish rule is enabled")
+        if not self.time_of_day:
+            raise ValueError("time_of_day cannot be empty when publish rule is enabled")
+        return self
 
 
 class PanTransferFollowTaskCreateRequest(PanTransferBaseModel):

@@ -577,6 +577,10 @@
   justify-content: start;
 }
 
+.resource-ops-transfer-action-grid--wide {
+  grid-template-columns: repeat(4, 28px);
+}
+
 .resource-ops-transfer-action-grid .ant-btn {
   width: 28px;
   min-width: 28px;
@@ -596,6 +600,48 @@
 .resource-ops-transfer-directory-name.is-dir {
   color: #1677ff;
   font-weight: 600;
+}
+
+.resource-ops-transfer-directory-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #1677ff;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.resource-ops-transfer-directory-breadcrumbs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.resource-ops-transfer-directory-crumb {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: rgba(15, 23, 42, 0.75);
+  font: inherit;
+  cursor: pointer;
+}
+
+.resource-ops-transfer-bulkbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 16px;
+  padding: 10px 12px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 14px;
+  background: #fafcff;
+}
+
+.resource-ops-transfer-bulkbar-meta {
+  color: rgba(15, 23, 42, 0.72);
 }
 
 .resource-ops-transfer-terminal-meta {

@@ -38,7 +38,7 @@ import type {
 import AccountsSection from './AccountsSection'
 import BatchSection from './BatchSection'
 import FollowTasksSection from './FollowTasksSection'
-import PublishSection from './PublishSectionCompact'
+import PublishSection from './PublishSectionPanel'
 import PreviewSection from './PreviewSection'
 import {
   BatchCreateDraft,

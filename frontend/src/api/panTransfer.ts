@@ -18,6 +18,7 @@ import type {
   PanTransferMessagePublishResponse,
   PanTransferPublishRecordItem,
   PanTransferPublishRecordListResponse,
+  PanTransferPublishRuleUpdateRequest,
   PanTransferPublishRecordUpdateRequest,
   PanTransferBatchRetryRequest,
   PanTransferDeleteResponse,
@@ -152,11 +153,34 @@ export const previewPanTransferLinkDirectory = async (
 
 export const listPanTransferPublishRecords = async (
   page = 1,
-  pageSize = 20
+  pageSize = 20,
+  options?: {
+    keyword?: string
+    platform?: string
+    scope?: 'active' | 'archived' | 'all' | string
+    sortBy?: string
+    sortOrder?: 'asc' | 'desc' | string
+  }
 ): Promise<PanTransferPublishRecordListResponse> => {
+  const params = new URLSearchParams({
+    page: String(page),
+    page_size: String(pageSize),
+  })
+  if (options?.keyword?.trim()) params.set('keyword', options.keyword.trim())
+  if (options?.platform?.trim()) params.set('platform', options.platform.trim())
+  if (options?.scope?.trim()) params.set('scope', options.scope.trim())
+  if (options?.sortBy?.trim()) params.set('sort_by', options.sortBy.trim())
+  if (options?.sortOrder?.trim()) params.set('sort_order', options.sortOrder.trim())
   const response = await apiClient.get<PanTransferPublishRecordListResponse>(
-    `/admin/pan-transfer/publishes?page=${page}&page_size=${pageSize}`
+    `/admin/pan-transfer/publishes?${params.toString()}`
   )
+  return response.data
+}
+
+export const republishPanTransferPublishRecord = async (
+  recordId: number
+): Promise<PanTransferPublishRecordItem> => {
+  const response = await apiClient.post<PanTransferPublishRecordItem>(`/admin/pan-transfer/publishes/${recordId}/republish`)
   return response.data
 }
 
@@ -172,6 +196,28 @@ export const validatePanTransferPublishRecord = async (
   recordId: number
 ): Promise<PanTransferPublishRecordItem> => {
   const response = await apiClient.post<PanTransferPublishRecordItem>(`/admin/pan-transfer/publishes/${recordId}/validate`)
+  return response.data
+}
+
+export const archivePanTransferPublishRecord = async (
+  recordId: number
+): Promise<PanTransferPublishRecordItem> => {
+  const response = await apiClient.post<PanTransferPublishRecordItem>(`/admin/pan-transfer/publishes/${recordId}/archive`)
+  return response.data
+}
+
+export const deletePanTransferPublishRecord = async (
+  recordId: number
+): Promise<PanTransferDeleteResponse> => {
+  const response = await apiClient.delete<PanTransferDeleteResponse>(`/admin/pan-transfer/publishes/${recordId}`)
+  return response.data
+}
+
+export const updatePanTransferPublishRule = async (
+  recordId: number,
+  payload: PanTransferPublishRuleUpdateRequest
+): Promise<PanTransferPublishRecordItem> => {
+  const response = await apiClient.put<PanTransferPublishRecordItem>(`/admin/pan-transfer/publishes/${recordId}/rule`, payload)
   return response.data
 }
 

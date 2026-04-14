@@ -114,6 +114,7 @@ def _build_entry(
     size_bytes: int | None = None,
     updated_at: datetime | None = None,
     entry_id: str | None = None,
+    path: str | None = None,
 ) -> dict[str, Any]:
     return {
         "name": _normalize_text(name, max_length=255) or "未命名项",
@@ -121,6 +122,7 @@ def _build_entry(
         "size_bytes": size_bytes,
         "updated_at": updated_at,
         "entry_id": _normalize_text(entry_id, max_length=255) or None,
+        "path": _normalize_text(path, max_length=1024) or None,
     }
 
 
@@ -133,8 +135,14 @@ def _extract_quark_share_id(url: str) -> tuple[str, str | None]:
     raise ValueError("无法解析夸克分享链接")
 
 
-async def _preview_quark_directory(url: str) -> dict[str, Any]:
+async def _preview_quark_directory(
+    url: str,
+    *,
+    entry_id: str | None = None,
+    entry_name: str | None = None,
+) -> dict[str, Any]:
     pwd_id, passcode = _extract_quark_share_id(url)
+    current_entry_id = _normalize_text(entry_id, max_length=255) or "0"
     async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30), headers=_QUARK_HEADERS) as session:
         status_code, token_payload = await _request_json(
             session,
@@ -166,7 +174,7 @@ async def _preview_quark_directory(url: str) -> dict[str, Any]:
                     "uc_param_str": "",
                     "pwd_id": pwd_id,
                     "stoken": stoken,
-                    "pdir_fid": "0",
+                    "pdir_fid": current_entry_id,
                     "force": "0",
                     "_page": str(page),
                     "_size": "50",
@@ -188,6 +196,7 @@ async def _preview_quark_directory(url: str) -> dict[str, Any]:
                         size_bytes=_normalize_int(payload.get("size")),
                         updated_at=_normalize_datetime(payload.get("updated_at") or payload.get("obj_update_time")),
                         entry_id=_normalize_text(payload.get("fid")),
+                        path=None,
                     )
                 )
                 if len(items) >= _DIRECTORY_PREVIEW_LIMIT:
@@ -206,6 +215,9 @@ async def _preview_quark_directory(url: str) -> dict[str, Any]:
             "supported": True,
             "item_count": max(total_count, len(items)),
             "truncated": truncated or max(total_count, len(items)) > len(items),
+            "current_entry_id": None if current_entry_id == "0" else current_entry_id,
+            "current_path": None,
+            "current_name": _normalize_text(entry_name, max_length=255) or None,
             "items": items,
             "message": None if items else "目录为空",
         }
@@ -224,12 +236,18 @@ def _extract_baidu_share_key(url: str) -> tuple[str, bool, str | None]:
     raise ValueError("无法解析百度分享链接")
 
 
-async def _preview_baidu_directory(url: str) -> dict[str, Any]:
+async def _preview_baidu_directory(
+    url: str,
+    *,
+    entry_path: str | None = None,
+    entry_name: str | None = None,
+) -> dict[str, Any]:
     share_key, requires_prefix_strip, passcode = _extract_baidu_share_key(url)
     short_url = share_key[1:] if requires_prefix_strip and share_key.startswith("1") and len(share_key) > 1 else share_key
     cookies: dict[str, str] | None = None
     referer_headers = dict(_BAIDU_HEADERS)
     referer_headers["Referer"] = url
+    normalized_entry_path = _normalize_text(entry_path, max_length=1024) or None
     async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30), headers=referer_headers) as session:
         if passcode:
             verify_status, verify_payload = await _request_json(
@@ -261,7 +279,8 @@ async def _preview_baidu_directory(url: str) -> dict[str, Any]:
                 "num": "200",
                 "order": "time",
                 "shorturl": short_url,
-                "root": "1",
+                "root": "0" if normalized_entry_path else "1",
+                "dir": normalized_entry_path or "",
                 "view_mode": "1",
                 "channel": "chunlei",
                 "clienttype": "0",
@@ -283,6 +302,7 @@ async def _preview_baidu_directory(url: str) -> dict[str, Any]:
                 size_bytes=_normalize_int(row.get("size")),
                 updated_at=_normalize_datetime(row.get("server_mtime")),
                 entry_id=_normalize_text(row.get("fs_id")),
+                path=_normalize_text(row.get("path")),
             )
             for row in rows[:_DIRECTORY_PREVIEW_LIMIT]
         ]
@@ -292,18 +312,27 @@ async def _preview_baidu_directory(url: str) -> dict[str, Any]:
             "supported": True,
             "item_count": len(rows),
             "truncated": len(rows) > len(items),
+            "current_entry_id": None,
+            "current_path": normalized_entry_path,
+            "current_name": _normalize_text(entry_name, max_length=255) or None,
             "items": items,
             "message": None if items else "目录为空",
         }
 
 
-async def preview_pan_transfer_link_directory(*, url: str) -> dict[str, Any]:
+async def preview_pan_transfer_link_directory(
+    *,
+    url: str,
+    entry_id: str | None = None,
+    entry_path: str | None = None,
+    entry_name: str | None = None,
+) -> dict[str, Any]:
     normalized_url = normalize_candidate_url(str(url or "").strip())
     if not normalized_url:
         raise ValueError("链接不能为空")
     platform = detect_platform_from_url(normalized_url)
     if platform == PLATFORM_QUARK:
-        return await _preview_quark_directory(normalized_url)
+        return await _preview_quark_directory(normalized_url, entry_id=entry_id, entry_name=entry_name)
     if platform == PLATFORM_BAIDU:
-        return await _preview_baidu_directory(normalized_url)
+        return await _preview_baidu_directory(normalized_url, entry_path=entry_path, entry_name=entry_name)
     raise ValueError("当前仅支持夸克和百度链接目录预览")

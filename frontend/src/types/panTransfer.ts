@@ -157,6 +157,9 @@ export interface PanTransferManualPublishRequest {
 
 export interface PanTransferLinkDirectoryPreviewRequest {
   url: string
+  entry_id?: string | null
+  entry_path?: string | null
+  entry_name?: string | null
 }
 
 export interface PanTransferLinkDirectoryEntry {
@@ -165,6 +168,7 @@ export interface PanTransferLinkDirectoryEntry {
   size_bytes?: number | null
   updated_at?: string | null
   entry_id?: string | null
+  path?: string | null
 }
 
 export interface PanTransferLinkDirectoryPreviewResponse {
@@ -173,6 +177,9 @@ export interface PanTransferLinkDirectoryPreviewResponse {
   supported: boolean
   item_count: number
   truncated: boolean
+  current_entry_id?: string | null
+  current_path?: string | null
+  current_name?: string | null
   message?: string | null
   items: PanTransferLinkDirectoryEntry[]
 }
@@ -194,14 +201,24 @@ export interface PanTransferPublishRecordItem {
   published_description?: string | null
   published_tags: string[]
   original_link_status?: string | null
+  original_link_detail_message?: string | null
+  original_link_checked_at?: string | null
   current_share_status?: string | null
+  current_share_detail_message?: string | null
+  current_share_checked_at?: string | null
   published_link_status?: string | null
   published_link_detail_message?: string | null
   published_link_checked_at?: string | null
   published_clicks_total: number
+  publish_count: number
   can_refresh_share: boolean
   can_edit: boolean
   operator?: string | null
+  is_archived: boolean
+  archived_at?: string | null
+  publish_rule_enabled: boolean
+  publish_rule_summary?: string | null
+  next_publish_at?: string | null
   extra_json: Record<string, unknown>
   published_at: string
   created_at: string
@@ -220,6 +237,13 @@ export interface PanTransferPublishRecordUpdateRequest {
   title: string
   description?: string | null
   tags?: string[]
+}
+
+export interface PanTransferPublishRuleUpdateRequest {
+  enabled: boolean
+  weekdays: number[]
+  time_of_day?: string | null
+  timezone?: string
 }
 
 export interface PanTransferFollowTaskCreateRequest {

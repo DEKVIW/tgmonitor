@@ -25,6 +25,7 @@ from app.schemas.pan_transfer_models import (
     PanTransferMessagePublishResponse,
     PanTransferPublishRecordItem,
     PanTransferPublishRecordListResponse,
+    PanTransferPublishRuleUpdateRequest,
     PanTransferPublishRecordUpdateRequest,
     PanTransferBatchRetryRequest,
     PanTransferBatchSummaryItem,
@@ -41,6 +42,7 @@ from app.services.pan_transfer import (
     delete_pan_transfer_account,
     delete_pan_transfer_batch,
     delete_pan_transfer_follow_task,
+    delete_pan_transfer_publish_record,
     get_pan_transfer_batch_detail,
     get_pan_transfer_follow_task_detail,
     list_pan_transfer_accounts,
@@ -48,15 +50,18 @@ from app.services.pan_transfer import (
     list_pan_transfer_follow_tasks,
     list_pan_transfer_publish_records,
     pause_pan_transfer_follow_task,
+    archive_pan_transfer_publish_record,
     publish_manual_pan_transfer_message,
     publish_pan_transfer_batch_item_message,
     preview_pan_transfer_link_directory,
     preview_manual_pan_transfer_selection,
     queue_pan_transfer_follow_task_check,
+    republish_pan_transfer_publish_record,
     refresh_pan_transfer_publish_record_share,
     retry_pan_transfer_batch,
     resume_pan_transfer_follow_task,
     start_pan_transfer_batch,
+    update_pan_transfer_publish_rule,
     update_pan_transfer_publish_record,
     update_pan_transfer_account,
     validate_pan_transfer_account,
@@ -462,12 +467,26 @@ async def preview_pan_transfer_link_directory_api(
 async def list_pan_transfer_publish_records_api(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
+    keyword: str | None = Query(default=None),
+    platform: str | None = Query(default=None),
+    scope: str = Query(default="active"),
+    sort_by: str = Query(default="published_at"),
+    sort_order: str = Query(default="desc"),
     current_user: dict[str, Any] = Depends(get_admin_user),
     db: Session = Depends(get_db),
 ) -> PanTransferPublishRecordListResponse:
     del current_user
     try:
-        result = list_pan_transfer_publish_records(db, page=page, page_size=page_size)
+        result = list_pan_transfer_publish_records(
+            db,
+            page=page,
+            page_size=page_size,
+            keyword=keyword,
+            platform=platform,
+            scope=scope,
+            sort_by=sort_by,
+            sort_order=sort_order,
+        )
         return PanTransferPublishRecordListResponse(
             items=[PanTransferPublishRecordItem(**item) for item in result["items"]],
             page=result["page"],
@@ -478,6 +497,38 @@ async def list_pan_transfer_publish_records_api(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to list publish records: {exc}",
+        ) from exc
+
+
+@router.post(
+    "/publishes/{record_id}/republish",
+    response_model=PanTransferPublishRecordItem,
+    summary="Republish a managed resource to the frontend feed",
+)
+async def republish_pan_transfer_publish_record_api(
+    record_id: int,
+    current_user: dict[str, Any] = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+) -> PanTransferPublishRecordItem:
+    try:
+        result = republish_pan_transfer_publish_record(
+            db,
+            record_id=record_id,
+            operator=str(current_user.get("username") or current_user.get("account") or "admin"),
+        )
+        db.commit()
+        return PanTransferPublishRecordItem(**result)
+    except LookupError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to republish resource: {exc}",
         ) from exc
 
 
@@ -508,6 +559,98 @@ async def update_pan_transfer_publish_record_api(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to update publish record: {exc}",
+        ) from exc
+
+
+@router.post(
+    "/publishes/{record_id}/archive",
+    response_model=PanTransferPublishRecordItem,
+    summary="Archive a publish record resource",
+)
+async def archive_pan_transfer_publish_record_api(
+    record_id: int,
+    current_user: dict[str, Any] = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+) -> PanTransferPublishRecordItem:
+    try:
+        result = archive_pan_transfer_publish_record(
+            db,
+            record_id=record_id,
+            operator=str(current_user.get("username") or current_user.get("account") or "admin"),
+        )
+        db.commit()
+        return PanTransferPublishRecordItem(**result)
+    except LookupError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to archive publish record: {exc}",
+        ) from exc
+
+
+@router.delete(
+    "/publishes/{record_id}",
+    response_model=PanTransferDeleteResponse,
+    summary="Delete a publish record resource",
+)
+async def delete_pan_transfer_publish_record_api(
+    record_id: int,
+    current_user: dict[str, Any] = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+) -> PanTransferDeleteResponse:
+    del current_user
+    try:
+        result = delete_pan_transfer_publish_record(db, record_id=record_id)
+        db.commit()
+        return PanTransferDeleteResponse(**result)
+    except LookupError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete publish record: {exc}",
+        ) from exc
+
+
+@router.put(
+    "/publishes/{record_id}/rule",
+    response_model=PanTransferPublishRecordItem,
+    summary="Update a publish rule",
+)
+async def update_pan_transfer_publish_rule_api(
+    record_id: int,
+    payload: PanTransferPublishRuleUpdateRequest,
+    current_user: dict[str, Any] = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+) -> PanTransferPublishRecordItem:
+    del current_user
+    try:
+        result = update_pan_transfer_publish_rule(
+            db,
+            record_id=record_id,
+            payload=payload.model_dump(),
+        )
+        db.commit()
+        return PanTransferPublishRecordItem(**result)
+    except LookupError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update publish rule: {exc}",
         ) from exc
 
 
