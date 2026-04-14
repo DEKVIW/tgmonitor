@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import distinct, func
+from sqlalchemy import distinct, func, or_
 from sqlalchemy.orm import Session, aliased
 
 from app.models.models import (
@@ -218,6 +218,37 @@ def _build_manual_candidate_items(
     return items
 
 
+def _collect_keyword_matched_link_target_ids(
+    session: Session,
+    *,
+    search_keyword: str,
+    link_target_ids: list[int],
+    selected_message_ids: list[int] | None = None,
+) -> set[int]:
+    normalized_keyword = _normalize_text(search_keyword, max_length=120).lower()
+    normalized_link_target_ids = [int(value) for value in (link_target_ids or []) if int(value) > 0]
+    if not normalized_keyword or not normalized_link_target_ids:
+        return set()
+
+    pattern = f"%{normalized_keyword}%"
+    query = (
+        session.query(distinct(MessageLinkRef.link_target_id))
+        .join(Message, Message.id == MessageLinkRef.message_id)
+        .filter(MessageLinkRef.link_target_id.in_(normalized_link_target_ids))
+        .filter(
+            or_(
+                func.lower(func.coalesce(Message.title, "")).like(pattern),
+                func.lower(func.coalesce(Message.description, "")).like(pattern),
+                func.lower(func.coalesce(Message.monitor_channel_title, "")).like(pattern),
+                func.lower(func.coalesce(MessageLinkRef.display_text, "")).like(pattern),
+            )
+        )
+    )
+    if selected_message_ids:
+        query = query.filter(MessageLinkRef.message_id.in_(selected_message_ids))
+    return {int(link_target_id) for (link_target_id,) in query.all()}
+
+
 def collect_manual_pan_transfer_candidates_for_link_targets(
     session: Session,
     *,
@@ -234,6 +265,7 @@ def collect_manual_pan_transfer_candidates_for_link_targets(
 def _collect_selected_message_ids(session: Session, payload: dict[str, Any]) -> tuple[list[int], dict[str, Any]]:
     selection_mode = _normalize_selection_mode(payload.get("selection_mode"))
     direction = _normalize_direction(payload.get("direction"))
+    search_keyword = _normalize_search_keyword(payload.get("search_keyword"))
     order_column = Message.id.desc() if direction == "newest_first" else Message.id.asc()
     query = session.query(Message.id).filter(Message.links.isnot(None))
     summary: dict[str, Any] = {
@@ -247,6 +279,12 @@ def _collect_selected_message_ids(session: Session, payload: dict[str, Any]) -> 
     }
 
     if selection_mode == "recent_messages":
+        if search_keyword:
+            total_count = int(query.count() or 0)
+            summary["requested_message_count"] = total_count
+            summary["effective_message_count"] = total_count
+            summary["full_history_search"] = True
+            return [], summary
         try:
             requested_count = int(payload.get("recent_message_count") or 0)
         except (TypeError, ValueError) as exc:
@@ -283,6 +321,7 @@ def collect_manual_pan_transfer_candidates(session: Session, payload: dict[str, 
     health_filter = _normalize_health_filter(payload.get("health_filter"), only_healthy=bool(payload.get("only_healthy")))
     only_healthy = health_filter == "healthy_only"
     search_keyword = _normalize_search_keyword(payload.get("search_keyword"))
+    full_history_search = bool(selection_summary.get("full_history_search"))
 
     empty_payload = {
         **selection_summary,
@@ -298,16 +337,22 @@ def collect_manual_pan_transfer_candidates(session: Session, payload: dict[str, 
         "can_start": False,
         "items": [],
     }
-    if not selected_message_ids:
+    if not selected_message_ids and not full_history_search:
         return empty_payload
 
     items = _build_manual_candidate_items(
         session,
-        selected_message_ids=selected_message_ids,
+        selected_message_ids=None if full_history_search else selected_message_ids,
         platforms=platforms,
         health_filter=health_filter,
     )
     if search_keyword:
+        keyword_matched_link_target_ids = _collect_keyword_matched_link_target_ids(
+            session,
+            search_keyword=search_keyword,
+            link_target_ids=[int(item.get("link_target_id") or 0) for item in items],
+            selected_message_ids=None if full_history_search else selected_message_ids,
+        )
         filtered_items: list[dict[str, Any]] = []
         for item in items:
             haystacks = [
@@ -318,7 +363,10 @@ def collect_manual_pan_transfer_candidates(session: Session, payload: dict[str, 
                 item.get("original_url"),
                 item.get("share_key"),
             ]
-            if any(search_keyword in _normalize_text(value).lower() for value in haystacks):
+            if (
+                any(search_keyword in _normalize_text(value).lower() for value in haystacks)
+                or int(item.get("link_target_id") or 0) in keyword_matched_link_target_ids
+            ):
                 filtered_items.append(item)
         items = filtered_items
 
@@ -344,7 +392,7 @@ def collect_manual_pan_transfer_candidates(session: Session, payload: dict[str, 
 
 def preview_manual_pan_transfer_selection(session: Session, payload: dict[str, Any]) -> dict[str, Any]:
     page = max(1, int(payload.get("page") or 1))
-    page_size = int(payload.get("page_size") or 50)
+    page_size = int(payload.get("page_size") or 10)
     if page_size < 1 or page_size > 200:
         raise ValueError("page_size must be between 1 and 200")
 

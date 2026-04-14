@@ -30,6 +30,7 @@ from .constants import (
     PAN_TRANSFER_REPLACEMENT_STATUS_PENDING,
     PAN_TRANSFER_SHARE_STATUS_PENDING,
     PAN_TRANSFER_VALIDATION_STATUS_PENDING,
+    normalize_transfer_platform,
 )
 from .execution_logs import append_pan_transfer_execution_log
 from .preview import collect_manual_pan_transfer_candidates, collect_manual_pan_transfer_candidates_for_link_targets
@@ -140,6 +141,68 @@ def _serialize_execution_log(row: PanTransferExecutionLog) -> dict[str, Any]:
     }
 
 
+def _serialize_account_snapshot(account: PanTransferAccount) -> dict[str, Any]:
+    return {
+        "id": int(account.id),
+        "platform": str(account.platform or ""),
+        "account_name": str(account.account_name or ""),
+        "default_save_root": str(account.default_save_root or ""),
+    }
+
+
+def _resolve_target_accounts_by_platform(
+    session: Session,
+    *,
+    selected_items: list[dict[str, Any]],
+    payload: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    resolved_accounts = dict(get_recommended_accounts_by_platform(session))
+    requested_mapping = dict(payload.get("target_account_ids_by_platform") or {})
+    if not requested_mapping:
+        missing_platforms = sorted(
+            {
+                str(item.get("platform") or "")
+                for item in selected_items
+                if not resolved_accounts.get(str(item.get("platform") or ""))
+            }
+        )
+        if missing_platforms:
+            raise ValueError(f"missing enabled pan transfer account for: {', '.join(missing_platforms)}")
+        return resolved_accounts
+
+    requested_account_ids = dedupe_ints(requested_mapping.values())
+    account_rows = (
+        session.query(PanTransferAccount)
+        .filter(PanTransferAccount.id.in_(requested_account_ids))
+        .all()
+    )
+    accounts_by_id = {int(row.id): row for row in account_rows if bool(row.is_enabled)}
+
+    for raw_platform, raw_account_id in requested_mapping.items():
+        platform = normalize_transfer_platform(raw_platform)
+        try:
+            account_id = int(raw_account_id)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"invalid target account id for: {platform}") from exc
+        account_row = accounts_by_id.get(account_id)
+        if account_row is None:
+            raise ValueError(f"selected pan transfer account is invalid or disabled for: {platform}")
+        if str(account_row.platform or "") != platform:
+            raise ValueError(f"selected pan transfer account does not match platform: {platform}")
+        resolved_accounts[platform] = _serialize_account_snapshot(account_row)
+
+    missing_platforms = sorted(
+        {
+            str(item.get("platform") or "")
+            for item in selected_items
+            if not resolved_accounts.get(str(item.get("platform") or ""))
+        }
+    )
+    if missing_platforms:
+        raise ValueError(f"missing enabled pan transfer account for: {', '.join(missing_platforms)}")
+    return resolved_accounts
+
+
 def create_manual_pan_transfer_batch(
     session: Session,
     *,
@@ -163,16 +226,11 @@ def create_manual_pan_transfer_batch(
     if not selected_items:
         raise ValueError("no transferable items selected")
 
-    recommended_accounts = get_recommended_accounts_by_platform(session)
-    missing_platforms = sorted(
-        {
-            str(item.get("platform") or "")
-            for item in selected_items
-            if not recommended_accounts.get(str(item.get("platform") or ""))
-        }
+    target_accounts_by_platform = _resolve_target_accounts_by_platform(
+        session,
+        selected_items=selected_items,
+        payload=payload,
     )
-    if missing_platforms:
-        raise ValueError(f"missing enabled pan transfer account for: {', '.join(missing_platforms)}")
 
     max_attempts = max(1, int(normalize_positive_int(payload.get("max_attempts"), default=DEFAULT_PAN_TRANSFER_MAX_ATTEMPTS) or DEFAULT_PAN_TRANSFER_MAX_ATTEMPTS))
     retry_delay_seconds = _normalize_retry_delay_seconds(payload.get("retry_delay_seconds"))
@@ -202,6 +260,11 @@ def create_manual_pan_transfer_batch(
                 if key != "items"
             },
             "selected_link_target_ids": [int(item.get("link_target_id") or 0) for item in selected_items],
+            "target_account_ids_by_platform": {
+                platform: int(account.get("id") or 0)
+                for platform, account in target_accounts_by_platform.items()
+                if int(account.get("id") or 0) > 0
+            },
             "retry_policy": {
                 "max_attempts": max_attempts,
                 "retry_delay_seconds": retry_delay_seconds,
@@ -216,7 +279,7 @@ def create_manual_pan_transfer_batch(
 
     created_rows: list[tuple[PanTransferBatchItem, dict[str, Any], dict[str, Any]]] = []
     for item in selected_items:
-        recommended_account = recommended_accounts[str(item.get("platform") or "")]
+        recommended_account = target_accounts_by_platform[str(item.get("platform") or "")]
         row = PanTransferBatchItem(
             batch_id=int(batch.id),
             link_target_id=int(item.get("link_target_id") or 0),

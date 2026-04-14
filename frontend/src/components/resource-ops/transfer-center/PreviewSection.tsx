@@ -6,7 +6,13 @@ import { SearchOutlined } from '@ant-design/icons'
 
 import type { PanTransferManualPreviewResponse, PanTransferPreviewItem } from '@/types/panTransfer'
 
-import { HEALTH_FILTER_OPTIONS, HEALTH_META, PLATFORM_OPTIONS, PreviewDraft } from './shared'
+import {
+  HEALTH_FILTER_OPTIONS,
+  HEALTH_META,
+  PLATFORM_OPTIONS,
+  type PreviewDraft,
+  type TargetAccountSelectionMap,
+} from './shared'
 
 const { Title, Paragraph, Text } = Typography
 const { CheckableTag } = Tag
@@ -16,7 +22,10 @@ type PreviewSectionProps = {
   previewData: PanTransferManualPreviewResponse | null
   previewLoading: boolean
   selectedPreviewKeys: Key[]
+  targetAccountOptionsByPlatform: Record<string, { label: string; value: number }[]>
+  selectedTargetAccountIds: TargetAccountSelectionMap
   onDraftChange: (updater: (current: PreviewDraft) => PreviewDraft) => void
+  onTargetAccountChange: (platform: string, accountId: number | undefined) => void
   onPreview: () => void
   onOpenCreateBatch: () => void
   onSelectionChange: (keys: Key[]) => void
@@ -28,13 +37,28 @@ const PreviewSection = ({
   previewData,
   previewLoading,
   selectedPreviewKeys,
+  targetAccountOptionsByPlatform,
+  selectedTargetAccountIds,
   onDraftChange,
+  onTargetAccountChange,
   onPreview,
   onOpenCreateBatch,
   onSelectionChange,
   onTableChange,
 }: PreviewSectionProps) => {
   const [pickerOpen, setPickerOpen] = useState(false)
+  const isGlobalKeywordSearch = draft.searchKeyword.trim().length > 0
+
+  const visibleAccountPlatforms = useMemo(() => {
+    const basePlatforms = draft.platforms.length > 0 ? draft.platforms : Object.keys(targetAccountOptionsByPlatform)
+    return basePlatforms.filter((platform) => (targetAccountOptionsByPlatform[platform] || []).length > 0)
+  }, [draft.platforms, targetAccountOptionsByPlatform])
+
+  const getSelectedAccountLabel = (platform: string, fallback?: string | null) => {
+    const options = targetAccountOptionsByPlatform[platform] || []
+    const selectedId = selectedTargetAccountIds[platform]
+    return options.find((option) => option.value === selectedId)?.label || fallback || ''
+  }
 
   useEffect(() => {
     if (!pickerOpen || previewData || previewLoading) return
@@ -46,8 +70,14 @@ const PreviewSection = ({
       platformLabel: draft.platforms.length > 0 ? draft.platforms.join(' / ') : '全部平台',
       keywordLabel: draft.searchKeyword.trim() || '未限制关键词',
       healthLabel: HEALTH_FILTER_OPTIONS.find((item) => item.value === draft.healthFilter)?.label || '全部',
+      accountLabel:
+        visibleAccountPlatforms.length > 0
+          ? visibleAccountPlatforms
+              .map((platform) => `${platform}：${getSelectedAccountLabel(platform, '未指定') || '未指定'}`)
+              .join(' / ')
+          : '按平台默认账号执行',
     }),
-    [draft]
+    [draft, visibleAccountPlatforms, selectedTargetAccountIds, targetAccountOptionsByPlatform]
   )
 
   const columns: ColumnsType<PanTransferPreviewItem> = [
@@ -96,11 +126,11 @@ const PreviewSection = ({
       ),
     },
     {
-      title: '推荐账号',
+      title: '目标账号',
       dataIndex: 'recommended_account_name',
       key: 'recommended_account_name',
       width: 160,
-      render: (value) => value || <Text type="secondary">未配置</Text>,
+      render: (value, record) => getSelectedAccountLabel(record.platform, value) || <Text type="secondary">未配置</Text>,
     },
     {
       title: '原链接',
@@ -140,9 +170,9 @@ const PreviewSection = ({
 
         <div className="resource-ops-transfer-summary">
           <div className="resource-ops-transfer-summary-item">
-            <span>扫描范围</span>
-            <strong>最近 {draft.recentMessageCount}</strong>
-            <small>按最新消息倒序扫描</small>
+            <span>{isGlobalKeywordSearch ? '搜索范围' : '扫描范围'}</span>
+            <strong>{isGlobalKeywordSearch ? '全库历史' : `最近 ${draft.recentMessageCount}`}</strong>
+            <small>{isGlobalKeywordSearch ? '输入关键词后自动检索全部历史消息' : '按最新消息倒序扫描'}</small>
           </div>
           <div className="resource-ops-transfer-summary-item">
             <span>关键词</span>
@@ -153,6 +183,11 @@ const PreviewSection = ({
             <span>平台 / 状态</span>
             <strong>{filterSummary.platformLabel}</strong>
             <small>链接状态：{filterSummary.healthLabel}</small>
+          </div>
+          <div className="resource-ops-transfer-summary-item">
+            <span>目标账号</span>
+            <strong>{visibleAccountPlatforms.length > 0 ? visibleAccountPlatforms.length : '-'}</strong>
+            <small>{filterSummary.accountLabel}</small>
           </div>
           <div className="resource-ops-transfer-summary-item">
             <span>已选择资源</span>
@@ -205,7 +240,7 @@ const PreviewSection = ({
                 allowClear
                 prefix={<SearchOutlined />}
                 value={draft.searchKeyword}
-                placeholder="支持资源标题、消息标题、原链接、分享码"
+                placeholder="支持资源标题、全部历史消息标题、原链接、分享码"
                 onChange={(event) => onDraftChange((current) => ({ ...current, searchKeyword: event.target.value }))}
                 onPressEnter={() => onPreview()}
               />
@@ -220,7 +255,7 @@ const PreviewSection = ({
             </div>
             <div className="resource-ops-transfer-head-actions">
               <Button type="primary" loading={previewLoading} onClick={onPreview}>
-                查询资源
+                搜索资源
               </Button>
             </div>
           </div>
@@ -251,8 +286,36 @@ const PreviewSection = ({
             type="info"
             showIcon
             message="这里展示的是唯一源链预览"
-            description="系统会先从最近消息里抽取链接，再按唯一原链接去重。勾选后的资源才会真正进入转存批次。"
+            description="默认浏览最近消息；只要输入关键词，就会自动切换成全库历史搜索。勾选后的资源才会真正进入转存批次。"
           />
+
+          {visibleAccountPlatforms.length > 0 ? (
+            <div className="resource-ops-transfer-picker-account-grid">
+              {visibleAccountPlatforms.map((platform) => {
+                const options = targetAccountOptionsByPlatform[platform] || []
+                const selectedAccountId = selectedTargetAccountIds[platform]
+                const currentLabel = getSelectedAccountLabel(platform)
+                return (
+                  <div key={platform} className="resource-ops-transfer-picker-account-item">
+                    <label>{platform}账号</label>
+                    <Select
+                      value={selectedAccountId}
+                      options={options}
+                      disabled={options.length <= 1}
+                      onChange={(value) => onTargetAccountChange(platform, Number(value || 0) || undefined)}
+                    />
+                    <small>
+                      {options.length > 1
+                        ? '本批次该平台将按这里选择的账号执行转存'
+                        : currentLabel
+                          ? `当前仅启用账号：${currentLabel}`
+                          : '当前平台暂无启用账号'}
+                    </small>
+                  </div>
+                )
+              })}
+            </div>
+          ) : null}
 
           {previewData ? (
             <>

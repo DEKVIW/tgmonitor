@@ -1,4 +1,8 @@
-import type { PanTransferBatchSummaryItem, PanTransferManualPreviewRequest } from '@/types/panTransfer'
+import type {
+  PanTransferAccountItem,
+  PanTransferBatchSummaryItem,
+  PanTransferManualPreviewRequest,
+} from '@/types/panTransfer'
 import { formatServerDateTime } from '@/utils/dateTime'
 
 export type PreviewDraft = {
@@ -14,10 +18,12 @@ export type BatchCreateDraft = {
   retryDelaySeconds: number
   transferLayout: 'independent' | 'batch_archive'
   batchFolderName: string
-  itemFolderMode: 'auto' | 'custom'
+  itemFolderPreset: 'masked_cn' | 'coded' | 'custom'
   itemFolderTemplate: string
   shareTargetMode: 'resource_dir' | 'content_root'
 }
+
+export type TargetAccountSelectionMap = Record<string, number | undefined>
 
 export type BatchPagination = {
   page: number
@@ -47,19 +53,22 @@ export const SHARE_MODE_OPTIONS = [
 export const DEFAULT_PREVIEW_DRAFT: PreviewDraft = {
   recentMessageCount: 200,
   searchKeyword: '',
-  platforms: [],
+  platforms: ['夸克网盘'],
   healthFilter: 'all',
 }
+
+export const MASKED_CN_ITEM_TEMPLATE = '{title_masked_cn}'
+export const CODED_ITEM_TEMPLATE = 'tg-transfer-{batch_id}-{item_id}-{title_slug}'
 
 export const DEFAULT_BATCH_CREATE_DRAFT: BatchCreateDraft = {
   startImmediately: true,
   maxAttempts: 3,
   retryDelaySeconds: 10 * 60,
-  transferLayout: 'independent',
-  batchFolderName: '',
-  itemFolderMode: 'auto',
-  itemFolderTemplate: '',
-  shareTargetMode: 'resource_dir',
+  transferLayout: 'batch_archive',
+  batchFolderName: '剧集',
+  itemFolderPreset: 'masked_cn',
+  itemFolderTemplate: MASKED_CN_ITEM_TEMPLATE,
+  shareTargetMode: 'content_root',
 }
 
 export const TRANSFER_LAYOUT_OPTIONS = [
@@ -67,14 +76,37 @@ export const TRANSFER_LAYOUT_OPTIONS = [
   { label: '批次归档', value: 'batch_archive' },
 ]
 
-export const ITEM_FOLDER_MODE_OPTIONS = [
-  { label: '自动生成', value: 'auto' },
-  { label: '自定义名称', value: 'custom' },
+export const BATCH_FOLDER_NAME_OPTIONS = [
+  { label: '剧集', value: '剧集' },
+  { label: '动漫', value: '动漫' },
+  { label: '电影', value: '电影' },
+  { label: '综艺', value: '综艺' },
+]
+
+export const ITEM_FOLDER_TEMPLATE_PRESET_OPTIONS = [
+  {
+    label: '中文混淆标题模板',
+    value: 'masked_cn',
+    template: MASKED_CN_ITEM_TEMPLATE,
+    description: '把原标题按原有字数混淆成中文目录名，默认推荐。',
+  },
+  {
+    label: '自动编码目录',
+    value: 'coded',
+    template: CODED_ITEM_TEMPLATE,
+    description: '使用批次号、项目号和 slug 生成技术型目录名。',
+  },
+  {
+    label: '自定义模板',
+    value: 'custom',
+    template: MASKED_CN_ITEM_TEMPLATE,
+    description: '手动填写模板，支持 title / title_masked_cn / title_slug 等变量。',
+  },
 ]
 
 export const SHARE_TARGET_MODE_OPTIONS = [
-  { label: '分享资源目录（默认）', value: 'resource_dir' },
-  { label: '优先分享原分享目录或文件', value: 'content_root' },
+  { label: '原分享目录', value: 'content_root' },
+  { label: '资源目录', value: 'resource_dir' },
 ]
 
 export const HEALTH_FILTER_OPTIONS = [
@@ -156,8 +188,52 @@ export const buildPreviewPayload = (
   health_filter: draft.healthFilter,
   only_healthy: draft.healthFilter === 'healthy_only',
   page: pagination?.page || 1,
-  page_size: pagination?.pageSize || 50,
+  page_size: pagination?.pageSize || 10,
 })
+
+export const resolveBatchCreateTemplate = (draft: BatchCreateDraft) => {
+  if (draft.itemFolderPreset === 'masked_cn') return MASKED_CN_ITEM_TEMPLATE
+  if (draft.itemFolderPreset === 'coded') return CODED_ITEM_TEMPLATE
+  return draft.itemFolderTemplate.trim() || MASKED_CN_ITEM_TEMPLATE
+}
+
+export const buildTargetAccountOptionsByPlatform = (
+  accounts: PanTransferAccountItem[]
+): Record<string, { label: string; value: number }[]> =>
+  accounts
+    .filter((account) => account.is_enabled)
+    .reduce<Record<string, { label: string; value: number }[]>>((accumulator, account) => {
+      const platform = account.platform
+      if (!accumulator[platform]) {
+        accumulator[platform] = []
+      }
+      accumulator[platform].push({
+        label: account.account_name,
+        value: account.id,
+      })
+      return accumulator
+    }, {})
+
+export const buildDefaultTargetAccountSelections = (
+  accounts: PanTransferAccountItem[]
+): TargetAccountSelectionMap => {
+  const next: TargetAccountSelectionMap = {}
+  const grouped = accounts
+    .filter((account) => account.is_enabled)
+    .reduce<Record<string, PanTransferAccountItem[]>>((accumulator, account) => {
+      if (!accumulator[account.platform]) {
+        accumulator[account.platform] = []
+      }
+      accumulator[account.platform].push(account)
+      return accumulator
+    }, {})
+
+  Object.entries(grouped).forEach(([platform, platformAccounts]) => {
+    const preferred = platformAccounts.find((account) => account.is_default) || platformAccounts[0]
+    next[platform] = preferred?.id
+  })
+  return next
+}
 
 export const getBatchSummary = (batch: PanTransferBatchSummaryItem) => {
   const summary = (batch.result_json?.summary as Record<string, unknown> | undefined) || {}

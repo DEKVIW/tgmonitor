@@ -10,6 +10,22 @@ from typing import Any, Iterable
 _SLUG_REGEX = re.compile(r"[^a-z0-9]+")
 _INVALID_PATH_SEGMENT_REGEX = re.compile(r'[<>:"/\\|?*\x00-\x1f]+')
 _WHITESPACE_REGEX = re.compile(r"[\s\u3000]+")
+_MASKED_CN_POOL = tuple(
+    "春江花月夜山川云海星河风竹松岚雪影霜华晨暮青玄流光长歌隐岸归舟烟霞澄空静水澜庭初晴寒林青屿遥岑"
+    "孤灯听雨疏钟映雪微澜清川朝雾平沙远汀沧浪晚舟苍岚晴峦长汀轻鸿闲庭归梦疏林清霁秋声月白"
+)
+_DIGIT_TO_CN = {
+    "0": "零",
+    "1": "一",
+    "2": "二",
+    "3": "三",
+    "4": "四",
+    "5": "五",
+    "6": "六",
+    "7": "七",
+    "8": "八",
+    "9": "九",
+}
 
 DEFAULT_TRANSFER_LAYOUT = "independent"
 DEFAULT_ITEM_FOLDER_MODE = "auto"
@@ -78,6 +94,21 @@ def build_title_slug(value: Any, *, fallback: str) -> str:
     return ascii_slug or fallback
 
 
+def build_masked_cn_title(value: Any, *, fallback: str) -> str:
+    source = sanitize_path_segment(value, fallback=fallback, max_length=80)
+    masked_chars: list[str] = []
+    for index, char in enumerate(source):
+        if char.isspace():
+            continue
+        if char.isdigit():
+            masked_chars.append(_DIGIT_TO_CN.get(char, "零"))
+            continue
+        pool_index = (ord(char) + index * 7) % len(_MASKED_CN_POOL)
+        masked_chars.append(_MASKED_CN_POOL[pool_index])
+    masked = "".join(masked_chars)
+    return sanitize_path_segment(masked, fallback=fallback, max_length=80)
+
+
 def normalize_batch_path_strategy(payload: dict[str, Any] | None) -> dict[str, Any]:
     raw = dict(payload or {})
     transfer_layout = str(raw.get("transfer_layout") or DEFAULT_TRANSFER_LAYOUT).strip().lower()
@@ -129,6 +160,7 @@ def render_item_folder_template(
     context = {
         "title": safe_title,
         "title_slug": title_slug,
+        "title_masked_cn": build_masked_cn_title(title, fallback=f"资源{int(item_id)}"),
         "platform": sanitize_path_segment(platform, fallback="disk", max_length=32),
         "batch_id": str(int(batch_id)),
         "item_id": str(int(item_id)),

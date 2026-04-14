@@ -125,6 +125,7 @@ export interface PanTransferBatchCreateRequest extends PanTransferManualPreviewR
   start_immediately?: boolean
   max_attempts?: number | null
   retry_delay_seconds?: number | null
+  target_account_ids_by_platform?: Record<string, number>
   transfer_layout?: 'independent' | 'batch_archive' | string
   batch_folder_name?: string | null
   item_folder_mode?: 'auto' | 'custom' | string

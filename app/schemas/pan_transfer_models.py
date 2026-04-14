@@ -145,7 +145,7 @@ class PanTransferManualPreviewRequest(PanTransferBaseModel):
     health_filter: str = Field(default="all", min_length=1, max_length=32)
     only_healthy: bool = False
     page: int = Field(default=1, ge=1)
-    page_size: int = Field(default=50, ge=1, le=200)
+    page_size: int = Field(default=10, ge=1, le=200)
 
     @field_validator("selection_mode", "direction", "health_filter")
     @classmethod
@@ -218,7 +218,7 @@ class PanTransferManualPreviewResponse(PanTransferBaseModel):
     invalid_count: int = 0
     unknown_count: int = 0
     page: int = 1
-    page_size: int = 50
+    page_size: int = 10
     total: int = 0
     can_start: bool = False
     items: list[PanTransferPreviewItem] = Field(default_factory=list)
@@ -240,6 +240,7 @@ class PanTransferBatchCreateRequest(PanTransferManualPreviewRequest):
     start_immediately: bool = True
     max_attempts: int | None = Field(default=3, ge=1, le=10)
     retry_delay_seconds: int | None = Field(default=600, ge=0, le=86400)
+    target_account_ids_by_platform: dict[str, int] = Field(default_factory=dict)
     transfer_layout: str = Field(default="independent", min_length=1, max_length=32)
     batch_folder_name: str | None = Field(default=None, max_length=120)
     item_folder_mode: str = Field(default="auto", min_length=1, max_length=32)
@@ -281,6 +282,21 @@ class PanTransferBatchCreateRequest(PanTransferManualPreviewRequest):
         if value is None:
             return None
         return _normalize_text(value, field_name=info.field_name, allow_empty=True) or None
+
+    @field_validator("target_account_ids_by_platform")
+    @classmethod
+    def validate_target_account_ids_by_platform(cls, value: dict[str, int]) -> dict[str, int]:
+        normalized: dict[str, int] = {}
+        for raw_platform, raw_account_id in dict(value or {}).items():
+            platform = _normalize_text(str(raw_platform or ""), field_name="target_account_ids_by_platform")
+            try:
+                account_id = int(raw_account_id)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("target_account_ids_by_platform must contain integer account ids") from exc
+            if account_id <= 0:
+                raise ValueError("target_account_ids_by_platform must contain positive account ids")
+            normalized[platform] = account_id
+        return normalized
 
     @model_validator(mode="after")
     def validate_batch_path_strategy(self) -> "PanTransferBatchCreateRequest":
