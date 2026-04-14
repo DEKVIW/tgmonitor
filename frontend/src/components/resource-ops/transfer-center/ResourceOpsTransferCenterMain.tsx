@@ -53,6 +53,7 @@ import {
   formatRetryDelay,
   getErrorMessage,
   ITEM_FOLDER_TEMPLATE_PRESET_OPTIONS,
+  MASKED_MIX_ITEM_TEMPLATE,
   MASKED_CN_ITEM_TEMPLATE,
   PLATFORM_OPTIONS,
   type PreviewDraft,
@@ -226,11 +227,13 @@ const ResourceOpsTransferCenterMain = () => {
 
   const batchPathPreview = useMemo(() => {
     const itemFolderName =
-      batchCreateDraft.itemFolderPreset === 'masked_cn'
-        ? '<中文混淆标题>'
-        : batchCreateDraft.itemFolderPreset === 'coded'
-          ? 'tg-transfer-<批次>-<项目>-<标题slug>'
-          : resolveBatchCreateTemplate(batchCreateDraft).trim() || MASKED_CN_ITEM_TEMPLATE
+      batchCreateDraft.itemFolderPreset === 'masked_mix'
+        ? '<强混淆乱码标题>'
+        : batchCreateDraft.itemFolderPreset === 'masked_cn'
+          ? '<中文混淆标题>'
+          : batchCreateDraft.itemFolderPreset === 'coded'
+              ? 'tg-transfer-<批次>-<项目>-<标题slug>'
+              : resolveBatchCreateTemplate(batchCreateDraft).trim() || MASKED_MIX_ITEM_TEMPLATE
     const folderParts = ['<账号根目录>']
     if (batchCreateDraft.transferLayout === 'batch_archive') {
       folderParts.push(batchCreateDraft.batchFolderName.trim() || '剧集')
@@ -832,54 +835,33 @@ const ResourceOpsTransferCenterMain = () => {
         confirmLoading={batchCreating}
         okText="确认创建"
         destroyOnHidden
-        width={980}
+        width={1080}
       >
-        <div className="resource-ops-transfer-create-shell resource-ops-transfer-create-shell--compact">
-          <div className="resource-ops-transfer-create-summary resource-ops-transfer-create-summary--compact">
-            <div className="resource-ops-transfer-create-summary-item">
-              <span>本次处理</span>
-              <strong>{selectedPreviewKeys.length}</strong>
-              <small>个唯一源链</small>
+        <div className="resource-ops-transfer-create-shell">
+          <section className="resource-ops-transfer-create-panel">
+            <div className="resource-ops-transfer-create-panel-head resource-ops-transfer-create-panel-head--compact">
+              <h4>{renderBatchCreateLabel('执行策略', '控制队列启动方式和失败重试规则。')}</h4>
             </div>
-            <div className="resource-ops-transfer-create-summary-item">
-              <span>创建方式</span>
-              <strong>{batchCreateDraft.startImmediately ? '立即入列' : '草稿保存'}</strong>
-              <small>仍走现有 worker 队列</small>
-            </div>
-            <div className="resource-ops-transfer-create-summary-item">
-              <span>自动重试</span>
-              <strong>{formatRetryDelay(batchCreateDraft.retryDelaySeconds)}</strong>
-              <small>失败项也支持手动立即重试</small>
-            </div>
-          </div>
-
-          <Alert
-            type="info"
-            showIcon
-            message="目标账号"
-            description={selectedTargetAccountSummary}
-          />
-
-          <div className="resource-ops-transfer-create-layout">
-            <section className="resource-ops-transfer-create-panel">
-              <div className="resource-ops-transfer-create-panel-head resource-ops-transfer-create-panel-head--compact">
-                <h4>{renderBatchCreateLabel('执行策略', '控制队列启动方式和失败重试规则。')}</h4>
-              </div>
-              <div className="resource-ops-transfer-create-strategy-grid">
-                <div className="resource-ops-transfer-create-inline-item resource-ops-transfer-create-inline-item--wide">
-                  <label>{renderBatchCreateLabel('创建后立即入列', '打开后，批次创建成功会直接进入 worker 队列；关闭则先保存为草稿，稍后手动启动。')}</label>
-                  <div className="resource-ops-transfer-create-switch-row">
-                    <Switch
-                      checked={batchCreateDraft.startImmediately}
-                      onChange={(checked) =>
-                        setBatchCreateDraft((current) => ({ ...current, startImmediately: checked }))
-                      }
-                    />
-                  </div>
+            <div className="resource-ops-transfer-create-strategy-grid">
+              <div className="resource-ops-transfer-create-field-card resource-ops-transfer-create-field-card--compact">
+                <label>{renderBatchCreateLabel('创建后立即入列', '打开后，批次创建成功会直接进入 worker 队列；关闭则先保存为草稿，稍后手动启动。')}</label>
+                <div className="resource-ops-transfer-create-control-row">
+                  <span className="resource-ops-transfer-create-control-value">
+                    {batchCreateDraft.startImmediately ? '立即入列' : '草稿保存'}
+                  </span>
+                  <Switch
+                    checked={batchCreateDraft.startImmediately}
+                    onChange={(checked) =>
+                      setBatchCreateDraft((current) => ({ ...current, startImmediately: checked }))
+                    }
+                  />
                 </div>
+                <small>创建完成后仍走现有 worker 队列，不会绕开当前执行链路。</small>
+              </div>
 
-                <div className="resource-ops-transfer-create-inline-item">
-                  <label>{renderBatchCreateLabel('最大尝试次数', '单条任务最多执行多少次，超过后会停止自动重试。')}</label>
+              <div className="resource-ops-transfer-create-field-card resource-ops-transfer-create-field-card--compact">
+                <label>{renderBatchCreateLabel('最大尝试次数', '单条任务最多执行多少次，超过后会停止自动重试。')}</label>
+                <div className="resource-ops-transfer-create-control-row">
                   <InputNumber
                     min={1}
                     max={10}
@@ -889,12 +871,16 @@ const ResourceOpsTransferCenterMain = () => {
                       setBatchCreateDraft((current) => ({ ...current, maxAttempts: Number(value || 1) }))
                     }
                   />
+                  <span className="resource-ops-transfer-create-control-suffix">次</span>
                 </div>
+                <small>达到上限后会停留在失败状态，支持后续手动立即重试。</small>
+              </div>
 
-                <div className="resource-ops-transfer-create-inline-item">
-                  <label>{renderBatchCreateLabel('自动重试间隔', '失败项进入 retry_wait 后，按这个间隔自动再次尝试。')}</label>
+              <div className="resource-ops-transfer-create-field-card resource-ops-transfer-create-field-card--compact">
+                <label>{renderBatchCreateLabel('自动重试间隔', '失败项进入 retry_wait 后，按这个间隔自动再次尝试。')}</label>
+                <div className="resource-ops-transfer-create-control-row">
                   <Select
-                    className="resource-ops-transfer-create-select-sm"
+                    className="resource-ops-transfer-create-select"
                     options={RETRY_DELAY_OPTIONS}
                     value={batchCreateDraft.retryDelaySeconds}
                     onChange={(value) =>
@@ -902,116 +888,141 @@ const ResourceOpsTransferCenterMain = () => {
                     }
                   />
                 </div>
+                <small>适合临时风控、目录延迟或分享接口波动的场景。</small>
               </div>
-            </section>
 
-            <section className="resource-ops-transfer-create-panel">
-              <div className="resource-ops-transfer-create-panel-head resource-ops-transfer-create-panel-head--compact">
-                <h4>{renderBatchCreateLabel('目录与分享', '控制落目录方式，以及最终对外分享的是哪一层。')}</h4>
+              <div className="resource-ops-transfer-create-field-card resource-ops-transfer-create-field-card--preview">
+                <label>执行策略预览</label>
+                <div className="resource-ops-transfer-create-meta-list">
+                  <div className="resource-ops-transfer-create-meta-row">
+                    <span>本次处理</span>
+                    <strong>{selectedPreviewKeys.length} 个唯一源链</strong>
+                  </div>
+                  <div className="resource-ops-transfer-create-meta-row">
+                    <span>创建方式</span>
+                    <strong>{batchCreateDraft.startImmediately ? '立即入列' : '草稿保存'}</strong>
+                  </div>
+                  <div className="resource-ops-transfer-create-meta-row">
+                    <span>自动重试</span>
+                    <strong>{formatRetryDelay(batchCreateDraft.retryDelaySeconds)}</strong>
+                  </div>
+                  <div className="resource-ops-transfer-create-meta-row">
+                    <span>目标账号</span>
+                    <strong title={selectedTargetAccountSummary}>{selectedTargetAccountSummary}</strong>
+                  </div>
+                </div>
               </div>
-              <div className="resource-ops-transfer-create-fixed-grid">
-                <div className="resource-ops-transfer-create-field-card">
-                  <label>{renderBatchCreateLabel('目录布局', '独立目录：每条源链直接落在账号根目录下。批次归档：先进入一个批次目录，再进入每条资源目录。')}</label>
+            </div>
+          </section>
+
+          <section className="resource-ops-transfer-create-panel">
+            <div className="resource-ops-transfer-create-panel-head resource-ops-transfer-create-panel-head--compact">
+              <h4>{renderBatchCreateLabel('目录与分享', '控制落目录方式，以及最终对外分享的是哪一层。')}</h4>
+            </div>
+            <div className="resource-ops-transfer-create-field-row">
+              <div className="resource-ops-transfer-create-field-card">
+                <label>{renderBatchCreateLabel('目录布局', '独立目录：每条源链直接落在账号根目录下。批次归档：先进入一个批次目录，再进入每条资源目录。')}</label>
+                <Select
+                  options={TRANSFER_LAYOUT_OPTIONS}
+                  value={batchCreateDraft.transferLayout}
+                  onChange={(value) =>
+                    setBatchCreateDraft((current) => ({
+                      ...current,
+                      transferLayout: value as BatchCreateDraft['transferLayout'],
+                    }))
+                  }
+                />
+                <small>默认使用批次归档，先分入分类目录，再进入资源目录。</small>
+              </div>
+
+              <div className="resource-ops-transfer-create-field-card">
+                <label>{renderBatchCreateLabel('批次目录名', '内置常用分类目录；切到独立目录时保留当前值但不会生效。')}</label>
+                <Select
+                  disabled={batchCreateDraft.transferLayout !== 'batch_archive'}
+                  options={BATCH_FOLDER_NAME_OPTIONS}
+                  value={batchCreateDraft.batchFolderName}
+                  onChange={(value) =>
+                    setBatchCreateDraft((current) => ({
+                      ...current,
+                      batchFolderName: String(value || ''),
+                    }))
+                  }
+                />
+                <small>{batchCreateDraft.transferLayout === 'batch_archive' ? '默认先进入这个分类目录，再落到资源目录。' : '当前为独立目录模式，这个值暂不参与路径生成。'}</small>
+              </div>
+
+              <div className="resource-ops-transfer-create-field-card">
+                <label>{renderBatchCreateLabel('资源目录模板', '默认用强混淆乱码模板。支持变量：{title}、{title_masked_mix}、{title_masked_cn}、{title_slug}、{platform}、{batch_id}、{item_id}、{share_key}、{date}。')}</label>
+                <div className="resource-ops-transfer-create-field-stack">
                   <Select
-                    options={TRANSFER_LAYOUT_OPTIONS}
-                    value={batchCreateDraft.transferLayout}
+                    options={ITEM_FOLDER_TEMPLATE_PRESET_OPTIONS.map((item) => ({
+                      label: item.label,
+                      value: item.value,
+                    }))}
+                    value={batchCreateDraft.itemFolderPreset}
                     onChange={(value) =>
                       setBatchCreateDraft((current) => ({
                         ...current,
-                        transferLayout: value as BatchCreateDraft['transferLayout'],
-                      }))
-                    }
-                  />
-                  <small>默认使用批次归档，先分入分类目录，再进入资源目录。</small>
-                </div>
-
-                <div className="resource-ops-transfer-create-field-card">
-                  <label>{renderBatchCreateLabel('批次目录名', '内置常用分类目录；切到独立目录时保留当前值但不会生效。')}</label>
-                  <Select
-                    disabled={batchCreateDraft.transferLayout !== 'batch_archive'}
-                    options={BATCH_FOLDER_NAME_OPTIONS}
-                    value={batchCreateDraft.batchFolderName}
-                    onChange={(value) =>
-                      setBatchCreateDraft((current) => ({
-                        ...current,
-                        batchFolderName: String(value || ''),
-                      }))
-                    }
-                  />
-                  <small>{batchCreateDraft.transferLayout === 'batch_archive' ? '默认先进入这个分类目录，再落到资源目录。' : '当前为独立目录模式，这个值暂不参与路径生成。'}</small>
-                </div>
-
-                <div className="resource-ops-transfer-create-field-card">
-                  <label>{renderBatchCreateLabel('资源目录模板', '默认用中文混淆标题模板。支持变量：{title}、{title_masked_cn}、{title_slug}、{platform}、{batch_id}、{item_id}、{share_key}、{date}。')}</label>
-                  <div className="resource-ops-transfer-create-field-stack">
-                    <Select
-                      options={ITEM_FOLDER_TEMPLATE_PRESET_OPTIONS.map((item) => ({
-                        label: item.label,
-                        value: item.value,
-                      }))}
-                      value={batchCreateDraft.itemFolderPreset}
-                      onChange={(value) =>
-                        setBatchCreateDraft((current) => ({
-                          ...current,
-                          itemFolderPreset: value as BatchCreateDraft['itemFolderPreset'],
-                          itemFolderTemplate:
-                            value === 'masked_cn'
+                        itemFolderPreset: value as BatchCreateDraft['itemFolderPreset'],
+                        itemFolderTemplate:
+                          value === 'masked_mix'
+                            ? MASKED_MIX_ITEM_TEMPLATE
+                            : value === 'masked_cn'
                               ? MASKED_CN_ITEM_TEMPLATE
                               : value === 'coded'
                                 ? CODED_ITEM_TEMPLATE
-                                : current.itemFolderTemplate || MASKED_CN_ITEM_TEMPLATE,
-                        }))
-                      }
-                    />
-                    <Input
-                      value={batchCreateDraft.itemFolderTemplate}
-                      disabled={batchCreateDraft.itemFolderPreset !== 'custom'}
-                      placeholder={MASKED_CN_ITEM_TEMPLATE}
-                      onChange={(event) =>
-                        setBatchCreateDraft((current) => ({
-                          ...current,
-                          itemFolderTemplate: event.target.value,
-                        }))
-                      }
-                    />
-                  </div>
-                  <small>{currentTemplatePresetMeta.description}</small>
-                </div>
-
-                <div className="resource-ops-transfer-create-field-card">
-                  <label>{renderBatchCreateLabel('分享层级', '原分享目录：若资源目录下只有一个顶层目录或文件，则直接分享该层，否则自动回退为资源目录。')}</label>
-                  <Select
-                    options={SHARE_TARGET_MODE_OPTIONS}
-                    value={batchCreateDraft.shareTargetMode}
-                    onChange={(value) =>
-                      setBatchCreateDraft((current) => ({
-                        ...current,
-                        shareTargetMode: value as BatchCreateDraft['shareTargetMode'],
+                                : current.itemFolderTemplate || MASKED_MIX_ITEM_TEMPLATE,
                       }))
                     }
                   />
-                  <small>{batchCreateDraft.shareTargetMode === 'content_root' ? '默认更接近原链接打开后的目录效果。' : '始终分享系统生成的资源目录，结构更稳定。'}</small>
+                  <Input
+                    value={batchCreateDraft.itemFolderTemplate}
+                    disabled={batchCreateDraft.itemFolderPreset !== 'custom'}
+                    placeholder={MASKED_MIX_ITEM_TEMPLATE}
+                    onChange={(event) =>
+                      setBatchCreateDraft((current) => ({
+                        ...current,
+                        itemFolderTemplate: event.target.value,
+                      }))
+                    }
+                  />
                 </div>
+                <small>{currentTemplatePresetMeta.description}</small>
               </div>
-            </section>
 
-            <section className="resource-ops-transfer-create-panel resource-ops-transfer-create-panel--full">
-              <div className="resource-ops-transfer-create-panel-head resource-ops-transfer-create-panel-head--compact">
-                <h4>路径预览</h4>
+              <div className="resource-ops-transfer-create-field-card">
+                <label>{renderBatchCreateLabel('分享层级', '原分享目录：若资源目录下只有一个顶层目录或文件，则直接分享该层，否则自动回退为资源目录。')}</label>
+                <Select
+                  options={SHARE_TARGET_MODE_OPTIONS}
+                  value={batchCreateDraft.shareTargetMode}
+                  onChange={(value) =>
+                    setBatchCreateDraft((current) => ({
+                      ...current,
+                      shareTargetMode: value as BatchCreateDraft['shareTargetMode'],
+                    }))
+                  }
+                />
+                <small>{batchCreateDraft.shareTargetMode === 'content_root' ? '默认更接近原链接打开后的目录效果。' : '始终分享系统生成的资源目录，结构更稳定。'}</small>
               </div>
-              <div className="resource-ops-transfer-create-preview">
-                <div className="resource-ops-transfer-create-preview-row">
-                  <span>转存路径</span>
-                  <code>{batchPathPreview.transferPath}</code>
-                </div>
-                <div className="resource-ops-transfer-create-preview-row">
-                  <span>创建分享</span>
-                  <code>{batchPathPreview.sharePath}</code>
-                </div>
-                <div className="resource-ops-transfer-create-preview-note">{batchPathPreview.shareTip}</div>
+            </div>
+          </section>
+
+          <section className="resource-ops-transfer-create-panel">
+            <div className="resource-ops-transfer-create-panel-head resource-ops-transfer-create-panel-head--compact">
+              <h4>路径预览</h4>
+            </div>
+            <div className="resource-ops-transfer-create-preview">
+              <div className="resource-ops-transfer-create-preview-row">
+                <span>转存路径</span>
+                <code>{batchPathPreview.transferPath}</code>
               </div>
-            </section>
-          </div>
+              <div className="resource-ops-transfer-create-preview-row">
+                <span>创建分享</span>
+                <code>{batchPathPreview.sharePath}</code>
+              </div>
+              <div className="resource-ops-transfer-create-preview-note">{batchPathPreview.shareTip}</div>
+            </div>
+          </section>
         </div>
       </Modal>
 

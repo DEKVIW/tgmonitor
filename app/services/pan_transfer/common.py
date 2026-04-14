@@ -14,6 +14,16 @@ _MASKED_CN_POOL = tuple(
     "春江花月夜山川云海星河风竹松岚雪影霜华晨暮青玄流光长歌隐岸归舟烟霞澄空静水澜庭初晴寒林青屿遥岑"
     "孤灯听雨疏钟映雪微澜清川朝雾平沙远汀沧浪晚舟苍岚晴峦长汀轻鸿闲庭归梦疏林清霁秋声月白"
 )
+_MASKED_MIX_HAN_POOL = tuple(
+    "朳裡旳氿乂乜丷卂兀屾夂玥岚沨鸢葅铖澂雲岺衍宸祈陌霁烬瓴栞祂阑绾奚徵砚弦"
+)
+_MASKED_MIX_LATIN_UPPER_POOL = tuple("ABCDEFGHJKLMNPQRSTUVWXYZ")
+_MASKED_MIX_LATIN_LOWER_POOL = tuple("abcdefghijkmnpqrstuvwxyz")
+_MASKED_MIX_ACCENT_POOL = tuple("áàâäãåéèêëíìîïóòôöõúùûüýÿñç")
+_MASKED_MIX_CYRILLIC_POOL = tuple("БГДЖЗИЙЛПФЦЧШЩЪЫЬЭЮЯабвгдежзийклмнопрстуфхцчшщыьэюя")
+_MASKED_MIX_KANA_POOL = tuple("ぁあぃいぅうぇえぉおかきくけこさしすせそたちつてとなにぬねのまみむめもやゆよらりるれろわをんじ")
+_MASKED_MIX_ENCLOSED_POOL = tuple("ⓐⓑⓒⓓⓔⓕⓖⓗⓘⓙⓚⓛⓜⓝⓞⓟⓠⓡⓢⓣⓤⓥⓦⓧⓨⓩ")
+_MASKED_MIX_SYMBOL_POOL = tuple("○•◌⊙¤")
 _DIGIT_TO_CN = {
     "0": "零",
     "1": "一",
@@ -109,6 +119,77 @@ def build_masked_cn_title(value: Any, *, fallback: str) -> str:
     return sanitize_path_segment(masked, fallback=fallback, max_length=80)
 
 
+def _build_masked_mix_piece(rng: random.Random) -> str:
+    style = rng.choices(
+        (
+            "han",
+            "upper",
+            "cyr",
+            "accent_pair",
+            "upper_cyr",
+            "han_upper",
+            "symbol_pair",
+            "enclosed_mix",
+            "kana_mix",
+            "triple",
+        ),
+        weights=(9, 8, 9, 18, 14, 11, 10, 9, 9, 10),
+        k=1,
+    )[0]
+    if style == "han":
+        return rng.choice(_MASKED_MIX_HAN_POOL)
+    if style == "upper":
+        return rng.choice(_MASKED_MIX_LATIN_UPPER_POOL)
+    if style == "cyr":
+        return rng.choice(_MASKED_MIX_CYRILLIC_POOL)
+    if style == "accent_pair":
+        return rng.choice(_MASKED_MIX_LATIN_UPPER_POOL + _MASKED_MIX_LATIN_LOWER_POOL) + rng.choice(
+            _MASKED_MIX_ACCENT_POOL
+        )
+    if style == "upper_cyr":
+        return rng.choice(_MASKED_MIX_LATIN_UPPER_POOL) + rng.choice(_MASKED_MIX_CYRILLIC_POOL)
+    if style == "han_upper":
+        return rng.choice(_MASKED_MIX_HAN_POOL) + rng.choice(_MASKED_MIX_LATIN_UPPER_POOL)
+    if style == "symbol_pair":
+        return rng.choice(_MASKED_MIX_SYMBOL_POOL) + rng.choice(_MASKED_MIX_CYRILLIC_POOL)
+    if style == "enclosed_mix":
+        return rng.choice(_MASKED_MIX_LATIN_UPPER_POOL) + rng.choice(_MASKED_MIX_ENCLOSED_POOL)
+    if style == "kana_mix":
+        return rng.choice(_MASKED_MIX_HAN_POOL) + rng.choice(_MASKED_MIX_KANA_POOL)
+    return (
+        rng.choice(_MASKED_MIX_LATIN_UPPER_POOL + _MASKED_MIX_HAN_POOL)
+        + rng.choice(_MASKED_MIX_ACCENT_POOL + _MASKED_MIX_ENCLOSED_POOL + _MASKED_MIX_SYMBOL_POOL)
+        + rng.choice(_MASKED_MIX_CYRILLIC_POOL + _MASKED_MIX_KANA_POOL)
+    )
+
+
+def build_masked_mix_title(value: Any, *, fallback: str) -> str:
+    source = sanitize_path_segment(value, fallback=fallback, max_length=80)
+    rng = random.Random(f"masked-mix::{source}")
+    masked_parts: list[str] = []
+    bracket_map = {"（": "(", "）": ")", "【": "[", "】": "]"}
+    for char in source:
+        if char.isspace():
+            if masked_parts and masked_parts[-1] != " ":
+                masked_parts.append(" ")
+            continue
+        if char.isdigit():
+            masked_parts.append(char)
+            continue
+        if char in bracket_map:
+            masked_parts.append(bracket_map[char])
+            continue
+        if char in "()[]-_.+":
+            masked_parts.append(char)
+            continue
+        masked_parts.append(_build_masked_mix_piece(rng))
+
+    masked = "".join(masked_parts)
+    masked = re.sub(r"\s+([)\]])", r"\1", masked)
+    masked = re.sub(r"([(\[])\s+", r"\1", masked)
+    return sanitize_path_segment(masked, fallback=fallback, max_length=80)
+
+
 def normalize_batch_path_strategy(payload: dict[str, Any] | None) -> dict[str, Any]:
     raw = dict(payload or {})
     transfer_layout = str(raw.get("transfer_layout") or DEFAULT_TRANSFER_LAYOUT).strip().lower()
@@ -161,6 +242,7 @@ def render_item_folder_template(
         "title": safe_title,
         "title_slug": title_slug,
         "title_masked_cn": build_masked_cn_title(title, fallback=f"资源{int(item_id)}"),
+        "title_masked_mix": build_masked_mix_title(title, fallback=f"资源{int(item_id)}"),
         "platform": sanitize_path_segment(platform, fallback="disk", max_length=32),
         "batch_id": str(int(batch_id)),
         "item_id": str(int(item_id)),

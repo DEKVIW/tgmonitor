@@ -18,7 +18,7 @@ export type BatchCreateDraft = {
   retryDelaySeconds: number
   transferLayout: 'independent' | 'batch_archive'
   batchFolderName: string
-  itemFolderPreset: 'masked_cn' | 'coded' | 'custom'
+  itemFolderPreset: 'masked_mix' | 'masked_cn' | 'coded' | 'custom'
   itemFolderTemplate: string
   shareTargetMode: 'resource_dir' | 'content_root'
 }
@@ -57,6 +57,7 @@ export const DEFAULT_PREVIEW_DRAFT: PreviewDraft = {
   healthFilter: 'all',
 }
 
+export const MASKED_MIX_ITEM_TEMPLATE = '{title_masked_mix}'
 export const MASKED_CN_ITEM_TEMPLATE = '{title_masked_cn}'
 export const CODED_ITEM_TEMPLATE = 'tg-transfer-{batch_id}-{item_id}-{title_slug}'
 
@@ -66,8 +67,8 @@ export const DEFAULT_BATCH_CREATE_DRAFT: BatchCreateDraft = {
   retryDelaySeconds: 10 * 60,
   transferLayout: 'batch_archive',
   batchFolderName: '剧集',
-  itemFolderPreset: 'masked_cn',
-  itemFolderTemplate: MASKED_CN_ITEM_TEMPLATE,
+  itemFolderPreset: 'masked_mix',
+  itemFolderTemplate: MASKED_MIX_ITEM_TEMPLATE,
   shareTargetMode: 'content_root',
 }
 
@@ -85,10 +86,16 @@ export const BATCH_FOLDER_NAME_OPTIONS = [
 
 export const ITEM_FOLDER_TEMPLATE_PRESET_OPTIONS = [
   {
+    label: '强混淆乱码模板',
+    value: 'masked_mix',
+    template: MASKED_MIX_ITEM_TEMPLATE,
+    description: '把原标题稳定转换成中英俄符号混排风格，默认推荐用于分享目录。',
+  },
+  {
     label: '中文混淆标题模板',
     value: 'masked_cn',
     template: MASKED_CN_ITEM_TEMPLATE,
-    description: '把原标题按原有字数混淆成中文目录名，默认推荐。',
+    description: '把原标题按原有字数混淆成中文目录名，兼容性更高。',
   },
   {
     label: '自动编码目录',
@@ -99,8 +106,8 @@ export const ITEM_FOLDER_TEMPLATE_PRESET_OPTIONS = [
   {
     label: '自定义模板',
     value: 'custom',
-    template: MASKED_CN_ITEM_TEMPLATE,
-    description: '手动填写模板，支持 title / title_masked_cn / title_slug 等变量。',
+    template: MASKED_MIX_ITEM_TEMPLATE,
+    description: '手动填写模板，支持 title / title_masked_mix / title_masked_cn / title_slug 等变量。',
   },
 ]
 
@@ -192,9 +199,10 @@ export const buildPreviewPayload = (
 })
 
 export const resolveBatchCreateTemplate = (draft: BatchCreateDraft) => {
+  if (draft.itemFolderPreset === 'masked_mix') return MASKED_MIX_ITEM_TEMPLATE
   if (draft.itemFolderPreset === 'masked_cn') return MASKED_CN_ITEM_TEMPLATE
   if (draft.itemFolderPreset === 'coded') return CODED_ITEM_TEMPLATE
-  return draft.itemFolderTemplate.trim() || MASKED_CN_ITEM_TEMPLATE
+  return draft.itemFolderTemplate.trim() || MASKED_MIX_ITEM_TEMPLATE
 }
 
 export const buildTargetAccountOptionsByPlatform = (

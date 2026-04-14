@@ -85,14 +85,16 @@ const PreviewSection = ({
       title: '资源',
       dataIndex: 'short_title',
       key: 'short_title',
-      render: (_, record) => (
-        <div className="resource-ops-transfer-title-cell">
-          <span className="resource-ops-transfer-title-main">{record.short_title}</span>
-          <span className="resource-ops-transfer-title-sub">
-            {record.latest_message_title || record.work_title || '暂无补充标题'}
-          </span>
-        </div>
-      ),
+      render: (_, record) => {
+        const title = record.short_title || record.latest_message_title || record.work_title || '暂无标题'
+        return (
+          <Tooltip title={title}>
+            <div className="resource-ops-transfer-title-cell">
+              <span className="resource-ops-transfer-title-main">{title}</span>
+            </div>
+          </Tooltip>
+        )
+      },
     },
     {
       title: '网盘',
@@ -281,13 +283,6 @@ const PreviewSection = ({
               )
             })}
           </div>
-
-          <Alert
-            type="info"
-            showIcon
-            message="这里展示的是唯一源链预览"
-            description="默认浏览最近消息；只要输入关键词，就会自动切换成全库历史搜索。勾选后的资源才会真正进入转存批次。"
-          />
 
           {visibleAccountPlatforms.length > 0 ? (
             <div className="resource-ops-transfer-picker-account-grid">
