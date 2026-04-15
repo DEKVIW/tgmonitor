@@ -36,9 +36,35 @@ AI_PROVIDER_TYPE_OPENAI_COMPATIBLE = "openai_compatible"
 AI_ROUTE_OUTPUT_MODE_TEXT = "text"
 AI_ROUTE_OUTPUT_MODE_JSON = "json"
 AI_ROUTE_DEFAULT_MAX_ATTEMPTS = 3
+AI_ROUTE_SELECTION_MODE_AUTOMATIC = "automatic"
+AI_ROUTE_SELECTION_MODE_MANUAL = "manual_steps"
+AI_ROUTE_SELECTION_MODE_DEFAULT = AI_ROUTE_SELECTION_MODE_AUTOMATIC
+AI_ROUTE_OPTIMIZATION_GOAL_BALANCED = "balanced"
+AI_ROUTE_OPTIMIZATION_GOAL_QUALITY = "quality"
+AI_ROUTE_OPTIMIZATION_GOAL_STABILITY = "stability"
+AI_ROUTE_OPTIMIZATION_GOAL_SPEED = "speed"
+AI_ROUTE_OPTIMIZATION_GOAL_COST = "cost"
+AI_ROUTE_DEFAULT_OPTIMIZATION_GOAL = AI_ROUTE_OPTIMIZATION_GOAL_BALANCED
 AI_EVENT_STATUS_SUCCESS = "success"
 AI_EVENT_STATUS_ERROR = "error"
 AI_EVENT_STATUS_SKIPPED = "skipped"
+AI_MODEL_SCORE_DEFAULT = 50
+AI_EMPTY_RESPONSE_MARKERS = (
+    "empty message",
+    "no content",
+    "recognizable text",
+    "returned no content",
+)
+AI_ROUTE_CAPABILITY_DEFAULTS: dict[str, list[str]] = {
+    "resource_ops_title_extract": ["title_extraction", "chinese", "low_latency"],
+    "pan_transfer_follow_identity_extract": ["structured_output", "entity_extraction", "chinese"],
+    "pan_transfer_follow_candidate_judge": ["structured_output", "reasoning", "chinese"],
+}
+AI_ROUTE_GOAL_DEFAULTS: dict[str, str] = {
+    "resource_ops_title_extract": AI_ROUTE_OPTIMIZATION_GOAL_SPEED,
+    "pan_transfer_follow_identity_extract": AI_ROUTE_OPTIMIZATION_GOAL_STABILITY,
+    "pan_transfer_follow_candidate_judge": AI_ROUTE_OPTIMIZATION_GOAL_QUALITY,
+}
 
 AI_ROUTE_SEEDS: tuple[dict[str, Any], ...] = (
     {
@@ -74,6 +100,8 @@ class AiCenterRouteResult:
     route_step_id: int | None
     duration_ms: int | None
     event_id: int | None
+    selection_summary: str | None = None
+    attempt_trace: list[dict[str, Any]] | None = None
 
 
 def _utcnow() -> datetime:
@@ -129,6 +157,236 @@ def _normalize_int(
     return normalized
 
 
+def _normalize_string_list(
+    value: Any,
+    *,
+    max_items: int = 24,
+    item_max_length: int = 64,
+) -> list[str]:
+    if isinstance(value, str):
+        raw_items = re.split(r"[\n,，;；]+", value)
+    elif isinstance(value, (list, tuple, set)):
+        raw_items = list(value)
+    else:
+        raw_items = []
+    items: list[str] = []
+    seen: set[str] = set()
+    for raw in raw_items:
+        text = _normalize_text(raw, max_length=item_max_length)
+        if not text:
+            continue
+        normalized_key = text.lower()
+        if normalized_key in seen:
+            continue
+        seen.add(normalized_key)
+        items.append(text)
+        if len(items) >= max_items:
+            break
+    return items
+
+
+def _normalize_score(value: Any, *, default: int = AI_MODEL_SCORE_DEFAULT) -> int:
+    return _normalize_int(value, default, minimum=0, maximum=100)
+
+
+def _default_route_preferred_capabilities(route_key: str) -> list[str]:
+    return list(AI_ROUTE_CAPABILITY_DEFAULTS.get(route_key, []))
+
+
+def _default_route_optimization_goal(route_key: str) -> str:
+    return AI_ROUTE_GOAL_DEFAULTS.get(route_key, AI_ROUTE_DEFAULT_OPTIMIZATION_GOAL)
+
+
+def _normalize_model_settings(extra_json: dict[str, Any] | None) -> dict[str, Any]:
+    raw = dict(extra_json or {})
+    return {
+        "capabilities": _normalize_string_list(raw.get("capabilities")),
+        "route_allowlist": _normalize_string_list(raw.get("route_allowlist"), max_items=24, item_max_length=128),
+        "priority_bias": _normalize_int(raw.get("priority_bias"), 0, minimum=-200, maximum=200),
+        "quality_score": _normalize_score(raw.get("quality_score")),
+        "speed_score": _normalize_score(raw.get("speed_score")),
+        "cost_score": _normalize_score(raw.get("cost_score")),
+        "stability_score": _normalize_score(raw.get("stability_score")),
+        "notes": _normalize_text(raw.get("notes"), max_length=500) or None,
+    }
+
+
+def _merge_model_settings(*, existing: dict[str, Any] | None, payload: dict[str, Any] | None) -> dict[str, Any]:
+    merged = {
+        **dict(existing or {}),
+        **dict(payload or {}),
+    }
+    normalized = _normalize_model_settings(merged)
+    return {
+        **dict(existing or {}),
+        **dict(payload or {}),
+        **normalized,
+    }
+
+
+def _extract_model_settings_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
+    raw = dict(payload or {})
+    normalized = {
+        "capabilities": raw.get("capabilities"),
+        "route_allowlist": raw.get("route_allowlist"),
+        "priority_bias": raw.get("priority_bias"),
+        "quality_score": raw.get("quality_score"),
+        "speed_score": raw.get("speed_score"),
+        "cost_score": raw.get("cost_score"),
+        "stability_score": raw.get("stability_score"),
+        "notes": raw.get("notes"),
+    }
+    return {
+        **dict(raw.get("extra_json") or {}),
+        **{key: value for key, value in normalized.items() if value is not None},
+    }
+
+
+def _normalize_route_settings(*, route_key: str, extra_json: dict[str, Any] | None) -> dict[str, Any]:
+    raw = dict(extra_json or {})
+    selection_mode = _normalize_text(raw.get("selection_mode"), max_length=32).lower() or AI_ROUTE_SELECTION_MODE_DEFAULT
+    if selection_mode not in {AI_ROUTE_SELECTION_MODE_AUTOMATIC, AI_ROUTE_SELECTION_MODE_MANUAL}:
+        selection_mode = AI_ROUTE_SELECTION_MODE_DEFAULT
+    optimization_goal = _normalize_text(raw.get("optimization_goal"), max_length=32).lower() or _default_route_optimization_goal(route_key)
+    if optimization_goal not in {
+        AI_ROUTE_OPTIMIZATION_GOAL_BALANCED,
+        AI_ROUTE_OPTIMIZATION_GOAL_QUALITY,
+        AI_ROUTE_OPTIMIZATION_GOAL_STABILITY,
+        AI_ROUTE_OPTIMIZATION_GOAL_SPEED,
+        AI_ROUTE_OPTIMIZATION_GOAL_COST,
+    }:
+        optimization_goal = _default_route_optimization_goal(route_key)
+    preferred_capabilities = _normalize_string_list(raw.get("preferred_capabilities")) or _default_route_preferred_capabilities(route_key)
+    return {
+        "selection_mode": selection_mode,
+        "optimization_goal": optimization_goal,
+        "preferred_capabilities": preferred_capabilities,
+        "allow_same_provider_model_failover": _normalize_bool(raw.get("allow_same_provider_model_failover"), True),
+        "allow_cross_provider_failover": _normalize_bool(raw.get("allow_cross_provider_failover"), True),
+    }
+
+
+def _merge_route_settings(
+    *,
+    route_key: str,
+    existing: dict[str, Any] | None,
+    payload: dict[str, Any] | None,
+) -> dict[str, Any]:
+    merged = {
+        **dict(existing or {}),
+        **dict(payload or {}),
+    }
+    normalized = _normalize_route_settings(route_key=route_key, extra_json=merged)
+    return {
+        **merged,
+        **normalized,
+    }
+
+
+def _is_empty_response_error(message: str | None) -> bool:
+    normalized = _normalize_text(message, max_length=2000).lower()
+    if not normalized:
+        return False
+    return any(marker in normalized for marker in AI_EMPTY_RESPONSE_MARKERS)
+
+
+def _load_ai_call_stats(
+    session: Session,
+    *,
+    provider_ids: list[int],
+    route_key: str,
+    since_days: int = 14,
+) -> dict[str, dict[tuple[int, str], dict[str, Any]]]:
+    if not provider_ids:
+        return {"global": {}, "route": {}}
+    since = _utcnow() - timedelta(days=max(1, int(since_days)))
+    rows = (
+        session.query(AiCallEvent)
+        .filter(
+            AiCallEvent.provider_id.in_(provider_ids),
+            AiCallEvent.created_at >= since,
+        )
+        .order_by(AiCallEvent.created_at.desc(), AiCallEvent.id.desc())
+        .all()
+    )
+    stats = {"global": {}, "route": {}}
+    for row in rows:
+        provider_id = int(row.provider_id) if row.provider_id is not None else None
+        if provider_id is None:
+            continue
+        model_id = _normalize_text(row.model_id, max_length=255)
+        if not model_id:
+            continue
+        bucket_names = ["global"]
+        if _normalize_text(row.route_key, max_length=128) == route_key:
+            bucket_names.append("route")
+        for bucket_name in bucket_names:
+            key = (provider_id, model_id)
+            bucket = stats[bucket_name].setdefault(
+                key,
+                {
+                    "success_count": 0,
+                    "error_count": 0,
+                    "empty_response_count": 0,
+                    "last_success_at": None,
+                    "last_error_at": None,
+                    "last_event_at": None,
+                },
+            )
+            bucket["last_event_at"] = bucket["last_event_at"] or row.created_at
+            status = _normalize_text(row.status, max_length=32).lower()
+            if status == AI_EVENT_STATUS_SUCCESS:
+                bucket["success_count"] += 1
+                bucket["last_success_at"] = bucket["last_success_at"] or row.created_at
+            elif status == AI_EVENT_STATUS_ERROR:
+                bucket["error_count"] += 1
+                if _is_empty_response_error(row.error_message):
+                    bucket["empty_response_count"] += 1
+                bucket["last_error_at"] = bucket["last_error_at"] or row.created_at
+    return stats
+
+
+def _score_model_goal(model_settings: dict[str, Any], optimization_goal: str) -> float:
+    metrics = {
+        "quality": int(model_settings.get("quality_score") or AI_MODEL_SCORE_DEFAULT),
+        "stability": int(model_settings.get("stability_score") or AI_MODEL_SCORE_DEFAULT),
+        "speed": int(model_settings.get("speed_score") or AI_MODEL_SCORE_DEFAULT),
+        "cost": int(model_settings.get("cost_score") or AI_MODEL_SCORE_DEFAULT),
+    }
+    weights: dict[str, float]
+    if optimization_goal == AI_ROUTE_OPTIMIZATION_GOAL_QUALITY:
+        weights = {"quality": 0.55, "stability": 0.2, "speed": 0.1, "cost": 0.15}
+    elif optimization_goal == AI_ROUTE_OPTIMIZATION_GOAL_STABILITY:
+        weights = {"quality": 0.2, "stability": 0.55, "speed": 0.1, "cost": 0.15}
+    elif optimization_goal == AI_ROUTE_OPTIMIZATION_GOAL_SPEED:
+        weights = {"quality": 0.15, "stability": 0.15, "speed": 0.55, "cost": 0.15}
+    elif optimization_goal == AI_ROUTE_OPTIMIZATION_GOAL_COST:
+        weights = {"quality": 0.15, "stability": 0.15, "speed": 0.1, "cost": 0.6}
+    else:
+        weights = {"quality": 0.3, "stability": 0.3, "speed": 0.2, "cost": 0.2}
+    weighted = sum((metrics[name] - AI_MODEL_SCORE_DEFAULT) * weight for name, weight in weights.items())
+    return round(weighted / 2.0, 2)
+
+
+def _score_stats_bucket(stats: dict[str, Any] | None, *, weight: float) -> float:
+    if not stats:
+        return 0.0
+    score = 0.0
+    score += min(int(stats.get("success_count") or 0) * 2, 12)
+    score -= min(int(stats.get("error_count") or 0) * 3, 18)
+    score -= min(int(stats.get("empty_response_count") or 0) * 5, 20)
+    return round(score * weight, 2)
+
+
+def _build_candidate_summary(candidate: dict[str, Any]) -> str:
+    provider_label = _normalize_text(candidate.get("provider_label"), max_length=128) or "-"
+    model_id = _normalize_text(candidate.get("model_id"), max_length=255) or "auto"
+    mode = _normalize_text(candidate.get("selection_mode"), max_length=32) or AI_ROUTE_SELECTION_MODE_DEFAULT
+    goal = _normalize_text(candidate.get("optimization_goal"), max_length=32) or AI_ROUTE_DEFAULT_OPTIMIZATION_GOAL
+    score = candidate.get("score")
+    score_label = f"{float(score):.1f}" if isinstance(score, (float, int)) else "-"
+    return f"{provider_label} / {model_id} ({mode}, {goal}, score {score_label})"
+
 def _normalize_provider_key(value: Any) -> str:
     raw = _normalize_text(value, max_length=64).lower()
     normalized = re.sub(r"[^a-z0-9]+", "_", raw).strip("_")
@@ -159,7 +417,13 @@ def _truncate_text(value: Any, *, max_length: int = 240) -> str:
     return f"{text[: max_length - 3].rstrip()}..."
 
 
-def _serialize_provider_model(row: AiProviderModel) -> dict[str, Any]:
+def _serialize_provider_model(
+    row: AiProviderModel,
+    *,
+    stats_by_model: dict[tuple[int, str], dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    model_settings = _normalize_model_settings(dict(row.extra_json or {}))
+    stats = (stats_by_model or {}).get((int(row.provider_id), _normalize_text(row.model_id, max_length=255)), {})
     return {
         "id": int(row.id),
         "provider_id": int(row.provider_id),
@@ -168,6 +432,19 @@ def _serialize_provider_model(row: AiProviderModel) -> dict[str, Any]:
         "owned_by": _normalize_text(row.owned_by, max_length=255) or None,
         "is_enabled": bool(row.is_enabled),
         "is_preferred": bool(row.is_preferred),
+        "capabilities": list(model_settings["capabilities"]),
+        "route_allowlist": list(model_settings["route_allowlist"]),
+        "priority_bias": int(model_settings["priority_bias"]),
+        "quality_score": int(model_settings["quality_score"]),
+        "speed_score": int(model_settings["speed_score"]),
+        "cost_score": int(model_settings["cost_score"]),
+        "stability_score": int(model_settings["stability_score"]),
+        "notes": model_settings["notes"],
+        "recent_success_count": int(stats.get("success_count") or 0),
+        "recent_error_count": int(stats.get("error_count") or 0),
+        "recent_empty_response_count": int(stats.get("empty_response_count") or 0),
+        "last_event_at": stats.get("last_event_at"),
+        "extra_json": dict(row.extra_json or {}),
         "last_refreshed_at": row.last_refreshed_at,
         "created_at": row.created_at,
         "updated_at": row.updated_at,
@@ -188,7 +465,12 @@ def _load_provider_models(session: Session, *, provider_id: int) -> list[AiProvi
     )
 
 
-def _serialize_provider(row: AiProviderConfig, *, models: list[AiProviderModel]) -> dict[str, Any]:
+def _serialize_provider(
+    row: AiProviderConfig,
+    *,
+    models: list[AiProviderModel],
+    stats_by_model: dict[tuple[int, str], dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     enabled_models = [item for item in models if bool(item.is_enabled)]
     preferred_model = next((item for item in enabled_models if bool(item.is_preferred)), None)
     decrypted_api_key = decrypt_secret(_normalize_text(row.api_key_encrypted, max_length=8000))
@@ -218,7 +500,7 @@ def _serialize_provider(row: AiProviderConfig, *, models: list[AiProviderModel])
         "preferred_model_id": _normalize_text(getattr(preferred_model, "model_id", None), max_length=255) or None,
         "updated_by": _normalize_text(row.updated_by, max_length=128) or None,
         "extra_json": dict(row.extra_json or {}),
-        "models": [_serialize_provider_model(model) for model in models],
+        "models": [_serialize_provider_model(model, stats_by_model=stats_by_model) for model in models],
         "created_at": row.created_at,
         "updated_at": row.updated_at,
     }
@@ -276,7 +558,195 @@ def _resolve_provider_model_id(
     return _normalize_text(fallback.model_id, max_length=255) or None
 
 
+def _build_route_candidates(
+    session: Session,
+    *,
+    route: AiRouteProfile,
+    steps: list[AiRouteStep],
+    provider_lookup: dict[int, AiProviderConfig],
+    provider_models_lookup: dict[int, list[AiProviderModel]],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    route_key = _normalize_text(route.route_key, max_length=128)
+    route_settings = _normalize_route_settings(route_key=route_key, extra_json=dict(route.extra_json or {}))
+    provider_ids = [int(step.provider_id) for step in steps if int(step.provider_id or 0) > 0]
+    stats = _load_ai_call_stats(session, provider_ids=provider_ids, route_key=route_key)
+    candidates: list[dict[str, Any]] = []
+    seen: set[tuple[int, str]] = set()
+    now = _utcnow()
+
+    for step in sorted(steps, key=lambda item: (int(item.step_index or 1), int(item.id))):
+        if not bool(step.is_enabled):
+            continue
+        provider = provider_lookup.get(int(step.provider_id))
+        if provider is None or not bool(provider.is_enabled):
+            continue
+        if provider.cooldown_until is not None and provider.cooldown_until > now:
+            continue
+        api_key = decrypt_secret(_normalize_text(provider.api_key_encrypted, max_length=8000))
+        if not normalize_base_url(provider.base_url or "") or not _normalize_text(api_key, max_length=8000):
+            continue
+
+        provider_models = provider_models_lookup.get(int(provider.id), [])
+        explicit_model_id = _normalize_text(step.model_id, max_length=255)
+        model_candidates: list[AiProviderModel | None] = []
+        if explicit_model_id:
+            matched_model = next(
+                (
+                    row
+                    for row in provider_models
+                    if _normalize_text(row.model_id, max_length=255) == explicit_model_id and bool(row.is_enabled)
+                ),
+                None,
+            )
+            if matched_model is not None:
+                model_candidates = [matched_model]
+            else:
+                model_candidates = [None]
+        elif route_settings["selection_mode"] == AI_ROUTE_SELECTION_MODE_AUTOMATIC and route_settings["allow_same_provider_model_failover"]:
+            model_candidates = [row for row in provider_models if bool(row.is_enabled)]
+            if not model_candidates:
+                model_candidates = [None]
+        else:
+            resolved_model_id = _resolve_provider_model_id(
+                step=step,
+                provider_id=int(provider.id),
+                provider_models_lookup=provider_models_lookup,
+            )
+            if resolved_model_id:
+                matched_model = next(
+                    (
+                        row
+                        for row in provider_models
+                        if _normalize_text(row.model_id, max_length=255) == resolved_model_id and bool(row.is_enabled)
+                    ),
+                    None,
+                )
+                model_candidates = [matched_model] if matched_model is not None else [None]
+            else:
+                model_candidates = [None]
+
+        for model in model_candidates:
+            model_id = _normalize_text(getattr(model, "model_id", None), max_length=255) or explicit_model_id
+            candidate_key = (int(provider.id), model_id or "__provider_auto__")
+            if candidate_key in seen:
+                continue
+
+            model_settings = _normalize_model_settings(dict(getattr(model, "extra_json", {}) or {}))
+            allowlist = set(model_settings["route_allowlist"])
+            if allowlist and route_key not in allowlist:
+                continue
+
+            reasons: list[str] = []
+            score = 0.0
+            if route_settings["selection_mode"] == AI_ROUTE_SELECTION_MODE_MANUAL:
+                score += 1000 - int(step.step_index or 1) * 10
+                reasons.append(f"manual step {int(step.step_index or 1)}")
+            else:
+                step_bonus = max(0, 18 - (int(step.step_index or 1) - 1) * 3)
+                if step_bonus:
+                    score += step_bonus
+                    reasons.append(f"step+{step_bonus}")
+
+            provider_bonus = max(-12, 12 - int(provider.priority or 100) // 10)
+            if provider_bonus:
+                score += provider_bonus
+                reasons.append(f"provider{provider_bonus:+d}")
+            if bool(provider.is_default):
+                score += 4
+                reasons.append("default+4")
+            if _normalize_text(provider.health_status, max_length=32) == "healthy":
+                score += 6
+                reasons.append("healthy+6")
+            elif _normalize_text(provider.health_status, max_length=32) == "degraded":
+                score -= 6
+                reasons.append("degraded-6")
+
+            if model is not None and bool(model.is_preferred):
+                score += 8
+                reasons.append("preferred+8")
+
+            priority_bias = int(model_settings["priority_bias"])
+            if priority_bias:
+                score += priority_bias
+                reasons.append(f"bias{priority_bias:+d}")
+
+            preferred_capabilities = set(route_settings["preferred_capabilities"])
+            matched_capabilities = [
+                capability
+                for capability in model_settings["capabilities"]
+                if capability in preferred_capabilities
+            ]
+            if matched_capabilities:
+                capability_bonus = len(matched_capabilities) * 6
+                score += capability_bonus
+                reasons.append(f"caps+{capability_bonus}")
+
+            goal_bonus = _score_model_goal(model_settings, route_settings["optimization_goal"])
+            if goal_bonus:
+                score += goal_bonus
+                reasons.append(f"goal{goal_bonus:+.1f}")
+
+            stats_key = (int(provider.id), model_id)
+            route_stats = stats["route"].get(stats_key, {}) if model_id else {}
+            global_stats = stats["global"].get(stats_key, {}) if model_id else {}
+            route_stats_bonus = _score_stats_bucket(route_stats, weight=1.0)
+            global_stats_bonus = _score_stats_bucket(global_stats, weight=0.5)
+            if route_stats_bonus:
+                score += route_stats_bonus
+                reasons.append(f"route{route_stats_bonus:+.1f}")
+            if global_stats_bonus:
+                score += global_stats_bonus
+                reasons.append(f"global{global_stats_bonus:+.1f}")
+
+            candidate = {
+                "route_step_id": int(step.id),
+                "step_index": int(step.step_index or 1),
+                "provider_id": int(provider.id),
+                "provider_label": _normalize_text(provider.display_name, max_length=128) or provider.provider_key,
+                "provider_key": _normalize_text(provider.provider_key, max_length=64) or None,
+                "provider_priority": int(provider.priority or 100),
+                "model_id": model_id or None,
+                "model_label": (
+                    _normalize_text(getattr(model, "label", None), max_length=255)
+                    or model_id
+                    or "auto"
+                ),
+                "model_row": model,
+                "selection_mode": route_settings["selection_mode"],
+                "optimization_goal": route_settings["optimization_goal"],
+                "score": round(score, 2),
+                "reasons": reasons,
+            }
+            candidate["selection_summary"] = _build_candidate_summary(candidate)
+            candidates.append(candidate)
+            seen.add(candidate_key)
+
+    if route_settings["selection_mode"] == AI_ROUTE_SELECTION_MODE_MANUAL or not route_settings["allow_cross_provider_failover"]:
+        candidates.sort(
+            key=lambda item: (
+                int(item["step_index"]),
+                -float(item["score"]),
+                int(item["provider_priority"]),
+                0 if item["model_id"] else 1,
+                _normalize_text(item["model_id"], max_length=255),
+            )
+        )
+    else:
+        candidates.sort(
+            key=lambda item: (
+                -float(item["score"]),
+                int(item["step_index"]),
+                int(item["provider_priority"]),
+                0 if item["model_id"] else 1,
+                _normalize_text(item["model_id"], max_length=255),
+            )
+        )
+
+    return candidates, route_settings
+
+
 def _build_route_readiness(
+    session: Session,
     route: AiRouteProfile,
     *,
     steps: list[AiRouteStep],
@@ -284,34 +754,41 @@ def _build_route_readiness(
     provider_models_lookup: dict[int, list[AiProviderModel]],
 ) -> dict[str, Any]:
     enabled_steps = [step for step in steps if bool(step.is_enabled)]
+    route_settings = _normalize_route_settings(
+        route_key=_normalize_text(route.route_key, max_length=128),
+        extra_json=dict(route.extra_json or {}),
+    )
     if not bool(route.is_enabled):
         return {
             "is_ready": False,
             "reason": "route_disabled",
             "provider_label": None,
             "model_id": None,
+            "selection_mode": route_settings["selection_mode"],
+            "optimization_goal": route_settings["optimization_goal"],
+            "candidate_count": 0,
+            "selection_summary": None,
             "step_count": len(steps),
             "enabled_step_count": len(enabled_steps),
         }
-    for step in enabled_steps:
-        provider = provider_lookup.get(int(step.provider_id))
-        if provider is None or not bool(provider.is_enabled):
-            continue
-        api_key = decrypt_secret(_normalize_text(provider.api_key_encrypted, max_length=8000))
-        if not normalize_base_url(provider.base_url or "") or not _normalize_text(api_key, max_length=8000):
-            continue
-        model_id = _resolve_provider_model_id(
-            step=step,
-            provider_id=int(provider.id),
-            provider_models_lookup=provider_models_lookup,
-        )
+    candidates, route_settings = _build_route_candidates(
+        session,
+        route=route,
+        steps=enabled_steps,
+        provider_lookup=provider_lookup,
+        provider_models_lookup=provider_models_lookup,
+    )
+    top_candidate = candidates[0] if candidates else None
+    if top_candidate is not None:
         return {
             "is_ready": True,
             "reason": None,
-            "provider_label": _normalize_text(provider.display_name, max_length=128)
-            or _normalize_text(provider.provider_key, max_length=64)
-            or None,
-            "model_id": model_id,
+            "provider_label": top_candidate["provider_label"],
+            "model_id": top_candidate["model_id"],
+            "selection_mode": route_settings["selection_mode"],
+            "optimization_goal": route_settings["optimization_goal"],
+            "candidate_count": len(candidates),
+            "selection_summary": top_candidate["selection_summary"],
             "step_count": len(steps),
             "enabled_step_count": len(enabled_steps),
         }
@@ -320,18 +797,27 @@ def _build_route_readiness(
         "reason": "no_enabled_provider_step",
         "provider_label": None,
         "model_id": None,
+        "selection_mode": route_settings["selection_mode"],
+        "optimization_goal": route_settings["optimization_goal"],
+        "candidate_count": 0,
+        "selection_summary": None,
         "step_count": len(steps),
         "enabled_step_count": len(enabled_steps),
     }
 
 
 def _serialize_route(
+    session: Session,
     row: AiRouteProfile,
     *,
     steps: list[AiRouteStep],
     provider_lookup: dict[int, AiProviderConfig],
     provider_models_lookup: dict[int, list[AiProviderModel]],
 ) -> dict[str, Any]:
+    route_settings = _normalize_route_settings(
+        route_key=_normalize_text(row.route_key, max_length=128),
+        extra_json=dict(row.extra_json or {}),
+    )
     serialized_steps = [
         _serialize_route_step(
             step,
@@ -341,6 +827,7 @@ def _serialize_route(
         for step in sorted(steps, key=lambda item: (int(item.step_index or 1), int(item.id)))
     ]
     readiness = _build_route_readiness(
+        session,
         row,
         steps=steps,
         provider_lookup=provider_lookup,
@@ -354,21 +841,35 @@ def _serialize_route(
         "output_mode": _normalize_text(row.output_mode, max_length=32) or AI_ROUTE_OUTPUT_MODE_TEXT,
         "is_enabled": bool(row.is_enabled),
         "max_attempts": int(row.max_attempts or AI_ROUTE_DEFAULT_MAX_ATTEMPTS),
+        "selection_mode": route_settings["selection_mode"],
+        "optimization_goal": route_settings["optimization_goal"],
+        "preferred_capabilities": list(route_settings["preferred_capabilities"]),
+        "allow_same_provider_model_failover": bool(route_settings["allow_same_provider_model_failover"]),
+        "allow_cross_provider_failover": bool(route_settings["allow_cross_provider_failover"]),
         "updated_by": _normalize_text(row.updated_by, max_length=128) or None,
         "extra_json": dict(row.extra_json or {}),
         "steps": serialized_steps,
         "configured_step_count": len(steps),
         "enabled_step_count": sum(1 for step in steps if bool(step.is_enabled)),
+        "candidate_count": int(readiness["candidate_count"] or 0),
         "is_ready": bool(readiness["is_ready"]),
         "ready_reason": readiness["reason"],
         "ready_provider_label": readiness["provider_label"],
         "ready_model_id": readiness["model_id"],
+        "selection_summary": readiness["selection_summary"],
         "created_at": row.created_at,
         "updated_at": row.updated_at,
     }
 
 
 def _serialize_call_event(row: AiCallEvent) -> dict[str, Any]:
+    extra_json = dict(row.extra_json or {})
+    candidate_score = None
+    if extra_json.get("candidate_score") is not None:
+        try:
+            candidate_score = float(extra_json.get("candidate_score"))
+        except (TypeError, ValueError):
+            candidate_score = None
     return {
         "id": int(row.id),
         "route_key": str(row.route_key or ""),
@@ -381,7 +882,12 @@ def _serialize_call_event(row: AiCallEvent) -> dict[str, Any]:
         "error_type": _normalize_text(row.error_type, max_length=64) or None,
         "error_message": _normalize_text(row.error_message, max_length=2000) or None,
         "duration_ms": int(row.duration_ms) if row.duration_ms is not None else None,
-        "extra_json": dict(row.extra_json or {}),
+        "used_api_mode": _normalize_text(extra_json.get("used_api_mode"), max_length=32) or None,
+        "selection_mode": _normalize_text(extra_json.get("selection_mode"), max_length=32) or None,
+        "selection_summary": _normalize_text(extra_json.get("selection_summary"), max_length=255) or None,
+        "attempt_index": int(extra_json.get("attempt_index")) if extra_json.get("attempt_index") is not None else None,
+        "candidate_score": candidate_score,
+        "extra_json": extra_json,
         "created_at": row.created_at,
     }
 
@@ -487,14 +993,99 @@ def _upsert_provider_model(
             provider_id=int(provider_id),
             model_id=model_id,
         )
-    row.label = _normalize_text(payload.get("label"), max_length=255) or model_id
-    row.owned_by = _normalize_text(payload.get("owned_by"), max_length=255) or None
-    row.is_enabled = _normalize_bool(payload.get("is_enabled"), True)
-    row.is_preferred = model_id == _normalize_text(preferred_model_id, max_length=255)
+    incoming_label = _normalize_text(payload.get("label"), max_length=255)
+    if row.id is None or not _normalize_text(row.label, max_length=255):
+        row.label = incoming_label or model_id
+    elif incoming_label and _normalize_text(row.label, max_length=255) == _normalize_text(row.model_id, max_length=255):
+        row.label = incoming_label
+    row.owned_by = _normalize_text(payload.get("owned_by"), max_length=255) or row.owned_by
+    if "is_enabled" in payload:
+        row.is_enabled = _normalize_bool(payload.get("is_enabled"), bool(row.is_enabled) if row.id is not None else True)
+    elif row.id is None:
+        row.is_enabled = True
+    if preferred_model_id is not None:
+        row.is_preferred = model_id == _normalize_text(preferred_model_id, max_length=255)
     row.last_refreshed_at = _utcnow()
+    row.extra_json = _merge_model_settings(
+        existing=dict(row.extra_json or {}),
+        payload=_extract_model_settings_payload(payload),
+    )
     session.add(row)
     session.flush()
     return row
+
+
+def _save_provider_models(
+    session: Session,
+    *,
+    provider_id: int,
+    payload_models: list[dict[str, Any]],
+) -> None:
+    existing_rows = _load_provider_models(session, provider_id=provider_id)
+    by_id = {int(row.id): row for row in existing_rows}
+    by_model_id = {
+        _normalize_text(row.model_id, max_length=255): row
+        for row in existing_rows
+        if _normalize_text(row.model_id, max_length=255)
+    }
+    preferred_model_id = _normalize_text(
+        next(
+            (
+                raw.get("model_id")
+                for raw in payload_models
+                if _normalize_bool(raw.get("is_preferred"), False) and _normalize_text(raw.get("model_id"), max_length=255)
+            ),
+            None,
+        ),
+        max_length=255,
+    ) or None
+
+    claimed_model_ids: set[str] = set()
+    for raw in payload_models:
+        payload = dict(raw or {})
+        model_id = _normalize_text(payload.get("model_id") or payload.get("id"), max_length=255)
+        if not model_id:
+            continue
+        row = None
+        explicit_id = _normalize_int(payload.get("id"), 0, minimum=0)
+        if explicit_id > 0:
+            row = by_id.get(explicit_id)
+        if row is None:
+            row = by_model_id.get(model_id)
+        if row is None:
+            row = AiProviderModel(provider_id=int(provider_id), model_id=model_id, label=model_id)
+        row.model_id = model_id
+        label = _normalize_text(payload.get("label"), max_length=255)
+        if label:
+            row.label = label
+        elif not _normalize_text(row.label, max_length=255):
+            row.label = model_id
+        row.owned_by = _normalize_text(payload.get("owned_by"), max_length=255) or row.owned_by
+        row.is_enabled = _normalize_bool(payload.get("is_enabled"), bool(row.is_enabled) if row.id is not None else True)
+        row.extra_json = _merge_model_settings(
+            existing=dict(row.extra_json or {}),
+            payload=_extract_model_settings_payload(payload),
+        )
+        row.is_preferred = preferred_model_id is not None and model_id == preferred_model_id
+        session.add(row)
+        session.flush()
+        claimed_model_ids.add(model_id)
+
+    for row in existing_rows:
+        row_model_id = _normalize_text(row.model_id, max_length=255)
+        if row_model_id and row_model_id not in claimed_model_ids:
+            row.is_enabled = False
+            row.is_preferred = False
+            session.add(row)
+
+    if preferred_model_id is not None:
+        rows = _load_provider_models(session, provider_id=provider_id)
+        for row in rows:
+            row_model_id = _normalize_text(row.model_id, max_length=255)
+            row.is_preferred = row_model_id == preferred_model_id
+            session.add(row)
+
+    _ensure_preferred_provider_model(session, provider_id=provider_id)
 
 
 def _ensure_route_seed_rows(session: Session) -> None:
@@ -513,7 +1104,11 @@ def _ensure_route_seed_rows(session: Session) -> None:
                 output_mode=str(seed.get("output_mode") or AI_ROUTE_OUTPUT_MODE_TEXT),
                 is_enabled=True,
                 max_attempts=AI_ROUTE_DEFAULT_MAX_ATTEMPTS,
-                extra_json={"seeded": True},
+                extra_json=_merge_route_settings(
+                    route_key=route_key,
+                    existing={"seeded": True},
+                    payload={},
+                ),
                 updated_by="system",
             )
             session.add(row)
@@ -527,6 +1122,14 @@ def _ensure_route_seed_rows(session: Session) -> None:
                 changed = True
             if not _normalize_text(row.output_mode, max_length=32):
                 row.output_mode = str(seed.get("output_mode") or AI_ROUTE_OUTPUT_MODE_TEXT)
+                changed = True
+            normalized_extra_json = _merge_route_settings(
+                route_key=route_key,
+                existing=dict(row.extra_json or {}),
+                payload={},
+            )
+            if normalized_extra_json != dict(row.extra_json or {}):
+                row.extra_json = normalized_extra_json
                 changed = True
             if changed:
                 row.updated_by = "system"
@@ -639,6 +1242,7 @@ def get_ai_center_overview(session: Session) -> dict[str, Any]:
     ready_route_count = 0
     for route in route_rows:
         readiness = _build_route_readiness(
+            session,
             route,
             steps=steps_by_route.get(int(route.id), []),
             provider_lookup=provider_lookup,
@@ -697,9 +1301,20 @@ def list_ai_providers(session: Session) -> dict[str, Any]:
         )
         .all()
     )
+    stats_by_model = _load_ai_call_stats(
+        session,
+        provider_ids=[int(row.id) for row in rows],
+        route_key="",
+    )["global"]
     items = []
     for row in rows:
-        items.append(_serialize_provider(row, models=_load_provider_models(session, provider_id=int(row.id))))
+        items.append(
+            _serialize_provider(
+                row,
+                models=_load_provider_models(session, provider_id=int(row.id)),
+                stats_by_model=stats_by_model,
+            )
+        )
     return {
         "items": items,
         "total": len(items),
@@ -711,7 +1326,12 @@ def get_ai_provider_detail(session: Session, *, provider_id: int) -> dict[str, A
     row = session.get(AiProviderConfig, int(provider_id))
     if row is None:
         raise LookupError("AI provider not found")
-    return _serialize_provider(row, models=_load_provider_models(session, provider_id=int(row.id)))
+    stats_by_model = _load_ai_call_stats(session, provider_ids=[int(row.id)], route_key="")["global"]
+    return _serialize_provider(
+        row,
+        models=_load_provider_models(session, provider_id=int(row.id)),
+        stats_by_model=stats_by_model,
+    )
 
 
 def save_ai_provider(
@@ -781,6 +1401,13 @@ def save_ai_provider(
 
     session.add(row)
     session.flush()
+    if "models" in payload:
+        _save_provider_models(
+            session,
+            provider_id=int(row.id),
+            payload_models=[dict(item or {}) for item in list(payload.get("models") or [])],
+        )
+        session.flush()
     return get_ai_provider_detail(session, provider_id=int(row.id))
 
 
@@ -916,6 +1543,7 @@ def list_ai_routes(session: Session) -> dict[str, Any]:
 
     items = [
         _serialize_route(
+            session,
             row,
             steps=steps_by_route.get(int(row.id), []),
             provider_lookup=provider_lookup,
@@ -948,6 +1576,7 @@ def get_ai_route_detail(session: Session, *, route_key: str) -> dict[str, Any]:
         .all()
     )
     return _serialize_route(
+        session,
         route,
         steps=steps,
         provider_lookup=provider_lookup,
@@ -985,10 +1614,18 @@ def save_ai_route(
     route.is_enabled = _normalize_bool(payload.get("is_enabled"), bool(route.is_enabled))
     route.max_attempts = _normalize_int(payload.get("max_attempts"), int(route.max_attempts or AI_ROUTE_DEFAULT_MAX_ATTEMPTS), minimum=1, maximum=10)
     route.updated_by = _normalize_text(updated_by, max_length=128) or None
-    route.extra_json = {
-        **dict(route.extra_json or {}),
-        **dict(payload.get("extra_json") or {}),
-    }
+    route.extra_json = _merge_route_settings(
+        route_key=normalized_route_key,
+        existing=dict(route.extra_json or {}),
+        payload={
+            **dict(payload.get("extra_json") or {}),
+            "selection_mode": payload.get("selection_mode"),
+            "optimization_goal": payload.get("optimization_goal"),
+            "preferred_capabilities": payload.get("preferred_capabilities"),
+            "allow_same_provider_model_failover": payload.get("allow_same_provider_model_failover"),
+            "allow_cross_provider_failover": payload.get("allow_cross_provider_failover"),
+        },
+    )
     session.add(route)
     session.flush()
 
@@ -1051,6 +1688,10 @@ def get_ai_route_readiness(session: Session, *, route_key: str) -> dict[str, Any
             "reason": "route_missing",
             "provider_label": None,
             "model_id": None,
+            "selection_mode": AI_ROUTE_SELECTION_MODE_DEFAULT,
+            "optimization_goal": _default_route_optimization_goal(normalized_route_key),
+            "candidate_count": 0,
+            "selection_summary": None,
         }
     providers = session.query(AiProviderConfig).all()
     provider_lookup = {int(row.id): row for row in providers}
@@ -1065,6 +1706,7 @@ def get_ai_route_readiness(session: Session, *, route_key: str) -> dict[str, Any
         .all()
     )
     readiness = _build_route_readiness(
+        session,
         route,
         steps=steps,
         provider_lookup=provider_lookup,
@@ -1110,67 +1752,75 @@ def execute_text_route(
         for provider_id in provider_lookup.keys()
     }
 
+    candidates, route_settings = _build_route_candidates(
+        session,
+        route=route,
+        steps=steps,
+        provider_lookup=provider_lookup,
+        provider_models_lookup=provider_models_lookup,
+    )
+    if not candidates:
+        raise AiCenterError(f"AI route has no available candidate: {normalized_route_key}")
+
     errors: list[str] = []
     attempts = 0
     route_max_attempts = max(1, int(route.max_attempts or AI_ROUTE_DEFAULT_MAX_ATTEMPTS))
-    for step in steps:
+    provider_attempts: dict[int, dict[str, Any]] = {}
+    attempt_trace: list[dict[str, Any]] = []
+    for candidate in candidates:
         if attempts >= route_max_attempts:
             break
-        provider = provider_lookup.get(int(step.provider_id))
+        provider = provider_lookup.get(int(candidate["provider_id"]))
         if provider is None:
-            errors.append(f"step#{int(step.step_index or 0)}: provider missing")
             continue
-        if not bool(provider.is_enabled):
-            errors.append(f"step#{int(step.step_index or 0)}: provider disabled")
-            continue
-        if provider.cooldown_until is not None and provider.cooldown_until > _utcnow():
-            _record_call_event(
-                session,
-                route_key=normalized_route_key,
-                route_profile_id=int(route.id),
-                route_step_id=int(step.id),
-                provider_id=int(provider.id),
-                provider_label=_normalize_text(provider.display_name, max_length=128) or provider.provider_key,
-                model_id=_normalize_text(step.model_id, max_length=255) or None,
-                status=AI_EVENT_STATUS_SKIPPED,
-                error_type="provider_cooldown",
-                error_message="provider is in cooldown",
-                extra_json={"cooldown_until": _to_utc_iso(provider.cooldown_until)},
-            )
-            errors.append(f"step#{int(step.step_index or 0)}: provider cooldown")
-            continue
-
         api_key = decrypt_secret(_normalize_text(provider.api_key_encrypted, max_length=8000))
         base_url = normalize_base_url(str(provider.base_url or ""))
         if not base_url or not _normalize_text(api_key, max_length=8000):
-            errors.append(f"step#{int(step.step_index or 0)}: provider credentials incomplete")
             continue
-        model_id = _resolve_provider_model_id(
-            step=step,
-            provider_id=int(provider.id),
-            provider_models_lookup=provider_models_lookup,
-        )
-        start_time = _utcnow()
         attempts += 1
+        provider_state = provider_attempts.setdefault(
+            int(provider.id),
+            {
+                "provider": provider,
+                "errors": [],
+                "success": False,
+            },
+        )
+        model_id = _normalize_text(candidate.get("model_id"), max_length=255) or ""
+        start_time = _utcnow()
         try:
             result = complete_openai_compatible_text(
                 base_url=base_url,
                 api_key=api_key,
-                model=model_id or "",
+                model=model_id,
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 api_mode=_normalize_text(provider.api_mode, max_length=32) or AI_API_MODE_AUTO,
                 timeout_seconds=int(provider.timeout_seconds or 25),
             )
             duration_ms = int((_utcnow() - start_time).total_seconds() * 1000)
+            provider_state["success"] = True
+            trace_row = {
+                "attempt_index": attempts,
+                "provider_id": int(provider.id),
+                "provider_label": candidate["provider_label"],
+                "model_id": result.used_model or model_id or None,
+                "status": AI_EVENT_STATUS_SUCCESS,
+                "used_api_mode": result.used_api_mode,
+                "duration_ms": duration_ms,
+                "selection_summary": candidate["selection_summary"],
+                "candidate_score": float(candidate["score"]),
+                "candidate_reasons": list(candidate["reasons"]),
+            }
+            attempt_trace.append(trace_row)
             event = _record_call_event(
                 session,
                 route_key=normalized_route_key,
                 route_profile_id=int(route.id),
-                route_step_id=int(step.id),
+                route_step_id=int(candidate["route_step_id"]),
                 provider_id=int(provider.id),
-                provider_label=_normalize_text(provider.display_name, max_length=128) or provider.provider_key,
-                model_id=result.used_model or model_id,
+                provider_label=candidate["provider_label"],
+                model_id=result.used_model or model_id or None,
                 status=AI_EVENT_STATUS_SUCCESS,
                 duration_ms=duration_ms,
                 extra_json={
@@ -1178,33 +1828,63 @@ def execute_text_route(
                     "metadata": metadata or {},
                     "system_prompt_preview": _truncate_text(system_prompt),
                     "user_prompt_preview": _truncate_text(user_prompt),
+                    "selection_mode": route_settings["selection_mode"],
+                    "selection_summary": candidate["selection_summary"],
+                    "attempt_index": attempts,
+                    "candidate_score": float(candidate["score"]),
+                    "candidate_reasons": list(candidate["reasons"]),
+                    "attempt_trace": list(attempt_trace),
                 },
             )
-            _mark_provider_success(session, provider=provider)
+            for state in provider_attempts.values():
+                if state["success"]:
+                    _mark_provider_success(session, provider=state["provider"])
+                elif state["errors"]:
+                    _mark_provider_failure(
+                        session,
+                        provider=state["provider"],
+                        error_message=_normalize_text(state["errors"][-1], max_length=2000) or "unknown error",
+                    )
             session.flush()
             return AiCenterRouteResult(
                 text=result.text,
                 route_key=normalized_route_key,
                 provider_id=int(provider.id),
-                provider_label=_normalize_text(provider.display_name, max_length=128) or provider.provider_key,
-                model_id=result.used_model or model_id,
+                provider_label=candidate["provider_label"],
+                model_id=result.used_model or model_id or None,
                 used_api_mode=result.used_api_mode,
                 route_profile_id=int(route.id),
-                route_step_id=int(step.id),
+                route_step_id=int(candidate["route_step_id"]),
                 duration_ms=duration_ms,
                 event_id=int(event.id),
+                selection_summary=candidate["selection_summary"],
+                attempt_trace=list(attempt_trace),
             )
         except Exception as exc:
             error_message = _normalize_text(exc, max_length=2000) or type(exc).__name__
             duration_ms = int((_utcnow() - start_time).total_seconds() * 1000)
+            provider_state["errors"].append(error_message)
+            trace_row = {
+                "attempt_index": attempts,
+                "provider_id": int(provider.id),
+                "provider_label": candidate["provider_label"],
+                "model_id": model_id or None,
+                "status": AI_EVENT_STATUS_ERROR,
+                "error_message": error_message,
+                "duration_ms": duration_ms,
+                "selection_summary": candidate["selection_summary"],
+                "candidate_score": float(candidate["score"]),
+                "candidate_reasons": list(candidate["reasons"]),
+            }
+            attempt_trace.append(trace_row)
             _record_call_event(
                 session,
                 route_key=normalized_route_key,
                 route_profile_id=int(route.id),
-                route_step_id=int(step.id),
+                route_step_id=int(candidate["route_step_id"]),
                 provider_id=int(provider.id),
-                provider_label=_normalize_text(provider.display_name, max_length=128) or provider.provider_key,
-                model_id=model_id,
+                provider_label=candidate["provider_label"],
+                model_id=model_id or None,
                 status=AI_EVENT_STATUS_ERROR,
                 error_type=type(exc).__name__,
                 error_message=error_message,
@@ -1213,18 +1893,32 @@ def execute_text_route(
                     "metadata": metadata or {},
                     "system_prompt_preview": _truncate_text(system_prompt),
                     "user_prompt_preview": _truncate_text(user_prompt),
+                    "selection_mode": route_settings["selection_mode"],
+                    "selection_summary": candidate["selection_summary"],
+                    "attempt_index": attempts,
+                    "candidate_score": float(candidate["score"]),
+                    "candidate_reasons": list(candidate["reasons"]),
                 },
             )
-            _mark_provider_failure(session, provider=provider, error_message=error_message)
-            session.flush()
-            errors.append(f"step#{int(step.step_index or 0)}: {error_message}")
+            errors.append(f"candidate#{attempts}: {error_message}")
             logger.warning(
-                "AI route failed route=%s step=%s provider=%s error=%s",
+                "AI route failed route=%s candidate=%s provider=%s error=%s",
                 normalized_route_key,
-                int(step.step_index or 0),
+                attempts,
                 int(provider.id),
                 error_message,
             )
+
+    for state in provider_attempts.values():
+        if state["success"]:
+            _mark_provider_success(session, provider=state["provider"])
+        elif state["errors"]:
+            _mark_provider_failure(
+                session,
+                provider=state["provider"],
+                error_message=_normalize_text(state["errors"][-1], max_length=2000) or "unknown error",
+            )
+    session.flush()
 
     if not errors:
         raise AiCenterError(f"AI route execution failed: {normalized_route_key}")
@@ -1255,6 +1949,8 @@ def test_ai_route(
         "duration_ms": result.duration_ms,
         "text": result.text,
         "event_id": result.event_id,
+        "selection_summary": result.selection_summary,
+        "attempt_trace": list(result.attempt_trace or []),
         "ok": True,
     }
 

@@ -49,6 +49,8 @@ const { Title, Paragraph, Text } = Typography
 const formatDateTime = (value?: string | null) =>
   value ? formatServerDateTime(value, 'YYYY-MM-DD HH:mm', 'Asia/Shanghai') : '-'
 
+const getErrorMessage = (error: any, fallback: string) => error?.response?.data?.detail || fallback
+
 const PROVIDER_HEALTH_COLOR: Record<string, string> = {
   healthy: 'success',
   degraded: 'warning',
@@ -60,6 +62,41 @@ const EVENT_STATUS_COLOR: Record<string, string> = {
   error: 'error',
   skipped: 'default',
 }
+
+const CAPABILITY_OPTIONS = [
+  { label: '中文理解', value: 'chinese' },
+  { label: '结构化输出', value: 'structured_output' },
+  { label: '实体抽取', value: 'entity_extraction' },
+  { label: '标题抽取', value: 'title_extraction' },
+  { label: '推理判断', value: 'reasoning' },
+  { label: '低延迟', value: 'low_latency' },
+  { label: '低成本', value: 'low_cost' },
+]
+
+const SELECTION_MODE_OPTIONS = [
+  { label: '自动优选', value: 'automatic' },
+  { label: '严格按步骤', value: 'manual_steps' },
+]
+
+const OPTIMIZATION_GOAL_OPTIONS = [
+  { label: '平衡', value: 'balanced' },
+  { label: '质量优先', value: 'quality' },
+  { label: '稳定优先', value: 'stability' },
+  { label: '速度优先', value: 'speed' },
+  { label: '成本优先', value: 'cost' },
+]
+
+const SELECTION_MODE_LABELS: Record<string, string> = Object.fromEntries(
+  SELECTION_MODE_OPTIONS.map((item) => [item.value, item.label])
+)
+
+const OPTIMIZATION_GOAL_LABELS: Record<string, string> = Object.fromEntries(
+  OPTIMIZATION_GOAL_OPTIONS.map((item) => [item.value, item.label])
+)
+
+const CAPABILITY_LABELS: Record<string, string> = Object.fromEntries(
+  CAPABILITY_OPTIONS.map((item) => [item.value, item.label])
+)
 
 const ROUTE_TEST_PRESETS: Record<string, AiCenterRouteTestRequest> = {
   resource_ops_title_extract: {
@@ -80,6 +117,22 @@ const ROUTE_TEST_PRESETS: Record<string, AiCenterRouteTestRequest> = {
   },
 }
 
+const emptyProviderModelDraft = () => ({
+  model_id: '',
+  label: '',
+  is_enabled: true,
+  is_preferred: false,
+  capabilities: [] as string[],
+  route_allowlist: [] as string[],
+  priority_bias: 0,
+  quality_score: 50,
+  speed_score: 50,
+  cost_score: 50,
+  stability_score: 50,
+  notes: '',
+  extra_json: {},
+})
+
 const emptyProviderDraft = (): AiCenterProviderUpsertRequest => ({
   provider_key: '',
   display_name: '',
@@ -94,7 +147,14 @@ const emptyProviderDraft = (): AiCenterProviderUpsertRequest => ({
   max_retries: 1,
   cooldown_seconds: 300,
   extra_json: {},
+  models: [],
 })
+
+const getSelectionModeLabel = (value?: string | null) => SELECTION_MODE_LABELS[value || ''] || value || '-'
+
+const getOptimizationGoalLabel = (value?: string | null) => OPTIMIZATION_GOAL_LABELS[value || ''] || value || '-'
+
+const getCapabilityLabel = (value: string) => CAPABILITY_LABELS[value] || value
 
 const AiCenterAdminRuntime = () => {
   const [overview, setOverview] = useState<AiCenterOverviewResponse | null>(null)
@@ -132,7 +192,7 @@ const AiCenterAdminRuntime = () => {
       setRoutes(routeData.items)
       setEvents(eventData.items)
     } catch (error: any) {
-      message.error(error.response?.data?.detail || '加载 AI 中心失败')
+      message.error(getErrorMessage(error, '加载 AI 中心失败'))
     } finally {
       setLoading(false)
     }
@@ -157,12 +217,21 @@ const AiCenterAdminRuntime = () => {
         providers.map((provider) => [
           provider.id,
           provider.models.map((model) => ({
-            label: model.label || model.model_id,
+            label: model.is_enabled ? model.label || model.model_id : `${model.label || model.model_id}（已停用）`,
             value: model.model_id,
           })),
         ])
       ),
     [providers]
+  )
+
+  const routeKeyOptions = useMemo(
+    () =>
+      routes.map((route) => ({
+        label: `${route.display_name} (${route.route_key})`,
+        value: route.route_key,
+      })),
+    [routes]
   )
 
   const openCreateProvider = () => {
@@ -187,6 +256,23 @@ const AiCenterAdminRuntime = () => {
       max_retries: record.max_retries,
       cooldown_seconds: record.cooldown_seconds,
       extra_json: record.extra_json,
+      models: record.models.map((model) => ({
+        id: model.id,
+        model_id: model.model_id,
+        label: model.label,
+        owned_by: model.owned_by || undefined,
+        is_enabled: model.is_enabled,
+        is_preferred: model.is_preferred,
+        capabilities: model.capabilities,
+        route_allowlist: model.route_allowlist,
+        priority_bias: model.priority_bias,
+        quality_score: model.quality_score,
+        speed_score: model.speed_score,
+        cost_score: model.cost_score,
+        stability_score: model.stability_score,
+        notes: model.notes || '',
+        extra_json: model.extra_json,
+      })),
     })
     setProviderModalOpen(true)
   }
@@ -207,7 +293,7 @@ const AiCenterAdminRuntime = () => {
       providerForm.resetFields()
       await loadAll()
     } catch (error: any) {
-      message.error(error.response?.data?.detail || '保存 AI 提供方失败')
+      message.error(getErrorMessage(error, '保存 AI 提供方失败'))
     } finally {
       setProviderSaving(false)
     }
@@ -220,7 +306,7 @@ const AiCenterAdminRuntime = () => {
       message.success(`已刷新 ${record.display_name} 的模型列表`)
       await loadAll()
     } catch (error: any) {
-      message.error(error.response?.data?.detail || '刷新模型失败')
+      message.error(getErrorMessage(error, '刷新模型失败'))
     } finally {
       setProviderRefreshingId(null)
     }
@@ -232,17 +318,18 @@ const AiCenterAdminRuntime = () => {
       const result = await testAiProvider(record.id)
       Modal.info({
         title: `Provider 测试成功: ${record.display_name}`,
+        width: 640,
         content: (
-          <div>
+          <Space direction="vertical" size={8} style={{ width: '100%' }}>
             <Paragraph>{`模型: ${result.model_id || '-'}`}</Paragraph>
             <Paragraph>{`模式: ${result.used_api_mode || '-'}`}</Paragraph>
             <Paragraph copyable>{result.text || '(空返回)'}</Paragraph>
-          </div>
+          </Space>
         ),
       })
       await loadAll()
     } catch (error: any) {
-      message.error(error.response?.data?.detail || '测试 provider 失败')
+      message.error(getErrorMessage(error, '测试 provider 失败'))
     } finally {
       setProviderTestingId(null)
     }
@@ -260,7 +347,7 @@ const AiCenterAdminRuntime = () => {
           message.success('AI 提供方已删除')
           await loadAll()
         } catch (error: any) {
-          message.error(error.response?.data?.detail || '删除 provider 失败')
+          message.error(getErrorMessage(error, '删除 provider 失败'))
         } finally {
           setProviderDeletingId(null)
         }
@@ -276,6 +363,11 @@ const AiCenterAdminRuntime = () => {
       output_mode: record.output_mode,
       is_enabled: record.is_enabled,
       max_attempts: record.max_attempts,
+      selection_mode: record.selection_mode,
+      optimization_goal: record.optimization_goal,
+      preferred_capabilities: record.preferred_capabilities,
+      allow_same_provider_model_failover: record.allow_same_provider_model_failover,
+      allow_cross_provider_failover: record.allow_cross_provider_failover,
       extra_json: record.extra_json,
       steps: record.steps.map((step) => ({
         id: step.id,
@@ -300,7 +392,7 @@ const AiCenterAdminRuntime = () => {
       routeForm.resetFields()
       await loadAll()
     } catch (error: any) {
-      message.error(error.response?.data?.detail || '保存路由失败')
+      message.error(getErrorMessage(error, '保存路由失败'))
     } finally {
       setRouteSaving(false)
     }
@@ -320,21 +412,42 @@ const AiCenterAdminRuntime = () => {
       const result = await testAiRoute(testingRoute.route_key, values)
       Modal.info({
         title: `路由测试成功: ${testingRoute.display_name}`,
-        width: 720,
+        width: 820,
         content: (
-          <div>
+          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+            <Paragraph>{`选择摘要: ${result.selection_summary || '-'}`}</Paragraph>
             <Paragraph>{`Provider: ${result.provider_label || '-'}`}</Paragraph>
             <Paragraph>{`模型: ${result.model_id || '-'}`}</Paragraph>
             <Paragraph>{`模式: ${result.used_api_mode || '-'}`}</Paragraph>
             <Paragraph>{`耗时: ${result.duration_ms || 0} ms`}</Paragraph>
             <Paragraph copyable={{ text: result.text }}>{result.text || '(空返回)'}</Paragraph>
-          </div>
+            {result.attempt_trace.length ? (
+              <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                <Text strong>尝试链路</Text>
+                {result.attempt_trace.map((item, index) => (
+                  <Card key={`${item.provider_id || 'p'}-${item.model_id || 'm'}-${index}`} size="small">
+                    <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                      <Text>{`#${item.attempt_index || index + 1} ${item.provider_label || '-'} / ${item.model_id || 'auto'}`}</Text>
+                      <Text type={item.status === 'error' ? 'danger' : 'secondary'}>
+                        {`${item.status || '-'} · ${item.duration_ms || 0} ms`}
+                      </Text>
+                      <Text type="secondary">{item.selection_summary || '-'}</Text>
+                      {Array.isArray(item.candidate_reasons) && item.candidate_reasons.length ? (
+                        <Text type="secondary">{`打分依据: ${item.candidate_reasons.join(', ')}`}</Text>
+                      ) : null}
+                      {item.error_message ? <Text type="danger">{item.error_message}</Text> : null}
+                    </Space>
+                  </Card>
+                ))}
+              </Space>
+            ) : null}
+          </Space>
         ),
       })
       setRouteTestModalOpen(false)
       await loadAll()
     } catch (error: any) {
-      message.error(error.response?.data?.detail || '测试路由失败')
+      message.error(getErrorMessage(error, '测试路由失败'))
     } finally {
       setRouteTesting(false)
     }
@@ -357,14 +470,34 @@ const AiCenterAdminRuntime = () => {
       ),
     },
     {
+      title: '模型池',
+      key: 'models',
+      width: 260,
+      render: (_, record) => (
+        <Space direction="vertical" size={6}>
+          <Text type="secondary">{`启用 ${record.enabled_model_count}/${record.model_count}`}</Text>
+          <Text type="secondary">{record.preferred_model_id ? `首选 ${record.preferred_model_id}` : '未设置首选模型'}</Text>
+          <Space wrap size={[4, 4]}>
+            {record.models.slice(0, 3).map((model) => (
+              <Tag key={`${record.id}-${model.model_id}`} color={model.is_enabled ? 'blue' : 'default'}>
+                {model.label || model.model_id}
+              </Tag>
+            ))}
+            {record.models.length > 3 ? <Tag>{`+${record.models.length - 3}`}</Tag> : null}
+          </Space>
+        </Space>
+      ),
+    },
+    {
       title: '状态',
       key: 'status',
-      width: 180,
+      width: 220,
       render: (_, record) => (
         <Space direction="vertical" size={2}>
           <Tag color={PROVIDER_HEALTH_COLOR[record.health_status] || 'default'}>{record.health_status || 'unknown'}</Tag>
-          <Text type="secondary">{`模型 ${record.enabled_model_count}/${record.model_count}`}</Text>
-          <Text type="secondary">{record.preferred_model_id || '未设置首选模型'}</Text>
+          <Text type="secondary">{record.cooldown_until ? `冷却至 ${formatDateTime(record.cooldown_until)}` : '当前可参与调度'}</Text>
+          <Text type="secondary">{record.last_success_at ? `最近成功 ${formatDateTime(record.last_success_at)}` : '暂无成功记录'}</Text>
+          {record.last_error_message ? <Text type="danger">{record.last_error_message}</Text> : null}
         </Space>
       ),
     },
@@ -407,14 +540,40 @@ const AiCenterAdminRuntime = () => {
       ),
     },
     {
-      title: '当前链路',
+      title: '选模策略',
+      key: 'strategy',
+      width: 320,
+      render: (_, record) => (
+        <Space direction="vertical" size={6}>
+          <Space wrap size={[4, 4]}>
+            <Tag color="blue">{getSelectionModeLabel(record.selection_mode)}</Tag>
+            <Tag color="geekblue">{getOptimizationGoalLabel(record.optimization_goal)}</Tag>
+            {record.allow_same_provider_model_failover ? <Tag color="cyan">同 Provider 模型回退</Tag> : <Tag>固定单模型</Tag>}
+            {record.allow_cross_provider_failover ? <Tag color="purple">跨 Provider 回退</Tag> : <Tag>按步骤顺序</Tag>}
+          </Space>
+          <Space wrap size={[4, 4]}>
+            {record.preferred_capabilities.length ? (
+              record.preferred_capabilities.map((item) => (
+                <Tag key={`${record.route_key}-${item}`}>{getCapabilityLabel(item)}</Tag>
+              ))
+            ) : (
+              <Text type="secondary">未设置偏好能力</Text>
+            )}
+          </Space>
+          <Text type="secondary">{record.selection_summary || '尚未形成候选摘要'}</Text>
+        </Space>
+      ),
+    },
+    {
+      title: '当前候选',
       key: 'ready',
-      width: 220,
+      width: 240,
       render: (_, record) => (
         <Space direction="vertical" size={2}>
           <Text>{record.ready_provider_label || '未绑定 provider'}</Text>
           <Text type="secondary">{record.ready_model_id || '未绑定模型'}</Text>
-          <Text type="secondary">{`步骤 ${record.enabled_step_count}/${record.configured_step_count}`}</Text>
+          <Text type="secondary">{`步骤 ${record.enabled_step_count}/${record.configured_step_count} · 候选 ${record.candidate_count}`}</Text>
+          {!record.is_ready && record.ready_reason ? <Text type="danger">{record.ready_reason}</Text> : null}
         </Space>
       ),
     },
@@ -437,12 +596,48 @@ const AiCenterAdminRuntime = () => {
 
   const eventColumns: ColumnsType<AiCenterCallEventItem> = [
     { title: '时间', dataIndex: 'created_at', width: 160, render: (value) => formatDateTime(value) },
-    { title: '路由', dataIndex: 'route_key', width: 220 },
-    { title: 'Provider', dataIndex: 'provider_label', width: 180, render: (value) => value || '-' },
-    { title: '模型', dataIndex: 'model_id', width: 180, render: (value) => value || '-' },
-    { title: '结果', dataIndex: 'status', width: 110, render: (value) => <Tag color={EVENT_STATUS_COLOR[value] || 'default'}>{value}</Tag> },
-    { title: '耗时', dataIndex: 'duration_ms', width: 100, render: (value) => (value ? `${value} ms` : '-') },
-    { title: '错误', dataIndex: 'error_message', render: (value) => value || '-' },
+    {
+      title: '路由',
+      key: 'route',
+      width: 220,
+      render: (_, record) => (
+        <Space direction="vertical" size={2}>
+          <Text>{record.route_key}</Text>
+          <Text type="secondary">
+            {record.selection_mode ? `${getSelectionModeLabel(record.selection_mode)} · 第 ${record.attempt_index || 1} 次` : '-'}
+          </Text>
+        </Space>
+      ),
+    },
+    {
+      title: '执行链路',
+      key: 'chain',
+      width: 280,
+      render: (_, record) => (
+        <Space direction="vertical" size={2}>
+          <Text>{record.provider_label || '-'}</Text>
+          <Text type="secondary">{`${record.model_id || '-'} / ${record.used_api_mode || '-'}`}</Text>
+          <Text type="secondary">{record.selection_summary || '-'}</Text>
+        </Space>
+      ),
+    },
+    {
+      title: '结果',
+      key: 'status',
+      width: 140,
+      render: (_, record) => (
+        <Space direction="vertical" size={2}>
+          <Tag color={EVENT_STATUS_COLOR[record.status] || 'default'}>{record.status}</Tag>
+          <Text type="secondary">{record.duration_ms ? `${record.duration_ms} ms` : '-'}</Text>
+        </Space>
+      ),
+    },
+    {
+      title: '错误 / 备注',
+      key: 'message',
+      render: (_, record) =>
+        record.error_message || (record.candidate_score != null ? `候选评分 ${record.candidate_score.toFixed(1)}` : '-'),
+    },
   ]
 
   const routeSteps = Form.useWatch('steps', routeForm) || []
@@ -454,13 +649,20 @@ const AiCenterAdminRuntime = () => {
           AI 中心
         </Title>
         <Paragraph type="secondary" style={{ marginBottom: 0 }}>
-          统一管理 AI provider、模型刷新、能力路由和最近调用事件。作品归并、追更同步都会从这里取配置。
+          统一管理 AI Provider、模型池、能力路由和调用事件。作品归并、追更同步等业务只消费这里的配置，不再各自维护一套 AI 参数。
         </Paragraph>
       </div>
 
       {overview?.legacy_migration_applied ? (
         <Alert type="info" showIcon message="已检测到旧资源运营 AI 配置，并自动迁移为默认 provider 与路由步骤。" />
       ) : null}
+
+      <Alert
+        type="info"
+        showIcon
+        message="自动优选会综合步骤顺序、模型能力标签、质量/稳定/速度/成本评分，以及最近成功率来挑选模型。"
+        description="同 Provider 模型回退只在步骤未固定具体模型时生效；跨 Provider 回退开启后，系统会在整个候选池中选择更合适的可用模型。"
+      />
 
       <Row gutter={[16, 16]}>
         <Col xs={24} sm={12} lg={6}><Card loading={loading}><Text type="secondary">Provider</Text><Title level={3}>{overview?.enabled_providers || 0}/{overview?.total_providers || 0}</Title></Card></Col>
@@ -495,9 +697,16 @@ const AiCenterAdminRuntime = () => {
         onCancel={() => setProviderModalOpen(false)}
         onOk={() => void saveProvider()}
         confirmLoading={providerSaving}
-        width={760}
+        width={1120}
       >
         <Form form={providerForm} layout="vertical">
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginBottom: 16 }}
+            message="Provider 负责连接凭据与模型池。"
+            description="模型池里的能力标签、质量/稳定/速度/成本评分会被自动优选路由直接使用；路由白名单可限制某些模型只给特定业务使用。"
+          />
           <Row gutter={12}>
             <Col span={12}><Form.Item name="provider_key" label="Provider Key" rules={[{ required: true }]}><Input placeholder="openai_default" /></Form.Item></Col>
             <Col span={12}><Form.Item name="display_name" label="显示名称" rules={[{ required: true }]}><Input placeholder="默认 OpenAI 兼容接口" /></Form.Item></Col>
@@ -512,6 +721,40 @@ const AiCenterAdminRuntime = () => {
             <Col span={8}><Form.Item name="is_default" label="设为默认" valuePropName="checked"><Switch /></Form.Item></Col>
             <Col span={8}><Form.Item name="clear_api_key" label="清空已存 API Key" valuePropName="checked"><Switch disabled={!editingProvider?.has_api_key} /></Form.Item></Col>
           </Row>
+          <Form.List name="models">
+            {(fields, { add, remove }) => (
+              <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                <Space style={{ justifyContent: 'space-between', width: '100%' }}>
+                  <Text strong>模型池</Text>
+                  <Button onClick={() => add(emptyProviderModelDraft())}>手动补充模型</Button>
+                </Space>
+                {fields.map((field) => (
+                  <Card
+                    key={field.key}
+                    size="small"
+                    title={<Form.Item noStyle shouldUpdate>{() => <span>{providerForm.getFieldValue(['models', field.name, 'model_id']) || '新模型'}</span>}</Form.Item>}
+                    extra={<Button danger size="small" onClick={() => remove(field.name)}>移除</Button>}
+                  >
+                    <Row gutter={12}>
+                      <Col span={8}><Form.Item name={[field.name, 'model_id']} label="模型 ID" rules={[{ required: true }]}><Input placeholder="gpt-5.2" /></Form.Item></Col>
+                      <Col span={8}><Form.Item name={[field.name, 'label']} label="显示名"><Input placeholder="可选" /></Form.Item></Col>
+                      <Col span={4}><Form.Item name={[field.name, 'is_enabled']} label="启用" valuePropName="checked"><Switch /></Form.Item></Col>
+                      <Col span={4}><Form.Item name={[field.name, 'is_preferred']} label="首选" valuePropName="checked"><Switch /></Form.Item></Col>
+                      <Col span={12}><Form.Item name={[field.name, 'capabilities']} label="能力标签"><Select mode="multiple" allowClear options={CAPABILITY_OPTIONS} /></Form.Item></Col>
+                      <Col span={12}><Form.Item name={[field.name, 'route_allowlist']} label="限制路由"><Select mode="multiple" allowClear options={routeKeyOptions} placeholder="留空表示全部路由可用" /></Form.Item></Col>
+                      <Col span={6}><Form.Item name={[field.name, 'priority_bias']} label="优先偏置"><InputNumber min={-200} max={200} style={{ width: '100%' }} /></Form.Item></Col>
+                      <Col span={4}><Form.Item name={[field.name, 'quality_score']} label="质量"><InputNumber min={0} max={100} style={{ width: '100%' }} /></Form.Item></Col>
+                      <Col span={4}><Form.Item name={[field.name, 'stability_score']} label="稳定"><InputNumber min={0} max={100} style={{ width: '100%' }} /></Form.Item></Col>
+                      <Col span={4}><Form.Item name={[field.name, 'speed_score']} label="速度"><InputNumber min={0} max={100} style={{ width: '100%' }} /></Form.Item></Col>
+                      <Col span={4}><Form.Item name={[field.name, 'cost_score']} label="成本"><InputNumber min={0} max={100} style={{ width: '100%' }} /></Form.Item></Col>
+                      <Col span={24}><Form.Item name={[field.name, 'notes']} label="备注"><Input placeholder="可选，记录这个模型更适合什么任务" /></Form.Item></Col>
+                      <Form.Item name={[field.name, 'id']} hidden><InputNumber /></Form.Item>
+                    </Row>
+                  </Card>
+                ))}
+              </Space>
+            )}
+          </Form.List>
         </Form>
       </Modal>
 
@@ -521,15 +764,27 @@ const AiCenterAdminRuntime = () => {
         onCancel={() => setRouteModalOpen(false)}
         onOk={() => void saveRoute()}
         confirmLoading={routeSaving}
-        width={920}
+        width={1040}
       >
         <Form form={routeForm} layout="vertical">
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginBottom: 16 }}
+            message="路由决定业务调用时如何选模型。"
+            description="自动优选会把步骤看作候选池并进行打分；严格按步骤会优先遵循步骤顺序。若步骤显式固定模型，则同 Provider 模型回退不会生效。"
+          />
           <Row gutter={12}>
             <Col span={12}><Form.Item name="display_name" label="显示名称" rules={[{ required: true }]}><Input /></Form.Item></Col>
             <Col span={6}><Form.Item name="output_mode" label="输出模式"><Select options={[{ label: 'text', value: 'text' }, { label: 'json', value: 'json' }]} /></Form.Item></Col>
             <Col span={6}><Form.Item name="max_attempts" label="路由最大尝试"><InputNumber min={1} max={10} style={{ width: '100%' }} /></Form.Item></Col>
             <Col span={24}><Form.Item name="description" label="说明"><Input.TextArea rows={2} /></Form.Item></Col>
             <Col span={24}><Form.Item name="is_enabled" label="启用路由" valuePropName="checked"><Switch /></Form.Item></Col>
+            <Col span={6}><Form.Item name="selection_mode" label="选择策略"><Select options={SELECTION_MODE_OPTIONS} /></Form.Item></Col>
+            <Col span={6}><Form.Item name="optimization_goal" label="优化目标"><Select options={OPTIMIZATION_GOAL_OPTIONS} /></Form.Item></Col>
+            <Col span={12}><Form.Item name="preferred_capabilities" label="偏好能力"><Select mode="multiple" allowClear options={CAPABILITY_OPTIONS} /></Form.Item></Col>
+            <Col span={12}><Form.Item name="allow_same_provider_model_failover" label="同 Provider 模型回退" valuePropName="checked"><Switch /></Form.Item></Col>
+            <Col span={12}><Form.Item name="allow_cross_provider_failover" label="跨 Provider 回退" valuePropName="checked"><Switch /></Form.Item></Col>
           </Row>
           <Form.List name="steps">
             {(fields, { add, remove }) => (

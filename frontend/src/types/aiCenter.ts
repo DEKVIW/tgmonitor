@@ -19,9 +19,40 @@ export interface AiCenterProviderModelItem {
   owned_by?: string | null
   is_enabled: boolean
   is_preferred: boolean
+  capabilities: string[]
+  route_allowlist: string[]
+  priority_bias: number
+  quality_score: number
+  speed_score: number
+  cost_score: number
+  stability_score: number
+  notes?: string | null
+  recent_success_count: number
+  recent_error_count: number
+  recent_empty_response_count: number
+  last_event_at?: string | null
+  extra_json: Record<string, any>
   last_refreshed_at?: string | null
   created_at: string
   updated_at: string
+}
+
+export interface AiCenterProviderModelUpsertRequest {
+  id?: number | null
+  model_id: string
+  label?: string
+  owned_by?: string | null
+  is_enabled: boolean
+  is_preferred: boolean
+  capabilities: string[]
+  route_allowlist: string[]
+  priority_bias: number
+  quality_score: number
+  speed_score: number
+  cost_score: number
+  stability_score: number
+  notes?: string | null
+  extra_json?: Record<string, any>
 }
 
 export interface AiCenterProviderItem {
@@ -74,6 +105,7 @@ export interface AiCenterProviderUpsertRequest {
   max_retries: number
   cooldown_seconds: number
   extra_json?: Record<string, any>
+  models?: AiCenterProviderModelUpsertRequest[]
 }
 
 export interface AiCenterProviderTestRequest {
@@ -114,15 +146,22 @@ export interface AiCenterRouteItem {
   output_mode: string
   is_enabled: boolean
   max_attempts: number
+  selection_mode: string
+  optimization_goal: string
+  preferred_capabilities: string[]
+  allow_same_provider_model_failover: boolean
+  allow_cross_provider_failover: boolean
   updated_by?: string | null
   extra_json: Record<string, any>
   steps: AiCenterRouteStepItem[]
   configured_step_count: number
   enabled_step_count: number
+  candidate_count: number
   is_ready: boolean
   ready_reason?: string | null
   ready_provider_label?: string | null
   ready_model_id?: string | null
+  selection_summary?: string | null
   created_at: string
   updated_at: string
 }
@@ -146,6 +185,11 @@ export interface AiCenterRouteUpsertRequest {
   output_mode: string
   is_enabled: boolean
   max_attempts: number
+  selection_mode: string
+  optimization_goal: string
+  preferred_capabilities: string[]
+  allow_same_provider_model_failover: boolean
+  allow_cross_provider_failover: boolean
   extra_json?: Record<string, any>
   steps: AiCenterRouteStepUpsertRequest[]
 }
@@ -156,6 +200,10 @@ export interface AiCenterRouteReadinessResponse {
   reason?: string | null
   provider_label?: string | null
   model_id?: string | null
+  selection_mode: string
+  optimization_goal: string
+  candidate_count: number
+  selection_summary?: string | null
   step_count: number
   enabled_step_count: number
 }
@@ -174,6 +222,8 @@ export interface AiCenterRouteTestResponse {
   duration_ms?: number | null
   text: string
   event_id?: number | null
+  selection_summary?: string | null
+  attempt_trace: Record<string, any>[]
   ok: boolean
 }
 
@@ -189,6 +239,11 @@ export interface AiCenterCallEventItem {
   error_type?: string | null
   error_message?: string | null
   duration_ms?: number | null
+  used_api_mode?: string | null
+  selection_mode?: string | null
+  selection_summary?: string | null
+  attempt_index?: number | null
+  candidate_score?: number | null
   extra_json: Record<string, any>
   created_at: string
 }

@@ -43,9 +43,40 @@ class AiCenterProviderModelItem(AiCenterBaseModel):
     owned_by: str | None = None
     is_enabled: bool = True
     is_preferred: bool = False
+    capabilities: list[str] = Field(default_factory=list)
+    route_allowlist: list[str] = Field(default_factory=list)
+    priority_bias: int = 0
+    quality_score: int = 50
+    speed_score: int = 50
+    cost_score: int = 50
+    stability_score: int = 50
+    notes: str | None = None
+    recent_success_count: int = 0
+    recent_error_count: int = 0
+    recent_empty_response_count: int = 0
+    last_event_at: datetime | None = None
+    extra_json: dict[str, Any] = Field(default_factory=dict)
     last_refreshed_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class AiCenterProviderModelUpsertRequest(AiCenterBaseModel):
+    id: int | None = None
+    model_id: str = Field(min_length=1, max_length=255)
+    label: str = Field(default="", max_length=255)
+    owned_by: str | None = Field(default=None, max_length=255)
+    is_enabled: bool = True
+    is_preferred: bool = False
+    capabilities: list[str] = Field(default_factory=list, max_length=24)
+    route_allowlist: list[str] = Field(default_factory=list, max_length=24)
+    priority_bias: int = Field(default=0, ge=-200, le=200)
+    quality_score: int = Field(default=50, ge=0, le=100)
+    speed_score: int = Field(default=50, ge=0, le=100)
+    cost_score: int = Field(default=50, ge=0, le=100)
+    stability_score: int = Field(default=50, ge=0, le=100)
+    notes: str | None = Field(default=None, max_length=500)
+    extra_json: dict[str, Any] = Field(default_factory=dict)
 
 
 class AiCenterProviderItem(AiCenterBaseModel):
@@ -98,6 +129,7 @@ class AiCenterProviderUpsertRequest(AiCenterBaseModel):
     max_retries: int = Field(default=1, ge=0, le=5)
     cooldown_seconds: int = Field(default=300, ge=0, le=86400)
     extra_json: dict[str, Any] = Field(default_factory=dict)
+    models: list[AiCenterProviderModelUpsertRequest] = Field(default_factory=list)
 
 
 class AiCenterProviderTestRequest(AiCenterBaseModel):
@@ -138,15 +170,22 @@ class AiCenterRouteItem(AiCenterBaseModel):
     output_mode: str = "text"
     is_enabled: bool = True
     max_attempts: int = 3
+    selection_mode: str = "automatic"
+    optimization_goal: str = "balanced"
+    preferred_capabilities: list[str] = Field(default_factory=list)
+    allow_same_provider_model_failover: bool = True
+    allow_cross_provider_failover: bool = True
     updated_by: str | None = None
     extra_json: dict[str, Any] = Field(default_factory=dict)
     steps: list[AiCenterRouteStepItem] = Field(default_factory=list)
     configured_step_count: int = 0
     enabled_step_count: int = 0
+    candidate_count: int = 0
     is_ready: bool = False
     ready_reason: str | None = None
     ready_provider_label: str | None = None
     ready_model_id: str | None = None
+    selection_summary: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -170,6 +209,11 @@ class AiCenterRouteUpsertRequest(AiCenterBaseModel):
     output_mode: str = Field(default="text", max_length=32)
     is_enabled: bool = True
     max_attempts: int = Field(default=3, ge=1, le=10)
+    selection_mode: str = Field(default="automatic", max_length=32)
+    optimization_goal: str = Field(default="balanced", max_length=32)
+    preferred_capabilities: list[str] = Field(default_factory=list, max_length=24)
+    allow_same_provider_model_failover: bool = True
+    allow_cross_provider_failover: bool = True
     extra_json: dict[str, Any] = Field(default_factory=dict)
     steps: list[AiCenterRouteStepUpsertRequest] = Field(default_factory=list)
 
@@ -180,6 +224,10 @@ class AiCenterRouteReadinessResponse(AiCenterBaseModel):
     reason: str | None = None
     provider_label: str | None = None
     model_id: str | None = None
+    selection_mode: str = "automatic"
+    optimization_goal: str = "balanced"
+    candidate_count: int = 0
+    selection_summary: str | None = None
     step_count: int = 0
     enabled_step_count: int = 0
 
@@ -198,6 +246,8 @@ class AiCenterRouteTestResponse(AiCenterBaseModel):
     duration_ms: int | None = None
     text: str = ""
     event_id: int | None = None
+    selection_summary: str | None = None
+    attempt_trace: list[dict[str, Any]] = Field(default_factory=list)
     ok: bool = True
 
 
@@ -213,6 +263,11 @@ class AiCenterCallEventItem(AiCenterBaseModel):
     error_type: str | None = None
     error_message: str | None = None
     duration_ms: int | None = None
+    used_api_mode: str | None = None
+    selection_mode: str | None = None
+    selection_summary: str | None = None
+    attempt_index: int | None = None
+    candidate_score: float | None = None
     extra_json: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
 
