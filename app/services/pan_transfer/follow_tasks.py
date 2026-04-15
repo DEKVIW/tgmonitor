@@ -180,6 +180,98 @@ def _build_task_automation_config(raw_value: Any) -> dict[str, Any]:
     }
 
 
+def _build_follow_task_rule_assessment(row: PanTransferSyncTask) -> dict[str, Any]:
+    task_state = _normalize_text(row.task_state, max_length=32).lower() or PAN_TRANSFER_SYNC_STATE_IDLE
+    source_status = _normalize_text(row.source_link_status, max_length=32).lower() or "unknown"
+    share_status = _normalize_text(row.current_share_status, max_length=32).lower() or "unknown"
+    has_candidate = bool(_normalize_text(row.last_candidate_url))
+    has_error = bool(_normalize_text(row.last_error_message, max_length=2000))
+
+    if task_state in {
+        PAN_TRANSFER_SYNC_STATE_QUEUED,
+        PAN_TRANSFER_SYNC_STATE_CHECKING,
+        PAN_TRANSFER_SYNC_STATE_SYNC_QUEUED,
+    }:
+        return {
+            "rule_key": "busy",
+            "rule_label": "等待当前任务完成",
+            "summary": "当前已经有检查或同步在进行，先等待本轮完成，再决定是否执行新的同步规则。",
+            "recommended_source_kind": None,
+            "recommended_sync_mode": None,
+            "execution_mode": "busy",
+            "risk_level": "info",
+            "requires_manual_confirmation": False,
+            "can_execute": False,
+        }
+
+    if has_candidate:
+        return {
+            "rule_key": "candidate_manual_review",
+            "rule_label": "规则三：候选人工确认",
+            "summary": (
+                "已发现新的候选原链。为避免不同目录结构直接写入现有资源目录，"
+                "默认先进入人工确认，核对目录或文件后再同步。"
+            ),
+            "recommended_source_kind": "candidate",
+            "recommended_sync_mode": "incremental",
+            "execution_mode": "manual_modal",
+            "risk_level": "warning",
+            "requires_manual_confirmation": True,
+            "can_execute": True,
+        }
+
+    if source_status in {"invalid", "error"}:
+        return {
+            "rule_key": "await_candidate",
+            "rule_label": "等待新候选原链",
+            "summary": "当前原链已不可用，先重新检查或等待新的候选原链出现，再决定后续同步处理。",
+            "recommended_source_kind": None,
+            "recommended_sync_mode": None,
+            "execution_mode": "wait_candidate",
+            "risk_level": "warning",
+            "requires_manual_confirmation": False,
+            "can_execute": False,
+        }
+
+    if has_error:
+        return {
+            "rule_key": "recheck_required",
+            "rule_label": "先重新检查",
+            "summary": "最近一次跟踪出现异常，建议先重新检查，确认原链、分享和候选状态后再继续同步。",
+            "recommended_source_kind": None,
+            "recommended_sync_mode": None,
+            "execution_mode": "recheck_only",
+            "risk_level": "warning",
+            "requires_manual_confirmation": False,
+            "can_execute": True,
+        }
+
+    if share_status in {"invalid", "error"}:
+        return {
+            "rule_key": "safe_sync_current",
+            "rule_label": "规则一：安全同步当前原链",
+            "summary": "当前主要问题是对外分享异常。优先复用现有资源目录，从当前原链重新同步并刷新对外分享。",
+            "recommended_source_kind": "current",
+            "recommended_sync_mode": "standard",
+            "execution_mode": "direct_sync",
+            "risk_level": "info",
+            "requires_manual_confirmation": False,
+            "can_execute": True,
+        }
+
+    return {
+        "rule_key": "safe_sync_current",
+        "rule_label": "规则一：安全同步当前原链",
+        "summary": "当前原链仍可用，默认复用现有资源目录执行安全同步，不主动删除旧内容。",
+        "recommended_source_kind": "current",
+        "recommended_sync_mode": "standard",
+        "execution_mode": "direct_sync",
+        "risk_level": "info",
+        "requires_manual_confirmation": False,
+        "can_execute": True,
+    }
+
+
 def _build_follow_publish_binding_snapshot(row: PanTransferPublishRecord | None) -> dict[str, Any]:
     if row is None:
         return {}
@@ -285,6 +377,7 @@ def _serialize_follow_task(row: PanTransferSyncTask) -> dict[str, Any]:
         "last_sync_batch_item_id": _normalize_optional_int(last_sync.get("batch_item_id")),
         "last_sync_source_kind": _normalize_text(last_sync.get("source_kind"), max_length=32) or None,
         "last_sync_started_at": _parse_datetime(last_sync.get("started_at")),
+        "rule_assessment": _build_follow_task_rule_assessment(row),
         "extra_json": extra_json,
         "created_by": str(row.created_by or "") or None,
         "updated_by": str(row.updated_by or "") or None,

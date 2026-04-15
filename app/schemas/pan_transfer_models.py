@@ -667,6 +667,18 @@ class PanTransferFollowTaskLogItem(PanTransferBaseModel):
     created_at: datetime
 
 
+class PanTransferFollowTaskRuleAssessment(PanTransferBaseModel):
+    rule_key: str = "safe_sync_current"
+    rule_label: str = "规则一：安全同步当前原链"
+    summary: str = ""
+    recommended_source_kind: str | None = None
+    recommended_sync_mode: str | None = None
+    execution_mode: str = "direct_sync"
+    risk_level: str = "info"
+    requires_manual_confirmation: bool = False
+    can_execute: bool = True
+
+
 class PanTransferFollowTaskItem(PanTransferBaseModel):
     id: int
     task_name: str
@@ -714,6 +726,7 @@ class PanTransferFollowTaskItem(PanTransferBaseModel):
     last_sync_batch_item_id: int | None = None
     last_sync_source_kind: str | None = None
     last_sync_started_at: datetime | None = None
+    rule_assessment: PanTransferFollowTaskRuleAssessment = Field(default_factory=PanTransferFollowTaskRuleAssessment)
     extra_json: dict = Field(default_factory=dict)
     created_by: str | None = None
     updated_by: str | None = None

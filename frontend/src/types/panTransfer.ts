@@ -282,6 +282,18 @@ export interface PanTransferFollowTaskLogItem {
   created_at: string
 }
 
+export interface PanTransferFollowTaskRuleAssessment {
+  rule_key: string
+  rule_label: string
+  summary: string
+  recommended_source_kind?: string | null
+  recommended_sync_mode?: string | null
+  execution_mode: string
+  risk_level: string
+  requires_manual_confirmation: boolean
+  can_execute: boolean
+}
+
 export interface PanTransferFollowTaskItem {
   id: number
   task_name: string
@@ -329,6 +341,7 @@ export interface PanTransferFollowTaskItem {
   last_sync_batch_item_id?: number | null
   last_sync_source_kind?: string | null
   last_sync_started_at?: string | null
+  rule_assessment: PanTransferFollowTaskRuleAssessment
   extra_json: Record<string, unknown>
   created_by?: string | null
   updated_by?: string | null

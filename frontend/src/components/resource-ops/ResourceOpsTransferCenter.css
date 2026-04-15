@@ -816,6 +816,56 @@
   line-height: 1.6;
 }
 
+.resource-ops-follow-rule-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.resource-ops-follow-rule-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 14px;
+  background: #fff;
+}
+
+.resource-ops-follow-rule-card.is-recommended {
+  border-color: rgba(22, 119, 255, 0.3);
+  background: #f8fbff;
+  box-shadow: 0 0 0 1px rgba(22, 119, 255, 0.08) inset;
+}
+
+.resource-ops-follow-rule-card.is-danger {
+  border-color: rgba(255, 77, 79, 0.2);
+  background: #fff8f7;
+}
+
+.resource-ops-follow-rule-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.resource-ops-follow-rule-card-head span {
+  font-weight: 600;
+  color: rgba(15, 23, 42, 0.9);
+}
+
+.resource-ops-follow-rule-card small {
+  color: rgba(15, 23, 42, 0.62);
+  line-height: 1.6;
+}
+
+.resource-ops-follow-rule-card .ant-btn {
+  align-self: flex-start;
+}
+
 .resource-ops-follow-sync-manual-modal {
   gap: 14px;
 }
