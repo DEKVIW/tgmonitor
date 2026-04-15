@@ -10,7 +10,18 @@ from urllib.parse import parse_qs, urlparse
 from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
-from app.models.models import LinkClickEvent, LinkTarget, LinkTargetDailyStat, Message, MessageLinkRef, ResourceWorkBinding, SystemSettings
+from app.models.models import (
+    LinkClickEvent,
+    LinkTarget,
+    LinkTargetDailyStat,
+    Message,
+    MessageLinkRef,
+    PanTransferBatchItem,
+    PanTransferReplacementLog,
+    ResourceRecognitionTask,
+    ResourceWorkBinding,
+    SystemSettings,
+)
 from app.models.models import ResourceCandidateLog, ResourceCandidateProfile
 from app.services.link_check.constants import (
     PLATFORM_115,
@@ -464,11 +475,66 @@ def _purge_orphan_link_targets(session: Session, target_ids: Iterable[int]) -> N
         )
         if target_id is not None
     }
+    protected_target_ids: set[int] = set()
+    protected_target_ids.update(
+        int(target_id)
+        for (target_id,) in (
+            session.query(ResourceRecognitionTask.link_target_id)
+            .filter(ResourceRecognitionTask.link_target_id.in_(normalized_target_ids))
+            .distinct()
+            .all()
+        )
+        if target_id is not None
+    )
+    protected_target_ids.update(
+        int(target_id)
+        for (target_id,) in (
+            session.query(PanTransferBatchItem.link_target_id)
+            .filter(PanTransferBatchItem.link_target_id.in_(normalized_target_ids))
+            .distinct()
+            .all()
+        )
+        if target_id is not None
+    )
+    protected_target_ids.update(
+        int(target_id)
+        for (target_id,) in (
+            session.query(PanTransferBatchItem.new_link_target_id)
+            .filter(PanTransferBatchItem.new_link_target_id.in_(normalized_target_ids))
+            .distinct()
+            .all()
+        )
+        if target_id is not None
+    )
+    protected_target_ids.update(
+        int(target_id)
+        for (target_id,) in (
+            session.query(PanTransferReplacementLog.old_link_target_id)
+            .filter(PanTransferReplacementLog.old_link_target_id.in_(normalized_target_ids))
+            .distinct()
+            .all()
+        )
+        if target_id is not None
+    )
+    protected_target_ids.update(
+        int(target_id)
+        for (target_id,) in (
+            session.query(PanTransferReplacementLog.new_link_target_id)
+            .filter(PanTransferReplacementLog.new_link_target_id.in_(normalized_target_ids))
+            .distinct()
+            .all()
+        )
+        if target_id is not None
+    )
 
     orphan_target_ids = [
         target_id
         for target_id in normalized_target_ids
-        if target_id not in remaining_ref_target_ids and target_id not in remaining_event_target_ids
+        if (
+            target_id not in remaining_ref_target_ids
+            and target_id not in remaining_event_target_ids
+            and target_id not in protected_target_ids
+        )
     ]
     if not orphan_target_ids:
         return

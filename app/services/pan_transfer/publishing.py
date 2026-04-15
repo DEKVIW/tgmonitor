@@ -4,7 +4,7 @@ from datetime import datetime, time as daytime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.models.models import (
@@ -18,7 +18,7 @@ from app.models.models import (
     PanTransferSyncTask,
     ensure_runtime_storage_tables,
 )
-from app.services.resource_ops import ensure_message_link_refs_for_messages
+from app.services.resource_ops import delete_message_resource_data, ensure_message_link_refs_for_messages
 from app.services.resource_ops.catalog import flatten_message_links
 
 from .common import utcnow
@@ -44,6 +44,30 @@ _WEEKDAY_LABELS = {
     5: "周五",
     6: "周六",
     7: "周日",
+}
+
+_PUBLISH_LIFECYCLE_ACTIVE = "active"
+_PUBLISH_LIFECYCLE_ARCHIVED = "archived"
+_PUBLISH_LIFECYCLE_FRONTEND_OFFLINE = "frontend_offline"
+_PUBLISH_LIFECYCLE_RESOURCE_RECLAIMED = "resource_reclaimed"
+_PUBLISH_LIFECYCLE_LABELS = {
+    _PUBLISH_LIFECYCLE_ACTIVE: "运营中",
+    _PUBLISH_LIFECYCLE_ARCHIVED: "已归档",
+    _PUBLISH_LIFECYCLE_FRONTEND_OFFLINE: "已下线",
+    _PUBLISH_LIFECYCLE_RESOURCE_RECLAIMED: "已回收",
+}
+_PUBLISH_LIFECYCLE_SUMMARIES = {
+    _PUBLISH_LIFECYCLE_ACTIVE: "当前资源仍在运营中",
+    _PUBLISH_LIFECYCLE_ARCHIVED: "已从活跃运营中移除，前台消息和网盘资源保留",
+    _PUBLISH_LIFECYCLE_FRONTEND_OFFLINE: "前台消息已下线，网盘资源仍保留",
+    _PUBLISH_LIFECYCLE_RESOURCE_RECLAIMED: "前台消息已下线，网盘资源目录已回收",
+}
+
+_PUBLISH_LIFECYCLE_PRIORITY = {
+    _PUBLISH_LIFECYCLE_ACTIVE: 0,
+    _PUBLISH_LIFECYCLE_ARCHIVED: 1,
+    _PUBLISH_LIFECYCLE_FRONTEND_OFFLINE: 2,
+    _PUBLISH_LIFECYCLE_RESOURCE_RECLAIMED: 3,
 }
 
 
@@ -219,6 +243,93 @@ def _get_publish_record_publish_count(row: PanTransferPublishRecord) -> int:
 def _get_publish_record_archived_snapshot(row: PanTransferPublishRecord) -> tuple[bool, datetime | None]:
     extra_json = dict(row.extra_json or {})
     return bool(extra_json.get("archived")), _parse_datetime(extra_json.get("archived_at"))
+
+
+def _build_publish_lifecycle_dict(
+    *,
+    state: str,
+    archived: bool,
+    retired_at: datetime | None = None,
+    retired_by: str | None = None,
+) -> dict[str, Any]:
+    normalized_state = _normalize_text(state, max_length=32).lower() or _PUBLISH_LIFECYCLE_ACTIVE
+    if normalized_state not in {
+        _PUBLISH_LIFECYCLE_ACTIVE,
+        _PUBLISH_LIFECYCLE_ARCHIVED,
+        _PUBLISH_LIFECYCLE_FRONTEND_OFFLINE,
+        _PUBLISH_LIFECYCLE_RESOURCE_RECLAIMED,
+    }:
+        normalized_state = _PUBLISH_LIFECYCLE_ACTIVE
+    return {
+        "state": normalized_state,
+        "archived": bool(archived),
+        "retired_at": retired_at.isoformat() + "Z" if retired_at is not None else None,
+        "retired_by": _normalize_text(retired_by, max_length=128) or None,
+    }
+
+
+def _parse_publish_lifecycle(extra_json: dict[str, Any]) -> dict[str, Any]:
+    raw_value = extra_json.get("lifecycle")
+    lifecycle = dict(raw_value) if isinstance(raw_value, dict) else {}
+    archived = bool(lifecycle.get("archived")) or bool(extra_json.get("archived"))
+    retired_at = _parse_datetime(lifecycle.get("retired_at")) or _parse_datetime(extra_json.get("archived_at"))
+    retired_by = _normalize_text(lifecycle.get("retired_by"), max_length=128) or _normalize_text(extra_json.get("archived_by"), max_length=128) or None
+    state = _normalize_text(lifecycle.get("state"), max_length=32).lower()
+    if state not in {
+        _PUBLISH_LIFECYCLE_ACTIVE,
+        _PUBLISH_LIFECYCLE_ARCHIVED,
+        _PUBLISH_LIFECYCLE_FRONTEND_OFFLINE,
+        _PUBLISH_LIFECYCLE_RESOURCE_RECLAIMED,
+    }:
+        state = _PUBLISH_LIFECYCLE_ARCHIVED if archived else _PUBLISH_LIFECYCLE_ACTIVE
+    return _build_publish_lifecycle_dict(
+        state=state,
+        archived=archived,
+        retired_at=retired_at,
+        retired_by=retired_by,
+    )
+
+
+def _mark_publish_record_active(extra_json: dict[str, Any]) -> dict[str, Any]:
+    next_extra_json = dict(extra_json or {})
+    next_extra_json["archived"] = False
+    next_extra_json["archived_at"] = None
+    next_extra_json["archived_by"] = None
+    next_extra_json["lifecycle"] = _build_publish_lifecycle_dict(
+        state=_PUBLISH_LIFECYCLE_ACTIVE,
+        archived=False,
+        retired_at=None,
+        retired_by=None,
+    )
+    return next_extra_json
+
+
+def _resolve_publish_lifecycle_transition(current_state: str, requested_state: str) -> str:
+    normalized_current = _normalize_text(current_state, max_length=32).lower() or _PUBLISH_LIFECYCLE_ACTIVE
+    normalized_requested = _normalize_text(requested_state, max_length=32).lower() or _PUBLISH_LIFECYCLE_ACTIVE
+    if normalized_current not in _PUBLISH_LIFECYCLE_PRIORITY:
+        normalized_current = _PUBLISH_LIFECYCLE_ACTIVE
+    if normalized_requested not in _PUBLISH_LIFECYCLE_PRIORITY:
+        normalized_requested = _PUBLISH_LIFECYCLE_ACTIVE
+    if _PUBLISH_LIFECYCLE_PRIORITY[normalized_requested] < _PUBLISH_LIFECYCLE_PRIORITY[normalized_current]:
+        return normalized_current
+    return normalized_requested
+
+
+def _resolve_publish_resource_path(item: PanTransferBatchItem | None) -> str | None:
+    if item is None:
+        return None
+    extra_json = dict(item.extra_json or {})
+    resolved_paths = dict(extra_json.get("resolved_paths") or {})
+    resolved_path = _normalize_text(resolved_paths.get("resolved_path"), max_length=512)
+    if resolved_path:
+        return resolved_path
+    staging_snapshot = _get_staging_snapshot(item)
+    if staging_snapshot is None:
+        return None
+    root = _normalize_text(staging_snapshot.get("root"), max_length=512)
+    folder_name = _normalize_text(staging_snapshot.get("folder_name"), max_length=255)
+    return _normalize_text("/".join(part for part in [root, folder_name] if part), max_length=512) or None
 
 
 def _build_publish_rule_dict(
@@ -551,13 +662,37 @@ def _serialize_publish_record(
         published_clicks_total = int(click_totals.get(published_link_target_id, 0))
 
     can_refresh_share = False
-    if batch_item is not None and batch_item.target_account_id is not None and _get_staging_snapshot(batch_item) is not None:
+    resource_account_name = None
+    if (
+        message is not None
+        and batch_item is not None
+        and batch_item.target_account_id is not None
+        and _get_staging_snapshot(batch_item) is not None
+    ):
         account = session.get(PanTransferAccount, int(batch_item.target_account_id))
         can_refresh_share = account is not None and bool(account.is_enabled)
+        resource_account_name = _normalize_text(getattr(account, "account_name", None), max_length=128) or None
 
     published_tags = _normalize_publish_tags(list(getattr(message, "tags", None) or list(row.published_tags or [])))
     is_archived, archived_at = _get_publish_record_archived_snapshot(row)
+    lifecycle = _parse_publish_lifecycle(extra_json)
+    lifecycle_state = _normalize_text(lifecycle.get("state"), max_length=32).lower() or (
+        _PUBLISH_LIFECYCLE_ARCHIVED if is_archived else _PUBLISH_LIFECYCLE_ACTIVE
+    )
+    frontend_online = message is not None and lifecycle_state not in {
+        _PUBLISH_LIFECYCLE_FRONTEND_OFFLINE,
+        _PUBLISH_LIFECYCLE_RESOURCE_RECLAIMED,
+    }
+    can_offline = message is not None and lifecycle_state != _PUBLISH_LIFECYCLE_RESOURCE_RECLAIMED
+    can_reclaim = bool(
+        batch_item is not None
+        and batch_item.target_account_id is not None
+        and _get_staging_snapshot(batch_item) is not None
+        and lifecycle_state != _PUBLISH_LIFECYCLE_RESOURCE_RECLAIMED
+    )
+    can_republish = bool((published_url or row.source_url) and lifecycle_state != _PUBLISH_LIFECYCLE_RESOURCE_RECLAIMED)
     publish_rule = _parse_publish_rule(extra_json)
+    resource_path = _resolve_publish_resource_path(batch_item)
     return {
         "id": int(row.id),
         "source_type": str(row.source_type or "manual"),
@@ -586,10 +721,20 @@ def _serialize_publish_record(
         "published_clicks_total": published_clicks_total,
         "publish_count": _get_publish_record_publish_count(row),
         "can_refresh_share": can_refresh_share,
+        "can_offline": can_offline,
+        "can_reclaim": can_reclaim,
+        "can_republish": can_republish,
+        "frontend_online": frontend_online,
         "can_edit": message is not None,
         "operator": _normalize_text(row.operator, max_length=128) or None,
         "is_archived": is_archived,
         "archived_at": archived_at,
+        "lifecycle_state": lifecycle_state,
+        "lifecycle_label": _PUBLISH_LIFECYCLE_LABELS.get(lifecycle_state, _PUBLISH_LIFECYCLE_LABELS[_PUBLISH_LIFECYCLE_ACTIVE]),
+        "lifecycle_summary": _PUBLISH_LIFECYCLE_SUMMARIES.get(lifecycle_state, _PUBLISH_LIFECYCLE_SUMMARIES[_PUBLISH_LIFECYCLE_ACTIVE]),
+        "retired_at": _parse_datetime(lifecycle.get("retired_at")),
+        "resource_path": resource_path,
+        "resource_account_name": resource_account_name,
         "publish_rule_enabled": bool(publish_rule.get("enabled")),
         "publish_rule_summary": _build_publish_rule_summary(publish_rule),
         "next_publish_at": _parse_datetime(publish_rule.get("next_publish_at")),
@@ -679,7 +824,7 @@ def _create_publish_record(
     normalized_source_url = _normalize_text(source_url)
     normalized_source_link_target_id = _normalize_optional_int(source_link_target_id)
     normalized_message_id = _normalize_optional_int(message_id)
-    normalized_extra_json = dict(extra_json or {})
+    normalized_extra_json = _mark_publish_record_active(dict(extra_json or {}))
     if normalized_source_link_target_id is not None:
         normalized_extra_json["source_link_target_id"] = normalized_source_link_target_id
     if normalized_source_type == "batch_item" and source_batch_item_id is not None:
@@ -730,12 +875,10 @@ def _create_publish_record(
         merged_extra_json = dict(record.extra_json or {})
         publish_rule = _parse_publish_rule(merged_extra_json)
         merged_extra_json.update(normalized_extra_json)
+        merged_extra_json = _mark_publish_record_active(merged_extra_json)
         merged_extra_json["resource_key"] = resource_key
         if normalized_source_link_target_id is not None:
             merged_extra_json["source_link_target_id"] = normalized_source_link_target_id
-        merged_extra_json["archived"] = False
-        merged_extra_json["archived_at"] = None
-        merged_extra_json["archived_by"] = None
         if publish_rule:
             merged_extra_json["publish_rule"] = publish_rule
         record.source_type = normalized_source_type
@@ -1074,6 +1217,259 @@ def _list_publish_record_group_rows(session: Session, *, row: PanTransferPublish
     return [candidate for candidate in candidates if _get_publish_record_resource_key(candidate) == resource_key]
 
 
+def _clear_follow_task_publish_binding(task: PanTransferSyncTask) -> None:
+    extra_json = dict(task.extra_json or {})
+    extra_json["publish_binding"] = {}
+    task.publish_record_id = None
+    task.extra_json = extra_json
+
+
+def _cleanup_deleted_publish_record_bindings(
+    session: Session,
+    *,
+    deleted_rows: list[PanTransferPublishRecord],
+) -> None:
+    deleted_record_ids = {int(row.id) for row in deleted_rows if row.id is not None}
+    deleted_source_batch_item_ids = {
+        int(row.source_batch_item_id)
+        for row in deleted_rows
+        if row.source_batch_item_id is not None
+    }
+    if not deleted_record_ids and not deleted_source_batch_item_ids:
+        return
+
+    query = session.query(PanTransferSyncTask)
+    if deleted_record_ids and deleted_source_batch_item_ids:
+        query = query.filter(
+            or_(
+                PanTransferSyncTask.publish_record_id.in_(sorted(deleted_record_ids)),
+                PanTransferSyncTask.source_batch_item_id.in_(sorted(deleted_source_batch_item_ids)),
+            )
+        )
+    elif deleted_record_ids:
+        query = query.filter(PanTransferSyncTask.publish_record_id.in_(sorted(deleted_record_ids)))
+    else:
+        query = query.filter(PanTransferSyncTask.source_batch_item_id.in_(sorted(deleted_source_batch_item_ids)))
+
+    for task in query.all():
+        publish_binding = dict(dict(task.extra_json or {}).get("publish_binding") or {})
+        binding_record_id = _normalize_optional_int(publish_binding.get("record_id"))
+        source_batch_item_id = _normalize_optional_int(task.source_batch_item_id)
+        publish_record_id = _normalize_optional_int(task.publish_record_id)
+        should_clear = (
+            (publish_record_id is not None and publish_record_id in deleted_record_ids)
+            or (binding_record_id is not None and binding_record_id in deleted_record_ids)
+            or (source_batch_item_id is not None and source_batch_item_id in deleted_source_batch_item_ids)
+        )
+        if not should_clear:
+            continue
+        _clear_follow_task_publish_binding(task)
+        session.add(task)
+
+
+def _cleanup_publish_record_bindings(
+    session: Session,
+    *,
+    rows: list[PanTransferPublishRecord],
+    pause_follow_tasks: bool,
+    operator: str | None,
+) -> None:
+    record_ids = {int(row.id) for row in rows if row.id is not None}
+    source_batch_item_ids = {
+        int(row.source_batch_item_id)
+        for row in rows
+        if row.source_batch_item_id is not None
+    }
+    if not record_ids and not source_batch_item_ids:
+        return
+
+    query = session.query(PanTransferSyncTask)
+    if record_ids and source_batch_item_ids:
+        query = query.filter(
+            or_(
+                PanTransferSyncTask.publish_record_id.in_(sorted(record_ids)),
+                PanTransferSyncTask.source_batch_item_id.in_(sorted(source_batch_item_ids)),
+            )
+        )
+    elif record_ids:
+        query = query.filter(PanTransferSyncTask.publish_record_id.in_(sorted(record_ids)))
+    else:
+        query = query.filter(PanTransferSyncTask.source_batch_item_id.in_(sorted(source_batch_item_ids)))
+
+    for task in query.all():
+        _clear_follow_task_publish_binding(task)
+        if pause_follow_tasks:
+            task.status = "paused"
+            task.task_state = "idle"
+            task.next_check_at = None
+            task.current_share_url = None
+            task.current_share_link_target_id = None
+            task.current_share_status = "invalid"
+            task.last_error_message = "resource reclaimed and follow task paused"
+        task.updated_by = _normalize_text(operator, max_length=128) or task.updated_by
+        session.add(task)
+
+
+def _collect_publish_record_message_ids(row: PanTransferPublishRecord) -> set[int]:
+    message_ids: set[int] = set()
+    current_message_id = _normalize_optional_int(row.published_message_id)
+    if current_message_id is not None:
+        message_ids.add(current_message_id)
+    extra_json = dict(row.extra_json or {})
+    publish_history = list(extra_json.get("publish_history") or [])
+    for entry in publish_history:
+        if not isinstance(entry, dict):
+            continue
+        history_message_id = _normalize_optional_int(entry.get("message_id"))
+        if history_message_id is not None:
+            message_ids.add(history_message_id)
+    return message_ids
+
+
+def _delete_publish_record_messages(
+    session: Session,
+    *,
+    rows: list[PanTransferPublishRecord],
+) -> dict[str, Any]:
+    deleted_message_ids: list[int] = []
+    messages_to_delete: list[Message] = []
+    seen_message_ids: set[int] = set()
+    for row in rows:
+        for message_id in sorted(_collect_publish_record_message_ids(row)):
+            if message_id in seen_message_ids:
+                continue
+            seen_message_ids.add(message_id)
+            message = session.get(Message, int(message_id))
+            if message is not None:
+                deleted_message_ids.append(int(message_id))
+                messages_to_delete.append(message)
+    if deleted_message_ids:
+        delete_message_resource_data(session, deleted_message_ids)
+        for message in messages_to_delete:
+            session.delete(message)
+    return {
+        "deleted_message_count": len(deleted_message_ids),
+        "deleted_message_ids": deleted_message_ids,
+    }
+
+
+def _apply_publish_lifecycle(
+    *,
+    row: PanTransferPublishRecord,
+    state: str,
+    operator: str | None,
+    retired_at: datetime,
+    clear_frontend_message: bool,
+    clear_current_share: bool,
+) -> None:
+    extra_json = dict(row.extra_json or {})
+    extra_json["archived"] = state != _PUBLISH_LIFECYCLE_ACTIVE
+    extra_json["archived_at"] = retired_at.isoformat() + "Z" if state != _PUBLISH_LIFECYCLE_ACTIVE else None
+    extra_json["archived_by"] = _normalize_text(operator, max_length=128) or None if state != _PUBLISH_LIFECYCLE_ACTIVE else None
+    extra_json["lifecycle"] = _build_publish_lifecycle_dict(
+        state=state,
+        archived=state != _PUBLISH_LIFECYCLE_ACTIVE,
+        retired_at=retired_at if state != _PUBLISH_LIFECYCLE_ACTIVE else None,
+        retired_by=operator if state != _PUBLISH_LIFECYCLE_ACTIVE else None,
+    )
+    if clear_frontend_message:
+        row.published_message_id = None
+        extra_json["last_frontend_removed_at"] = retired_at.isoformat() + "Z"
+    if clear_current_share:
+        extra_json["retired_current_share_url"] = _normalize_text(extra_json.get("current_share_url")) or None
+        extra_json["current_share_url"] = None
+        extra_json["current_share_validation"] = {
+            "status": "invalid",
+            "detail_message": "resource reclaimed",
+            "checked_at": retired_at.isoformat() + "Z",
+        }
+        row.source_new_link_target_id = None
+    row.operator = _normalize_text(operator, max_length=128) or row.operator
+    row.extra_json = extra_json
+
+
+async def _reclaim_publish_record_directory(
+    session: Session,
+    *,
+    row: PanTransferPublishRecord,
+    operator: str | None,
+    retired_at: datetime,
+) -> dict[str, Any]:
+    item = _get_publish_record_batch_item(session, row=row)
+    if item is None:
+        raise ValueError("source batch item not found, cannot reclaim resource")
+    if item.target_account_id is None:
+        raise ValueError("target account is missing, cannot reclaim resource")
+    staging_snapshot = _get_staging_snapshot(item)
+    if staging_snapshot is None:
+        raise ValueError("resource directory snapshot is missing, cannot reclaim resource")
+
+    account = session.get(PanTransferAccount, int(item.target_account_id))
+    if account is None:
+        raise LookupError("target account not found")
+    if not bool(account.is_enabled):
+        raise ValueError("target account is disabled")
+
+    resource_path = _resolve_publish_resource_path(item)
+    credential_value = decrypt_account_credential(account)
+    provider = get_pan_transfer_provider(str(item.platform or row.platform or ""))
+    try:
+        delete_result = await provider.delete_staging_target(
+            credential_value=credential_value,
+            account_name=_normalize_text(account.account_name, max_length=128),
+            staging_root=_normalize_text(staging_snapshot.get("root")),
+            staging_folder_name=_normalize_text(staging_snapshot.get("folder_name"), max_length=255),
+            staging_folder_id=_normalize_text(staging_snapshot.get("folder_id"), max_length=255) or None,
+        )
+    except Exception as exc:
+        error_detail = _describe_exception(exc)
+        _mark_account_validation(
+            account,
+            ok=False,
+            detail_message=error_detail,
+            payload=_extract_error_payload(exc),
+        )
+        session.add(account)
+        session.flush()
+        raise
+
+    _mark_account_validation(
+        account,
+        ok=True,
+        detail_message="Validated during resource reclaim",
+        payload=dict(delete_result.payload or {}),
+    )
+    session.add(account)
+
+    extra_json = dict(item.extra_json or {})
+    extra_json["reclaimed_resource"] = {
+        "operator": _normalize_text(operator, max_length=128) or None,
+        "retired_at": retired_at.isoformat() + "Z",
+        "staging_root": _normalize_text(staging_snapshot.get("root")),
+        "staging_folder_name": _normalize_text(staging_snapshot.get("folder_name"), max_length=255) or None,
+        "staging_folder_id": _normalize_text(staging_snapshot.get("folder_id"), max_length=255) or None,
+        "provider_payload": dict(delete_result.payload or {}),
+    }
+    extra_json.pop("staging_snapshot", None)
+    extra_json.pop("share_request", None)
+    extra_json["staging_root"] = None
+    extra_json["staging_folder_name"] = None
+    extra_json["staging_folder_id"] = None
+    item.extra_json = extra_json
+    item.new_share_url = None
+    item.new_link_target_id = None
+    item.validation_status = "invalid"
+    item.share_status = "failed"
+    session.add(item)
+    return {
+        "item_id": int(item.id),
+        "resource_path": resource_path,
+        "account_name": _normalize_text(account.account_name, max_length=128) or None,
+        "deleted": bool(delete_result.deleted),
+        "already_missing": bool(delete_result.already_missing),
+    }
+
+
 def _build_publish_record_payload(session: Session, *, row: PanTransferPublishRecord) -> dict[str, Any]:
     message = _get_publish_record_message(session, row=row)
     source_url = _extract_primary_url_from_links(getattr(message, "links", None)) or _normalize_text(row.source_url)
@@ -1098,15 +1494,107 @@ def archive_pan_transfer_publish_record(
     row = _get_publish_record_row(session, record_id=record_id)
     archived_at = utcnow()
     for candidate in _list_publish_record_group_rows(session, row=row):
-        extra_json = dict(candidate.extra_json or {})
-        extra_json["archived"] = True
-        extra_json["archived_at"] = archived_at.isoformat() + "Z"
-        extra_json["archived_by"] = _normalize_text(operator, max_length=128) or None
-        candidate.extra_json = extra_json
-        candidate.operator = _normalize_text(operator, max_length=128) or candidate.operator
+        current_state = _normalize_text(
+            _parse_publish_lifecycle(dict(candidate.extra_json or {})).get("state"),
+            max_length=32,
+        ).lower()
+        _apply_publish_lifecycle(
+            row=candidate,
+            state=_resolve_publish_lifecycle_transition(current_state, _PUBLISH_LIFECYCLE_ARCHIVED),
+            operator=operator,
+            retired_at=archived_at,
+            clear_frontend_message=False,
+            clear_current_share=False,
+        )
         session.add(candidate)
     session.flush()
     return _serialize_publish_record(session, row)
+
+
+async def retire_pan_transfer_publish_record(
+    session: Session,
+    *,
+    record_id: int,
+    mode: str,
+    operator: str | None,
+) -> dict[str, Any]:
+    ensure_runtime_storage_tables()
+    row = _get_publish_record_row(session, record_id=record_id)
+    normalized_mode = _normalize_text(mode, max_length=32).lower() or "archive"
+    state_by_mode = {
+        "archive": _PUBLISH_LIFECYCLE_ARCHIVED,
+        "offline_frontend": _PUBLISH_LIFECYCLE_FRONTEND_OFFLINE,
+        "reclaim_resource": _PUBLISH_LIFECYCLE_RESOURCE_RECLAIMED,
+    }
+    lifecycle_state = state_by_mode.get(normalized_mode)
+    if lifecycle_state is None:
+        raise ValueError("retire mode must be archive, offline_frontend, or reclaim_resource")
+
+    grouped_rows = _list_publish_record_group_rows(session, row=row)
+    retired_at = utcnow()
+    clear_frontend_message = normalized_mode in {"offline_frontend", "reclaim_resource"}
+    clear_current_share = normalized_mode == "reclaim_resource"
+    pause_follow_tasks = normalized_mode == "reclaim_resource"
+    reclaim_payload: dict[str, Any] | None = None
+
+    if clear_current_share:
+        latest_lifecycle = _parse_publish_lifecycle(dict(grouped_rows[0].extra_json or {}))
+        if _normalize_text(latest_lifecycle.get("state"), max_length=32).lower() != _PUBLISH_LIFECYCLE_RESOURCE_RECLAIMED:
+            reclaim_source_row = next(
+                (
+                    candidate
+                    for candidate in grouped_rows
+                    if _normalize_text(candidate.source_type, max_length=32) == "batch_item"
+                    and candidate.source_batch_item_id is not None
+                ),
+                grouped_rows[0],
+            )
+            reclaim_payload = await _reclaim_publish_record_directory(
+                session,
+                row=reclaim_source_row,
+                operator=operator,
+                retired_at=retired_at,
+            )
+
+    if clear_frontend_message:
+        _delete_publish_record_messages(session, rows=grouped_rows)
+        _cleanup_publish_record_bindings(
+            session,
+            rows=grouped_rows,
+            pause_follow_tasks=pause_follow_tasks,
+            operator=operator,
+        )
+
+    for candidate in grouped_rows:
+        current_state = _normalize_text(
+            _parse_publish_lifecycle(dict(candidate.extra_json or {})).get("state"),
+            max_length=32,
+        ).lower()
+        next_state = _resolve_publish_lifecycle_transition(current_state, lifecycle_state)
+        _apply_publish_lifecycle(
+            row=candidate,
+            state=next_state,
+            operator=operator,
+            retired_at=retired_at,
+            clear_frontend_message=clear_frontend_message or next_state in {
+                _PUBLISH_LIFECYCLE_FRONTEND_OFFLINE,
+                _PUBLISH_LIFECYCLE_RESOURCE_RECLAIMED,
+            },
+            clear_current_share=clear_current_share or next_state == _PUBLISH_LIFECYCLE_RESOURCE_RECLAIMED,
+        )
+        extra_json = dict(candidate.extra_json or {})
+        extra_json["last_retire_action"] = {
+            "mode": normalized_mode,
+            "operator": _normalize_text(operator, max_length=128) or None,
+            "retired_at": retired_at.isoformat() + "Z",
+            "reclaim": dict(reclaim_payload or {}),
+        }
+        candidate.extra_json = extra_json
+        session.add(candidate)
+
+    session.flush()
+    latest_row = _list_publish_record_group_rows(session, row=row)[0]
+    return _serialize_publish_record(session, latest_row)
 
 
 def delete_pan_transfer_publish_record(
@@ -1117,7 +1605,9 @@ def delete_pan_transfer_publish_record(
     ensure_runtime_storage_tables()
     row = _get_publish_record_row(session, record_id=record_id)
     platform = _normalize_text(row.platform, max_length=64)
-    for candidate in _list_publish_record_group_rows(session, row=row):
+    deleted_rows = _list_publish_record_group_rows(session, row=row)
+    _cleanup_deleted_publish_record_bindings(session, deleted_rows=deleted_rows)
+    for candidate in deleted_rows:
         session.delete(candidate)
     session.flush()
     return {
