@@ -30,7 +30,10 @@ from .follow_tasks import (
     PAN_TRANSFER_SYNC_STATE_SYNC_QUEUED,
     _append_follow_task_log,
     _get_follow_task,
+    _normalize_source_message_snapshot,
     _normalize_optional_int,
+    _parse_datetime,
+    _serialize_json_value,
     _normalize_text,
     _serialize_follow_task,
     _sync_follow_task_publish_binding,
@@ -164,7 +167,7 @@ def _resolve_follow_sync_source(
     *,
     task: PanTransferSyncTask,
     source_kind: str,
-) -> tuple[LinkTarget, str, str | None]:
+) -> tuple[LinkTarget, str, dict[str, Any]]:
     if source_kind == "candidate":
         link_target_id = _normalize_optional_int(task.last_candidate_link_target_id)
         if link_target_id is None:
@@ -172,8 +175,17 @@ def _resolve_follow_sync_source(
         source_target = session.get(LinkTarget, int(link_target_id))
         if source_target is None:
             raise LookupError("candidate source link target not found")
-        source_title = _normalize_text(task.last_candidate_title, max_length=255) or _normalize_text(task.topic_title, max_length=255) or None
-        return source_target, _normalize_text(source_target.original_url), source_title
+        source_snapshot = _normalize_source_message_snapshot(
+            {
+                "title": _normalize_text(task.last_candidate_title, max_length=255)
+                or _normalize_text(task.topic_title, max_length=255)
+                or None,
+                "description": None,
+                "tags": [],
+                "message_time": task.last_candidate_message_time,
+            }
+        )
+        return source_target, _normalize_text(source_target.original_url), source_snapshot
 
     link_target_id = _normalize_optional_int(task.source_link_target_id)
     if link_target_id is None:
@@ -181,8 +193,14 @@ def _resolve_follow_sync_source(
     source_target = session.get(LinkTarget, int(link_target_id))
     if source_target is None:
         raise LookupError("source link target not found")
-    source_title = _normalize_text(task.work_title, max_length=255) or _normalize_text(task.topic_title, max_length=255) or None
-    return source_target, _normalize_text(source_target.original_url), source_title
+    source_snapshot = _normalize_source_message_snapshot(dict(dict(task.extra_json or {}).get("source_message_snapshot") or {}))
+    if not source_snapshot.get("title"):
+        source_snapshot["title"] = (
+            _normalize_text(task.work_title, max_length=255)
+            or _normalize_text(task.topic_title, max_length=255)
+            or None
+        )
+    return source_target, _normalize_text(source_target.original_url), source_snapshot
 
 
 def create_pan_transfer_follow_sync_batch(
@@ -206,7 +224,11 @@ def create_pan_transfer_follow_sync_batch(
 
     source_kind = _normalize_source_kind((payload or {}).get("source_kind"))
     sync_mode = _normalize_sync_mode((payload or {}).get("sync_mode"))
-    source_target, source_url, source_title = _resolve_follow_sync_source(session, task=task, source_kind=source_kind)
+    source_target, source_url, source_message_snapshot = _resolve_follow_sync_source(
+        session,
+        task=task,
+        source_kind=source_kind,
+    )
     if not source_url:
         raise ValueError("source_url cannot be empty")
 
@@ -253,14 +275,17 @@ def create_pan_transfer_follow_sync_batch(
         link_target_id=int(source_target.id),
         target_account_id=int(account.id),
         platform=_normalize_text(task.platform, max_length=64),
-        short_title=_normalize_text(source_title, max_length=255)
+        short_title=_normalize_text(source_message_snapshot.get("title"), max_length=255)
         or _normalize_text(task.task_name, max_length=255)
         or _normalize_text(task.topic_title, max_length=255),
         original_url=source_url,
         source_message_count=1,
         source_ref_count=1,
-        latest_message_title=_normalize_text(source_title, max_length=255) or None,
-        latest_message_time=task.last_candidate_message_time if source_kind == "candidate" else task.last_checked_at,
+        latest_message_title=_normalize_text(source_message_snapshot.get("title"), max_length=255) or None,
+        latest_message_time=(
+            _parse_datetime(source_message_snapshot.get("message_time"))
+            or (task.last_candidate_message_time if source_kind == "candidate" else task.last_checked_at)
+        ),
         latest_link_health=_normalize_text(task.source_link_status if source_kind == "current" else "unknown", max_length=32) or "unknown",
         transfer_status=PAN_TRANSFER_ITEM_STATUS_QUEUED,
         share_status=PAN_TRANSFER_SHARE_STATUS_PENDING,
@@ -272,11 +297,15 @@ def create_pan_transfer_follow_sync_batch(
             "recommended_account_name": _normalize_text(account.account_name, max_length=128) or None,
             "path_strategy": path_strategy,
             "resolved_paths": resolved_paths,
-            "source_message_snapshot": {
-                "title": _normalize_text(source_title, max_length=255) or _normalize_text(task.topic_title, max_length=255) or None,
-                "description": None,
-                "tags": [],
-            },
+            "source_message_snapshot": _normalize_source_message_snapshot(
+                {
+                    **source_message_snapshot,
+                    "message_time": source_message_snapshot.get("message_time")
+                    or _serialize_json_value(
+                        task.last_candidate_message_time if source_kind == "candidate" else task.last_checked_at
+                    ),
+                }
+            ),
             "follow_sync_context": {
                 "follow_task_id": int(task.id),
                 "trigger_mode": trigger_mode,
@@ -396,6 +425,11 @@ def handle_follow_sync_item_success(
         task.last_candidate_message_time = None
 
     extra_json = dict(task.extra_json or {})
+    source_message_snapshot = _normalize_source_message_snapshot(
+        dict(dict(item.extra_json or {}).get("source_message_snapshot") or {})
+    )
+    if source_message_snapshot:
+        extra_json["source_message_snapshot"] = source_message_snapshot
     extra_json["last_sync"] = {
         "batch_id": int(item.batch_id),
         "batch_item_id": int(item.id),

@@ -241,8 +241,28 @@ def _set_task_extra_section(task: PanTransferSyncTask, key: str, value: dict[str
     task.extra_json = extra_json
 
 
+def _normalize_source_message_snapshot(value: Mapping[str, Any] | None) -> dict[str, Any]:
+    raw = dict(value or {})
+    normalized_tags = [
+        tag
+        for tag in [_normalize_text(item, max_length=64) for item in list(raw.get("tags") or [])]
+        if tag
+    ]
+    message_time_value = raw.get("message_time")
+    normalized_message_time = None
+    if message_time_value not in (None, ""):
+        normalized_message_time = _serialize_json_value(_parse_datetime(message_time_value) or message_time_value)
+    snapshot = {
+        "title": _normalize_text(raw.get("title"), max_length=255) or None,
+        "description": _normalize_text(raw.get("description"), max_length=2000) or None,
+        "tags": normalized_tags,
+        "message_time": normalized_message_time,
+    }
+    return {key: value for key, value in snapshot.items() if value not in (None, [], "")}
+
+
 def _collect_follow_reference_texts(task: PanTransferSyncTask) -> list[str]:
-    source_message_snapshot = _get_task_extra_section(task, "source_message_snapshot")
+    source_message_snapshot = _normalize_source_message_snapshot(_get_task_extra_section(task, "source_message_snapshot"))
     texts = [
         _normalize_text(source_message_snapshot.get("title"), max_length=255),
         _normalize_text(task.work_title, max_length=255),
@@ -260,7 +280,7 @@ def _build_follow_identity_fallback(task: PanTransferSyncTask) -> dict[str, Any]
     aliases = _dedupe_texts(reference_titles + cleaned_titles, max_items=6)
     latest_episode = _extract_follow_episode_hint(*reference_titles)
     season = _extract_follow_season_hint(*reference_titles)
-    source_message_snapshot = _get_task_extra_section(task, "source_message_snapshot")
+    source_message_snapshot = _normalize_source_message_snapshot(_get_task_extra_section(task, "source_message_snapshot"))
     reference_message_time = _serialize_json_value(
         _parse_datetime(source_message_snapshot.get("message_time")) or task.last_candidate_message_time
     )
@@ -295,7 +315,7 @@ def _build_follow_identity_fallback(task: PanTransferSyncTask) -> dict[str, Any]
 
 
 def _build_follow_identity_user_prompt(task: PanTransferSyncTask) -> str:
-    source_message_snapshot = _get_task_extra_section(task, "source_message_snapshot")
+    source_message_snapshot = _normalize_source_message_snapshot(_get_task_extra_section(task, "source_message_snapshot"))
     reference_titles = _collect_follow_reference_texts(task)
     payload = {
         "platform": _normalize_text(task.platform, max_length=64) or None,
@@ -620,6 +640,7 @@ def _serialize_follow_task(row: PanTransferSyncTask) -> dict[str, Any]:
     identity_snapshot = dict(extra_json.get("identity_snapshot") or {})
     candidate_assessment = dict(extra_json.get("candidate_assessment") or {})
     candidate_recall = dict(extra_json.get("candidate_recall") or {})
+    source_message_snapshot = _normalize_source_message_snapshot(dict(extra_json.get("source_message_snapshot") or {}))
     return {
         "id": int(row.id),
         "task_name": str(row.task_name or ""),
@@ -631,6 +652,7 @@ def _serialize_follow_task(row: PanTransferSyncTask) -> dict[str, Any]:
         "source_link_target_id": int(row.source_link_target_id) if row.source_link_target_id is not None else None,
         "source_url": str(row.source_url or ""),
         "source_share_key": str(row.source_share_key or "") or None,
+        "source_message_title": _normalize_text(source_message_snapshot.get("title"), max_length=255) or None,
         "topic_key": str(row.topic_key or ""),
         "topic_title": str(row.topic_title or ""),
         "work_id": int(row.work_id) if row.work_id is not None else None,
@@ -803,7 +825,7 @@ def create_pan_transfer_follow_task_from_batch_item(
     resolved_paths = dict(extra_json.get("resolved_paths") or {})
     path_strategy = dict(extra_json.get("path_strategy") or {})
     share_validation = dict(extra_json.get("share_validation") or {})
-    source_message_snapshot = dict(extra_json.get("source_message_snapshot") or {})
+    source_message_snapshot = _normalize_source_message_snapshot(dict(extra_json.get("source_message_snapshot") or {}))
     if not source_message_snapshot.get("message_time") and item.latest_message_time is not None:
         source_message_snapshot["message_time"] = _serialize_json_value(item.latest_message_time)
     topic_payload = _build_follow_topic_payload(session, item=item)
@@ -872,7 +894,7 @@ def create_pan_transfer_follow_task_from_batch_item(
         check_interval_minutes=interval_minutes,
         next_check_at=utcnow(),
         extra_json={
-            "source_message_snapshot": source_message_snapshot,
+            "source_message_snapshot": _normalize_source_message_snapshot(source_message_snapshot),
             "path_strategy": path_strategy,
             "resolved_paths": resolved_paths,
             "publish_binding": _build_follow_publish_binding_snapshot(publish_record),
@@ -1225,7 +1247,7 @@ def _get_follow_reference_message_time(task: PanTransferSyncTask, snapshot: dict
     parsed = _parse_datetime(snapshot.get("reference_message_time"))
     if parsed is not None:
         return parsed
-    source_message_snapshot = _get_task_extra_section(task, "source_message_snapshot")
+    source_message_snapshot = _normalize_source_message_snapshot(_get_task_extra_section(task, "source_message_snapshot"))
     parsed = _parse_datetime(source_message_snapshot.get("message_time"))
     if parsed is not None:
         return parsed

@@ -191,7 +191,7 @@ const getFollowStatusSummary = (record: PanTransferFollowTaskItem) => {
 }
 
 const getFollowTaskTitle = (record: PanTransferFollowTaskItem) =>
-  record.identity_snapshot?.core_title || record.work_title || record.topic_title || record.task_name || `追更任务 #${record.id}`
+  record.source_message_title || record.work_title || record.topic_title || record.task_name || `追更任务 #${record.id}`
 
 const getFollowCandidateAssessmentSummary = (record: PanTransferFollowTaskItem) => {
   const assessment = record.candidate_assessment

@@ -766,6 +766,7 @@ class PanTransferFollowTaskItem(PanTransferBaseModel):
     source_link_target_id: int | None = None
     source_url: str
     source_share_key: str | None = None
+    source_message_title: str | None = None
     topic_key: str
     topic_title: str
     work_id: int | None = None

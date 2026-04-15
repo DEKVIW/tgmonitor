@@ -373,6 +373,7 @@ export interface PanTransferFollowTaskItem {
   source_link_target_id?: number | null
   source_url: string
   source_share_key?: string | null
+  source_message_title?: string | null
   topic_key: string
   topic_title: string
   work_id?: number | null
