@@ -60,6 +60,23 @@
   gap: 0;
 }
 
+.filters-search-clear-button {
+  flex: 0 0 auto;
+  color: rgba(22, 50, 74, 0.54);
+}
+
+.filters-sort-toggle {
+  flex: 0 0 auto;
+  background: rgba(231, 238, 245, 0.9);
+}
+
+.filters-sort-toggle .ant-segmented-item-label {
+  min-height: 30px;
+  padding-inline: 10px;
+  font-size: 12px;
+  line-height: 30px;
+}
+
 .toolbar-icon-button {
   width: 32px;
   min-width: 32px;
@@ -134,7 +151,7 @@
   .filters-search-shell {
     min-height: 40px;
     padding: 0 7px 0 11px;
-    gap: 8px;
+    gap: 6px;
     border-radius: 13px;
   }
 
@@ -151,6 +168,10 @@
   .filters-advanced-grid {
     grid-template-columns: minmax(0, 1fr);
     gap: 16px;
+  }
+
+  .filters-sort-toggle .ant-segmented-item-label {
+    padding-inline: 8px;
   }
 }
 

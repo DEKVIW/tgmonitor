@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
@@ -79,6 +79,7 @@ def _build_message_response(
 @router.get("", response_model=MessageListResponse, summary="获取消息列表")
 async def get_messages(
     request: Request,
+    sort_mode: Literal["relevance", "newest"] = Query("newest", description="search result sort mode"),
     search_query: Optional[str] = Query(None, description="搜索关键词（支持多关键词，空格分隔）"),
     time_range: str = Query("最近24小时", description="时间范围"),
     selected_tags: Optional[List[str]] = Query(None, description="选中的标签列表"),
@@ -111,6 +112,7 @@ async def get_messages(
         messages, total, max_page = get_filtered_messages(
             db=db,
             search_query=search_query,
+            sort_mode=sort_mode,
             time_range=time_range,
             selected_tags=selected_tags or [],
             selected_netdisks=selected_netdisks or [],

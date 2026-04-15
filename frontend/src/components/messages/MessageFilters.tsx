@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Alert, Button, Input, InputNumber, Modal, Select, Space, Tag, Tooltip } from 'antd'
-import { ClearOutlined, FilterOutlined, SearchOutlined } from '@ant-design/icons'
+import { Alert, Button, Input, InputNumber, Modal, Segmented, Select, Space, Tag, Tooltip } from 'antd'
+import { ClearOutlined, CloseCircleFilled, FilterOutlined, SearchOutlined } from '@ant-design/icons'
 import { useMessageStore } from '@/store/messageStore'
 import { useAuthStore } from '@/store/authStore'
 import TurnstileWidget from '@/components/security/TurnstileWidget'
@@ -8,7 +8,7 @@ import { verifySearchTurnstile } from '@/api/security'
 import { trackEvent } from '@/utils/analytics'
 import { NETDISK_TYPES, TIME_RANGES } from '@/utils/constants'
 import { getTagStats } from '@/api/messages'
-import { MessageFilters as MessageFiltersState, TagStatsResponse } from '@/types/message'
+import { MessageFilters as MessageFiltersState, MessageSortMode, TagStatsResponse } from '@/types/message'
 import {
   clearSearchChallengeClearance,
   isSearchChallengeRequiredForAudience,
@@ -21,6 +21,10 @@ import './MessageFilters.css'
 const { Option } = Select
 
 const DEFAULT_REFRESH_INTERVAL = 60
+const SORT_MODE_OPTIONS: { label: string; value: MessageSortMode }[] = [
+  { label: '综合排序', value: 'relevance' },
+  { label: '最新优先', value: 'newest' },
+]
 
 const sanitizeHiddenFilters = (value: MessageFiltersState): MessageFiltersState => ({
   ...value,
@@ -98,6 +102,7 @@ const MessageFilters = ({
     nextRefreshInterval: number = refreshInterval
   ) => ({
     audience,
+    sort_mode: nextFilters.sort_mode || 'newest',
     time_range: nextFilters.time_range || '',
     tags_count: nextFilters.selected_tags?.length || 0,
     netdisk_count: nextFilters.selected_netdisks?.length || 0,
@@ -244,6 +249,32 @@ const MessageFilters = ({
     setAdvancedOpen(false)
   }
 
+  const handleClearSearch = () => {
+    if (!searchValue && !filters.search_query) {
+      return
+    }
+
+    setSearchValue('')
+    setPendingSearchValue(null)
+    setChallengeOpen(false)
+    setChallengeError('')
+    applySearch('')
+    trackEvent('search_clear', { audience })
+  }
+
+  const handleSortModeChange = (value: MessageSortMode) => {
+    if ((filters.sort_mode || 'newest') === value) {
+      return
+    }
+
+    setFilters({ sort_mode: value })
+    trackEvent('search_sort_change', {
+      audience,
+      sort_mode: value,
+      has_query: Boolean((filters.search_query || '').trim()),
+    })
+  }
+
   const applyAdvanced = () => {
     const nextFilters = sanitizeHiddenFilters(draft)
     const nextRefreshInterval = normalizeRefreshInterval(draftRefreshInterval)
@@ -304,6 +335,25 @@ const MessageFilters = ({
           onPressEnter={() => handleSearch(searchValue)}
           onChange={(event) => setSearchValue(event.target.value)}
           disabled={disabled}
+        />
+        {searchValue || filters.search_query ? (
+          <Tooltip title="清空搜索">
+            <Button
+              type="text"
+              className="toolbar-icon-button filters-search-clear-button"
+              icon={<CloseCircleFilled />}
+              onClick={handleClearSearch}
+              disabled={disabled}
+            />
+          </Tooltip>
+        ) : null}
+        <Segmented
+          className="filters-sort-toggle"
+          options={SORT_MODE_OPTIONS}
+          value={filters.sort_mode || 'newest'}
+          onChange={(value) => handleSortModeChange(value as MessageSortMode)}
+          disabled={disabled}
+          size="small"
         />
         <div className="filters-search-actions">
           <Tooltip title="高级筛选">

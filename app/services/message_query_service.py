@@ -16,6 +16,9 @@ from app.models.models import Message
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_MESSAGE_SORT_MODE = "newest"
+MESSAGE_SORT_MODES = frozenset({"relevance", "newest"})
+
 TIME_RANGE_DELTAS = {
     "最近1小时": timedelta(hours=1),
     "最近24小时": timedelta(days=1),
@@ -80,8 +83,15 @@ def _build_search_rank_expression(search_terms: List[str]):
     return rank
 
 
-def _get_message_order_by(search_terms: List[str]):
-    if not search_terms:
+def _normalize_sort_mode(sort_mode: Optional[str]) -> str:
+    if sort_mode in MESSAGE_SORT_MODES:
+        return sort_mode
+    return DEFAULT_MESSAGE_SORT_MODE
+
+
+def _get_message_order_by(search_terms: List[str], sort_mode: Optional[str]):
+    normalized_sort_mode = _normalize_sort_mode(sort_mode)
+    if normalized_sort_mode == "newest" or not search_terms:
         return (Message.timestamp.desc(),)
     return (_build_search_rank_expression(search_terms).desc(), Message.timestamp.desc())
 
@@ -89,6 +99,7 @@ def _get_message_order_by(search_terms: List[str]):
 def get_filtered_messages(
     db: Session,
     search_query: Optional[str] = None,
+    sort_mode: Optional[str] = DEFAULT_MESSAGE_SORT_MODE,
     time_range: str = "最近24小时",
     selected_tags: Optional[List[str]] = None,
     selected_netdisks: Optional[List[str]] = None,
@@ -132,7 +143,7 @@ def get_filtered_messages(
             query = query.filter(Message.links.isnot(None))
 
         start_idx = (page - 1) * page_size
-        order_by_clauses = _get_message_order_by(search_terms)
+        order_by_clauses = _get_message_order_by(search_terms, sort_mode)
         messages_page = query.order_by(*order_by_clauses).offset(start_idx).limit(page_size + 1).all()
 
         has_more = len(messages_page) > page_size

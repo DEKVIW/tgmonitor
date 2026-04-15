@@ -36,8 +36,11 @@ export interface MessageListResponse {
   max_page: number
 }
 
+export type MessageSortMode = 'relevance' | 'newest'
+
 export interface MessageFilters {
   search_query?: string
+  sort_mode?: MessageSortMode
   time_range?: string
   selected_tags?: string[]
   selected_netdisks?: string[]

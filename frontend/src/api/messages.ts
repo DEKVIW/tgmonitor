@@ -15,6 +15,7 @@ export const getMessages = async (filters: MessageFilters): Promise<MessageListR
   const params = new URLSearchParams()
   
   if (filters.search_query) params.append('search_query', filters.search_query)
+  if (filters.sort_mode) params.append('sort_mode', filters.sort_mode)
   if (filters.time_range) params.append('time_range', filters.time_range)
   if (filters.selected_tags?.length) {
     filters.selected_tags.forEach(tag => params.append('selected_tags', tag))

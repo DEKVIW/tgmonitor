@@ -17,6 +17,7 @@ interface MessageState {
 
 const defaultFilters: MessageFilters = {
   search_query: '',
+  sort_mode: 'newest',
   time_range: '最近24小时',
   selected_tags: [],
   selected_netdisks: [],
