@@ -1,26 +1,29 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
-  Alert,
   Button,
   Card,
   Col,
+  Empty,
   Form,
   Input,
   InputNumber,
   Modal,
+  Popconfirm,
   Row,
   Select,
   Space,
   Switch,
   Table,
   Tag,
+  Tooltip,
   Typography,
   message,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
-import { DeleteOutlined, ExperimentOutlined, PlusOutlined, ReloadOutlined, SettingOutlined } from '@ant-design/icons'
+import { ApiOutlined, DeleteOutlined, ExperimentOutlined, PlusOutlined, ReloadOutlined, SettingOutlined } from '@ant-design/icons'
 
 import {
+  clearAiCallEvents,
   createAiProvider,
   deleteAiProvider,
   getAiCenterOverview,
@@ -43,6 +46,8 @@ import type {
   AiCenterRouteUpsertRequest,
 } from '@/types/aiCenter'
 import { formatServerDateTime } from '@/utils/dateTime'
+import './Admin.css'
+import './AiCenterAdminRuntime.css'
 
 const { Title, Paragraph, Text } = Typography
 
@@ -57,10 +62,40 @@ const PROVIDER_HEALTH_COLOR: Record<string, string> = {
   unknown: 'default',
 }
 
+const PROVIDER_HEALTH_LABELS: Record<string, string> = {
+  healthy: '健康',
+  degraded: '波动',
+  unknown: '未知',
+}
+
 const EVENT_STATUS_COLOR: Record<string, string> = {
   success: 'success',
   error: 'error',
   skipped: 'default',
+}
+
+const EVENT_STATUS_LABELS: Record<string, string> = {
+  success: '成功',
+  error: '失败',
+  skipped: '跳过',
+}
+
+const API_MODE_LABELS: Record<string, string> = {
+  auto: '自动识别',
+  chat_completions: '对话补全',
+  responses: '统一响应',
+}
+
+const OUTPUT_MODE_LABELS: Record<string, string> = {
+  text: '文本',
+  json: 'JSON',
+}
+
+const ROUTE_REASON_LABELS: Record<string, string> = {
+  route_disabled: '路由已停用',
+  route_missing: '路由不存在',
+  no_enabled_step: '没有启用步骤',
+  no_enabled_provider_step: '没有可用的提供方步骤',
 }
 
 const CAPABILITY_OPTIONS = [
@@ -156,12 +191,35 @@ const getOptimizationGoalLabel = (value?: string | null) => OPTIMIZATION_GOAL_LA
 
 const getCapabilityLabel = (value: string) => CAPABILITY_LABELS[value] || value
 
+const getProviderHealthLabel = (value?: string | null) => PROVIDER_HEALTH_LABELS[value || ''] || value || '-'
+
+const getEventStatusLabel = (value?: string | null) => EVENT_STATUS_LABELS[value || ''] || value || '-'
+
+const getApiModeLabel = (value?: string | null) => API_MODE_LABELS[value || ''] || value || '-'
+
+const getOutputModeLabel = (value?: string | null) => OUTPUT_MODE_LABELS[value || ''] || value || '-'
+
+const getRouteReasonLabel = (value?: string | null) => ROUTE_REASON_LABELS[value || ''] || value || '请检查步骤与提供方状态'
+
+const renderTextWithTooltip = (value?: string | null, className: string = 'ai-center-ellipsis') => {
+  const text = value?.trim() ? value : '-'
+  if (text === '-') {
+    return <span className={className}>-</span>
+  }
+  return (
+    <Tooltip title={text}>
+      <span className={className}>{text}</span>
+    </Tooltip>
+  )
+}
+
 const AiCenterAdminRuntime = () => {
   const [overview, setOverview] = useState<AiCenterOverviewResponse | null>(null)
   const [providers, setProviders] = useState<AiCenterProviderItem[]>([])
   const [routes, setRoutes] = useState<AiCenterRouteItem[]>([])
   const [events, setEvents] = useState<AiCenterCallEventItem[]>([])
   const [loading, setLoading] = useState(true)
+  const [eventClearing, setEventClearing] = useState(false)
   const [providerModalOpen, setProviderModalOpen] = useState(false)
   const [providerSaving, setProviderSaving] = useState(false)
   const [providerTestingId, setProviderTestingId] = useState<number | null>(null)
@@ -234,8 +292,35 @@ const AiCenterAdminRuntime = () => {
     [routes]
   )
 
+  const summaryItems = useMemo(
+    () => [
+      {
+        label: '提供方',
+        value: `${overview?.enabled_providers || 0}/${overview?.total_providers || 0}`,
+        hint: overview?.default_provider_label ? `默认：${overview.default_provider_label}` : '未设置默认提供方',
+      },
+      {
+        label: '可用路由',
+        value: `${overview?.ready_routes || 0}/${overview?.total_routes || 0}`,
+        hint: routes.length ? `已配置 ${routes.length} 条业务路由` : '暂无路由配置',
+      },
+      {
+        label: '24 小时成功',
+        value: String(overview?.recent_success_count_24h || 0),
+        hint: '最近成功调用次数',
+      },
+      {
+        label: '24 小时失败',
+        value: String(overview?.recent_failure_count_24h || 0),
+        hint: '最近失败调用次数',
+      },
+    ],
+    [overview, routes.length]
+  )
+
   const openCreateProvider = () => {
     setEditingProvider(null)
+    providerForm.resetFields()
     providerForm.setFieldsValue(emptyProviderDraft())
     setProviderModalOpen(true)
   }
@@ -317,19 +402,19 @@ const AiCenterAdminRuntime = () => {
     try {
       const result = await testAiProvider(record.id)
       Modal.info({
-        title: `Provider 测试成功: ${record.display_name}`,
+        title: `测试通过：${record.display_name}`,
         width: 640,
         content: (
           <Space direction="vertical" size={8} style={{ width: '100%' }}>
-            <Paragraph>{`模型: ${result.model_id || '-'}`}</Paragraph>
-            <Paragraph>{`模式: ${result.used_api_mode || '-'}`}</Paragraph>
-            <Paragraph copyable>{result.text || '(空返回)'}</Paragraph>
+            <Paragraph>{`模型：${result.model_id || '-'}`}</Paragraph>
+            <Paragraph>{`接口模式：${getApiModeLabel(result.used_api_mode)}`}</Paragraph>
+            <Paragraph copyable={{ text: result.text }}>{result.text || '(空返回)'}</Paragraph>
           </Space>
         ),
       })
       await loadAll()
     } catch (error: any) {
-      message.error(getErrorMessage(error, '测试 provider 失败'))
+      message.error(getErrorMessage(error, '测试提供方失败'))
     } finally {
       setProviderTestingId(null)
     }
@@ -337,9 +422,11 @@ const AiCenterAdminRuntime = () => {
 
   const handleDeleteProvider = async (record: AiCenterProviderItem) => {
     Modal.confirm({
-      title: `删除 Provider: ${record.display_name}`,
-      content: '删除前请确认这个 provider 没有被路由使用。',
+      title: `删除提供方：${record.display_name}`,
+      content: '删除前请确认这个提供方没有被任何路由步骤使用。',
       okButtonProps: { danger: true },
+      okText: '删除',
+      cancelText: '取消',
       onOk: async () => {
         setProviderDeletingId(record.id)
         try {
@@ -347,7 +434,7 @@ const AiCenterAdminRuntime = () => {
           message.success('AI 提供方已删除')
           await loadAll()
         } catch (error: any) {
-          message.error(getErrorMessage(error, '删除 provider 失败'))
+          message.error(getErrorMessage(error, '删除提供方失败'))
         } finally {
           setProviderDeletingId(null)
         }
@@ -411,15 +498,13 @@ const AiCenterAdminRuntime = () => {
     try {
       const result = await testAiRoute(testingRoute.route_key, values)
       Modal.info({
-        title: `路由测试成功: ${testingRoute.display_name}`,
+        title: `路由测试通过：${testingRoute.display_name}`,
         width: 820,
         content: (
           <Space direction="vertical" size={12} style={{ width: '100%' }}>
-            <Paragraph>{`选择摘要: ${result.selection_summary || '-'}`}</Paragraph>
-            <Paragraph>{`Provider: ${result.provider_label || '-'}`}</Paragraph>
-            <Paragraph>{`模型: ${result.model_id || '-'}`}</Paragraph>
-            <Paragraph>{`模式: ${result.used_api_mode || '-'}`}</Paragraph>
-            <Paragraph>{`耗时: ${result.duration_ms || 0} ms`}</Paragraph>
+            <Paragraph>{`选中链路：${result.provider_label || '-'} / ${result.model_id || '-'}`}</Paragraph>
+            <Paragraph>{`接口模式：${getApiModeLabel(result.used_api_mode)}`}</Paragraph>
+            <Paragraph>{`耗时：${result.duration_ms || 0} ms`}</Paragraph>
             <Paragraph copyable={{ text: result.text }}>{result.text || '(空返回)'}</Paragraph>
             {result.attempt_trace.length ? (
               <Space direction="vertical" size={8} style={{ width: '100%' }}>
@@ -427,13 +512,12 @@ const AiCenterAdminRuntime = () => {
                 {result.attempt_trace.map((item, index) => (
                   <Card key={`${item.provider_id || 'p'}-${item.model_id || 'm'}-${index}`} size="small">
                     <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                      <Text>{`#${item.attempt_index || index + 1} ${item.provider_label || '-'} / ${item.model_id || 'auto'}`}</Text>
+                      <Text>{`#${item.attempt_index || index + 1} ${item.provider_label || '-'} / ${item.model_id || '自动'}`}</Text>
                       <Text type={item.status === 'error' ? 'danger' : 'secondary'}>
-                        {`${item.status || '-'} · ${item.duration_ms || 0} ms`}
+                        {`${getEventStatusLabel(item.status)} · ${item.duration_ms || 0} ms`}
                       </Text>
-                      <Text type="secondary">{item.selection_summary || '-'}</Text>
                       {Array.isArray(item.candidate_reasons) && item.candidate_reasons.length ? (
-                        <Text type="secondary">{`打分依据: ${item.candidate_reasons.join(', ')}`}</Text>
+                        <Text type="secondary">{`打分依据：${item.candidate_reasons.join('，')}`}</Text>
                       ) : null}
                       {item.error_message ? <Text type="danger">{item.error_message}</Text> : null}
                     </Space>
@@ -453,52 +537,90 @@ const AiCenterAdminRuntime = () => {
     }
   }
 
+  const handleClearEvents = async () => {
+    setEventClearing(true)
+    try {
+      const result = await clearAiCallEvents()
+      message.success(`已清空 ${result.deleted_count} 条调用记录`)
+      await loadAll()
+    } catch (error: any) {
+      message.error(getErrorMessage(error, '清空调用记录失败'))
+    } finally {
+      setEventClearing(false)
+    }
+  }
+
   const providerColumns: ColumnsType<AiCenterProviderItem> = [
     {
-      title: 'Provider',
+      title: '提供方',
       key: 'provider',
+      width: 240,
       render: (_, record) => (
-        <Space direction="vertical" size={2}>
-          <Space size={6}>
+        <div className="ai-center-cell-stack">
+          <div className="ai-center-cell-primary-row">
             <Text strong>{record.display_name}</Text>
             {record.is_default ? <Tag color="processing">默认</Tag> : null}
             {!record.is_enabled ? <Tag>停用</Tag> : null}
-          </Space>
-          <Text type="secondary">{record.provider_key}</Text>
-          <Text type="secondary">{record.base_url || '-'}</Text>
-        </Space>
+          </div>
+          {renderTextWithTooltip(record.provider_key, 'ai-center-ellipsis ai-center-cell-secondary')}
+        </div>
+      ),
+    },
+    {
+      title: '连接信息',
+      key: 'connection',
+      width: 320,
+      render: (_, record) => (
+        <div className="ai-center-cell-stack">
+          <span className="ai-center-cell-secondary">{`接口模式：${getApiModeLabel(record.api_mode)}`}</span>
+          {renderTextWithTooltip(record.base_url, 'ai-center-ellipsis ai-center-cell-secondary')}
+        </div>
       ),
     },
     {
       title: '模型池',
       key: 'models',
-      width: 260,
+      width: 360,
       render: (_, record) => (
-        <Space direction="vertical" size={6}>
-          <Text type="secondary">{`启用 ${record.enabled_model_count}/${record.model_count}`}</Text>
-          <Text type="secondary">{record.preferred_model_id ? `首选 ${record.preferred_model_id}` : '未设置首选模型'}</Text>
-          <Space wrap size={[4, 4]}>
-            {record.models.slice(0, 3).map((model) => (
+        <div className="ai-center-cell-stack">
+          <span className="ai-center-cell-secondary">{`启用 ${record.enabled_model_count}/${record.model_count}`}</span>
+          <span className="ai-center-cell-secondary">{record.preferred_model_id ? `首选：${record.preferred_model_id}` : '首选：未设置'}</span>
+          <div className="ai-center-tag-row">
+            {record.models.slice(0, 4).map((model) => (
               <Tag key={`${record.id}-${model.model_id}`} color={model.is_enabled ? 'blue' : 'default'}>
                 {model.label || model.model_id}
               </Tag>
             ))}
-            {record.models.length > 3 ? <Tag>{`+${record.models.length - 3}`}</Tag> : null}
-          </Space>
-        </Space>
+            {record.models.length > 4 ? <Tag>{`+${record.models.length - 4}`}</Tag> : null}
+          </div>
+        </div>
       ),
     },
     {
       title: '状态',
       key: 'status',
-      width: 220,
+      width: 260,
       render: (_, record) => (
-        <Space direction="vertical" size={2}>
-          <Tag color={PROVIDER_HEALTH_COLOR[record.health_status] || 'default'}>{record.health_status || 'unknown'}</Tag>
-          <Text type="secondary">{record.cooldown_until ? `冷却至 ${formatDateTime(record.cooldown_until)}` : '当前可参与调度'}</Text>
-          <Text type="secondary">{record.last_success_at ? `最近成功 ${formatDateTime(record.last_success_at)}` : '暂无成功记录'}</Text>
-          {record.last_error_message ? <Text type="danger">{record.last_error_message}</Text> : null}
-        </Space>
+        <div className="ai-center-cell-stack">
+          <div className="ai-center-tag-row">
+            <Tag color={PROVIDER_HEALTH_COLOR[record.health_status] || 'default'}>
+              {getProviderHealthLabel(record.health_status)}
+            </Tag>
+          </div>
+          <span className="ai-center-cell-secondary">
+            {record.cooldown_until ? `冷却至 ${formatDateTime(record.cooldown_until)}` : '当前可参与调度'}
+          </span>
+          <span className="ai-center-cell-secondary">
+            {record.last_success_at ? `最近成功：${formatDateTime(record.last_success_at)}` : '暂无成功记录'}
+          </span>
+          {record.last_error_message ? (
+            <Tooltip title={record.last_error_message}>
+              <Text type="danger" className="ai-center-line-clamp-2">
+                {record.last_error_message}
+              </Text>
+            </Tooltip>
+          ) : null}
+        </div>
       ),
     },
     {
@@ -511,7 +633,7 @@ const AiCenterAdminRuntime = () => {
             配置
           </Button>
           <Button size="small" icon={<ReloadOutlined />} loading={providerRefreshingId === record.id} onClick={() => void handleRefreshModels(record)}>
-            刷模型
+            刷新模型
           </Button>
           <Button size="small" icon={<ExperimentOutlined />} loading={providerTestingId === record.id} onClick={() => void handleTestProvider(record)}>
             测试
@@ -524,101 +646,35 @@ const AiCenterAdminRuntime = () => {
     },
   ]
 
-  const routeColumns: ColumnsType<AiCenterRouteItem> = [
-    {
-      title: '能力路由',
-      key: 'route',
-      render: (_, record) => (
-        <Space direction="vertical" size={2}>
-          <Space size={6}>
-            <Text strong>{record.display_name}</Text>
-            <Tag color={record.is_ready ? 'success' : 'warning'}>{record.is_ready ? '已就绪' : '未就绪'}</Tag>
-          </Space>
-          <Text type="secondary">{record.route_key}</Text>
-          <Text type="secondary">{record.description || '未填写说明'}</Text>
-        </Space>
-      ),
-    },
-    {
-      title: '选模策略',
-      key: 'strategy',
-      width: 320,
-      render: (_, record) => (
-        <Space direction="vertical" size={6}>
-          <Space wrap size={[4, 4]}>
-            <Tag color="blue">{getSelectionModeLabel(record.selection_mode)}</Tag>
-            <Tag color="geekblue">{getOptimizationGoalLabel(record.optimization_goal)}</Tag>
-            {record.allow_same_provider_model_failover ? <Tag color="cyan">同 Provider 模型回退</Tag> : <Tag>固定单模型</Tag>}
-            {record.allow_cross_provider_failover ? <Tag color="purple">跨 Provider 回退</Tag> : <Tag>按步骤顺序</Tag>}
-          </Space>
-          <Space wrap size={[4, 4]}>
-            {record.preferred_capabilities.length ? (
-              record.preferred_capabilities.map((item) => (
-                <Tag key={`${record.route_key}-${item}`}>{getCapabilityLabel(item)}</Tag>
-              ))
-            ) : (
-              <Text type="secondary">未设置偏好能力</Text>
-            )}
-          </Space>
-          <Text type="secondary">{record.selection_summary || '尚未形成候选摘要'}</Text>
-        </Space>
-      ),
-    },
-    {
-      title: '当前候选',
-      key: 'ready',
-      width: 240,
-      render: (_, record) => (
-        <Space direction="vertical" size={2}>
-          <Text>{record.ready_provider_label || '未绑定 provider'}</Text>
-          <Text type="secondary">{record.ready_model_id || '未绑定模型'}</Text>
-          <Text type="secondary">{`步骤 ${record.enabled_step_count}/${record.configured_step_count} · 候选 ${record.candidate_count}`}</Text>
-          {!record.is_ready && record.ready_reason ? <Text type="danger">{record.ready_reason}</Text> : null}
-        </Space>
-      ),
-    },
-    {
-      title: '操作',
-      key: 'actions',
-      width: 180,
-      render: (_, record) => (
-        <Space wrap>
-          <Button size="small" icon={<SettingOutlined />} onClick={() => openRouteConfig(record)}>
-            配置
-          </Button>
-          <Button size="small" icon={<ExperimentOutlined />} onClick={() => openRouteTest(record)}>
-            测试
-          </Button>
-        </Space>
-      ),
-    },
-  ]
-
   const eventColumns: ColumnsType<AiCenterCallEventItem> = [
-    { title: '时间', dataIndex: 'created_at', width: 160, render: (value) => formatDateTime(value) },
+    {
+      title: '时间',
+      dataIndex: 'created_at',
+      width: 160,
+      render: (value) => <span className="ai-center-nowrap">{formatDateTime(value)}</span>,
+    },
     {
       title: '路由',
       key: 'route',
       width: 220,
       render: (_, record) => (
-        <Space direction="vertical" size={2}>
-          <Text>{record.route_key}</Text>
-          <Text type="secondary">
+        <div className="ai-center-cell-stack">
+          <Text strong>{record.route_key}</Text>
+          <span className="ai-center-cell-secondary">
             {record.selection_mode ? `${getSelectionModeLabel(record.selection_mode)} · 第 ${record.attempt_index || 1} 次` : '-'}
-          </Text>
-        </Space>
+          </span>
+        </div>
       ),
     },
     {
       title: '执行链路',
       key: 'chain',
-      width: 280,
+      width: 300,
       render: (_, record) => (
-        <Space direction="vertical" size={2}>
-          <Text>{record.provider_label || '-'}</Text>
-          <Text type="secondary">{`${record.model_id || '-'} / ${record.used_api_mode || '-'}`}</Text>
-          <Text type="secondary">{record.selection_summary || '-'}</Text>
-        </Space>
+        <div className="ai-center-cell-stack">
+          {renderTextWithTooltip(record.provider_label, 'ai-center-ellipsis ai-center-cell-primary')}
+          <span className="ai-center-cell-secondary">{`${record.model_id || '-'} / ${getApiModeLabel(record.used_api_mode)}`}</span>
+        </div>
       ),
     },
     {
@@ -626,93 +682,248 @@ const AiCenterAdminRuntime = () => {
       key: 'status',
       width: 140,
       render: (_, record) => (
-        <Space direction="vertical" size={2}>
-          <Tag color={EVENT_STATUS_COLOR[record.status] || 'default'}>{record.status}</Tag>
-          <Text type="secondary">{record.duration_ms ? `${record.duration_ms} ms` : '-'}</Text>
-        </Space>
+        <div className="ai-center-cell-stack">
+          <div className="ai-center-tag-row">
+            <Tag color={EVENT_STATUS_COLOR[record.status] || 'default'}>{getEventStatusLabel(record.status)}</Tag>
+          </div>
+          <span className="ai-center-cell-secondary">{record.duration_ms ? `${record.duration_ms} ms` : '-'}</span>
+        </div>
       ),
     },
     {
       title: '错误 / 备注',
       key: 'message',
-      render: (_, record) =>
-        record.error_message || (record.candidate_score != null ? `候选评分 ${record.candidate_score.toFixed(1)}` : '-'),
+      width: 400,
+      render: (_, record) => {
+        const note =
+          record.error_message ||
+          (record.candidate_score != null ? `候选评分 ${record.candidate_score.toFixed(1)}` : '—')
+        return (
+          <Tooltip title={note === '—' ? '' : note}>
+            <div className="ai-center-line-clamp-2">{note}</div>
+          </Tooltip>
+        )
+      },
     },
   ]
 
   const routeSteps = Form.useWatch('steps', routeForm) || []
 
   return (
-    <Space direction="vertical" size={16} style={{ width: '100%' }}>
-      <div>
-        <Title level={3} style={{ marginBottom: 4 }}>
-          AI 中心
-        </Title>
-        <Paragraph type="secondary" style={{ marginBottom: 0 }}>
-          统一管理 AI Provider、模型池、能力路由和调用事件。作品归并、追更同步等业务只消费这里的配置，不再各自维护一套 AI 参数。
-        </Paragraph>
-      </div>
+    <div className="ai-center-page">
+      <Card className="ai-center-hero-card" variant="borderless">
+        <div className="ai-center-hero-head">
+          <div>
+            <div className="ai-center-eyebrow">
+              <ApiOutlined />
+              <span>AI 中心</span>
+            </div>
+            <Title level={3} className="ai-center-title">
+              AI 中心
+            </Title>
+            <p className="ai-center-subtitle">统一管理 AI 提供方、模型池、能力路由和调用记录。</p>
+          </div>
+          <Button icon={<ReloadOutlined />} onClick={() => void loadAll()}>
+            刷新
+          </Button>
+        </div>
 
-      {overview?.legacy_migration_applied ? (
-        <Alert type="info" showIcon message="已检测到旧资源运营 AI 配置，并自动迁移为默认 provider 与路由步骤。" />
-      ) : null}
+        <div className="ai-center-summary-grid">
+          {summaryItems.map((item) => (
+            <div key={item.label} className="ai-center-summary-card">
+              <span>{item.label}</span>
+              <strong>{item.value}</strong>
+              <small>{item.hint}</small>
+            </div>
+          ))}
+        </div>
+      </Card>
 
-      <Alert
-        type="info"
-        showIcon
-        message="自动优选会综合步骤顺序、模型能力标签、质量/稳定/速度/成本评分，以及最近成功率来挑选模型。"
-        description="同 Provider 模型回退只在步骤未固定具体模型时生效；跨 Provider 回退开启后，系统会在整个候选池中选择更合适的可用模型。"
-      />
+      <Card className="ai-center-panel-card" variant="borderless">
+        <div className="ai-center-section-head">
+          <div className="ai-center-section-copy">
+            <Title level={4} className="ai-center-section-title">
+              提供方管理
+            </Title>
+            <p className="ai-center-section-subtitle">单页查看连接信息、模型池和运行状态，避免双列表格互相挤压。</p>
+          </div>
+          <Button type="primary" icon={<PlusOutlined />} onClick={openCreateProvider}>
+            新增提供方
+          </Button>
+        </div>
 
-      <Row gutter={[16, 16]}>
-        <Col xs={24} sm={12} lg={6}><Card loading={loading}><Text type="secondary">Provider</Text><Title level={3}>{overview?.enabled_providers || 0}/{overview?.total_providers || 0}</Title></Card></Col>
-        <Col xs={24} sm={12} lg={6}><Card loading={loading}><Text type="secondary">可用路由</Text><Title level={3}>{overview?.ready_routes || 0}/{overview?.total_routes || 0}</Title></Card></Col>
-        <Col xs={24} sm={12} lg={6}><Card loading={loading}><Text type="secondary">24h 成功调用</Text><Title level={3}>{overview?.recent_success_count_24h || 0}</Title></Card></Col>
-        <Col xs={24} sm={12} lg={6}><Card loading={loading}><Text type="secondary">24h 失败调用</Text><Title level={3}>{overview?.recent_failure_count_24h || 0}</Title></Card></Col>
-      </Row>
+        <Table
+          rowKey="id"
+          className="ai-center-table"
+          size="small"
+          tableLayout="fixed"
+          loading={loading}
+          columns={providerColumns}
+          dataSource={providers}
+          pagination={false}
+          scroll={{ x: 1400 }}
+          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无提供方" /> }}
+        />
+      </Card>
 
-      <Row gutter={[16, 16]}>
-        <Col xs={24} xl={12}>
-          <Card
-            title="Provider 管理"
-            extra={<Button type="primary" icon={<PlusOutlined />} onClick={openCreateProvider}>新增 Provider</Button>}
-          >
-            <Table rowKey="id" size="small" loading={loading} columns={providerColumns} dataSource={providers} pagination={false} />
-          </Card>
-        </Col>
-        <Col xs={24} xl={12}>
-          <Card title="能力路由">
-            <Table rowKey="route_key" size="small" loading={loading} columns={routeColumns} dataSource={routes} pagination={false} />
-          </Card>
-        </Col>
-      </Row>
+      <Card className="ai-center-panel-card" variant="borderless" loading={loading}>
+        <div className="ai-center-section-head">
+          <div className="ai-center-section-copy">
+            <Title level={4} className="ai-center-section-title">
+              能力路由
+            </Title>
+            <p className="ai-center-section-subtitle">每条业务路由单独展示策略、当前候选和执行步骤，阅读成本更低。</p>
+          </div>
+        </div>
 
-      <Card title="最近调用事件" extra={<Button icon={<ReloadOutlined />} onClick={() => void loadAll()}>刷新</Button>}>
-        <Table rowKey="id" size="small" loading={loading} columns={eventColumns} dataSource={events} pagination={{ pageSize: 10 }} scroll={{ x: 960 }} />
+        {routes.length ? (
+          <div className="ai-center-route-grid">
+            {routes.map((route) => {
+              const enabledSteps = route.steps.filter((step) => step.is_enabled)
+              const candidateLabel =
+                route.ready_provider_label || route.ready_model_id
+                  ? `${route.ready_provider_label || '未绑定提供方'} / ${route.ready_model_id || '自动'}`
+                  : '当前无可用候选'
+              return (
+                <div key={route.route_key} className="ai-center-route-card">
+                  <div className="ai-center-route-card-head">
+                    <div className="ai-center-route-card-copy">
+                      <div className="ai-center-route-card-title-row">
+                        <Text strong>{route.display_name}</Text>
+                        <Tag color={route.is_ready ? 'success' : 'warning'}>{route.is_ready ? '已就绪' : '未就绪'}</Tag>
+                        {!route.is_enabled ? <Tag>停用</Tag> : null}
+                      </div>
+                      <div className="ai-center-route-key">{route.route_key}</div>
+                      {route.description ? <p className="ai-center-route-desc">{route.description}</p> : null}
+                    </div>
+                    <Space wrap>
+                      <Button size="small" icon={<SettingOutlined />} onClick={() => openRouteConfig(route)}>
+                        配置
+                      </Button>
+                      <Button size="small" icon={<ExperimentOutlined />} onClick={() => openRouteTest(route)}>
+                        测试
+                      </Button>
+                    </Space>
+                  </div>
+
+                  <div className="ai-center-route-meta-grid">
+                    <div className="ai-center-route-meta-card">
+                      <span>选模策略</span>
+                      <strong>{getSelectionModeLabel(route.selection_mode)}</strong>
+                      <small>{`优化目标：${getOptimizationGoalLabel(route.optimization_goal)} · 输出：${getOutputModeLabel(route.output_mode)}`}</small>
+                    </div>
+                    <div className="ai-center-route-meta-card">
+                      <span>当前候选</span>
+                      <strong>{candidateLabel}</strong>
+                      <small>{route.is_ready ? `候选 ${route.candidate_count} 个` : getRouteReasonLabel(route.ready_reason)}</small>
+                    </div>
+                    <div className="ai-center-route-meta-card">
+                      <span>执行范围</span>
+                      <strong>{`启用步骤 ${route.enabled_step_count}/${route.configured_step_count}`}</strong>
+                      <small>{`最大尝试 ${route.max_attempts} 次`}</small>
+                    </div>
+                  </div>
+
+                  <div className="ai-center-tag-row ai-center-route-tag-row">
+                    <Tag color="blue">{getSelectionModeLabel(route.selection_mode)}</Tag>
+                    <Tag color="geekblue">{getOptimizationGoalLabel(route.optimization_goal)}</Tag>
+                    {route.allow_same_provider_model_failover ? <Tag color="cyan">同提供方模型回退</Tag> : <Tag>固定单模型</Tag>}
+                    {route.allow_cross_provider_failover ? <Tag color="purple">跨提供方回退</Tag> : <Tag>按步骤顺序</Tag>}
+                    {route.preferred_capabilities.map((item) => (
+                      <Tag key={`${route.route_key}-${item}`}>{getCapabilityLabel(item)}</Tag>
+                    ))}
+                  </div>
+
+                  {route.selection_summary ? (
+                    <Tooltip title={route.selection_summary}>
+                      <div className="ai-center-route-summary">当前候选已按策略排序，悬停可查看详细摘要。</div>
+                    </Tooltip>
+                  ) : null}
+
+                  <div className="ai-center-route-steps">
+                    {enabledSteps.length ? (
+                      enabledSteps.map((step) => (
+                        <div key={step.id} className="ai-center-step-item">
+                          <span>{`步骤 ${step.step_index}`}</span>
+                          <strong>{step.provider_label || '未绑定提供方'}</strong>
+                          <small>{step.model_label || step.model_id || '自动选择模型'}</small>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="ai-center-empty-inline">暂无可用步骤</div>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        ) : (
+          <div className="ai-center-empty-block">
+            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无路由配置" />
+          </div>
+        )}
+      </Card>
+
+      <Card className="ai-center-panel-card" variant="borderless">
+        <div className="ai-center-section-head">
+          <div className="ai-center-section-copy">
+            <Title level={4} className="ai-center-section-title">
+              最近调用事件
+            </Title>
+            <p className="ai-center-section-subtitle">保留最近 50 条调用结果，可手动清空，不影响提供方和路由配置。</p>
+          </div>
+          <div className="ai-center-table-toolbar">
+            <Popconfirm
+              title="确认清空调用记录？"
+              description="只清空 AI 调用事件，不会删除提供方、模型池和路由配置。"
+              okText="清空"
+              cancelText="取消"
+              onConfirm={() => void handleClearEvents()}
+            >
+              <Button danger loading={eventClearing}>
+                清空记录
+              </Button>
+            </Popconfirm>
+            <Button icon={<ReloadOutlined />} onClick={() => void loadAll()}>
+              刷新
+            </Button>
+          </div>
+        </div>
+
+        <Table
+          rowKey="id"
+          className="ai-center-table"
+          size="small"
+          tableLayout="fixed"
+          loading={loading}
+          columns={eventColumns}
+          dataSource={events}
+          pagination={events.length > 10 ? { pageSize: 10, hideOnSinglePage: true } : false}
+          scroll={{ x: 1220 }}
+          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无调用记录" /> }}
+        />
       </Card>
 
       <Modal
-        title={editingProvider ? `编辑 Provider: ${editingProvider.display_name}` : '新增 Provider'}
+        title={editingProvider ? `编辑提供方：${editingProvider.display_name}` : '新增提供方'}
         open={providerModalOpen}
         onCancel={() => setProviderModalOpen(false)}
         onOk={() => void saveProvider()}
         confirmLoading={providerSaving}
         width={1120}
+        wrapClassName="responsive-modal-root"
+        afterClose={() => {
+          setEditingProvider(null)
+          providerForm.resetFields()
+        }}
       >
         <Form form={providerForm} layout="vertical">
-          <Alert
-            type="info"
-            showIcon
-            style={{ marginBottom: 16 }}
-            message="Provider 负责连接凭据与模型池。"
-            description="模型池里的能力标签、质量/稳定/速度/成本评分会被自动优选路由直接使用；路由白名单可限制某些模型只给特定业务使用。"
-          />
           <Row gutter={12}>
-            <Col span={12}><Form.Item name="provider_key" label="Provider Key" rules={[{ required: true }]}><Input placeholder="openai_default" /></Form.Item></Col>
-            <Col span={12}><Form.Item name="display_name" label="显示名称" rules={[{ required: true }]}><Input placeholder="默认 OpenAI 兼容接口" /></Form.Item></Col>
-            <Col span={24}><Form.Item name="base_url" label="Base URL" rules={[{ required: true }]}><Input placeholder="https://example.com/v1" /></Form.Item></Col>
-            <Col span={8}><Form.Item name="api_mode" label="接口模式"><Select options={[{ label: 'auto', value: 'auto' }, { label: 'chat_completions', value: 'chat_completions' }, { label: 'responses', value: 'responses' }]} /></Form.Item></Col>
-            <Col span={16}><Form.Item name="api_key" label={editingProvider?.has_api_key ? 'API Key（留空表示不改）' : 'API Key'}><Input.Password placeholder="sk-..." /></Form.Item></Col>
+            <Col span={12}><Form.Item name="provider_key" label="提供方标识" rules={[{ required: true }]}><Input placeholder="openai_default" /></Form.Item></Col>
+            <Col span={12}><Form.Item name="display_name" label="显示名称" rules={[{ required: true }]}><Input placeholder="默认 AI 兼容接口" /></Form.Item></Col>
+            <Col span={24}><Form.Item name="base_url" label="基础地址" rules={[{ required: true }]}><Input placeholder="https://example.com/v1" /></Form.Item></Col>
+            <Col span={8}><Form.Item name="api_mode" label="接口模式"><Select options={[{ label: '自动识别', value: 'auto' }, { label: '对话补全', value: 'chat_completions' }, { label: '统一响应', value: 'responses' }]} /></Form.Item></Col>
+            <Col span={16}><Form.Item name="api_key" label={editingProvider?.has_api_key ? 'API Key（留空表示不修改）' : 'API Key'}><Input.Password placeholder="sk-..." /></Form.Item></Col>
             <Col span={6}><Form.Item name="priority" label="优先级"><InputNumber min={0} max={100000} style={{ width: '100%' }} /></Form.Item></Col>
             <Col span={6}><Form.Item name="timeout_seconds" label="超时秒数"><InputNumber min={5} max={120} style={{ width: '100%' }} /></Form.Item></Col>
             <Col span={6}><Form.Item name="max_retries" label="最大重试"><InputNumber min={0} max={5} style={{ width: '100%' }} /></Form.Item></Col>
@@ -737,7 +948,7 @@ const AiCenterAdminRuntime = () => {
                   >
                     <Row gutter={12}>
                       <Col span={8}><Form.Item name={[field.name, 'model_id']} label="模型 ID" rules={[{ required: true }]}><Input placeholder="gpt-5.2" /></Form.Item></Col>
-                      <Col span={8}><Form.Item name={[field.name, 'label']} label="显示名"><Input placeholder="可选" /></Form.Item></Col>
+                      <Col span={8}><Form.Item name={[field.name, 'label']} label="显示名称"><Input placeholder="可选" /></Form.Item></Col>
                       <Col span={4}><Form.Item name={[field.name, 'is_enabled']} label="启用" valuePropName="checked"><Switch /></Form.Item></Col>
                       <Col span={4}><Form.Item name={[field.name, 'is_preferred']} label="首选" valuePropName="checked"><Switch /></Form.Item></Col>
                       <Col span={12}><Form.Item name={[field.name, 'capabilities']} label="能力标签"><Select mode="multiple" allowClear options={CAPABILITY_OPTIONS} /></Form.Item></Col>
@@ -759,32 +970,30 @@ const AiCenterAdminRuntime = () => {
       </Modal>
 
       <Modal
-        title={editingRoute ? `配置路由: ${editingRoute.display_name}` : '配置路由'}
+        title={editingRoute ? `配置路由：${editingRoute.display_name}` : '配置路由'}
         open={routeModalOpen}
         onCancel={() => setRouteModalOpen(false)}
         onOk={() => void saveRoute()}
         confirmLoading={routeSaving}
         width={1040}
+        wrapClassName="responsive-modal-root"
+        afterClose={() => {
+          setEditingRoute(null)
+          routeForm.resetFields()
+        }}
       >
         <Form form={routeForm} layout="vertical">
-          <Alert
-            type="info"
-            showIcon
-            style={{ marginBottom: 16 }}
-            message="路由决定业务调用时如何选模型。"
-            description="自动优选会把步骤看作候选池并进行打分；严格按步骤会优先遵循步骤顺序。若步骤显式固定模型，则同 Provider 模型回退不会生效。"
-          />
           <Row gutter={12}>
             <Col span={12}><Form.Item name="display_name" label="显示名称" rules={[{ required: true }]}><Input /></Form.Item></Col>
-            <Col span={6}><Form.Item name="output_mode" label="输出模式"><Select options={[{ label: 'text', value: 'text' }, { label: 'json', value: 'json' }]} /></Form.Item></Col>
-            <Col span={6}><Form.Item name="max_attempts" label="路由最大尝试"><InputNumber min={1} max={10} style={{ width: '100%' }} /></Form.Item></Col>
+            <Col span={6}><Form.Item name="output_mode" label="输出模式"><Select options={[{ label: '文本', value: 'text' }, { label: 'JSON', value: 'json' }]} /></Form.Item></Col>
+            <Col span={6}><Form.Item name="max_attempts" label="最大尝试次数"><InputNumber min={1} max={10} style={{ width: '100%' }} /></Form.Item></Col>
             <Col span={24}><Form.Item name="description" label="说明"><Input.TextArea rows={2} /></Form.Item></Col>
             <Col span={24}><Form.Item name="is_enabled" label="启用路由" valuePropName="checked"><Switch /></Form.Item></Col>
             <Col span={6}><Form.Item name="selection_mode" label="选择策略"><Select options={SELECTION_MODE_OPTIONS} /></Form.Item></Col>
             <Col span={6}><Form.Item name="optimization_goal" label="优化目标"><Select options={OPTIMIZATION_GOAL_OPTIONS} /></Form.Item></Col>
             <Col span={12}><Form.Item name="preferred_capabilities" label="偏好能力"><Select mode="multiple" allowClear options={CAPABILITY_OPTIONS} /></Form.Item></Col>
-            <Col span={12}><Form.Item name="allow_same_provider_model_failover" label="同 Provider 模型回退" valuePropName="checked"><Switch /></Form.Item></Col>
-            <Col span={12}><Form.Item name="allow_cross_provider_failover" label="跨 Provider 回退" valuePropName="checked"><Switch /></Form.Item></Col>
+            <Col span={12}><Form.Item name="allow_same_provider_model_failover" label="同提供方模型回退" valuePropName="checked"><Switch /></Form.Item></Col>
+            <Col span={12}><Form.Item name="allow_cross_provider_failover" label="跨提供方回退" valuePropName="checked"><Switch /></Form.Item></Col>
           </Row>
           <Form.List name="steps">
             {(fields, { add, remove }) => (
@@ -800,13 +1009,13 @@ const AiCenterAdminRuntime = () => {
                     >
                       <Row gutter={12}>
                         <Col span={10}>
-                          <Form.Item name={[field.name, 'provider_id']} label="Provider" rules={[{ required: true }]}>
+                          <Form.Item name={[field.name, 'provider_id']} label="提供方" rules={[{ required: true }]}>
                             <Select options={providerOptions} />
                           </Form.Item>
                         </Col>
                         <Col span={8}>
                           <Form.Item name={[field.name, 'model_id']} label="模型">
-                            <Select allowClear options={providerModelOptions[providerId] || []} placeholder="留空表示自动选首选模型" />
+                            <Select allowClear options={providerModelOptions[providerId] || []} placeholder="留空表示自动选择模型" />
                           </Form.Item>
                         </Col>
                         <Col span={6}>
@@ -827,19 +1036,24 @@ const AiCenterAdminRuntime = () => {
       </Modal>
 
       <Modal
-        title={testingRoute ? `测试路由: ${testingRoute.display_name}` : '测试路由'}
+        title={testingRoute ? `测试路由：${testingRoute.display_name}` : '测试路由'}
         open={routeTestModalOpen}
         onCancel={() => setRouteTestModalOpen(false)}
         onOk={() => void runRouteTest()}
         confirmLoading={routeTesting}
         width={820}
+        wrapClassName="responsive-modal-root"
+        afterClose={() => {
+          setTestingRoute(null)
+          routeTestForm.resetFields()
+        }}
       >
         <Form form={routeTestForm} layout="vertical">
-          <Form.Item name="system_prompt" label="System Prompt" rules={[{ required: true }]}><Input.TextArea rows={4} /></Form.Item>
-          <Form.Item name="user_prompt" label="User Prompt" rules={[{ required: true }]}><Input.TextArea rows={6} /></Form.Item>
+          <Form.Item name="system_prompt" label="系统提示词" rules={[{ required: true }]}><Input.TextArea rows={4} /></Form.Item>
+          <Form.Item name="user_prompt" label="用户输入" rules={[{ required: true }]}><Input.TextArea rows={6} /></Form.Item>
         </Form>
       </Modal>
-    </Space>
+    </div>
   )
 }
 

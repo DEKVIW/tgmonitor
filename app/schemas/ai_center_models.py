@@ -278,6 +278,10 @@ class AiCenterCallEventListResponse(AiCenterBaseModel):
     limit: int = 50
 
 
+class AiCenterCallEventClearResponse(AiCenterBaseModel):
+    deleted_count: int = 0
+
+
 class AiCenterDeleteResponse(AiCenterBaseModel):
     id: int
     deleted: bool = True

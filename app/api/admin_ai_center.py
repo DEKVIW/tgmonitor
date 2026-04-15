@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.api.dependencies_runtime_v2 import get_admin_user, get_db
 from app.schemas.ai_center_models import (
+    AiCenterCallEventClearResponse,
     AiCenterCallEventItem,
     AiCenterCallEventListResponse,
     AiCenterDeleteResponse,
@@ -24,6 +25,7 @@ from app.schemas.ai_center_models import (
     AiCenterRouteUpsertRequest,
 )
 from app.services.ai_center import (
+    clear_ai_call_events,
     delete_ai_provider,
     get_ai_center_overview,
     get_ai_provider_detail,
@@ -358,4 +360,23 @@ async def list_ai_call_events_api(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to load AI call events: {exc}",
+        ) from exc
+
+
+@router.post("/events/clear", response_model=AiCenterCallEventClearResponse, summary="Clear AI call events")
+async def clear_ai_call_events_api(
+    route_key: str | None = Query(default=None),
+    current_user: Dict[str, Any] = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+) -> AiCenterCallEventClearResponse:
+    del current_user
+    try:
+        payload = clear_ai_call_events(db, route_key=route_key)
+        db.commit()
+        return AiCenterCallEventClearResponse(**payload)
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to clear AI call events: {exc}",
         ) from exc

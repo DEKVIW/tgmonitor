@@ -254,6 +254,10 @@ export interface AiCenterCallEventListResponse {
   limit: number
 }
 
+export interface AiCenterCallEventClearResponse {
+  deleted_count: number
+}
+
 export interface AiCenterDeleteResponse {
   id: number
   deleted: boolean

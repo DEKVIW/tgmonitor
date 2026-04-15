@@ -1,5 +1,6 @@
 import apiClient from '@/utils/api'
 import type {
+  AiCenterCallEventClearResponse,
   AiCenterCallEventListResponse,
   AiCenterOverviewResponse,
   AiCenterProviderItem,
@@ -102,5 +103,13 @@ export const listAiCallEvents = async (
   })
   if (routeKey) params.set('route_key', routeKey)
   const response = await apiClient.get<AiCenterCallEventListResponse>(`/admin/ai-center/events?${params.toString()}`)
+  return response.data
+}
+
+export const clearAiCallEvents = async (routeKey?: string): Promise<AiCenterCallEventClearResponse> => {
+  const params = new URLSearchParams()
+  if (routeKey) params.set('route_key', routeKey)
+  const suffix = params.toString() ? `?${params.toString()}` : ''
+  const response = await apiClient.post<AiCenterCallEventClearResponse>(`/admin/ai-center/events/clear${suffix}`)
   return response.data
 }

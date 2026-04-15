@@ -1979,6 +1979,21 @@ def list_ai_call_events(
     }
 
 
+def clear_ai_call_events(
+    session: Session,
+    *,
+    route_key: str | None = None,
+) -> dict[str, Any]:
+    ensure_ai_center_seeded(session)
+    query = session.query(AiCallEvent)
+    normalized_route_key = _normalize_text(route_key, max_length=128)
+    if normalized_route_key:
+        query = query.filter(AiCallEvent.route_key == normalized_route_key)
+    deleted_count = int(query.delete(synchronize_session=False) or 0)
+    session.flush()
+    return {"deleted_count": deleted_count}
+
+
 def extract_json_object_from_text(raw_text: str) -> dict[str, Any] | None:
     text = _normalize_text(raw_text)
     if not text:
