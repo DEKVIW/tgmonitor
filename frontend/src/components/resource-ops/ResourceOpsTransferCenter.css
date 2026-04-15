@@ -377,6 +377,27 @@
   -webkit-line-clamp: unset;
 }
 
+.resource-ops-transfer-target-cell {
+  max-width: 100%;
+}
+
+.resource-ops-transfer-target-cell small {
+  width: 100%;
+}
+
+.resource-ops-transfer-validation--rule-compact {
+  gap: 0;
+}
+
+.resource-ops-transfer-validation--rule-compact .ant-space {
+  width: 100%;
+}
+
+.resource-ops-transfer-validation--rule-compact .ant-tag {
+  margin-inline-end: 0;
+  max-width: 100%;
+}
+
 .resource-ops-transfer-validation small.is-error {
   color: #cf1322;
 }

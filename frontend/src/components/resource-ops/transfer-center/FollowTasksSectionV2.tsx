@@ -747,7 +747,7 @@ const FollowTasksSectionV2 = ({ refreshToken }: FollowTasksSectionProps) => {
     {
       title: '资源',
       key: 'task_name',
-      width: 280,
+      width: 220,
       render: (_, record) => {
         const mainTitle = getFollowTaskTitle(record)
         return (
@@ -782,9 +782,9 @@ const FollowTasksSectionV2 = ({ refreshToken }: FollowTasksSectionProps) => {
     {
       title: '资源目录',
       key: 'target',
-      width: 220,
+      width: 180,
       render: (_, record) => (
-        <div className="resource-ops-transfer-validation resource-ops-transfer-validation--publish-meta">
+        <div className="resource-ops-transfer-validation resource-ops-transfer-validation--publish-meta resource-ops-transfer-target-cell">
           <small>{record.target_account_name || '未指定账号'}</small>
           <small title={record.fixed_save_path}>{record.fixed_save_path || '未记录固定目录'}</small>
         </div>
@@ -832,27 +832,31 @@ const FollowTasksSectionV2 = ({ refreshToken }: FollowTasksSectionProps) => {
     {
       title: '规则',
       key: 'rule',
-      width: 260,
+      width: 186,
       render: (_, record) => {
         const ruleTone = getFollowRuleTone(record)
-        return (
-          <div className="resource-ops-transfer-validation">
-            <Space wrap size={[6, 6]}>
-              <Tag color={ruleTone.color}>{record.rule_assessment.rule_label}</Tag>
-              <Tag color={(TASK_STATE_META[record.task_state] || { color: 'default' }).color}>
-                {(TASK_STATE_META[record.task_state] || { label: record.task_state }).label}
-              </Tag>
-              <Tag color={(TASK_STATUS_META[record.status] || { color: 'default' }).color}>
-                {(TASK_STATUS_META[record.status] || { label: record.status }).label}
-              </Tag>
-            </Space>
-            <small>{record.rule_assessment.summary}</small>
-            {record.last_error_message ? (
-              <small className="is-error">{record.last_error_message}</small>
-            ) : (
-              <small>{getFollowStatusSummary(record)}</small>
-            )}
+        const ruleTip = (
+          <div>
+            <div>{record.rule_assessment.rule_label}</div>
+            <div>{record.rule_assessment.summary}</div>
+            {record.last_error_message ? <div>{record.last_error_message}</div> : <div>{getFollowStatusSummary(record)}</div>}
           </div>
+        )
+        return (
+          <Tooltip title={ruleTip}>
+            <div className="resource-ops-transfer-validation resource-ops-transfer-validation--rule-compact">
+              <Space wrap size={[6, 6]}>
+                <Tag color={ruleTone.color}>{record.rule_assessment.rule_label}</Tag>
+                <Tag color={(TASK_STATE_META[record.task_state] || { color: 'default' }).color}>
+                  {(TASK_STATE_META[record.task_state] || { label: record.task_state }).label}
+                </Tag>
+                <Tag color={(TASK_STATUS_META[record.status] || { color: 'default' }).color}>
+                  {(TASK_STATUS_META[record.status] || { label: record.status }).label}
+                </Tag>
+                {record.last_error_message ? <Tag color="error">!</Tag> : null}
+              </Space>
+            </div>
+          </Tooltip>
         )
       },
     },
