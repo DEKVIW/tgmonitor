@@ -18,6 +18,7 @@ import type {
   PanTransferManualPublishRequest,
   PanTransferMessagePublishRequest,
   PanTransferMessagePublishResponse,
+  PanTransferPublishRetireRequest,
   PanTransferPublishRecordItem,
   PanTransferPublishRecordListResponse,
   PanTransferPublishRuleUpdateRequest,
@@ -205,6 +206,17 @@ export const archivePanTransferPublishRecord = async (
   recordId: number
 ): Promise<PanTransferPublishRecordItem> => {
   const response = await apiClient.post<PanTransferPublishRecordItem>(`/admin/pan-transfer/publishes/${recordId}/archive`)
+  return response.data
+}
+
+export const retirePanTransferPublishRecord = async (
+  recordId: number,
+  payload: PanTransferPublishRetireRequest
+): Promise<PanTransferPublishRecordItem> => {
+  const response = await apiClient.post<PanTransferPublishRecordItem>(
+    `/admin/pan-transfer/publishes/${recordId}/retire`,
+    payload
+  )
   return response.data
 }
 

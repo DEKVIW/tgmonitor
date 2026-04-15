@@ -1,9 +1,5 @@
 import apiClient from '@/utils/api'
 import type {
-  ResourceOpsAiModelListResponse,
-  ResourceOpsAiProviderDraftRequest,
-  ResourceOpsAiTestRequest,
-  ResourceOpsAiTestResponse,
   ResourceOpsCandidateDetailResponse,
   ResourceOpsCandidateListResponse,
   ResourceOpsCandidateQuery,
@@ -126,20 +122,6 @@ export const updateResourceOpsRuntimeSettings = async (
   payload: ResourceOpsRuntimeSettingsUpdateRequest
 ): Promise<ResourceOpsRuntimeSettingsResponse> => {
   const response = await apiClient.put<ResourceOpsRuntimeSettingsResponse>('/admin/resource-ops/settings', payload)
-  return response.data
-}
-
-export const listResourceOpsAiModels = async (
-  payload: ResourceOpsAiProviderDraftRequest
-): Promise<ResourceOpsAiModelListResponse> => {
-  const response = await apiClient.post<ResourceOpsAiModelListResponse>('/admin/resource-ops/ai/models', payload)
-  return response.data
-}
-
-export const testResourceOpsAiConnection = async (
-  payload: ResourceOpsAiTestRequest
-): Promise<ResourceOpsAiTestResponse> => {
-  const response = await apiClient.post<ResourceOpsAiTestResponse>('/admin/resource-ops/ai/test', payload)
   return response.data
 }
 

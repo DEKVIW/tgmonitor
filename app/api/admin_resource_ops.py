@@ -7,11 +7,6 @@ from sqlalchemy.orm import Session
 
 from app.api.dependencies_runtime_v2 import get_admin_user, get_db
 from app.schemas.resource_ops_models_v2 import (
-    ResourceOpsAiModelItem,
-    ResourceOpsAiModelListResponse,
-    ResourceOpsAiProviderDraftRequest,
-    ResourceOpsAiTestRequest,
-    ResourceOpsAiTestResponse,
     ResourceOpsCandidateDetailResponse,
     ResourceOpsCandidateItem,
     ResourceOpsCandidateListResponse,
@@ -44,13 +39,11 @@ from app.services.resource_ops import (
     get_resource_ops_runtime_settings,
     get_resource_ops_trend,
     get_work_binding_summary,
-    list_resource_ops_ai_models,
     list_resource_op_candidates,
     list_resource_op_workbench_items,
     run_resource_ops_retention,
     sync_resource_work_bindings,
     sync_message_link_catalog_batch,
-    test_resource_ops_ai_connection,
     update_resource_ops_runtime_settings,
     update_resource_op_workbench_item,
 )
@@ -329,7 +322,7 @@ async def update_resource_ops_runtime_settings_api(
         append_resource_ops_runtime_log(
             db,
             log_line=(
-                f"[INFO] 归并配置已保存 -> 模型 {payload.ai_model or '自动选择'} / "
+                f"[INFO] 归并配置已保存 -> AI 路由 resource_ops_title_extract / "
                 f"自动识别 {'开启' if payload.auto_recognition_enabled else '关闭'}"
             ),
             updated_by=str(operator),
@@ -363,99 +356,6 @@ async def update_resource_ops_runtime_settings_api(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to update resource runtime settings: {exc}",
-        ) from exc
-
-
-@router.post("/ai/models", response_model=ResourceOpsAiModelListResponse, summary="List available AI models")
-async def list_resource_ops_ai_models_api(
-    payload: ResourceOpsAiProviderDraftRequest,
-    current_user: Dict[str, Any] = Depends(get_admin_user),
-    db: Session = Depends(get_db),
-) -> ResourceOpsAiModelListResponse:
-    operator = current_user.get("username") or current_user.get("name") or "admin"
-    try:
-        result = list_resource_ops_ai_models(db, payload.dict(exclude_unset=True))
-        append_resource_ops_runtime_log(
-            db,
-            log_line=f"[INFO] 模型刷新成功 -> 共 {int(result.get('count') or 0)} 个模型",
-            updated_by=str(operator),
-        )
-        db.commit()
-        return ResourceOpsAiModelListResponse(
-            models=[ResourceOpsAiModelItem(**item) for item in result.get("models", [])],
-            base_url=result.get("base_url") or "",
-            used_saved_api_key=bool(result.get("used_saved_api_key")),
-            count=int(result.get("count") or 0),
-        )
-    except RuntimeError as exc:
-        append_resource_ops_runtime_log(
-            db,
-            log_line=f"[ERR] 模型刷新失败 -> {exc}",
-            updated_by=str(operator),
-            last_error=str(exc),
-        )
-        db.commit()
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(exc),
-        ) from exc
-    except Exception as exc:
-        append_resource_ops_runtime_log(
-            db,
-            log_line=f"[ERR] 模型刷新异常 -> {exc}",
-            updated_by=str(operator),
-            last_error=str(exc),
-        )
-        db.commit()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to load AI model list: {exc}",
-        ) from exc
-
-
-@router.post("/ai/test", response_model=ResourceOpsAiTestResponse, summary="Test AI recognition configuration")
-async def test_resource_ops_ai_connection_api(
-    payload: ResourceOpsAiTestRequest,
-    current_user: Dict[str, Any] = Depends(get_admin_user),
-    db: Session = Depends(get_db),
-) -> ResourceOpsAiTestResponse:
-    operator = current_user.get("username") or current_user.get("name") or "admin"
-    try:
-        result = test_resource_ops_ai_connection(db, payload.dict(exclude_unset=True))
-        append_resource_ops_runtime_log(
-            db,
-            log_line=(
-                f"[OK] 测试识别 -> {result.get('sample_text') or '-'} => "
-                f"{result.get('extracted_title') or '未识别'} / "
-                f"{result.get('used_api_mode') or 'auto'} / {result.get('model') or '-'}"
-            ),
-            updated_by=str(operator),
-        )
-        db.commit()
-        return ResourceOpsAiTestResponse(**result)
-    except RuntimeError as exc:
-        append_resource_ops_runtime_log(
-            db,
-            log_line=f"[ERR] 测试识别失败 -> {exc}",
-            updated_by=str(operator),
-            last_error=str(exc),
-        )
-        db.commit()
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(exc),
-        ) from exc
-    except Exception as exc:
-        append_resource_ops_runtime_log(
-            db,
-            log_line=f"[ERR] 测试识别异常 -> {exc}",
-            updated_by=str(operator),
-            last_error=str(exc),
-        )
-        db.commit()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to test AI configuration: {exc}",
         ) from exc
 
 

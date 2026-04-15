@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { Alert, Button, Card, Col, Collapse, Empty, Input, InputNumber, Row, Select, Space, Table, Tabs, Tag, Tooltip, Typography, message } from 'antd'
 import type { ColumnsType, TableProps } from 'antd/es/table'
 import { DatabaseOutlined, InfoCircleOutlined, LinkOutlined, ReloadOutlined, SyncOutlined } from '@ant-design/icons'
@@ -11,23 +12,20 @@ import {
   getResourceOpsRuntimeSettings,
   getResourceOpsTrend,
   getResourceOpsWorkbenchDetail,
-  listResourceOpsAiModels,
   listResourceOpsWorkbenchItems,
   runResourceOpsRetention,
   syncResourceOpsCatalog,
   syncResourceOpsRecognition,
   syncResourceOpsRecognitionFull,
-  testResourceOpsAiConnection,
   updateResourceOpsRuntimeSettings,
   updateResourceOpsWorkbenchItem,
 } from '@/api/resourceOps'
 import ResourceOpsPlatformChart from '@/components/resource-ops/ResourceOpsPlatformChart'
-import ResourceOpsRecognitionQueuePanel from '@/components/resource-ops/ResourceOpsRecognitionQueuePanel'
+import ResourceOpsRecognitionRoutePanel from '@/components/resource-ops/ResourceOpsRecognitionRoutePanel'
 import ResourceOpsTransferCenter from '@/components/resource-ops/transfer-center/ResourceOpsTransferCenterMain'
 import ResourceOpsTrendChart from '@/components/resource-ops/ResourceOpsTrendChart'
 import ResourceOpsWorkbenchDrawerTopic from '@/components/resource-ops/ResourceOpsWorkbenchDrawerTopic'
 import type {
-  ResourceOpsAiModelItem,
   ResourceOpsCatalogStatusResponse,
   ResourceOpsOverviewResponse,
   ResourceOpsPlatformDistributionResponse,
@@ -62,8 +60,6 @@ const getInitialResourceOpsTab = () => {
 
 const buildSettingsDraft = (response: ResourceOpsRuntimeSettingsResponse): ResourceOpsRuntimeSettingsUpdateRequest => ({
   auto_recognition_enabled: response.auto_recognition_enabled,
-  ai_base_url: response.ai_base_url,
-  ai_model: response.ai_model,
   retention_click_event_days: response.retention_click_event_days,
   retention_daily_stat_days: response.retention_daily_stat_days,
   retention_candidate_log_days: response.retention_candidate_log_days,
@@ -76,6 +72,7 @@ const operationColor = (status: string) =>
   status === 'ready_to_mirror' ? 'success' : status === 'observing' ? 'processing' : status === 'ignored' ? 'default' : 'gold'
 
 const ResourceOperationsAdminRuntime = () => {
+  const navigate = useNavigate()
   const [activeTab, setActiveTab] = useState(getInitialResourceOpsTab)
   const [overview, setOverview] = useState<ResourceOpsOverviewResponse | null>(null)
   const [trend, setTrend] = useState<ResourceOpsTrendResponse | null>(null)
@@ -92,12 +89,7 @@ const ResourceOperationsAdminRuntime = () => {
   const [pendingRunLoading, setPendingRunLoading] = useState(false)
   const [allRunLoading, setAllRunLoading] = useState(false)
   const [retentionRunning, setRetentionRunning] = useState(false)
-  const [aiModelsLoading, setAiModelsLoading] = useState(false)
-  const [aiTesting, setAiTesting] = useState(false)
   const [logsClearing, setLogsClearing] = useState(false)
-  const [aiApiKeyInput, setAiApiKeyInput] = useState('')
-  const [aiTestInput, setAiTestInput] = useState('')
-  const [aiModelOptions, setAiModelOptions] = useState<ResourceOpsAiModelItem[]>([])
 
   const [workbenchLoading, setWorkbenchLoading] = useState(false)
   const [workbenchVisited, setWorkbenchVisited] = useState(false)
@@ -117,36 +109,6 @@ const ResourceOperationsAdminRuntime = () => {
 
   const patchDraft = <K extends keyof ResourceOpsRuntimeSettingsUpdateRequest>(key: K, value: ResourceOpsRuntimeSettingsUpdateRequest[K]) => {
     setSettingsDraft((current) => (current ? { ...current, [key]: value } : current))
-  }
-
-  const aiDraft = () => ({
-    base_url: settingsDraft?.ai_base_url || runtimeSettings?.ai_base_url || '',
-    api_key: aiApiKeyInput || undefined,
-    use_saved_api_key: !aiApiKeyInput,
-  })
-
-  const shouldAutoRefreshAiModels = (
-    current: ResourceOpsRuntimeSettingsResponse | null,
-    draft: ResourceOpsRuntimeSettingsUpdateRequest | null,
-    nextApiKeyInput: string
-  ) => {
-    if (!draft) return false
-    const currentBaseUrl = (current?.ai_base_url || '').trim()
-    const nextBaseUrl = (draft.ai_base_url || '').trim()
-    return currentBaseUrl !== nextBaseUrl || Boolean(nextApiKeyInput.trim())
-  }
-
-  const loadSavedModels = async (response: ResourceOpsRuntimeSettingsResponse) => {
-    if (!response.ai_base_url || !response.ai_api_key_configured) {
-      setAiModelOptions([])
-      return
-    }
-    try {
-      const result = await listResourceOpsAiModels({ base_url: response.ai_base_url, use_saved_api_key: true })
-      setAiModelOptions(result.models)
-    } catch {
-      setAiModelOptions([])
-    }
   }
 
   const loadOverview = async () => {
@@ -198,15 +160,6 @@ const ResourceOperationsAdminRuntime = () => {
       if (!options?.silent) {
         setWorkbenchLoading(false)
       }
-    }
-  }
-
-  const refreshRuntimeStatusOnly = async () => {
-    try {
-      const response = await getResourceOpsRuntimeSettings()
-      setRuntimeSettings(response)
-    } catch {
-      // keep current view state if lightweight refresh fails
     }
   }
 
@@ -324,57 +277,13 @@ const ResourceOperationsAdminRuntime = () => {
     }
   }
 
-  const handleLoadAiModels = async () => {
-    if (!settingsDraft?.ai_base_url && !runtimeSettings?.ai_base_url) {
-      message.warning('请先填写 AI Base URL')
-      return
-    }
-    setAiModelsLoading(true)
-    try {
-      const result = await listResourceOpsAiModels(aiDraft())
-      setAiModelOptions(result.models)
-      if (!settingsDraft?.ai_model && result.models[0]?.id) patchDraft('ai_model', result.models[0].id)
-      message.success(`已加载 ${result.count} 个模型`)
-    } catch (error: any) {
-      setAiModelOptions([])
-      message.error(error.response?.data?.detail || '加载 AI 模型失败')
-    } finally {
-      setAiModelsLoading(false)
-      void refreshRuntimeStatusOnly()
-    }
-  }
-
-  const handleTestAiConnection = async () => {
-    setAiTesting(true)
-    try {
-      const result = await testResourceOpsAiConnection({
-        ...aiDraft(),
-        model: settingsDraft?.ai_model || '',
-        sample_text: aiTestInput.trim() || undefined,
-      })
-      message.success(`AI 识别测试通过：${result.extracted_title || '未识别出主题'}`)
-    } catch (error: any) {
-      message.error(error.response?.data?.detail || 'AI 识别测试失败')
-    } finally {
-      setAiTesting(false)
-      void refreshRuntimeStatusOnly()
-    }
-  }
-
   const handleSaveSettings = async () => {
     if (!settingsDraft) return
     setSettingsSaving(true)
     try {
-      const shouldRefreshModels = shouldAutoRefreshAiModels(runtimeSettings, settingsDraft, aiApiKeyInput)
-      const payload: ResourceOpsRuntimeSettingsUpdateRequest = { ...settingsDraft }
-      if (aiApiKeyInput) payload.ai_api_key = aiApiKeyInput
-      const response = await updateResourceOpsRuntimeSettings(payload)
+      const response = await updateResourceOpsRuntimeSettings({ ...settingsDraft })
       setRuntimeSettings(response)
       setSettingsDraft(buildSettingsDraft(response))
-      setAiApiKeyInput('')
-      if (shouldRefreshModels) {
-        void loadSavedModels(response)
-      }
       message.success('配置已保存')
     } catch (error: any) {
       message.error(error.response?.data?.detail || '保存配置失败')
@@ -389,8 +298,6 @@ const ResourceOperationsAdminRuntime = () => {
     try {
       const response = await updateResourceOpsRuntimeSettings({
         auto_recognition_enabled: settingsDraft.auto_recognition_enabled,
-        ai_base_url: settingsDraft.ai_base_url,
-        ai_model: settingsDraft.ai_model,
         retention_click_event_days: settingsDraft.retention_click_event_days,
         retention_daily_stat_days: settingsDraft.retention_daily_stat_days,
         retention_candidate_log_days: settingsDraft.retention_candidate_log_days,
@@ -821,32 +728,24 @@ const ResourceOperationsAdminRuntime = () => {
             label: '候选工作台',
             children: (
               <div className="resource-ops-tab-stack">
-                <ResourceOpsRecognitionQueuePanel
+                <ResourceOpsRecognitionRoutePanel
                   loading={settingsLoading}
                   settingsSaving={settingsSaving}
                   pendingRunLoading={pendingRunLoading}
                   allRunLoading={allRunLoading}
-                  aiModelsLoading={aiModelsLoading}
-                  aiTesting={aiTesting}
                   logsClearing={logsClearing}
                   settingsDraft={settingsDraft}
                   runtimeSettings={runtimeSettings}
                   bindingSummary={bindingSummary}
                   recognitionStatus={recognitionStatus}
                   recognitionSummaryItems={recognitionQueueSummaryItems}
-                  aiApiKeyInput={aiApiKeyInput}
-                  aiTestInput={aiTestInput}
-                  aiModelOptions={aiModelOptions}
                   formatNumber={formatNumber}
                   formatDateTime={formatResourceOpsDateTime}
                   onPatchDraft={handlePatchDraft}
-                  onAiApiKeyInputChange={setAiApiKeyInput}
-                  onAiTestInputChange={setAiTestInput}
                   onClearLogs={() => void handleClearLogs()}
-                  onLoadAiModels={() => void handleLoadAiModels()}
-                  onTestAiConnection={() => void handleTestAiConnection()}
                   onRunRecognition={(mode) => void handleRunRecognition(mode)}
                   onSaveSettings={() => void handleSaveSettings()}
+                  onOpenAiCenter={() => navigate('/ai-center')}
                 />
 
                 {workbenchSummaryItems.length > 0 ? (

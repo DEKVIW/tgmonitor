@@ -7,6 +7,7 @@ from ..constants import SUPPORTED_TRANSFER_PLATFORMS
 from .baidu import BaiduPanTransferProvider
 from .base import (
     PanTransferAccountValidationResult,
+    PanTransferDeleteResult,
     PanTransferProvider,
     PanTransferProviderError,
     PanTransferShareResult,
@@ -40,6 +41,7 @@ def decrypt_account_credential(account: PanTransferAccount) -> str:
 
 __all__ = [
     "PanTransferAccountValidationResult",
+    "PanTransferDeleteResult",
     "PanTransferProvider",
     "PanTransferProviderError",
     "PanTransferShareResult",

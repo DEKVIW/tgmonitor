@@ -19,7 +19,7 @@ from app.models.models import (
     ResourceWorkBinding,
     ensure_runtime_storage_tables,
 )
-from app.services.resource_ops.ai_title_client import recognize_resource_with_ai
+from app.services.resource_ops.ai_title_client import recognize_resource_with_ai_center
 from app.services.resource_ops.recognition_queue import (
     CLICK_RECOGNITION_PRIORITY,
     DEFAULT_RECOGNITION_PRIORITY,
@@ -31,7 +31,6 @@ from app.services.resource_ops.settings import (
     get_resource_ops_runtime_config,
     is_resource_ops_ai_ready,
     get_resource_ops_runtime_settings,
-    update_resource_ops_runtime_settings,
 )
 
 
@@ -508,26 +507,15 @@ def _build_ai_work_candidate(
     session: Session,
     *,
     candidate: RecognitionCandidate,
-    config: dict[str, Any],
 ) -> dict[str, Any]:
     primary_title = _get_primary_title(candidate, session)
 
-    result = recognize_resource_with_ai(
-        base_url=str(config.get("ai_base_url") or ""),
-        api_key=str(config.get("ai_api_key") or ""),
-        model=str(config.get("ai_model") or ""),
-        ai_api_mode=str(config.get("ai_api_mode") or "auto"),
+    result = recognize_resource_with_ai_center(
+        session,
         primary_title=primary_title,
     )
     used_model = _normalize_text(getattr(result, "used_model", None), max_length=255)
     used_api_mode = _normalize_text(getattr(result, "used_api_mode", None), max_length=64)
-    if used_model and used_model != _normalize_text(config.get("ai_model"), max_length=255):
-        update_resource_ops_runtime_settings(
-            session,
-            {"ai_model": used_model},
-            updated_by="system",
-        )
-        config["ai_model"] = used_model
     canonical_title = _normalize_text(result.title, max_length=255)
     if not canonical_title:
         raise ValueError("AI 没有返回作品标题")
@@ -667,7 +655,7 @@ def resolve_link_target_work(
     config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     runtime_config = config or get_resource_ops_runtime_config(session)
-    if not is_resource_ops_ai_ready(runtime_config):
+    if not is_resource_ops_ai_ready(session=session, config=runtime_config):
         raise ValueError("请先启用并配置可用的 AI 识别")
 
     candidate = candidate_row or _get_candidate_by_link_target_id(session, link_target_id=int(link_target_id))
@@ -677,7 +665,7 @@ def resolve_link_target_work(
     binding = _ensure_binding(session, link_target_id=candidate.link_target_id)
     had_matched_binding = binding.work_id is not None and binding.match_status == "matched"
     try:
-        ai_payload = _build_ai_work_candidate(session, candidate=candidate, config=runtime_config)
+        ai_payload = _build_ai_work_candidate(session, candidate=candidate)
         work = _upsert_ai_work(session, candidate=ai_payload)
         _apply_binding_success(
             session,
@@ -772,7 +760,7 @@ def sync_resource_work_bindings(
         normalized_mode = "all"
     if normalized_mode not in {"pending", "all"}:
         raise ValueError("invalid recognition mode")
-    if not is_resource_ops_ai_ready(config):
+    if not is_resource_ops_ai_ready(session=session, config=config):
         raise ValueError("请先启用并配置可用的 AI 识别")
     link_target_ids = _collect_processing_target_ids(session, mode=normalized_mode)
     enqueue_result = enqueue_recognition_tasks(
@@ -820,7 +808,7 @@ def sync_resource_work_bindings_for_link_targets(
         "skipped_matched_count": 0,
     }
     message = "disabled"
-    if bool(config.get("auto_recognition_enabled")) and is_resource_ops_ai_ready(config):
+    if bool(config.get("auto_recognition_enabled")) and is_resource_ops_ai_ready(session=session, config=config):
         enqueue_result = enqueue_recognition_tasks(
             session,
             link_target_ids=normalized_ids,

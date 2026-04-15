@@ -317,10 +317,10 @@ export interface ResourceOpsRecognitionStatus {
 
 export interface ResourceOpsRuntimeSettingsResponse {
   auto_recognition_enabled: boolean
-  ai_base_url: string
-  ai_model: string
-  ai_api_key_configured: boolean
-  ai_provider_ready: boolean
+  ai_route_key: string
+  ai_route_ready: boolean
+  ai_route_provider_label?: string | null
+  ai_route_model?: string | null
   retention_click_event_days: number
   retention_daily_stat_days: number
   retention_candidate_log_days: number
@@ -335,9 +335,6 @@ export interface ResourceOpsRuntimeSettingsResponse {
 
 export interface ResourceOpsRuntimeSettingsUpdateRequest {
   auto_recognition_enabled: boolean
-  ai_base_url: string
-  ai_model: string
-  ai_api_key?: string | null
   retention_click_event_days: number
   retention_daily_stat_days: number
   retention_candidate_log_days: number
@@ -350,44 +347,6 @@ export interface ResourceOpsRecognitionRunResponse {
   message: string
   recognition_status: ResourceOpsRecognitionStatus
   binding_summary: ResourceOpsWorkBindingSummary
-}
-
-export interface ResourceOpsAiProviderDraftRequest {
-  base_url?: string | null
-  api_key?: string | null
-  use_saved_api_key?: boolean
-}
-
-export interface ResourceOpsAiModelItem {
-  id: string
-  label: string
-  owned_by?: string | null
-}
-
-export interface ResourceOpsAiModelListResponse {
-  models: ResourceOpsAiModelItem[]
-  base_url: string
-  used_saved_api_key: boolean
-  count: number
-}
-
-export interface ResourceOpsAiTestRequest extends ResourceOpsAiProviderDraftRequest {
-  model: string
-  sample_text?: string | null
-}
-
-export interface ResourceOpsAiTestResponse {
-  ok: boolean
-  base_url: string
-  model: string
-  used_api_mode: string
-  sample_text: string
-  extracted_title?: string | null
-  release_year?: number | null
-  season?: number | null
-  media_type?: string | null
-  confidence: number
-  reason: string
 }
 
 export interface ResourceOpsRetentionRunResponse {

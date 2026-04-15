@@ -10,6 +10,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.services.ai_center import execute_text_route
 from app.services.resource_ops.settings import RESOURCE_OPS_AI_API_MODES, resolve_resource_ops_ai_request_config
 
 
@@ -724,3 +725,29 @@ def test_resource_ops_ai_connection(session: Session, payload: dict[str, Any] | 
         "confidence": result.confidence,
         "reason": result.reason,
     }
+
+
+def recognize_resource_with_ai_center(
+    session: Session,
+    *,
+    primary_title: str,
+) -> ResourceOpsAiRecognitionResult:
+    route_result = execute_text_route(
+        session,
+        route_key="resource_ops_title_extract",
+        system_prompt=AI_RECOGNITION_SYSTEM_PROMPT,
+        user_prompt=_build_user_prompt(primary_title=primary_title),
+        metadata={
+            "source": "resource_ops",
+            "primary_title": _normalize_text(primary_title, max_length=255),
+        },
+    )
+    title = _extract_plain_title(route_result.text)
+    return ResourceOpsAiRecognitionResult(
+        title=title,
+        confidence=1.0 if title else 0.0,
+        reason="plain_title_extract" if title else "empty_title",
+        raw_content=route_result.text,
+        used_model=route_result.model_id or "",
+        used_api_mode=route_result.used_api_mode or "",
+    )

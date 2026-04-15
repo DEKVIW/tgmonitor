@@ -107,7 +107,7 @@ def process_next_recognition_task(session: Session, *, worker_name: str) -> bool
     ensure_runtime_storage_tables()
     config = get_resource_ops_runtime_config(session)
 
-    if not is_resource_ops_ai_ready(config):
+    if not is_resource_ops_ai_ready(session=session, config=config):
         _set_worker_idle(session, worker_name=worker_name, last_error=None)
         return False
 

@@ -7,6 +7,7 @@ import {
   CloudUploadOutlined,
   DashboardOutlined,
   LineChartOutlined,
+  RobotOutlined,
   SettingOutlined,
   ThunderboltOutlined,
 } from '@ant-design/icons'
@@ -45,6 +46,11 @@ const SidebarNavRuntime = ({ collapsed, onNavigate, showAccountEntry = false }: 
             key: '/analytics',
             icon: renderMenuIcon(<LineChartOutlined />),
             label: '数据分析',
+          },
+          {
+            key: '/ai-center',
+            icon: renderMenuIcon(<RobotOutlined />),
+            label: 'AI 中心',
           },
           {
             key: '/resource-ops',

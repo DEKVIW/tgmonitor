@@ -213,10 +213,20 @@ export interface PanTransferPublishRecordItem {
   published_clicks_total: number
   publish_count: number
   can_refresh_share: boolean
+  can_offline: boolean
+  can_reclaim: boolean
+  can_republish: boolean
+  frontend_online: boolean
   can_edit: boolean
   operator?: string | null
   is_archived: boolean
   archived_at?: string | null
+  lifecycle_state: string
+  lifecycle_label?: string | null
+  lifecycle_summary?: string | null
+  retired_at?: string | null
+  resource_path?: string | null
+  resource_account_name?: string | null
   publish_rule_enabled: boolean
   publish_rule_summary?: string | null
   next_publish_at?: string | null
@@ -238,6 +248,10 @@ export interface PanTransferPublishRecordUpdateRequest {
   title: string
   description?: string | null
   tags?: string[]
+}
+
+export interface PanTransferPublishRetireRequest {
+  mode: 'archive' | 'offline_frontend' | 'reclaim_resource' | string
 }
 
 export interface PanTransferPublishRuleUpdateRequest {
@@ -280,6 +294,60 @@ export interface PanTransferFollowTaskLogItem {
   message: string
   payload: Record<string, unknown>
   created_at: string
+}
+
+export interface PanTransferFollowTaskIdentitySnapshot {
+  core_title?: string | null
+  aliases: string[]
+  release_year?: number | null
+  season?: number | null
+  latest_episode?: number | null
+  content_type?: string | null
+  search_queries: string[]
+  reference_titles: string[]
+  reference_message_time?: string | null
+  reason?: string | null
+  source?: string | null
+  identity_error?: string | null
+  used_model?: string | null
+  used_api_mode?: string | null
+  updated_at?: string | null
+}
+
+export interface PanTransferFollowTaskCandidateRecallItem {
+  link_target_id?: number | null
+  title?: string | null
+  url?: string | null
+  latest_message_time?: string | null
+}
+
+export interface PanTransferFollowTaskCandidateRecall {
+  queries: string[]
+  recall_count: number
+  judge_limit: number
+  selected_link_target_id?: number | null
+  items: PanTransferFollowTaskCandidateRecallItem[]
+}
+
+export interface PanTransferFollowTaskCandidateAssessment {
+  is_same_work?: boolean | null
+  is_newer?: boolean | null
+  should_promote?: boolean | null
+  confidence?: number | null
+  current_episode?: number | null
+  candidate_episode?: number | null
+  reason?: string | null
+  judge_source?: string | null
+  used_model?: string | null
+  used_api_mode?: string | null
+  judge_error?: string | null
+  checked_at?: string | null
+  candidate_link_target_id?: number | null
+  candidate_title?: string | null
+  recall_count: number
+  queries: string[]
+  validation_status?: string | null
+  validation_detail_message?: string | null
 }
 
 export interface PanTransferFollowTaskRuleAssessment {
@@ -342,6 +410,9 @@ export interface PanTransferFollowTaskItem {
   last_sync_source_kind?: string | null
   last_sync_started_at?: string | null
   rule_assessment: PanTransferFollowTaskRuleAssessment
+  identity_snapshot: PanTransferFollowTaskIdentitySnapshot
+  candidate_assessment: PanTransferFollowTaskCandidateAssessment
+  candidate_recall: PanTransferFollowTaskCandidateRecall
   extra_json: Record<string, unknown>
   created_by?: string | null
   updated_by?: string | null

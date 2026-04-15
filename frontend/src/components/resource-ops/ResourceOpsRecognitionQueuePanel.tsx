@@ -1,3 +1,4 @@
+/*
 import { Alert, Button, Card, Collapse, Empty, Input, Select, Switch, Tag, Tooltip, Typography } from 'antd'
 import { InfoCircleOutlined, RobotOutlined } from '@ant-design/icons'
 
@@ -415,3 +416,5 @@ const ResourceOpsRecognitionQueuePanel = ({
 }
 
 export default ResourceOpsRecognitionQueuePanel
+*/
+export { default } from './ResourceOpsRecognitionRoutePanel'

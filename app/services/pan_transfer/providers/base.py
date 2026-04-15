@@ -41,6 +41,16 @@ class PanTransferShareResult:
     payload: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(slots=True)
+class PanTransferDeleteResult:
+    deleted: bool = False
+    already_missing: bool = False
+    staging_root: str | None = None
+    staging_folder_name: str | None = None
+    staging_folder_id: str | None = None
+    payload: dict[str, Any] = field(default_factory=dict)
+
+
 class PanTransferProvider:
     platform: str = ""
 
@@ -76,4 +86,15 @@ class PanTransferProvider:
         share_expire_days: int | None,
         title_hint: str | None,
     ) -> PanTransferShareResult:
+        raise NotImplementedError
+
+    async def delete_staging_target(
+        self,
+        *,
+        credential_value: str,
+        account_name: str,
+        staging_root: str,
+        staging_folder_name: str,
+        staging_folder_id: str | None,
+    ) -> PanTransferDeleteResult:
         raise NotImplementedError

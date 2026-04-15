@@ -1,7 +1,7 @@
 const env = (import.meta as any).env || {}
 
 const DEFAULT_LOGIN_PATH = '/login'
-const RESERVED_LOGIN_PATHS = new Set(['/', '/dashboard', '/statistics', '/analytics', '/resource-ops', '/backups', '/admin'])
+const RESERVED_LOGIN_PATHS = new Set(['/', '/dashboard', '/statistics', '/analytics', '/ai-center', '/resource-ops', '/backups', '/admin'])
 
 const normalizePath = (rawPath: string | undefined, fallback: string): string => {
   const trimmed = rawPath?.trim()

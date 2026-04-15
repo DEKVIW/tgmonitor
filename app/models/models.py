@@ -452,6 +452,112 @@ class PanTransferSyncTaskLog(Base):
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
 
 
+class AiProviderConfig(Base):
+    __tablename__ = "ai_provider_configs"
+    __table_args__ = (
+        UniqueConstraint("provider_key", name="ux_ai_provider_configs_provider_key"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    provider_key = Column(String(64), nullable=False, index=True)
+    display_name = Column(String(128), nullable=False, default="")
+    provider_type = Column(String(32), nullable=False, default="openai_compatible", index=True)
+    base_url = Column(Text, nullable=False, default="")
+    api_key_encrypted = Column(Text, nullable=False, default="")
+    api_mode = Column(String(32), nullable=False, default="auto")
+    is_enabled = Column(Boolean, nullable=False, default=True, index=True)
+    is_default = Column(Boolean, nullable=False, default=False, index=True)
+    priority = Column(Integer, nullable=False, default=100, index=True)
+    timeout_seconds = Column(Integer, nullable=False, default=25)
+    max_retries = Column(Integer, nullable=False, default=1)
+    cooldown_seconds = Column(Integer, nullable=False, default=300)
+    cooldown_until = Column(DateTime, nullable=True, index=True)
+    health_status = Column(String(32), nullable=False, default="unknown", index=True)
+    consecutive_failures = Column(Integer, nullable=False, default=0)
+    last_checked_at = Column(DateTime, nullable=True)
+    last_success_at = Column(DateTime, nullable=True)
+    last_failure_at = Column(DateTime, nullable=True)
+    last_error_message = Column(Text, nullable=True)
+    extra_json = Column(JSONB, nullable=False, default=dict)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_by = Column(String(128), nullable=True)
+
+
+class AiProviderModel(Base):
+    __tablename__ = "ai_provider_models"
+    __table_args__ = (
+        UniqueConstraint("provider_id", "model_id", name="ux_ai_provider_models_provider_model"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    provider_id = Column(Integer, ForeignKey("ai_provider_configs.id"), nullable=False, index=True)
+    model_id = Column(String(255), nullable=False, index=True)
+    label = Column(String(255), nullable=False, default="")
+    owned_by = Column(String(255), nullable=True)
+    is_enabled = Column(Boolean, nullable=False, default=True, index=True)
+    is_preferred = Column(Boolean, nullable=False, default=False, index=True)
+    last_refreshed_at = Column(DateTime, nullable=True)
+    extra_json = Column(JSONB, nullable=False, default=dict)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class AiRouteProfile(Base):
+    __tablename__ = "ai_route_profiles"
+    __table_args__ = (
+        UniqueConstraint("route_key", name="ux_ai_route_profiles_route_key"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    route_key = Column(String(128), nullable=False, index=True)
+    display_name = Column(String(128), nullable=False, default="")
+    description = Column(Text, nullable=False, default="")
+    output_mode = Column(String(32), nullable=False, default="text")
+    is_enabled = Column(Boolean, nullable=False, default=True, index=True)
+    max_attempts = Column(Integer, nullable=False, default=3)
+    extra_json = Column(JSONB, nullable=False, default=dict)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_by = Column(String(128), nullable=True)
+
+
+class AiRouteStep(Base):
+    __tablename__ = "ai_route_steps"
+    __table_args__ = (
+        UniqueConstraint("route_profile_id", "step_index", name="ux_ai_route_steps_profile_index"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    route_profile_id = Column(Integer, ForeignKey("ai_route_profiles.id"), nullable=False, index=True)
+    step_index = Column(Integer, nullable=False, default=1)
+    provider_id = Column(Integer, ForeignKey("ai_provider_configs.id"), nullable=False, index=True)
+    model_id = Column(String(255), nullable=True)
+    is_enabled = Column(Boolean, nullable=False, default=True, index=True)
+    extra_json = Column(JSONB, nullable=False, default=dict)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_by = Column(String(128), nullable=True)
+
+
+class AiCallEvent(Base):
+    __tablename__ = "ai_call_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    route_key = Column(String(128), nullable=False, index=True)
+    route_profile_id = Column(Integer, ForeignKey("ai_route_profiles.id"), nullable=True, index=True)
+    route_step_id = Column(Integer, ForeignKey("ai_route_steps.id"), nullable=True, index=True)
+    provider_id = Column(Integer, ForeignKey("ai_provider_configs.id"), nullable=True, index=True)
+    provider_label = Column(String(128), nullable=True)
+    model_id = Column(String(255), nullable=True)
+    status = Column(String(32), nullable=False, default="success", index=True)
+    error_type = Column(String(64), nullable=True, index=True)
+    error_message = Column(Text, nullable=True)
+    duration_ms = Column(Integer, nullable=True)
+    extra_json = Column(JSONB, nullable=False, default=dict)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+
 class Credential(Base):
     __tablename__ = "credentials"
 
@@ -918,6 +1024,11 @@ def ensure_runtime_storage_tables() -> None:
                 PanTransferPublishRecord.__table__,
                 PanTransferSyncTask.__table__,
                 PanTransferSyncTaskLog.__table__,
+                AiProviderConfig.__table__,
+                AiProviderModel.__table__,
+                AiRouteProfile.__table__,
+                AiRouteStep.__table__,
+                AiCallEvent.__table__,
             ],
         )
         ensure_message_monitor_source_columns()

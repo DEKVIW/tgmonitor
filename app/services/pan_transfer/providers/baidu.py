@@ -13,6 +13,7 @@ from app.services.link_check.constants import PLATFORM_BAIDU
 
 from .base import (
     PanTransferAccountValidationResult,
+    PanTransferDeleteResult,
     PanTransferProvider,
     PanTransferProviderError,
     PanTransferShareResult,
@@ -714,5 +715,77 @@ class BaiduPanTransferProvider(PanTransferProvider):
                     "share_target_id": share_target_id,
                     "share_target_name": share_target_name,
                     "share_target_fallback_reason": share_target_fallback_reason,
+                },
+            )
+
+    async def delete_staging_target(
+        self,
+        *,
+        credential_value: str,
+        account_name: str,
+        staging_root: str,
+        staging_folder_name: str,
+        staging_folder_id: str | None,
+    ) -> PanTransferDeleteResult:
+        del account_name, staging_folder_id
+        async with _BaiduClient(credential_value) as client:
+            bdstoken, validation_payload = await client.get_bdstoken()
+            parent_path = "/" + "/".join(part for part in str(staging_root or "").split("/") if part)
+            parent_path = parent_path if parent_path != "/" else "/"
+            target_path = f"{parent_path.rstrip('/')}/{staging_folder_name}" if parent_path != "/" else f"/{staging_folder_name}"
+            rows = await client.list_dir(parent_path, bdstoken=bdstoken)
+            if isinstance(rows, int):
+                raise PanTransferProviderError(
+                    f"Baidu failed to inspect staging directory before deletion: errno {rows}"
+                )
+            target_exists = any(
+                str(row.get("path") or "").strip() == target_path
+                or (
+                    str(row.get("server_filename") or "").strip() == staging_folder_name
+                    and int(row.get("isdir") or 0) == 1
+                )
+                for row in rows
+            )
+            if not target_exists:
+                return PanTransferDeleteResult(
+                    deleted=False,
+                    already_missing=True,
+                    staging_root=parent_path,
+                    staging_folder_name=staging_folder_name,
+                    staging_folder_id=None,
+                    payload={
+                        "validation": validation_payload,
+                        "target_path": target_path,
+                    },
+                )
+
+            await client.delete_files(paths=[target_path], bdstoken=bdstoken)
+            for _ in range(12):
+                await asyncio.sleep(0.8)
+                rows = await client.list_dir(parent_path, bdstoken=bdstoken)
+                if isinstance(rows, int):
+                    raise PanTransferProviderError(
+                        f"Baidu failed to verify staging deletion: errno {rows}"
+                    )
+                still_exists = any(str(row.get("path") or "").strip() == target_path for row in rows)
+                if not still_exists:
+                    return PanTransferDeleteResult(
+                        deleted=True,
+                        already_missing=False,
+                        staging_root=parent_path,
+                        staging_folder_name=staging_folder_name,
+                        staging_folder_id=None,
+                        payload={
+                            "validation": validation_payload,
+                            "target_path": target_path,
+                        },
+                    )
+
+            raise PanTransferProviderError(
+                "Baidu staging directory was not deleted in time",
+                payload={
+                    "staging_root": parent_path,
+                    "staging_folder_name": staging_folder_name,
+                    "target_path": target_path,
                 },
             )

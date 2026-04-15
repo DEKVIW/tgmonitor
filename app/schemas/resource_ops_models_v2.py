@@ -321,9 +321,6 @@ class ResourceOpsRecognitionStatusResponse(ResourceOpsBaseModel):
 
 class ResourceOpsRuntimeSettingsUpdateRequest(ResourceOpsBaseModel):
     auto_recognition_enabled: bool = False
-    ai_base_url: str = Field(default="", max_length=512)
-    ai_model: str = Field(default="", max_length=255)
-    ai_api_key: str | None = Field(default=None, max_length=8000)
     retention_click_event_days: int = Field(default=90, ge=7, le=3650)
     retention_daily_stat_days: int = Field(default=365, ge=30, le=3650)
     retention_candidate_log_days: int = Field(default=180, ge=7, le=3650)
@@ -332,10 +329,10 @@ class ResourceOpsRuntimeSettingsUpdateRequest(ResourceOpsBaseModel):
 
 class ResourceOpsRuntimeSettingsResponse(ResourceOpsBaseModel):
     auto_recognition_enabled: bool = False
-    ai_base_url: str = ""
-    ai_model: str = ""
-    ai_api_key_configured: bool = False
-    ai_provider_ready: bool = False
+    ai_route_key: str = ""
+    ai_route_ready: bool = False
+    ai_route_provider_label: str | None = None
+    ai_route_model: str | None = None
     retention_click_event_days: int = 90
     retention_daily_stat_days: int = 365
     retention_candidate_log_days: int = 180
@@ -354,44 +351,6 @@ class ResourceOpsRecognitionRunResponse(ResourceOpsBaseModel):
     message: str = ""
     recognition_status: ResourceOpsRecognitionStatusResponse
     binding_summary: ResourceOpsWorkBindingSummaryResponse
-
-
-class ResourceOpsAiProviderDraftRequest(ResourceOpsBaseModel):
-    base_url: str | None = Field(default=None, max_length=512)
-    api_key: str | None = Field(default=None, max_length=8000)
-    use_saved_api_key: bool = True
-
-
-class ResourceOpsAiModelItem(ResourceOpsBaseModel):
-    id: str
-    label: str
-    owned_by: str | None = None
-
-
-class ResourceOpsAiModelListResponse(ResourceOpsBaseModel):
-    models: list[ResourceOpsAiModelItem] = Field(default_factory=list)
-    base_url: str = ""
-    used_saved_api_key: bool = False
-    count: int = 0
-
-
-class ResourceOpsAiTestRequest(ResourceOpsAiProviderDraftRequest):
-    model: str = Field(default="", max_length=255)
-    sample_text: str | None = Field(default=None, max_length=500)
-
-
-class ResourceOpsAiTestResponse(ResourceOpsBaseModel):
-    ok: bool = True
-    base_url: str = ""
-    model: str
-    used_api_mode: str = ""
-    sample_text: str
-    extracted_title: str | None = None
-    release_year: int | None = None
-    season: int | None = None
-    media_type: str | None = None
-    confidence: float = 0
-    reason: str = ""
 
 
 class ResourceOpsRetentionRunResponse(ResourceOpsBaseModel):

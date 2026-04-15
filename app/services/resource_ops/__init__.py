@@ -5,7 +5,6 @@ from .analytics import (
     get_resource_ops_trend,
     list_resource_op_candidates,
 )
-from .ai_title_client import list_resource_ops_ai_models, test_resource_ops_ai_connection
 from .catalog import (
     build_tracked_link_payloads,
     delete_message_resource_data,
@@ -72,6 +71,4 @@ __all__ = [
     "list_resource_op_workbench_items",
     "get_resource_op_workbench_detail",
     "update_resource_op_workbench_item",
-    "list_resource_ops_ai_models",
-    "test_resource_ops_ai_connection",
 ]

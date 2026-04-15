@@ -7,7 +7,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.models.models import SystemSettings, ensure_runtime_storage_tables
-from app.services.secret_codec import decrypt_secret, encrypt_secret
+from app.services.secret_codec import decrypt_secret
 from app.services.system_config_service import (
     SYSTEM_SETTINGS_SINGLETON_ID,
     build_default_system_settings_values,
@@ -20,6 +20,7 @@ RECOGNITION_LOG_LIMIT = 120
 WORKER_HEARTBEAT_GRACE_SECONDS = 30
 RESOURCE_OPS_AI_API_MODES = {"auto", "chat_completions", "responses"}
 RESOURCE_OPS_LOG_TIMEZONE = ZoneInfo("Asia/Shanghai")
+RESOURCE_OPS_AI_ROUTE_KEY = "resource_ops_title_extract"
 
 
 def _utcnow() -> datetime:
@@ -281,10 +282,20 @@ def get_resource_ops_runtime_config(session: Session) -> dict[str, Any]:
     return values
 
 
-def is_resource_ops_ai_ready(config: dict[str, Any]) -> bool:
+def is_resource_ops_ai_ready(
+    config: dict[str, Any] | None = None,
+    *,
+    session: Session | None = None,
+) -> bool:
+    if session is not None:
+        from app.services.ai_center import get_ai_route_readiness
+
+        readiness = get_ai_route_readiness(session, route_key=RESOURCE_OPS_AI_ROUTE_KEY)
+        return bool(readiness.get("is_ready"))
+    safe_config = config or {}
     return bool(
-        _coerce_text(config.get("ai_base_url"), "", max_length=512)
-        and _coerce_text(config.get("ai_api_key"), "", max_length=8000)
+        _coerce_text(safe_config.get("ai_base_url"), "", max_length=512)
+        and _coerce_text(safe_config.get("ai_api_key"), "", max_length=8000)
     )
 
 
@@ -328,19 +339,19 @@ def resolve_resource_ops_ai_request_config(
 
 def get_resource_ops_runtime_settings(session: Session) -> dict[str, Any]:
     values = get_resource_ops_runtime_config(session)
-    ai_base_url = _coerce_text(values.get("ai_base_url"), "", max_length=512)
-    ai_model = _coerce_text(values.get("ai_model"), "", max_length=255)
-    ai_api_key = _coerce_text(values.get("ai_api_key"), "", max_length=8000)
     worker_state = _coerce_text(values.get("worker_state"), "idle", max_length=32) or "idle"
     worker_alive = is_resource_ops_worker_alive(values)
     current_link_target_id = _coerce_int(values.get("worker_current_link_target_id"), 0, minimum=0)
+    from app.services.ai_center import get_ai_route_readiness
+
+    ai_route_readiness = get_ai_route_readiness(session, route_key=RESOURCE_OPS_AI_ROUTE_KEY)
 
     return {
         "auto_recognition_enabled": bool(values["auto_recognition_enabled"]),
-        "ai_base_url": ai_base_url,
-        "ai_model": ai_model,
-        "ai_api_key_configured": bool(ai_api_key),
-        "ai_provider_ready": is_resource_ops_ai_ready(values),
+        "ai_route_key": RESOURCE_OPS_AI_ROUTE_KEY,
+        "ai_route_ready": bool(ai_route_readiness.get("is_ready")),
+        "ai_route_provider_label": _coerce_text(ai_route_readiness.get("provider_label"), "", max_length=128) or None,
+        "ai_route_model": _coerce_text(ai_route_readiness.get("model_id"), "", max_length=255) or None,
         "retention_click_event_days": int(values["retention_click_event_days"]),
         "retention_daily_stat_days": int(values["retention_daily_stat_days"]),
         "retention_candidate_log_days": int(values["retention_candidate_log_days"]),
@@ -376,8 +387,6 @@ def update_resource_ops_runtime_settings(
 
     for field in (
         "auto_recognition_enabled",
-        "ai_base_url",
-        "ai_model",
         "retention_click_event_days",
         "retention_daily_stat_days",
         "retention_candidate_log_days",
@@ -385,9 +394,6 @@ def update_resource_ops_runtime_settings(
     ):
         if field in payload:
             values[field] = payload[field]
-
-    if "ai_api_key" in payload:
-        values["ai_api_key_encrypted"] = encrypt_secret(_coerce_text(payload.get("ai_api_key"), "", max_length=8000))
 
     record = _ensure_system_settings_record(session)
     _write_runtime_bucket(record, values, updated_by=updated_by)

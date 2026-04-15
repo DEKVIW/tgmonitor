@@ -377,6 +377,16 @@
   -webkit-line-clamp: unset;
 }
 
+.resource-ops-transfer-inline-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.resource-ops-transfer-inline-tags .ant-tag {
+  margin-inline-end: 0;
+}
+
 .resource-ops-transfer-target-cell {
   max-width: 100%;
 }
@@ -436,6 +446,39 @@
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+
+.resource-ops-transfer-retire-options {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.resource-ops-transfer-retire-option {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 14px;
+  background: #fff;
+  text-align: left;
+  cursor: pointer;
+}
+
+.resource-ops-transfer-retire-option strong {
+  color: rgba(15, 23, 42, 0.9);
+}
+
+.resource-ops-transfer-retire-option small {
+  color: rgba(15, 23, 42, 0.6);
+  line-height: 1.5;
+}
+
+.resource-ops-transfer-retire-option.is-active {
+  border-color: rgba(22, 119, 255, 0.32);
+  background: #f8fbff;
+  box-shadow: 0 0 0 1px rgba(22, 119, 255, 0.08) inset;
 }
 
 .resource-ops-transfer-create-shell {

@@ -455,10 +455,20 @@ class PanTransferPublishRecordItem(PanTransferBaseModel):
     published_clicks_total: int = 0
     publish_count: int = 1
     can_refresh_share: bool = False
+    can_offline: bool = False
+    can_reclaim: bool = False
+    can_republish: bool = False
+    frontend_online: bool = True
     can_edit: bool = True
     operator: str | None = None
     is_archived: bool = False
     archived_at: datetime | None = None
+    lifecycle_state: str = "active"
+    lifecycle_label: str | None = None
+    lifecycle_summary: str | None = None
+    retired_at: datetime | None = None
+    resource_path: str | None = None
+    resource_account_name: str | None = None
     publish_rule_enabled: bool = False
     publish_rule_summary: str | None = None
     next_publish_at: datetime | None = None
@@ -508,6 +518,18 @@ class PanTransferPublishRecordUpdateRequest(PanTransferBaseModel):
                 continue
             seen.add(cleaned)
             normalized.append(cleaned[:64])
+        return normalized
+
+
+class PanTransferPublishRetireRequest(PanTransferBaseModel):
+    mode: str = Field(default="archive", min_length=1, max_length=32)
+
+    @field_validator("mode")
+    @classmethod
+    def validate_retire_mode(cls, value: str) -> str:
+        normalized = _normalize_text(value, field_name="mode").lower()
+        if normalized not in {"archive", "offline_frontend", "reclaim_resource"}:
+            raise ValueError("mode must be archive, offline_frontend, or reclaim_resource")
         return normalized
 
 
@@ -667,6 +689,60 @@ class PanTransferFollowTaskLogItem(PanTransferBaseModel):
     created_at: datetime
 
 
+class PanTransferFollowTaskIdentitySnapshot(PanTransferBaseModel):
+    core_title: str | None = None
+    aliases: list[str] = Field(default_factory=list)
+    release_year: int | None = None
+    season: int | None = None
+    latest_episode: int | None = None
+    content_type: str | None = None
+    search_queries: list[str] = Field(default_factory=list)
+    reference_titles: list[str] = Field(default_factory=list)
+    reference_message_time: datetime | None = None
+    reason: str | None = None
+    source: str | None = None
+    identity_error: str | None = None
+    used_model: str | None = None
+    used_api_mode: str | None = None
+    updated_at: datetime | None = None
+
+
+class PanTransferFollowTaskCandidateRecallItem(PanTransferBaseModel):
+    link_target_id: int | None = None
+    title: str | None = None
+    url: str | None = None
+    latest_message_time: datetime | None = None
+
+
+class PanTransferFollowTaskCandidateRecall(PanTransferBaseModel):
+    queries: list[str] = Field(default_factory=list)
+    recall_count: int = 0
+    judge_limit: int = 0
+    selected_link_target_id: int | None = None
+    items: list[PanTransferFollowTaskCandidateRecallItem] = Field(default_factory=list)
+
+
+class PanTransferFollowTaskCandidateAssessment(PanTransferBaseModel):
+    is_same_work: bool | None = None
+    is_newer: bool | None = None
+    should_promote: bool | None = None
+    confidence: float | None = None
+    current_episode: int | None = None
+    candidate_episode: int | None = None
+    reason: str | None = None
+    judge_source: str | None = None
+    used_model: str | None = None
+    used_api_mode: str | None = None
+    judge_error: str | None = None
+    checked_at: datetime | None = None
+    candidate_link_target_id: int | None = None
+    candidate_title: str | None = None
+    recall_count: int = 0
+    queries: list[str] = Field(default_factory=list)
+    validation_status: str | None = None
+    validation_detail_message: str | None = None
+
+
 class PanTransferFollowTaskRuleAssessment(PanTransferBaseModel):
     rule_key: str = "safe_sync_current"
     rule_label: str = "规则一：安全同步当前原链"
@@ -727,6 +803,9 @@ class PanTransferFollowTaskItem(PanTransferBaseModel):
     last_sync_source_kind: str | None = None
     last_sync_started_at: datetime | None = None
     rule_assessment: PanTransferFollowTaskRuleAssessment = Field(default_factory=PanTransferFollowTaskRuleAssessment)
+    identity_snapshot: PanTransferFollowTaskIdentitySnapshot = Field(default_factory=PanTransferFollowTaskIdentitySnapshot)
+    candidate_assessment: PanTransferFollowTaskCandidateAssessment = Field(default_factory=PanTransferFollowTaskCandidateAssessment)
+    candidate_recall: PanTransferFollowTaskCandidateRecall = Field(default_factory=PanTransferFollowTaskCandidateRecall)
     extra_json: dict = Field(default_factory=dict)
     created_by: str | None = None
     updated_by: str | None = None

@@ -25,6 +25,7 @@ from app.schemas.pan_transfer_models import (
     PanTransferManualPublishRequest,
     PanTransferMessagePublishRequest,
     PanTransferMessagePublishResponse,
+    PanTransferPublishRetireRequest,
     PanTransferPublishRecordItem,
     PanTransferPublishRecordListResponse,
     PanTransferPublishRuleUpdateRequest,
@@ -62,6 +63,7 @@ from app.services.pan_transfer import (
     queue_pan_transfer_follow_task_check,
     republish_pan_transfer_publish_record,
     refresh_pan_transfer_publish_record_share,
+    retire_pan_transfer_publish_record,
     retry_pan_transfer_batch,
     resume_pan_transfer_follow_task,
     start_pan_transfer_batch,
@@ -600,6 +602,40 @@ async def archive_pan_transfer_publish_record_api(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to archive publish record: {exc}",
+        ) from exc
+
+
+@router.post(
+    "/publishes/{record_id}/retire",
+    response_model=PanTransferPublishRecordItem,
+    summary="Retire a managed publish resource",
+)
+async def retire_pan_transfer_publish_record_api(
+    record_id: int,
+    payload: PanTransferPublishRetireRequest,
+    current_user: dict[str, Any] = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+) -> PanTransferPublishRecordItem:
+    try:
+        result = await retire_pan_transfer_publish_record(
+            db,
+            record_id=record_id,
+            mode=payload.mode,
+            operator=str(current_user.get("username") or current_user.get("account") or "admin"),
+        )
+        db.commit()
+        return PanTransferPublishRecordItem(**result)
+    except LookupError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to retire publish record: {exc}",
         ) from exc
 
 

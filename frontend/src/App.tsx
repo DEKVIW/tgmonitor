@@ -15,6 +15,7 @@ import Dashboard from './pages/Dashboard'
 import Statistics from './pages/Statistics'
 import Analytics from './pages/AnalyticsDashboardModern'
 import Admin from './pages/AdminRuntime'
+import AiCenterAdminRuntime from './pages/AiCenterAdminRuntime'
 import Backups from './pages/BackupsRuntime'
 import ResourceOperations from './pages/ResourceOperationsAdminRuntime'
 import { LOGIN_LINUXDO_CALLBACK_PATH, LOGIN_PATH } from './utils/routes'
@@ -54,6 +55,14 @@ function App() {
             element={
               <AdminRoute>
                 <Analytics />
+              </AdminRoute>
+            }
+          />
+          <Route
+            path="/ai-center"
+            element={
+              <AdminRoute>
+                <AiCenterAdminRuntime />
               </AdminRoute>
             }
           />

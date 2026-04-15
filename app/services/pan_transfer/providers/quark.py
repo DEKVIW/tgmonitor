@@ -12,6 +12,7 @@ from app.services.link_check.constants import PLATFORM_QUARK
 
 from .base import (
     PanTransferAccountValidationResult,
+    PanTransferDeleteResult,
     PanTransferProvider,
     PanTransferProviderError,
     PanTransferShareResult,
@@ -736,5 +737,87 @@ class QuarkPanTransferProvider(PanTransferProvider):
                     "share_target_id": share_target_id,
                     "share_target_name": share_target_name,
                     "share_target_fallback_reason": share_target_fallback_reason,
+                },
+            )
+
+    async def delete_staging_target(
+        self,
+        *,
+        credential_value: str,
+        account_name: str,
+        staging_root: str,
+        staging_folder_name: str,
+        staging_folder_id: str | None,
+    ) -> PanTransferDeleteResult:
+        del account_name
+        async with _QuarkClient(credential_value) as client:
+            validation_payload = await client.get_user_info()
+            parent_id = "0"
+            parent_path = "/"
+            for segment in [part for part in str(staging_root or "").split("/") if part]:
+                rows = await client.list_dir_all(parent_id=parent_id)
+                matched = client._match_dir(rows, folder_name=segment)
+                if matched is None:
+                    return PanTransferDeleteResult(
+                        deleted=False,
+                        already_missing=True,
+                        staging_root=parent_path,
+                        staging_folder_name=staging_folder_name,
+                        staging_folder_id=None,
+                        payload={
+                            "validation": validation_payload,
+                            "missing_segment": segment,
+                        },
+                    )
+                parent_id = str(matched.get("fid") or "").strip()
+                parent_path = f"{parent_path.rstrip('/')}/{segment}"
+
+            folder_id = str(staging_folder_id or "").strip()
+            folder = None
+            rows = await client.list_dir_all(parent_id=parent_id)
+            if folder_id:
+                folder = next(
+                    (row for row in rows if str(row.get("fid") or "").strip() == folder_id),
+                    None,
+                )
+            if folder is None:
+                folder = client._match_dir(rows, folder_name=staging_folder_name)
+            if folder is None:
+                return PanTransferDeleteResult(
+                    deleted=False,
+                    already_missing=True,
+                    staging_root=parent_path,
+                    staging_folder_name=staging_folder_name,
+                    staging_folder_id=folder_id or None,
+                    payload={
+                        "validation": validation_payload,
+                        "missing_folder_name": staging_folder_name,
+                    },
+                )
+
+            folder_id = str(folder.get("fid") or "").strip()
+            await client.delete_entries(file_ids=[folder_id])
+            for _ in range(12):
+                await asyncio.sleep(0.8)
+                rows = await client.list_dir_all(parent_id=parent_id)
+                still_exists = any(str(row.get("fid") or "").strip() == folder_id for row in rows)
+                if not still_exists:
+                    return PanTransferDeleteResult(
+                        deleted=True,
+                        already_missing=False,
+                        staging_root=parent_path,
+                        staging_folder_name=staging_folder_name,
+                        staging_folder_id=folder_id or None,
+                        payload={
+                            "validation": validation_payload,
+                        },
+                    )
+
+            raise PanTransferProviderError(
+                "Quark staging directory was not deleted in time",
+                payload={
+                    "staging_root": parent_path,
+                    "staging_folder_name": staging_folder_name,
+                    "staging_folder_id": folder_id,
                 },
             )

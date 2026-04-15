@@ -191,7 +191,21 @@ const getFollowStatusSummary = (record: PanTransferFollowTaskItem) => {
 }
 
 const getFollowTaskTitle = (record: PanTransferFollowTaskItem) =>
-  record.work_title || record.topic_title || record.task_name || `追更任务 #${record.id}`
+  record.identity_snapshot?.core_title || record.work_title || record.topic_title || record.task_name || `追更任务 #${record.id}`
+
+const getFollowCandidateAssessmentSummary = (record: PanTransferFollowTaskItem) => {
+  const assessment = record.candidate_assessment
+  if (assessment.should_promote) {
+    return 'AI 判定当前候选可提升为追更来源'
+  }
+  if (assessment.is_same_work && assessment.is_newer === false) {
+    return 'AI 判定是同作品，但没有明显更新'
+  }
+  if (assessment.is_same_work === false) {
+    return 'AI 判定召回结果不是同一作品'
+  }
+  return assessment.reason || '本次巡检没有形成新的候选命中'
+}
 
 const getFollowRuleTone = (record: PanTransferFollowTaskItem) =>
   FOLLOW_RULE_TONE[String(record.rule_assessment?.risk_level || '').toLowerCase()] || FOLLOW_RULE_TONE.info
@@ -1164,7 +1178,7 @@ const FollowTasksSectionV2 = ({ refreshToken }: FollowTasksSectionProps) => {
                     </Space>
                   ),
                 },
-                { key: 'topic', label: '资源主题', children: detailTask.work_title || detailTask.topic_title },
+                { key: 'topic', label: '资源主题', children: getFollowTaskTitle(detailTask) },
                 { key: 'account', label: '目标账号', children: detailTask.target_account_name || '-' },
                 { key: 'path', label: '固定资源目录', children: detailTask.fixed_save_path || '-' },
                 {
@@ -1183,6 +1197,84 @@ const FollowTasksSectionV2 = ({ refreshToken }: FollowTasksSectionProps) => {
                 { key: 'next_check', label: '下次检查', children: formatDateTime(detailTask.next_check_at) },
               ]}
             />
+
+            <Card size="small" title="AI 识别身份" className="resource-ops-follow-sync-card">
+              <div className="resource-ops-follow-sync-meta">
+                <span>{detailTask.identity_snapshot.core_title || getFollowTaskTitle(detailTask)}</span>
+                {detailTask.identity_snapshot.aliases.length > 0 ? (
+                  <Space wrap size={[6, 6]}>
+                    {detailTask.identity_snapshot.aliases.map((alias) => (
+                      <Tag key={alias}>{alias}</Tag>
+                    ))}
+                  </Space>
+                ) : null}
+                <small>
+                  {[
+                    detailTask.identity_snapshot.release_year ? `年份 ${detailTask.identity_snapshot.release_year}` : null,
+                    detailTask.identity_snapshot.season ? `季 ${detailTask.identity_snapshot.season}` : null,
+                    detailTask.identity_snapshot.latest_episode ? `当前集数 ${detailTask.identity_snapshot.latest_episode}` : null,
+                    detailTask.identity_snapshot.content_type || null,
+                  ]
+                    .filter(Boolean)
+                    .join(' · ') || '当前还没有更多结构化身份信息'}
+                </small>
+                {detailTask.identity_snapshot.search_queries.length > 0 ? (
+                  <small>{`召回关键词：${detailTask.identity_snapshot.search_queries.join(' / ')}`}</small>
+                ) : null}
+                <small>
+                  {[
+                    detailTask.identity_snapshot.source ? `来源 ${detailTask.identity_snapshot.source}` : null,
+                    detailTask.identity_snapshot.used_model ? `模型 ${detailTask.identity_snapshot.used_model}` : null,
+                    detailTask.identity_snapshot.updated_at ? `更新时间 ${formatDateTime(detailTask.identity_snapshot.updated_at)}` : null,
+                  ]
+                    .filter(Boolean)
+                    .join(' · ') || '尚未记录 AI 执行元数据'}
+                </small>
+                {detailTask.identity_snapshot.identity_error ? (
+                  <small>{`回退原因：${detailTask.identity_snapshot.identity_error}`}</small>
+                ) : null}
+              </div>
+            </Card>
+
+            <Card size="small" title="候选判定" className="resource-ops-follow-sync-card">
+              <div className="resource-ops-follow-sync-meta">
+                <span>{getFollowCandidateAssessmentSummary(detailTask)}</span>
+                <small>
+                  {`召回 ${detailTask.candidate_recall.recall_count || 0} 条 · 最多评估 ${detailTask.candidate_recall.judge_limit || 0} 条`}
+                </small>
+                <small>
+                  {[
+                    detailTask.candidate_assessment.is_same_work === undefined || detailTask.candidate_assessment.is_same_work === null
+                      ? null
+                      : `同作品 ${detailTask.candidate_assessment.is_same_work ? '是' : '否'}`,
+                    detailTask.candidate_assessment.is_newer === undefined || detailTask.candidate_assessment.is_newer === null
+                      ? null
+                      : `更晚更新 ${detailTask.candidate_assessment.is_newer ? '是' : '否'}`,
+                    detailTask.candidate_assessment.confidence !== undefined && detailTask.candidate_assessment.confidence !== null
+                      ? `置信度 ${Number(detailTask.candidate_assessment.confidence).toFixed(2)}`
+                      : null,
+                  ]
+                    .filter(Boolean)
+                    .join(' · ') || '本次没有可展示的判定结论'}
+                </small>
+                {(detailTask.candidate_assessment.current_episode || detailTask.candidate_assessment.candidate_episode) ? (
+                  <small>
+                    {[
+                      detailTask.candidate_assessment.current_episode ? `当前集数 ${detailTask.candidate_assessment.current_episode}` : null,
+                      detailTask.candidate_assessment.candidate_episode ? `候选集数 ${detailTask.candidate_assessment.candidate_episode}` : null,
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')}
+                  </small>
+                ) : null}
+                {detailTask.candidate_recall.queries.length > 0 ? (
+                  <small>{`召回查询：${detailTask.candidate_recall.queries.join(' / ')}`}</small>
+                ) : null}
+                {detailTask.candidate_assessment.reason ? (
+                  <small>{`判定说明：${detailTask.candidate_assessment.reason}`}</small>
+                ) : null}
+              </div>
+            </Card>
 
             <Card size="small" title="链接状态" className="resource-ops-follow-sync-card">
               <div className="resource-ops-transfer-link-stack">
