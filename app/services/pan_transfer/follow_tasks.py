@@ -26,6 +26,7 @@ from app.services.ai_center import execute_text_route, extract_json_object_from_
 from app.services.resource_ops import get_work_binding_lookup
 
 from .common import normalize_relative_path, utcnow
+from .replacement import replace_link_target_references_with_url, rewrite_message_link_ref_with_url
 from .validation import validate_share_url
 
 
@@ -100,6 +101,16 @@ def _normalize_optional_int(value: Any) -> int | None:
     except (TypeError, ValueError):
         return None
     return normalized if normalized > 0 else None
+
+
+def _normalize_optional_non_negative_int(value: Any) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError):
+        return None
+    return normalized if normalized >= 0 else None
 
 
 def _normalize_optional_bool(value: Any) -> bool | None:
@@ -1262,6 +1273,9 @@ def _build_follow_candidate_payload(row: Any, *, fallback_title: str) -> dict[st
     display_text = _normalize_text(getattr(row, "display_text", None), max_length=255)
     return {
         "link_target_id": int(row.link_target_id),
+        "message_id": _normalize_optional_int(getattr(row, "message_id", None)),
+        "link_ref_id": _normalize_optional_int(getattr(row, "link_ref_id", None)),
+        "link_index": _normalize_optional_non_negative_int(getattr(row, "link_index", None)),
         "url": _normalize_text(getattr(row, "original_url", None)),
         "title": latest_message_title or display_text or fallback_title,
         "display_text": display_text or None,
@@ -1323,6 +1337,9 @@ def _list_follow_candidates_by_work(session: Session, *, task: PanTransferSyncTa
         session.query(
             LinkTarget.id.label("link_target_id"),
             LinkTarget.original_url.label("original_url"),
+            latest_ref.id.label("link_ref_id"),
+            latest_ref.message_id.label("message_id"),
+            latest_ref.link_index.label("link_index"),
             latest_ref.display_text.label("display_text"),
             latest_message.title.label("latest_message_title"),
             latest_message.description.label("latest_message_description"),
@@ -1400,6 +1417,9 @@ def _list_follow_candidates_by_identity(
         session.query(
             LinkTarget.id.label("link_target_id"),
             LinkTarget.original_url.label("original_url"),
+            latest_ref.id.label("link_ref_id"),
+            latest_ref.message_id.label("message_id"),
+            latest_ref.link_index.label("link_index"),
             latest_ref.display_text.label("display_text"),
             latest_message.title.label("latest_message_title"),
             latest_message.description.label("latest_message_description"),
@@ -1599,6 +1619,9 @@ def _build_follow_candidate_recall_snapshot(
         "items": [
             {
                 "link_target_id": _normalize_optional_int(item.get("link_target_id")),
+                "message_id": _normalize_optional_int(item.get("message_id")),
+                "link_ref_id": _normalize_optional_int(item.get("link_ref_id")),
+                "link_index": _normalize_optional_non_negative_int(item.get("link_index")),
                 "title": _normalize_text(item.get("title"), max_length=255) or None,
                 "url": _normalize_text(item.get("url"), max_length=1000) or None,
                 "latest_message_time": _serialize_json_value(item.get("latest_message_time")),
@@ -1613,7 +1636,13 @@ def _pick_follow_candidate(
     *,
     task: PanTransferSyncTask,
     snapshot: dict[str, Any],
-) -> tuple[dict[str, Any] | None, dict[str, Any] | None, dict[str, Any]]:
+) -> tuple[
+    dict[str, Any] | None,
+    dict[str, Any] | None,
+    dict[str, Any],
+    dict[str, Any] | None,
+    dict[str, Any] | None,
+]:
     candidate_policy = _get_follow_candidate_policy(task)
     recalled_candidates = _merge_follow_candidate_lists(
         _list_follow_candidates_by_work(session, task=task),
@@ -1630,9 +1659,13 @@ def _pick_follow_candidate(
                 "queries": list(recall_snapshot.get("queries") or []),
             },
             recall_snapshot,
+            None,
+            None,
         )
 
     last_assessment: dict[str, Any] | None = None
+    same_episode_candidate: dict[str, Any] | None = None
+    same_episode_assessment: dict[str, Any] | None = None
     for candidate in recalled_candidates[: int(candidate_policy["max_judge_candidates"])]:
         try:
             assessment = _judge_follow_candidate_with_ai(session, task=task, snapshot=snapshot, candidate=candidate)
@@ -1653,8 +1686,11 @@ def _pick_follow_candidate(
         last_assessment = assessment
         if assessment.get("should_promote"):
             recall_snapshot["selected_link_target_id"] = _normalize_optional_int(candidate.get("link_target_id"))
-            return candidate, assessment, recall_snapshot
-    return None, last_assessment, recall_snapshot
+            return candidate, assessment, recall_snapshot, same_episode_candidate, same_episode_assessment
+        if same_episode_candidate is None and _is_same_episode_follow_replacement_candidate(assessment):
+            same_episode_candidate = dict(candidate)
+            same_episode_assessment = dict(assessment)
+    return None, last_assessment, recall_snapshot, same_episode_candidate, same_episode_assessment
 
 
 async def _safe_validate_url(url: str | None) -> dict[str, Any]:
@@ -1674,6 +1710,18 @@ async def _safe_validate_url(url: str | None) -> dict[str, Any]:
 def _is_healthy_link_status(value: Any) -> bool:
     normalized = _normalize_text(value, max_length=32).lower()
     return normalized in {"valid", "healthy"}
+
+
+def _is_same_episode_follow_replacement_candidate(assessment: dict[str, Any] | None) -> bool:
+    if not isinstance(assessment, dict):
+        return False
+    if _normalize_optional_bool(assessment.get("is_same_work")) is not True:
+        return False
+    if _normalize_optional_bool(assessment.get("is_newer")) is not False:
+        return False
+    current_episode = _normalize_optional_int(assessment.get("current_episode"))
+    candidate_episode = _normalize_optional_int(assessment.get("candidate_episode"))
+    return current_episode is not None and current_episode == candidate_episode
 
 
 def _clear_follow_task_candidate_fields(task: PanTransferSyncTask) -> None:
@@ -1803,13 +1851,15 @@ async def _process_pan_transfer_follow_task_async(
             )
 
     candidate_discarded = False
-    candidate, candidate_assessment, candidate_recall = _pick_follow_candidate(
+    candidate, candidate_assessment, candidate_recall, same_episode_candidate, same_episode_assessment = _pick_follow_candidate(
         session,
         task=task,
         snapshot=identity_snapshot,
     )
     selected_candidate: dict[str, Any] | None = None
     selected_assessment = dict(candidate_assessment or {}) if candidate_assessment else None
+    if candidate is None and same_episode_assessment is not None:
+        selected_assessment = dict(same_episode_assessment)
     if candidate is not None:
         candidate_status = await _safe_validate_url(str(candidate.get("url") or ""))
         normalized_candidate_status = _normalize_text(candidate_status.get("status"), max_length=32).lower() or "unknown"
@@ -1883,6 +1933,163 @@ async def _process_pan_transfer_follow_task_async(
                 },
             )
         return
+
+    if same_episode_candidate is not None and _is_healthy_link_status(task.current_share_status) and _normalize_text(task.current_share_url):
+        same_episode_status = await _safe_validate_url(str(same_episode_candidate.get("url") or ""))
+        normalized_same_episode_status = _normalize_text(same_episode_status.get("status"), max_length=32).lower() or "unknown"
+        same_episode_assessment_payload = dict(selected_assessment or {})
+        same_episode_assessment_payload["validation_status"] = normalized_same_episode_status
+        same_episode_assessment_payload["validation_detail_message"] = same_episode_status.get("detail_message")
+        if _is_healthy_link_status(normalized_same_episode_status):
+            try:
+                replacement_result = replace_link_target_references_with_url(
+                    session,
+                    old_target_id=int(same_episode_candidate.get("link_target_id") or 0),
+                    new_share_url=str(task.current_share_url or ""),
+                    expected_platform=str(task.platform or ""),
+                )
+            except Exception as exc:
+                _clear_follow_task_candidate_fields(task)
+                _set_task_extra_section(task, "candidate_recall", candidate_recall)
+                _set_task_extra_section(task, "candidate_assessment", same_episode_assessment_payload)
+                _apply_follow_task_state_without_candidate(task)
+                session.add(task)
+                session.flush()
+                _append_follow_task_log(
+                    session,
+                    task=task,
+                    stage="candidate",
+                    level="warning",
+                    message=f"Failed to replace same-episode source links with the current share: {_normalize_text(exc, max_length=1000) or type(exc).__name__}",
+                    payload={
+                        **dict(same_episode_candidate),
+                        "candidate_assessment": same_episode_assessment_payload,
+                        "candidate_recall": candidate_recall,
+                        "current_share_url": _normalize_text(task.current_share_url) or None,
+                    },
+                )
+                return
+            else:
+                _clear_follow_task_candidate_fields(task)
+                _set_task_extra_section(task, "candidate_recall", candidate_recall)
+                _set_task_extra_section(task, "candidate_assessment", same_episode_assessment_payload)
+                task.task_state = PAN_TRANSFER_SYNC_STATE_IDLE
+                task.last_change_type = "same_episode_replaced" if str(replacement_result.get("status") or "") == "replaced" else "no_change"
+                session.add(task)
+                session.flush()
+                _append_follow_task_log(
+                    session,
+                    task=task,
+                    stage="candidate",
+                    message=(
+                        "Replaced same-episode source links with the current valid share"
+                        if str(replacement_result.get("status") or "") == "replaced"
+                        else "Same-episode source already matched the current valid share"
+                    ),
+                    payload={
+                        **dict(same_episode_candidate),
+                        "candidate_assessment": same_episode_assessment_payload,
+                        "candidate_recall": candidate_recall,
+                        "current_share_url": _normalize_text(task.current_share_url) or None,
+                        "replacement": replacement_result,
+                    },
+                )
+                return
+        elif normalized_same_episode_status == "invalid":
+            matched_link_ref_id = _normalize_optional_int(same_episode_candidate.get("link_ref_id"))
+            if matched_link_ref_id is None:
+                candidate_discarded = True
+                _append_follow_task_log(
+                    session,
+                    task=task,
+                    stage="candidate",
+                    level="warning",
+                    message="Skipped same-episode message rewrite because the matched message reference was unavailable",
+                    payload={
+                        **dict(same_episode_candidate),
+                        "candidate_status": normalized_same_episode_status,
+                        "candidate_detail_message": same_episode_status.get("detail_message"),
+                        "candidate_assessment": same_episode_assessment_payload,
+                        "candidate_recall": candidate_recall,
+                        "current_share_url": _normalize_text(task.current_share_url) or None,
+                    },
+                )
+            else:
+                try:
+                    rewrite_result = rewrite_message_link_ref_with_url(
+                        session,
+                        link_ref_id=matched_link_ref_id,
+                        new_share_url=str(task.current_share_url or ""),
+                        expected_platform=str(task.platform or ""),
+                    )
+                except Exception as exc:
+                    _clear_follow_task_candidate_fields(task)
+                    _set_task_extra_section(task, "candidate_recall", candidate_recall)
+                    _set_task_extra_section(task, "candidate_assessment", same_episode_assessment_payload)
+                    _apply_follow_task_state_without_candidate(task)
+                    session.add(task)
+                    session.flush()
+                    _append_follow_task_log(
+                        session,
+                        task=task,
+                        stage="candidate",
+                        level="warning",
+                        message=f"Failed to rewrite the matched same-episode message link with the current share: {_normalize_text(exc, max_length=1000) or type(exc).__name__}",
+                        payload={
+                            **dict(same_episode_candidate),
+                            "candidate_assessment": same_episode_assessment_payload,
+                            "candidate_recall": candidate_recall,
+                            "current_share_url": _normalize_text(task.current_share_url) or None,
+                        },
+                    )
+                    return
+                else:
+                    _clear_follow_task_candidate_fields(task)
+                    _set_task_extra_section(task, "candidate_recall", candidate_recall)
+                    _set_task_extra_section(task, "candidate_assessment", same_episode_assessment_payload)
+                    task.task_state = PAN_TRANSFER_SYNC_STATE_IDLE
+                    task.last_change_type = "same_episode_rewritten" if str(rewrite_result.get("status") or "") == "rewritten" else "no_change"
+                    session.add(task)
+                    session.flush()
+                    _append_follow_task_log(
+                        session,
+                        task=task,
+                        stage="candidate",
+                        message=(
+                            "Rewrote the matched same-episode message link to the current valid share"
+                            if str(rewrite_result.get("status") or "") == "rewritten"
+                            else "Matched same-episode message link already pointed to the current valid share"
+                        ),
+                        payload={
+                            **dict(same_episode_candidate),
+                            "candidate_status": normalized_same_episode_status,
+                            "candidate_detail_message": same_episode_status.get("detail_message"),
+                            "candidate_assessment": same_episode_assessment_payload,
+                            "candidate_recall": candidate_recall,
+                            "current_share_url": _normalize_text(task.current_share_url) or None,
+                            "replacement": rewrite_result,
+                        },
+                    )
+                    return
+        else:
+            candidate_discarded = True
+            _append_follow_task_log(
+                session,
+                task=task,
+                stage="candidate",
+                level="warning",
+                message=(
+                    "Discarded a same-episode source because link validation "
+                    f"finished with status: {normalized_same_episode_status}"
+                ),
+                payload={
+                    **dict(same_episode_candidate),
+                    "candidate_status": normalized_same_episode_status,
+                    "candidate_detail_message": same_episode_status.get("detail_message"),
+                    "candidate_assessment": same_episode_assessment_payload,
+                    "candidate_recall": candidate_recall,
+                },
+            )
 
     _clear_follow_task_candidate_fields(task)
     _set_task_extra_section(task, "candidate_recall", candidate_recall)

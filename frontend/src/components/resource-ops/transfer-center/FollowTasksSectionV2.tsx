@@ -88,6 +88,8 @@ const FOLLOW_CHANGE_LABELS: Record<string, string> = {
   source_invalid: '当前原链失效',
   share_invalid: '当前对外分享异常',
   no_change: '本次检查未发现变化',
+  same_episode_replaced: '同集数候选已替换为当前分享',
+  same_episode_rewritten: '同集数消息已回写为当前分享',
   sync_completed: '已按当前原链完成同步',
   candidate_applied: '已应用候选原链并完成同步',
   sync_failed: '同步失败，等待人工处理',
@@ -234,6 +236,32 @@ const buildFollowLogSummary = (log: PanTransferFollowTaskLogItem) => {
   if (messageText === 'No recent candidate source link was found for this check') {
     return '本轮未发现新的候选原链'
   }
+  if (messageText.startsWith('Discarded a same-episode source because link validation finished with status:')) {
+    return candidateTitle ? `已丢弃同集数来源 -> ${candidateTitle} · ${candidateStatus}` : `已丢弃同集数来源 -> ${candidateStatus}`
+  }
+  if (messageText === 'Replaced same-episode source links with the current valid share') {
+    if (candidateTitle) return `已用当前有效分享回写同集数来源 -> ${candidateTitle}`
+    return '已用当前有效分享回写同集数来源'
+  }
+  if (messageText === 'Same-episode source already matched the current valid share') {
+    return '同集数来源已指向当前有效分享'
+  }
+  if (messageText.startsWith('Failed to replace same-episode source links with the current share:')) {
+    return `同集数来源回写失败 -> ${messageText.replace('Failed to replace same-episode source links with the current share:', '').trim() || '未知错误'}`
+  }
+  if (messageText === 'Rewrote the matched same-episode message link to the current valid share') {
+    if (candidateTitle) return `已将命中消息回写为当前有效分享 -> ${candidateTitle}`
+    return '已将命中消息回写为当前有效分享'
+  }
+  if (messageText === 'Matched same-episode message link already pointed to the current valid share') {
+    return '命中消息已指向当前有效分享'
+  }
+  if (messageText === 'Skipped same-episode message rewrite because the matched message reference was unavailable') {
+    return '同集数消息未回写 -> 缺少命中消息定位'
+  }
+  if (messageText.startsWith('Failed to rewrite the matched same-episode message link with the current share:')) {
+    return `同集数消息回写失败 -> ${messageText.replace('Failed to rewrite the matched same-episode message link with the current share:', '').trim() || '未知错误'}`
+  }
   if (messageText === 'Created a follow-sync batch targeting the existing resource directory') {
     const details = [
       batchId > 0 ? `批次 #${batchId}` : '',
@@ -276,7 +304,11 @@ const getFollowLogTone = (log: PanTransferFollowTaskLogItem) => {
     level === 'warning' ||
     messageText === 'Detected a recent candidate source link for this tracked resource' ||
     messageText.startsWith('Removed the stored candidate source') ||
-    messageText.startsWith('Discarded a detected candidate source')
+    messageText.startsWith('Discarded a detected candidate source') ||
+    messageText.startsWith('Discarded a same-episode source') ||
+    messageText.startsWith('Failed to replace same-episode source links with the current share:') ||
+    messageText === 'Skipped same-episode message rewrite because the matched message reference was unavailable' ||
+    messageText.startsWith('Failed to rewrite the matched same-episode message link with the current share:')
   ) {
     return 'warning' as const
   }
@@ -284,6 +316,10 @@ const getFollowLogTone = (log: PanTransferFollowTaskLogItem) => {
     messageText.startsWith('Source link validation finished with status: valid') ||
     messageText.startsWith('Current share validation finished with status: valid') ||
     messageText === 'Built follow task identity snapshot' ||
+    messageText === 'Replaced same-episode source links with the current valid share' ||
+    messageText === 'Same-episode source already matched the current valid share' ||
+    messageText === 'Rewrote the matched same-episode message link to the current valid share' ||
+    messageText === 'Matched same-episode message link already pointed to the current valid share' ||
     messageText === 'Created a follow-sync batch targeting the existing resource directory' ||
     messageText === 'Follow-sync batch completed and the tracked resource directory was refreshed' ||
     messageText === 'Bound frontend publish record was updated to the latest share URL' ||

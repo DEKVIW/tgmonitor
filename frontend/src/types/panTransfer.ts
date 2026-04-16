@@ -329,6 +329,9 @@ export interface PanTransferFollowTaskIdentitySnapshot {
 
 export interface PanTransferFollowTaskCandidateRecallItem {
   link_target_id?: number | null
+  message_id?: number | null
+  link_ref_id?: number | null
+  link_index?: number | null
   title?: string | null
   url?: string | null
   latest_message_time?: string | null

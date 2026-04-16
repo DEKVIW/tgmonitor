@@ -79,6 +79,60 @@ def _replace_urls_in_links(value: Any, *, old_normalized_url: str, new_url: str)
     return value, 0
 
 
+def _replace_url_at_link_index(
+    value: Any,
+    *,
+    target_index: int,
+    old_normalized_url: str,
+    new_url: str,
+    counter: list[int],
+) -> tuple[Any, int]:
+    replaced = 0
+    if isinstance(value, dict):
+        if isinstance(value.get("url"), str):
+            copied = dict(value)
+            counter[0] += 1
+            if counter[0] == int(target_index) and _matches_old_url(str(copied.get("url") or ""), old_normalized_url=old_normalized_url):
+                copied["url"] = new_url
+                replaced = 1
+            return copied, replaced
+
+        copied: dict[str, Any] = {}
+        for key, item in value.items():
+            next_item, child_count = _replace_url_at_link_index(
+                item,
+                target_index=target_index,
+                old_normalized_url=old_normalized_url,
+                new_url=new_url,
+                counter=counter,
+            )
+            copied[key] = next_item
+            replaced += child_count
+        return copied, replaced
+
+    if isinstance(value, list):
+        items: list[Any] = []
+        for item in value:
+            next_item, child_count = _replace_url_at_link_index(
+                item,
+                target_index=target_index,
+                old_normalized_url=old_normalized_url,
+                new_url=new_url,
+                counter=counter,
+            )
+            items.append(next_item)
+            replaced += child_count
+        return items, replaced
+
+    if isinstance(value, str):
+        counter[0] += 1
+        if counter[0] == int(target_index) and _matches_old_url(str(value), old_normalized_url=old_normalized_url):
+            return new_url, 1
+        return value, 0
+
+    return value, 0
+
+
 def _ensure_link_target_for_url(session: Session, *, url: str, observed_at: datetime | None = None) -> LinkTarget:
     flattened = flatten_message_links({"url": url})
     if not flattened:
@@ -210,37 +264,47 @@ def _merge_recognition_task(session: Session, *, old_target_id: int, new_target_
     session.flush()
 
 
-def replace_pan_transfer_links(
+def _assert_replacement_platforms(
+    *,
+    old_target: LinkTarget,
+    new_target: LinkTarget,
+    expected_platform: str | None = None,
+) -> None:
+    normalized_expected_platform = str(expected_platform or "").strip()
+    if normalized_expected_platform:
+        if str(old_target.platform or "").strip() != normalized_expected_platform:
+            raise ValueError("old target platform mismatch")
+        if str(new_target.platform or "").strip() != normalized_expected_platform:
+            raise ValueError("new target platform mismatch")
+        return
+    if str(old_target.platform or "").strip() != str(new_target.platform or "").strip():
+        raise ValueError("cannot replace link targets across different platforms")
+
+
+def replace_link_target_references_with_url(
     session: Session,
     *,
-    batch_item: PanTransferBatchItem,
+    old_target_id: int,
     new_share_url: str,
-    operator: str | None,
+    expected_platform: str | None = None,
 ) -> dict[str, Any]:
-    old_target = session.get(LinkTarget, int(batch_item.link_target_id))
+    old_target = session.get(LinkTarget, int(old_target_id))
     if old_target is None:
         raise LookupError("source link target not found")
 
     new_target = _ensure_link_target_for_url(session, url=new_share_url, observed_at=utcnow())
+    _assert_replacement_platforms(old_target=old_target, new_target=new_target, expected_platform=expected_platform)
+
     if int(new_target.id) == int(old_target.id):
-        log_row = PanTransferReplacementLog(
-            batch_item_id=int(batch_item.id),
-            old_link_target_id=int(old_target.id),
-            new_link_target_id=int(new_target.id),
-            old_url=str(old_target.original_url or ""),
-            new_url=str(new_share_url or ""),
-            affected_message_count=0,
-            status="skipped",
-            operator=operator,
-            payload={"reason": "same_target"},
-        )
-        session.add(log_row)
-        session.flush()
         return {
+            "old_link_target_id": int(old_target.id),
             "new_link_target_id": int(new_target.id),
+            "old_url": str(old_target.original_url or ""),
+            "new_url": str(new_share_url or ""),
             "affected_message_count": 0,
             "affected_ref_count": 0,
             "status": "skipped",
+            "reason": "same_target",
         }
 
     refs = (
@@ -304,26 +368,143 @@ def replace_pan_transfer_links(
         .update({"link_target_id": int(new_target.id)}, synchronize_session=False)
     )
     _merge_recognition_task(session, old_target_id=int(old_target.id), new_target_id=int(new_target.id))
+    _refresh_link_target_daily_stats(session, [int(old_target.id), int(new_target.id)])
+    return {
+        "old_link_target_id": int(old_target.id),
+        "new_link_target_id": int(new_target.id),
+        "old_url": str(old_target.original_url or ""),
+        "new_url": str(new_share_url or ""),
+        "affected_message_count": affected_message_count,
+        "affected_ref_count": len(affected_ref_ids),
+        "status": "replaced",
+    }
+
+
+def rewrite_message_link_ref_with_url(
+    session: Session,
+    *,
+    link_ref_id: int,
+    new_share_url: str,
+    expected_platform: str | None = None,
+) -> dict[str, Any]:
+    ref = session.get(MessageLinkRef, int(link_ref_id))
+    if ref is None:
+        raise LookupError("message link ref not found")
+
+    old_target = session.get(LinkTarget, int(ref.link_target_id))
+    if old_target is None:
+        raise LookupError("source link target not found")
+
+    message = session.get(Message, int(ref.message_id))
+    if message is None:
+        raise LookupError("message not found")
+
+    new_target = _ensure_link_target_for_url(session, url=new_share_url, observed_at=utcnow())
+    _assert_replacement_platforms(old_target=old_target, new_target=new_target, expected_platform=expected_platform)
+
+    base_result = {
+        "old_link_target_id": int(old_target.id),
+        "new_link_target_id": int(new_target.id),
+        "old_url": str(old_target.original_url or ""),
+        "new_url": str(new_share_url or ""),
+        "message_id": int(message.id),
+        "link_ref_id": int(ref.id),
+        "link_index": int(ref.link_index),
+    }
+    if int(new_target.id) == int(old_target.id):
+        return {
+            **base_result,
+            "affected_message_count": 0,
+            "affected_ref_count": 0,
+            "status": "skipped",
+            "reason": "same_target",
+        }
+
+    normalized_links = _normalize_links_payload(message.links)
+    next_links, replaced_count = _replace_url_at_link_index(
+        normalized_links,
+        target_index=int(ref.link_index),
+        old_normalized_url=str(old_target.normalized_url or ""),
+        new_url=str(new_share_url or ""),
+        counter=[-1],
+    )
+    if replaced_count <= 0:
+        raise ValueError("matched message link was not found at the expected index")
+
+    message.links = next_links
+    message.netdisk_types = _extract_netdisk_types(next_links)
+    ref.link_target_id = int(new_target.id)
+    ref.target_url = str(new_share_url or "")
+    session.add(message)
+    session.add(ref)
+    session.flush()
+
+    (
+        session.query(LinkClickEvent)
+        .filter(LinkClickEvent.link_ref_id == int(ref.id))
+        .update({"link_target_id": int(new_target.id)}, synchronize_session=False)
+    )
+    _refresh_link_target_daily_stats(session, [int(old_target.id), int(new_target.id)])
+    return {
+        **base_result,
+        "affected_message_count": 1,
+        "affected_ref_count": 1,
+        "status": "rewritten",
+    }
+
+
+def replace_pan_transfer_links(
+    session: Session,
+    *,
+    batch_item: PanTransferBatchItem,
+    new_share_url: str,
+    operator: str | None,
+) -> dict[str, Any]:
+    replacement_result = replace_link_target_references_with_url(
+        session,
+        old_target_id=int(batch_item.link_target_id),
+        new_share_url=new_share_url,
+        expected_platform=str(batch_item.platform or ""),
+    )
+    if str(replacement_result.get("status") or "") == "skipped":
+        log_row = PanTransferReplacementLog(
+            batch_item_id=int(batch_item.id),
+            old_link_target_id=int(replacement_result.get("old_link_target_id") or 0),
+            new_link_target_id=int(replacement_result.get("new_link_target_id") or 0),
+            old_url=str(replacement_result.get("old_url") or ""),
+            new_url=str(replacement_result.get("new_url") or ""),
+            affected_message_count=0,
+            status="skipped",
+            operator=operator,
+            payload={"reason": str(replacement_result.get("reason") or "same_target")},
+        )
+        session.add(log_row)
+        session.flush()
+        return {
+            "new_link_target_id": int(replacement_result.get("new_link_target_id") or 0),
+            "affected_message_count": 0,
+            "affected_ref_count": 0,
+            "status": "skipped",
+        }
 
     log_row = PanTransferReplacementLog(
         batch_item_id=int(batch_item.id),
-        old_link_target_id=int(old_target.id),
-        new_link_target_id=int(new_target.id),
-        old_url=str(old_target.original_url or ""),
-        new_url=str(new_share_url or ""),
-        affected_message_count=affected_message_count,
+        old_link_target_id=int(replacement_result.get("old_link_target_id") or 0),
+        new_link_target_id=int(replacement_result.get("new_link_target_id") or 0),
+        old_url=str(replacement_result.get("old_url") or ""),
+        new_url=str(replacement_result.get("new_url") or ""),
+        affected_message_count=int(replacement_result.get("affected_message_count") or 0),
         status="replaced",
         operator=operator,
         payload={
-            "affected_ref_count": len(affected_ref_ids),
+            "affected_ref_count": int(replacement_result.get("affected_ref_count") or 0),
         },
     )
     session.add(log_row)
     session.flush()
-    _refresh_link_target_daily_stats(session, [int(old_target.id), int(new_target.id)])
     return {
-        "new_link_target_id": int(new_target.id),
-        "affected_message_count": affected_message_count,
-        "affected_ref_count": len(affected_ref_ids),
+        "new_link_target_id": int(replacement_result.get("new_link_target_id") or 0),
+        "affected_message_count": int(replacement_result.get("affected_message_count") or 0),
+        "affected_ref_count": int(replacement_result.get("affected_ref_count") or 0),
         "status": "replaced",
     }

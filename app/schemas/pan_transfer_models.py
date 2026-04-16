@@ -731,6 +731,9 @@ class PanTransferFollowTaskIdentitySnapshot(PanTransferBaseModel):
 
 class PanTransferFollowTaskCandidateRecallItem(PanTransferBaseModel):
     link_target_id: int | None = None
+    message_id: int | None = None
+    link_ref_id: int | None = None
+    link_index: int | None = None
     title: str | None = None
     url: str | None = None
     latest_message_time: datetime | None = None
