@@ -1,6 +1,8 @@
-import { Alert, Button, Card, Collapse, Empty, Switch, Tag, Tooltip } from 'antd'
+import { useEffect, useMemo, useState } from 'react'
+import { Alert, Button, Card, Collapse, Switch, Tag, Tooltip } from 'antd'
 import { InfoCircleOutlined, RobotOutlined } from '@ant-design/icons'
 
+import AppLogTerminal from '@/components/common/AppLogTerminal'
 import type {
   ResourceOpsRecognitionStatus,
   ResourceOpsRuntimeSettingsResponse,
@@ -58,6 +60,47 @@ const getWorkerStateLabel = (recognitionStatus: ResourceOpsRecognitionStatus | n
   return '离线'
 }
 
+const getRecognitionLogTone = (line: string) => {
+  const normalized = String(line || '').toLowerCase()
+  if (
+    normalized.includes('[error]') ||
+    normalized.includes(' error ') ||
+    normalized.includes(' failed') ||
+    normalized.includes('exception') ||
+    normalized.includes('traceback')
+  ) {
+    return 'error' as const
+  }
+  if (normalized.includes('[warning]') || normalized.includes(' warning ')) {
+    return 'warning' as const
+  }
+  if (normalized.includes('[success]') || normalized.includes(' completed') || normalized.includes(' finished')) {
+    return 'success' as const
+  }
+  return 'default' as const
+}
+
+const formatRecognitionLogLine = (line: string) => {
+  const text = String(line || '').trim()
+  if (text.startsWith('[OK] ')) {
+    const payload = text.slice(5).trim()
+    const [queryTitle, resolvedTitle] = payload.split('->').map((item) => item.trim())
+    if (queryTitle && resolvedTitle) {
+      return `识别成功 -> ${queryTitle} => ${resolvedTitle}`
+    }
+    return `识别成功 -> ${payload}`
+  }
+  if (text.startsWith('[ERR] ')) {
+    const payload = text.slice(6).trim()
+    const [queryTitle, reason] = payload.split('->').map((item) => item.trim())
+    if (queryTitle && reason) {
+      return `识别失败 -> ${queryTitle} => ${reason}`
+    }
+    return `识别失败 -> ${payload}`
+  }
+  return text
+}
+
 const ResourceOpsRecognitionRoutePanel = ({
   loading,
   settingsSaving,
@@ -77,6 +120,28 @@ const ResourceOpsRecognitionRoutePanel = ({
   onSaveSettings,
   onOpenAiCenter,
 }: ResourceOpsRecognitionRoutePanelProps) => {
+  const [clearedLogCount, setClearedLogCount] = useState(0)
+  const recognitionLogs = recognitionStatus?.logs || []
+
+  useEffect(() => {
+    setClearedLogCount((current) => Math.min(current, recognitionLogs.length))
+  }, [recognitionLogs.length])
+
+  const visibleRecognitionLogs = useMemo(
+    () => recognitionLogs.slice(clearedLogCount),
+    [recognitionLogs, clearedLogCount]
+  )
+
+  const visibleRecognitionLogLines = useMemo(
+    () =>
+      visibleRecognitionLogs.map((line, index) => ({
+        key: `${clearedLogCount + index}-${line}`,
+        text: formatRecognitionLogLine(line),
+        tone: getRecognitionLogTone(line),
+      })),
+    [clearedLogCount, visibleRecognitionLogs]
+  )
+
   return (
     <Card className="resource-ops-panel-card" loading={loading}>
       {settingsDraft && runtimeSettings ? (
@@ -178,20 +243,25 @@ const ResourceOpsRecognitionRoutePanel = ({
 
                   <div className="resource-ops-inline-actions resource-ops-inline-actions-tight">
                     <Button type="primary" loading={settingsSaving} onClick={onSaveSettings}>保存识别设置</Button>
-                    <Button loading={logsClearing} onClick={onClearLogs}>清空终端日志</Button>
                   </div>
 
-                  <div className="resource-ops-transfer-terminal">
-                    {recognitionStatus?.logs && recognitionStatus.logs.length > 0 ? (
-                      recognitionStatus.logs.map((line, index) => (
-                        <div key={`${line}-${index}`} className="resource-ops-transfer-terminal-line">
-                          {line}
-                        </div>
-                      ))
-                    ) : (
-                      <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无线程日志" />
-                    )}
-                  </div>
+                  <AppLogTerminal
+                    description="这里按真实运行顺序输出作品归并 worker 日志，便于确认排队、识别和失败原因。"
+                    items={visibleRecognitionLogLines}
+                    emptyText="暂无线程日志"
+                    isCleared={clearedLogCount > 0}
+                    onClearDisplay={() => setClearedLogCount(recognitionLogs.length)}
+                    onShowAll={() => setClearedLogCount(0)}
+                    canShowAll={clearedLogCount > 0}
+                    copyPayload={visibleRecognitionLogLines.map((item) => item.text)}
+                    copyEmptyText="当前没有可复制的日志"
+                    copySuccessText="已复制当前日志"
+                    onClearBackend={onClearLogs}
+                    clearBackendLoading={logsClearing}
+                    clearBackendDisabled={recognitionLogs.length <= 0}
+                    clearBackendConfirmTitle="确认清理作品归并的后端日志？"
+                    clearBackendConfirmDescription="这会删除当前保存的运行日志，但不会影响识别队列和绑定结果。"
+                  />
                 </div>
               ),
             },

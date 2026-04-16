@@ -40,6 +40,7 @@ from app.services.pan_transfer import (
     cancel_pan_transfer_batch,
     clear_pan_transfer_batch_logs,
     clear_pan_transfer_follow_task_candidate,
+    clear_pan_transfer_follow_task_logs,
     create_pan_transfer_account,
     create_pan_transfer_follow_task_from_batch_item,
     create_pan_transfer_follow_sync_batch,
@@ -972,6 +973,32 @@ async def clear_pan_transfer_follow_task_candidate_api(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to clear follow task candidate: {exc}",
+        ) from exc
+
+
+@router.post(
+    "/follow-tasks/{task_id}/logs/clear",
+    response_model=PanTransferFollowTaskDetailResponse,
+    summary="Clear follow task execution logs",
+)
+async def clear_pan_transfer_follow_task_logs_api(
+    task_id: int,
+    current_user: dict[str, Any] = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+) -> PanTransferFollowTaskDetailResponse:
+    del current_user
+    try:
+        result = clear_pan_transfer_follow_task_logs(db, task_id=task_id)
+        db.commit()
+        return PanTransferFollowTaskDetailResponse(**result)
+    except LookupError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to clear follow task logs: {exc}",
         ) from exc
 
 

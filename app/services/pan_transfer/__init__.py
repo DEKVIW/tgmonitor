@@ -19,6 +19,7 @@ from .batches import (
 from .follow_tasks import (
     bind_follow_task_publish_record,
     clear_pan_transfer_follow_task_candidate,
+    clear_pan_transfer_follow_task_logs,
     create_pan_transfer_follow_task_from_batch_item,
     delete_pan_transfer_follow_task,
     get_pan_transfer_follow_task_detail,
@@ -54,6 +55,7 @@ __all__ = [
     "cancel_pan_transfer_batch",
     "clear_pan_transfer_batch_logs",
     "clear_pan_transfer_follow_task_candidate",
+    "clear_pan_transfer_follow_task_logs",
     "delete_pan_transfer_account",
     "delete_pan_transfer_batch",
     "delete_pan_transfer_follow_task",

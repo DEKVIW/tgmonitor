@@ -326,6 +326,15 @@ export const clearPanTransferFollowTaskCandidate = async (
   return response.data
 }
 
+export const clearPanTransferFollowTaskLogs = async (
+  taskId: number
+): Promise<PanTransferFollowTaskDetailResponse> => {
+  const response = await apiClient.post<PanTransferFollowTaskDetailResponse>(
+    `/admin/pan-transfer/follow-tasks/${taskId}/logs/clear`
+  )
+  return response.data
+}
+
 export const deletePanTransferFollowTask = async (taskId: number): Promise<PanTransferDeleteResponse> => {
   const response = await apiClient.delete<PanTransferDeleteResponse>(`/admin/pan-transfer/follow-tasks/${taskId}`)
   return response.data

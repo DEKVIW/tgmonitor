@@ -1,0 +1,101 @@
+.app-log-terminal {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.app-log-terminal__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.app-log-terminal__toolbar-main {
+  display: flex;
+  flex: 1 1 380px;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.app-log-terminal__description {
+  color: rgba(15, 23, 42, 0.64);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.app-log-terminal__controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  min-width: 0;
+}
+
+.app-log-terminal__controls > * {
+  min-width: 0;
+}
+
+.app-log-terminal__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.app-log-terminal__surface {
+  min-height: 220px;
+  max-height: 360px;
+  overflow: auto;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(13, 27, 45, 0.92);
+  background: #0f1726;
+  color: #d8e3f0;
+  font-family: Consolas, Menlo, Monaco, monospace;
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.app-log-terminal__surface.is-compact {
+  min-height: 120px;
+  max-height: 220px;
+}
+
+.app-log-terminal__line {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.app-log-terminal__line + .app-log-terminal__line {
+  margin-top: 4px;
+}
+
+.app-log-terminal__line.is-error {
+  color: #fecaca;
+}
+
+.app-log-terminal__line.is-warning {
+  color: #fde68a;
+}
+
+.app-log-terminal__line.is-success {
+  color: #bbf7d0;
+}
+
+.app-log-terminal__empty {
+  color: rgba(216, 227, 240, 0.74);
+}
+
+@media (max-width: 768px) {
+  .app-log-terminal__toolbar {
+    align-items: stretch;
+  }
+
+  .app-log-terminal__actions {
+    justify-content: flex-start;
+  }
+}

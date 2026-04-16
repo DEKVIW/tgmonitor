@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { Key } from 'react'
-import { Alert, Button, Card, Descriptions, Drawer, Empty, Popconfirm, Segmented, Select, Space, Table, Tag, Typography, message } from 'antd'
+import { Alert, Button, Card, Descriptions, Drawer, Empty, Popconfirm, Segmented, Select, Space, Table, Tag, Typography } from 'antd'
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table'
+import AppLogTerminal from '@/components/common/AppLogTerminal'
 import type { PanTransferBatchDetailResponse, PanTransferBatchItem, PanTransferBatchSummaryItem } from '@/types/panTransfer'
 import { formatServerDateTime } from '@/utils/dateTime'
 
@@ -176,12 +177,12 @@ const buildExecutionTerminalLine = (log: ExecutionTimelineLog) => {
   return `[${timeLabel}] [${scopeLabel}] [${stageLabel}] [${statusLabel}] ${buildExecutionLogSummary(log)}`
 }
 
-const getTerminalLineClassName = (log: ExecutionTimelineLog) => {
+const getExecutionLineTone = (log: ExecutionTimelineLog) => {
   const statusLabel = getExecutionLineStatus(log)
-  if (statusLabel === 'ERR') return 'resource-ops-transfer-terminal-line is-error'
-  if (statusLabel === 'WARN') return 'resource-ops-transfer-terminal-line is-warning'
-  if (statusLabel === 'OK') return 'resource-ops-transfer-terminal-line is-success'
-  return 'resource-ops-transfer-terminal-line'
+  if (statusLabel === 'ERR') return 'error' as const
+  if (statusLabel === 'WARN') return 'warning' as const
+  if (statusLabel === 'OK') return 'success' as const
+  return 'default' as const
 }
 
 type BatchSectionProps = {
@@ -253,7 +254,7 @@ const BatchSection = ({
 }: BatchSectionProps) => {
   const [terminalFilter, setTerminalFilter] = useState<TerminalFilter>('all')
   const [terminalItemFilter, setTerminalItemFilter] = useState<number | 'all'>('all')
-  const [terminalCleared, setTerminalCleared] = useState(false)
+  const [terminalClearedMarker, setTerminalClearedMarker] = useState(0)
 
   const batchExecutionLogs = useMemo<ExecutionTimelineLog[]>(
     () =>
@@ -278,8 +279,8 @@ const BatchSection = ({
   useEffect(() => {
     setTerminalFilter('all')
     setTerminalItemFilter('all')
-    setTerminalCleared(false)
-  }, [detailData?.batch.id, batchExecutionLogs.length])
+    setTerminalClearedMarker(0)
+  }, [detailData?.batch.id])
 
   const filteredBatchExecutionLogs = useMemo(
     () =>
@@ -295,9 +296,14 @@ const BatchSection = ({
     [batchExecutionLogs, terminalFilter, terminalItemFilter]
   )
 
+  const visibleBatchExecutionLogs = useMemo(
+    () => filteredBatchExecutionLogs.filter((log) => log.id > terminalClearedMarker),
+    [filteredBatchExecutionLogs, terminalClearedMarker]
+  )
+
   const terminalLines = useMemo(
-    () => filteredBatchExecutionLogs.map((log) => buildExecutionTerminalLine(log)),
-    [filteredBatchExecutionLogs]
+    () => visibleBatchExecutionLogs.map((log) => buildExecutionTerminalLine(log)),
+    [visibleBatchExecutionLogs]
   )
 
   const selectedFailedCount = useMemo(() => {
@@ -313,19 +319,6 @@ const BatchSection = ({
       .filter((item) => selectedSet.has(item.id) && item.transfer_status === 'failed')
       .map((item) => item.id)
   }, [detailData, selectedItemKeys])
-
-  const handleCopyTerminal = async () => {
-    if (terminalLines.length <= 0) {
-      message.info('当前没有可复制的日志')
-      return
-    }
-    try {
-      await navigator.clipboard.writeText(terminalLines.join('\n'))
-      message.success('已复制当前日志')
-    } catch {
-      message.error('复制日志失败，请检查浏览器权限')
-    }
-  }
 
   const batchColumns: ColumnsType<PanTransferBatchSummaryItem> = [
     {
@@ -605,13 +598,6 @@ const BatchSection = ({
               <Button loading={detailLoading} onClick={() => onRefreshDetail(detailData.batch.id)}>
                 刷新明细
               </Button>
-              <Button
-                loading={clearingLogsBatchId === detailData.batch.id}
-                disabled={batchExecutionLogs.length <= 0}
-                onClick={() => onClearLogs(detailData.batch.id)}
-              >
-                清理日志
-              </Button>
               {detailData.batch.can_cancel ? (
                 <Button loading={cancellingBatchId === detailData.batch.id} onClick={() => onCancel(detailData.batch.id)}>
                   停止批次
@@ -705,54 +691,55 @@ const BatchSection = ({
             />
 
             <Card size="small" title="执行终端" className="resource-ops-transfer-log-card">
-              <Paragraph className="resource-ops-transfer-copy">
-                按真实执行顺序输出关键日志行。推荐先看这里定位“卡在哪一步”“失败原因是什么”，再决定是否立即重试或清理日志。
-              </Paragraph>
-              <div className="resource-ops-transfer-terminal-toolbar">
-                <Segmented
-                  size="small"
-                  value={terminalFilter}
-                  options={[
-                    { label: '全部日志', value: 'all' },
-                    { label: '仅错误', value: 'error' },
-                  ]}
-                  onChange={(value) => setTerminalFilter(value as TerminalFilter)}
-                />
-                <Select
-                  size="small"
-                  className="resource-ops-transfer-terminal-select"
-                  value={terminalItemFilter}
-                  options={[
-                    { label: '全部任务项', value: 'all' },
-                    ...detailData.items.map((item) => ({
-                      label: `项 #${item.id} ${item.short_title}`,
-                      value: item.id,
-                    })),
-                  ]}
-                  onChange={(value) => setTerminalItemFilter(value as number | 'all')}
-                />
-                <Space size={8}>
-                  <Button size="small" onClick={() => setTerminalCleared(true)}>
-                    清空显示
-                  </Button>
-                  <Button size="small" onClick={() => void handleCopyTerminal()}>
-                    复制日志
-                  </Button>
-                </Space>
-              </div>
-              <div className="resource-ops-terminal resource-ops-transfer-terminal">
-                {terminalCleared ? (
-                  <div className="resource-ops-terminal-empty">已清空当前显示，刷新明细或切换批次可重新载入日志。</div>
-                ) : filteredBatchExecutionLogs.length > 0 ? (
-                  filteredBatchExecutionLogs.map((log) => (
-                    <div key={log.id} className={getTerminalLineClassName(log)}>
-                      {buildExecutionTerminalLine(log)}
-                    </div>
-                  ))
-                ) : (
-                  <div className="resource-ops-terminal-empty">当前筛选条件下暂无执行日志。</div>
-                )}
-              </div>
+              <AppLogTerminal
+                description="按真实执行顺序输出关键日志行。推荐先看这里定位“卡在哪一步”“失败原因是什么”，再决定是否立即重试或清理日志。"
+                controls={
+                  <>
+                    <Segmented
+                      size="small"
+                      value={terminalFilter}
+                      options={[
+                        { label: '全部日志', value: 'all' },
+                        { label: '仅错误', value: 'error' },
+                      ]}
+                      onChange={(value) => setTerminalFilter(value as TerminalFilter)}
+                    />
+                    <Select
+                      size="small"
+                      className="resource-ops-transfer-terminal-select"
+                      value={terminalItemFilter}
+                      options={[
+                        { label: '全部任务项', value: 'all' },
+                        ...detailData.items.map((item) => ({
+                          label: `项 #${item.id} ${item.short_title}`,
+                          value: item.id,
+                        })),
+                      ]}
+                      onChange={(value) => setTerminalItemFilter(value as number | 'all')}
+                    />
+                  </>
+                }
+                items={visibleBatchExecutionLogs.map((log) => ({
+                  key: log.id,
+                  text: buildExecutionTerminalLine(log),
+                  tone: getExecutionLineTone(log),
+                }))}
+                emptyText="当前筛选条件下暂无执行日志。"
+                isCleared={terminalClearedMarker > 0}
+                onClearDisplay={() => {
+                  setTerminalClearedMarker(batchExecutionLogs[batchExecutionLogs.length - 1]?.id || 0)
+                }}
+                onShowAll={() => setTerminalClearedMarker(0)}
+                canShowAll={terminalClearedMarker > 0}
+                copyPayload={terminalLines}
+                copyEmptyText="当前没有可复制的日志"
+                copySuccessText="已复制当前日志"
+                onClearBackend={() => onClearLogs(detailData.batch.id)}
+                clearBackendLoading={clearingLogsBatchId === detailData.batch.id}
+                clearBackendDisabled={batchExecutionLogs.length <= 0}
+                clearBackendConfirmTitle="确认清理这批次的后端日志？"
+                clearBackendConfirmDescription="这会删除批次执行日志与回写日志，但不会删除批次本身。"
+              />
             </Card>
 
             <Table

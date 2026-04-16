@@ -8,7 +8,6 @@ import {
   Input,
   InputNumber,
   Modal,
-  Popconfirm,
   Row,
   Select,
   Space,
@@ -22,6 +21,7 @@ import {
 import type { ColumnsType } from 'antd/es/table'
 import { ApiOutlined, DeleteOutlined, ExperimentOutlined, PlusOutlined, ReloadOutlined, SettingOutlined } from '@ant-design/icons'
 
+import AppLogTerminal from '@/components/common/AppLogTerminal'
 import {
   clearAiCallEvents,
   createAiProvider,
@@ -51,8 +51,8 @@ import './AiCenterAdminRuntime.css'
 
 const { Title, Paragraph, Text } = Typography
 
-const formatDateTime = (value?: string | null) =>
-  value ? formatServerDateTime(value, 'YYYY-MM-DD HH:mm', 'Asia/Shanghai') : '-'
+const formatDateTime = (value?: string | null, format = 'YYYY-MM-DD HH:mm') =>
+  value ? formatServerDateTime(value, format, 'Asia/Shanghai') : '-'
 
 const getErrorMessage = (error: any, fallback: string) => error?.response?.data?.detail || fallback
 
@@ -66,12 +66,6 @@ const PROVIDER_HEALTH_LABELS: Record<string, string> = {
   healthy: '健康',
   degraded: '波动',
   unknown: '未知',
-}
-
-const EVENT_STATUS_COLOR: Record<string, string> = {
-  success: 'success',
-  error: 'error',
-  skipped: 'default',
 }
 
 const EVENT_STATUS_LABELS: Record<string, string> = {
@@ -213,11 +207,38 @@ const renderTextWithTooltip = (value?: string | null, className: string = 'ai-ce
   )
 }
 
+const getEventLogTone = (record: AiCenterCallEventItem) => {
+  if (record.status === 'error') return 'error' as const
+  if (record.status === 'success') return 'success' as const
+  return 'warning' as const
+}
+
+const buildEventLogSummary = (record: AiCenterCallEventItem) => {
+  const note =
+    record.error_message ||
+    (record.candidate_score != null ? `候选评分 ${record.candidate_score.toFixed(1)}` : record.selection_summary || '')
+  const chain = [record.provider_label || '未绑定提供方', record.model_id || '自动模型', getApiModeLabel(record.used_api_mode)]
+    .filter(Boolean)
+    .join(' / ')
+  const meta = [
+    record.selection_mode ? getSelectionModeLabel(record.selection_mode) : '',
+    record.attempt_index ? `第 ${record.attempt_index} 次` : '',
+    record.duration_ms ? `${record.duration_ms} ms` : '',
+  ].filter(Boolean)
+  const details = [chain, meta.join(' · ')].filter(Boolean).join(' · ')
+  return note ? `${details} -> ${note}` : details || '调用已记录'
+}
+
+const buildEventLogLine = (record: AiCenterCallEventItem) =>
+  `[${formatDateTime(record.created_at, 'HH:mm:ss')}] [${record.route_key}] [${getEventStatusLabel(record.status)}] ${buildEventLogSummary(record)}`
+
 const AiCenterAdminRuntime = () => {
   const [overview, setOverview] = useState<AiCenterOverviewResponse | null>(null)
   const [providers, setProviders] = useState<AiCenterProviderItem[]>([])
   const [routes, setRoutes] = useState<AiCenterRouteItem[]>([])
   const [events, setEvents] = useState<AiCenterCallEventItem[]>([])
+  const [eventFilter, setEventFilter] = useState<'all' | 'error' | 'success'>('all')
+  const [eventHiddenMarker, setEventHiddenMarker] = useState(0)
   const [loading, setLoading] = useState(true)
   const [eventClearing, setEventClearing] = useState(false)
   const [providerModalOpen, setProviderModalOpen] = useState(false)
@@ -259,6 +280,12 @@ const AiCenterAdminRuntime = () => {
   useEffect(() => {
     void loadAll()
   }, [])
+
+  useEffect(() => {
+    if (events.length <= 0) {
+      setEventHiddenMarker(0)
+    }
+  }, [events.length])
 
   const providerOptions = useMemo(
     () =>
@@ -646,66 +673,32 @@ const AiCenterAdminRuntime = () => {
     },
   ]
 
-  const eventColumns: ColumnsType<AiCenterCallEventItem> = [
-    {
-      title: '时间',
-      dataIndex: 'created_at',
-      width: 160,
-      render: (value) => <span className="ai-center-nowrap">{formatDateTime(value)}</span>,
-    },
-    {
-      title: '路由',
-      key: 'route',
-      width: 220,
-      render: (_, record) => (
-        <div className="ai-center-cell-stack">
-          <Text strong>{record.route_key}</Text>
-          <span className="ai-center-cell-secondary">
-            {record.selection_mode ? `${getSelectionModeLabel(record.selection_mode)} · 第 ${record.attempt_index || 1} 次` : '-'}
-          </span>
-        </div>
-      ),
-    },
-    {
-      title: '执行链路',
-      key: 'chain',
-      width: 300,
-      render: (_, record) => (
-        <div className="ai-center-cell-stack">
-          {renderTextWithTooltip(record.provider_label, 'ai-center-ellipsis ai-center-cell-primary')}
-          <span className="ai-center-cell-secondary">{`${record.model_id || '-'} / ${getApiModeLabel(record.used_api_mode)}`}</span>
-        </div>
-      ),
-    },
-    {
-      title: '结果',
-      key: 'status',
-      width: 140,
-      render: (_, record) => (
-        <div className="ai-center-cell-stack">
-          <div className="ai-center-tag-row">
-            <Tag color={EVENT_STATUS_COLOR[record.status] || 'default'}>{getEventStatusLabel(record.status)}</Tag>
-          </div>
-          <span className="ai-center-cell-secondary">{record.duration_ms ? `${record.duration_ms} ms` : '-'}</span>
-        </div>
-      ),
-    },
-    {
-      title: '错误 / 备注',
-      key: 'message',
-      width: 400,
-      render: (_, record) => {
-        const note =
-          record.error_message ||
-          (record.candidate_score != null ? `候选评分 ${record.candidate_score.toFixed(1)}` : '—')
-        return (
-          <Tooltip title={note === '—' ? '' : note}>
-            <div className="ai-center-line-clamp-2">{note}</div>
-          </Tooltip>
-        )
-      },
-    },
-  ]
+  const orderedEvents = useMemo(() => [...events].reverse(), [events])
+
+  const filteredEvents = useMemo(
+    () =>
+      orderedEvents.filter((item) => {
+        if (eventFilter === 'error') return item.status === 'error'
+        if (eventFilter === 'success') return item.status === 'success'
+        return true
+      }),
+    [eventFilter, orderedEvents]
+  )
+
+  const visibleEvents = useMemo(
+    () => filteredEvents.filter((item) => item.id > eventHiddenMarker),
+    [eventHiddenMarker, filteredEvents]
+  )
+
+  const visibleEventLines = useMemo(
+    () =>
+      visibleEvents.map((item) => ({
+        key: item.id,
+        text: buildEventLogLine(item),
+        tone: getEventLogTone(item),
+      })),
+    [visibleEvents]
+  )
 
   const routeSteps = Form.useWatch('steps', routeForm) || []
 
@@ -872,35 +865,42 @@ const AiCenterAdminRuntime = () => {
             </Title>
             <p className="ai-center-section-subtitle">保留最近 50 条调用结果，可手动清空，不影响提供方和路由配置。</p>
           </div>
-          <div className="ai-center-table-toolbar">
-            <Popconfirm
-              title="确认清空调用记录？"
-              description="只清空 AI 调用事件，不会删除提供方、模型池和路由配置。"
-              okText="清空"
-              cancelText="取消"
-              onConfirm={() => void handleClearEvents()}
-            >
-              <Button danger loading={eventClearing}>
-                清空记录
-              </Button>
-            </Popconfirm>
-            <Button icon={<ReloadOutlined />} onClick={() => void loadAll()}>
-              刷新
-            </Button>
-          </div>
         </div>
 
-        <Table
-          rowKey="id"
-          className="ai-center-table"
-          size="small"
-          tableLayout="fixed"
-          loading={loading}
-          columns={eventColumns}
-          dataSource={events}
-          pagination={events.length > 10 ? { pageSize: 10, hideOnSinglePage: true } : false}
-          scroll={{ x: 1220 }}
-          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无调用记录" /> }}
+        <AppLogTerminal
+          description="统一按时间顺序展示最近 50 条 AI 调用结果，方便排查空响应、模型波动和自动回退是否生效。"
+          controls={
+            <>
+              <Select
+                size="small"
+                value={eventFilter}
+                style={{ minWidth: 160 }}
+                options={[
+                  { label: '全部调用', value: 'all' },
+                  { label: '仅失败', value: 'error' },
+                  { label: '仅成功', value: 'success' },
+                ]}
+                onChange={(value) => setEventFilter(value as 'all' | 'error' | 'success')}
+              />
+              <Button size="small" icon={<ReloadOutlined />} onClick={() => void loadAll()}>
+                刷新
+              </Button>
+            </>
+          }
+          items={visibleEventLines}
+          emptyText="暂无调用记录"
+          isCleared={eventHiddenMarker > 0}
+          onClearDisplay={() => setEventHiddenMarker(orderedEvents[orderedEvents.length - 1]?.id || 0)}
+          onShowAll={() => setEventHiddenMarker(0)}
+          canShowAll={eventHiddenMarker > 0}
+          copyPayload={visibleEventLines.map((item) => item.text)}
+          copyEmptyText="当前没有可复制的日志"
+          copySuccessText="已复制当前日志"
+          onClearBackend={() => void handleClearEvents()}
+          clearBackendLoading={eventClearing}
+          clearBackendDisabled={events.length <= 0}
+          clearBackendConfirmTitle="确认清理 AI 调用事件？"
+          clearBackendConfirmDescription="只清空调用记录，不会删除提供方、模型池和能力路由配置。"
         />
       </Card>
 

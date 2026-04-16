@@ -18,6 +18,7 @@ import type { ColumnsType, TablePaginationConfig } from 'antd/es/table'
 
 import {
   clearPanTransferFollowTaskCandidate,
+  clearPanTransferFollowTaskLogs,
   createPanTransferFollowSyncBatch,
   deletePanTransferFollowTask,
   getPanTransferFollowTaskDetail,
@@ -30,11 +31,13 @@ import {
 import type {
   PanTransferFollowTaskDetailResponse,
   PanTransferFollowTaskItem,
+  PanTransferFollowTaskLogItem,
   PanTransferFollowTaskSyncSelectionEntry,
   PanTransferLinkDirectoryEntry,
   PanTransferLinkDirectoryPreviewResponse,
 } from '@/types/panTransfer'
 import { formatServerDateTime } from '@/utils/dateTime'
+import AppLogTerminal from '@/components/common/AppLogTerminal'
 
 import { getErrorMessage } from './shared'
 
@@ -100,14 +103,183 @@ const LINK_ROOT_LABELS: Record<FollowLinkChip['key'], string> = {
 const formatDateTime = (value?: string | null, format = 'YYYY-MM-DD HH:mm') =>
   value ? formatServerDateTime(value, format, 'Asia/Shanghai') : '-'
 
-const formatTerminalLine = (level: string, stage: string, createdAt?: string | null, messageText?: string | null) =>
-  `[${formatDateTime(createdAt, 'HH:mm:ss')}] [${stage || 'general'}] [${String(level || 'info').toUpperCase()}] ${messageText || ''}`
+const FOLLOW_STAGE_LABELS: Record<string, string> = {
+  setup: '建立',
+  queue: '排队',
+  check: '巡检',
+  source: '原链',
+  share: '分享',
+  identity: '识别',
+  candidate: '候选',
+  sync: '同步',
+  publish: '发布',
+  finish: '结束',
+  general: '通用',
+}
 
-const getTerminalLineClassName = (level: string) => {
-  const normalized = String(level || '').toLowerCase()
-  if (normalized === 'error') return 'resource-ops-transfer-terminal-line is-error'
-  if (normalized === 'warning') return 'resource-ops-transfer-terminal-line is-warning'
-  return 'resource-ops-transfer-terminal-line'
+const formatFollowLogStatus = (value: unknown) => {
+  const normalized = String(value || '').trim().toLowerCase()
+  if (normalized === 'valid') return '有效'
+  if (normalized === 'warning') return '存疑'
+  if (normalized === 'invalid') return '失效'
+  if (normalized === 'error') return '异常'
+  if (normalized === 'pending') return '待校验'
+  return normalized || '未知'
+}
+
+const formatFollowSourceKind = (value: unknown) =>
+  String(value || '').trim().toLowerCase() === 'candidate' ? '候选原链' : '当前原链'
+
+const formatFollowSyncMode = (value: unknown) => {
+  const normalized = String(value || '').trim().toLowerCase()
+  if (normalized === 'replace_all') return '全量替换'
+  if (normalized === 'incremental') return '增量追加'
+  return '安全同步'
+}
+
+const buildFollowIdentitySummary = (payload: Record<string, unknown>) => {
+  const segments: string[] = []
+  const coreTitle = String(payload.core_title || '').trim()
+  const releaseYear = Number(payload.release_year || 0)
+  const season = Number(payload.season || 0)
+  const latestEpisode = Number(payload.latest_episode || 0)
+  if (coreTitle) segments.push(coreTitle)
+  if (releaseYear > 0) segments.push(String(releaseYear))
+  if (season > 0) segments.push(`第 ${season} 季`)
+  if (latestEpisode > 0) segments.push(`更至 ${latestEpisode} 集`)
+  return segments.join(' · ')
+}
+
+const buildFollowLogSummary = (log: PanTransferFollowTaskLogItem) => {
+  const messageText = String(log.message || '')
+  const payload = log.payload || {}
+  const candidateTitle = String(payload.title || payload.candidate_title || '').trim()
+  const candidateStatus = formatFollowLogStatus(payload.candidate_status)
+  const candidateTime = payload.latest_message_time ? formatDateTime(String(payload.latest_message_time), 'YYYY-MM-DD HH:mm') : ''
+  const batchId = Number(payload.batch_id || 0)
+  const publishRecordId = Number(payload.publish_record_id || 0)
+  const selectedCount = Number(payload.selected_count || 0)
+  const nextCheckAt = String(payload.next_check_at || '').trim()
+  const newShareUrl = String(payload.new_share_url || payload.source_url || '').trim()
+  const identitySummary = buildFollowIdentitySummary(payload)
+
+  if (messageText === 'Follow task created from transfer batch item') {
+    return '已从转存批次创建追更任务'
+  }
+  if (messageText === 'Follow task queued for immediate check') {
+    return '已加入立即检查队列'
+  }
+  if (messageText === 'Follow task paused') {
+    return '已暂停追更任务'
+  }
+  if (messageText === 'Follow task resumed and queued') {
+    return '已恢复追更任务，并重新加入检查队列'
+  }
+  if (messageText === 'Cleared the stored candidate source') {
+    return '已手动清空候选原链'
+  }
+  if (messageText === 'Starting follow task check') {
+    return '开始执行追更巡检'
+  }
+  if (messageText.startsWith('Source link validation finished with status:')) {
+    return `原链校验完成 -> ${formatFollowLogStatus(messageText.split(':').pop())}`
+  }
+  if (messageText.startsWith('Current share validation finished with status:')) {
+    return `当前分享校验完成 -> ${formatFollowLogStatus(messageText.split(':').pop())}`
+  }
+  if (messageText === 'Built follow task identity snapshot') {
+    return identitySummary ? `已更新作品识别快照 -> ${identitySummary}` : '已更新作品识别快照'
+  }
+  if (messageText.startsWith('Removed the stored candidate source because link validation finished with status:')) {
+    return `已移除旧候选原链 -> ${candidateStatus}`
+  }
+  if (messageText.startsWith('Discarded a detected candidate source because link validation finished with status:')) {
+    return candidateTitle ? `已丢弃本轮候选原链 -> ${candidateTitle} · ${candidateStatus}` : `已丢弃本轮候选原链 -> ${candidateStatus}`
+  }
+  if (messageText === 'Detected a recent candidate source link for this tracked resource') {
+    if (candidateTitle && candidateTime) return `发现新候选原链 -> ${candidateTitle} · ${candidateTime}`
+    if (candidateTitle) return `发现新候选原链 -> ${candidateTitle}`
+    return '发现新候选原链'
+  }
+  if (messageText === 'Keeping the stored candidate source because it is still valid') {
+    return candidateTitle ? `保留已有候选原链 -> ${candidateTitle}` : '保留已有候选原链'
+  }
+  if (messageText === 'No new candidate found and the current source link is invalid') {
+    return '当前原链已失效，且本轮未发现新候选'
+  }
+  if (messageText === 'No new candidate found and the current outward share is invalid') {
+    return '当前对外分享异常，且本轮未发现新候选'
+  }
+  if (messageText === 'No recent candidate source link was found for this check') {
+    return '本轮未发现新的候选原链'
+  }
+  if (messageText === 'Created a follow-sync batch targeting the existing resource directory') {
+    const details = [
+      batchId > 0 ? `批次 #${batchId}` : '',
+      formatFollowSourceKind(payload.source_kind),
+      formatFollowSyncMode(payload.sync_mode),
+      selectedCount > 0 ? `已选 ${selectedCount} 项` : '',
+    ].filter(Boolean)
+    return details.length > 0 ? `已创建同步批次 -> ${details.join(' · ')}` : '已创建同步批次'
+  }
+  if (messageText === 'Follow-sync batch completed and the tracked resource directory was refreshed') {
+    const details = [
+      batchId > 0 ? `批次 #${batchId}` : '',
+      formatFollowSourceKind(payload.source_kind),
+      newShareUrl ? `新分享 ${newShareUrl}` : '',
+    ].filter(Boolean)
+    return details.length > 0 ? `同步完成 -> ${details.join(' · ')}` : '同步完成'
+  }
+  if (messageText === 'Bound frontend publish record was updated to the latest share URL') {
+    return publishRecordId > 0 ? `已更新前台发布记录 -> 记录 #${publishRecordId}` : '已更新前台发布记录'
+  }
+  if (messageText.startsWith('Follow-sync batch failed:')) {
+    return `同步失败 -> ${messageText.replace('Follow-sync batch failed:', '').trim() || '未知错误'}`
+  }
+  if (messageText === 'Follow task check completed') {
+    return nextCheckAt ? `巡检完成 -> 下次检查 ${formatDateTime(nextCheckAt)}` : '巡检完成'
+  }
+  if (messageText.startsWith('Follow task check failed:')) {
+    return `巡检失败 -> ${messageText.replace('Follow task check failed:', '').trim() || '未知错误'}`
+  }
+  return messageText || '日志已更新'
+}
+
+const getFollowLogTone = (log: PanTransferFollowTaskLogItem) => {
+  const level = String(log.level || '').trim().toLowerCase()
+  const messageText = String(log.message || '')
+  if (level === 'error' || messageText.startsWith('Follow task check failed:') || messageText.startsWith('Follow-sync batch failed:')) {
+    return 'error' as const
+  }
+  if (
+    level === 'warning' ||
+    messageText === 'Detected a recent candidate source link for this tracked resource' ||
+    messageText.startsWith('Removed the stored candidate source') ||
+    messageText.startsWith('Discarded a detected candidate source')
+  ) {
+    return 'warning' as const
+  }
+  if (
+    messageText.startsWith('Source link validation finished with status: valid') ||
+    messageText.startsWith('Current share validation finished with status: valid') ||
+    messageText === 'Built follow task identity snapshot' ||
+    messageText === 'Created a follow-sync batch targeting the existing resource directory' ||
+    messageText === 'Follow-sync batch completed and the tracked resource directory was refreshed' ||
+    messageText === 'Bound frontend publish record was updated to the latest share URL' ||
+    messageText === 'Follow task check completed'
+  ) {
+    return 'success' as const
+  }
+  return 'default' as const
+}
+
+const buildFollowTerminalLine = (log: PanTransferFollowTaskLogItem) =>
+  `[${formatDateTime(log.created_at, 'HH:mm:ss')}] [${FOLLOW_STAGE_LABELS[log.stage] || log.stage || '通用'}] [${String(log.level || 'info').toUpperCase()}] ${buildFollowLogSummary(log)}`
+
+const clearFollowLogMarker = (markers: Record<number, number>, taskId: number) => {
+  const next = { ...markers }
+  delete next[taskId]
+  return next
 }
 
 const getAutomationSummary = (task: PanTransferFollowTaskItem) => {
@@ -370,6 +542,7 @@ const FollowTasksSectionV2 = ({ refreshToken }: FollowTasksSectionProps) => {
   const [directoryLink, setDirectoryLink] = useState<FollowLinkChip | null>(null)
   const [directoryTrail, setDirectoryTrail] = useState<DirectoryTrailItem[]>([])
   const [clearedLogMarkerByTaskId, setClearedLogMarkerByTaskId] = useState<Record<number, number>>({})
+  const [clearingDetailLogsTaskId, setClearingDetailLogsTaskId] = useState<number | null>(null)
 
   const loadTasks = async (page = pagination.page, pageSize = pagination.pageSize, filter = statusFilter) => {
     setLoading(true)
@@ -587,6 +760,20 @@ const FollowTasksSectionV2 = ({ refreshToken }: FollowTasksSectionProps) => {
       message.error(getErrorMessage(error, '清空候选原链失败'))
     } finally {
       setClearingCandidateTaskId(null)
+    }
+  }
+
+  const clearTaskLogs = async (taskId: number) => {
+    setClearingDetailLogsTaskId(taskId)
+    try {
+      const response = await clearPanTransferFollowTaskLogs(taskId)
+      setDetailData((current) => (current?.task.id === taskId ? response : current))
+      setClearedLogMarkerByTaskId((current) => clearFollowLogMarker(current, taskId))
+      message.success(`已清理追更任务 #${taskId} 的后端日志`)
+    } catch (error) {
+      message.error(getErrorMessage(error, '清理追更日志失败'))
+    } finally {
+      setClearingDetailLogsTaskId(null)
     }
   }
 
@@ -961,6 +1148,15 @@ const FollowTasksSectionV2 = ({ refreshToken }: FollowTasksSectionProps) => {
   const detailLogs = detailData?.logs ?? []
   const detailLogMarker = detailTask ? clearedLogMarkerByTaskId[detailTask.id] || 0 : 0
   const visibleDetailLogs = detailLogs.filter((log) => log.id > detailLogMarker)
+  const visibleDetailLogLines = useMemo(
+    () =>
+      visibleDetailLogs.map((log) => ({
+        key: log.id,
+        text: buildFollowTerminalLine(log),
+        tone: getFollowLogTone(log),
+      })),
+    [visibleDetailLogs]
+  )
   const hasCandidate = Boolean(detailTask?.last_candidate_link_target_id && detailTask?.last_candidate_url)
   const manualPreviewColumns: ColumnsType<PanTransferLinkDirectoryEntry> = [
     {
@@ -1421,52 +1617,32 @@ const FollowTasksSectionV2 = ({ refreshToken }: FollowTasksSectionProps) => {
             </Card>
 
             <Card size="small" title="执行终端" className="resource-ops-transfer-log-card">
-              <div className="resource-ops-transfer-terminal-toolbar">
-                <span className="resource-ops-transfer-terminal-meta">
-                  按真实执行顺序输出检查与同步日志，便于确认候选发现、同步排队和前台回写过程。
-                </span>
-                <Space size={8}>
-                  <Button
-                    size="small"
-                    onClick={() => {
-                      if (!detailTask || detailLogs.length <= 0) return
-                      setClearedLogMarkerByTaskId((current) => ({
-                        ...current,
-                        [detailTask.id]: detailLogs[detailLogs.length - 1]?.id || 0,
-                      }))
-                    }}
-                  >
-                    清空显示
-                  </Button>
-                  <Button
-                    size="small"
-                    disabled={!detailTask || !detailLogMarker}
-                    onClick={() => {
-                      if (!detailTask) return
-                      setClearedLogMarkerByTaskId((current) => {
-                        const next = { ...current }
-                        delete next[detailTask.id]
-                        return next
-                      })
-                    }}
-                  >
-                    显示全部
-                  </Button>
-                </Space>
-              </div>
-              <div className="resource-ops-terminal resource-ops-transfer-terminal">
-                {visibleDetailLogs.length > 0 ? (
-                  visibleDetailLogs.map((log) => (
-                    <div key={log.id} className={getTerminalLineClassName(log.level)}>
-                      {formatTerminalLine(log.level, log.stage, log.created_at, log.message)}
-                    </div>
-                  ))
-                ) : detailLogs.length > 0 ? (
-                  <div className="resource-ops-terminal-empty">当前显示已清空，新的日志会继续追加。</div>
-                ) : (
-                  <div className="resource-ops-terminal-empty">暂无追更检查日志</div>
-                )}
-              </div>
+              <AppLogTerminal
+                description="按真实执行顺序输出检查与同步日志，便于确认候选发现、同步排队和前台回写过程。"
+                items={visibleDetailLogLines}
+                emptyText="暂无追更检查日志"
+                isCleared={detailLogMarker > 0}
+                onClearDisplay={() => {
+                  if (!detailTask || detailLogs.length <= 0) return
+                  setClearedLogMarkerByTaskId((current) => ({
+                    ...current,
+                    [detailTask.id]: detailLogs[detailLogs.length - 1]?.id || 0,
+                  }))
+                }}
+                onShowAll={() => {
+                  if (!detailTask) return
+                  setClearedLogMarkerByTaskId((current) => clearFollowLogMarker(current, detailTask.id))
+                }}
+                canShowAll={detailLogMarker > 0}
+                copyPayload={visibleDetailLogLines.map((item) => item.text)}
+                copyEmptyText="当前没有可复制的日志"
+                copySuccessText="已复制当前日志"
+                onClearBackend={detailTask ? () => clearTaskLogs(detailTask.id) : null}
+                clearBackendLoading={detailTask ? clearingDetailLogsTaskId === detailTask.id : false}
+                clearBackendDisabled={!detailTask || detailLogs.length <= 0}
+                clearBackendConfirmTitle="确认清理这条追更任务的后端日志？"
+                clearBackendConfirmDescription="这会删除追更检查与同步日志，但不会删除追更任务本身。"
+              />
             </Card>
           </div>
         ) : (

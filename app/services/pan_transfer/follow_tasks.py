@@ -727,6 +727,21 @@ def get_pan_transfer_follow_task_detail(session: Session, *, task_id: int) -> di
     }
 
 
+def clear_pan_transfer_follow_task_logs(session: Session, *, task_id: int) -> dict[str, Any]:
+    ensure_runtime_storage_tables()
+    task = _get_follow_task(session, task_id=task_id)
+    (
+        session.query(PanTransferSyncTaskLog)
+        .filter(PanTransferSyncTaskLog.task_id == int(task.id))
+        .delete(synchronize_session=False)
+    )
+    session.flush()
+    return {
+        "task": _serialize_follow_task(task),
+        "logs": [],
+    }
+
+
 def list_pan_transfer_follow_tasks(
     session: Session,
     *,
