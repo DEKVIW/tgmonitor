@@ -210,8 +210,8 @@ def _build_manual_candidate_items(
 
     items.sort(
         key=lambda item: (
-            -int(item["impact_message_count"]),
             -(item["latest_message_time"].timestamp()) if item["latest_message_time"] is not None else float("inf"),
+            -int(item["impact_message_count"]),
             int(item["link_target_id"]),
         ),
     )

@@ -85,6 +85,7 @@ const PreviewSection = ({
       title: '资源',
       dataIndex: 'short_title',
       key: 'short_title',
+      width: 300,
       render: (_, record) => {
         const title = record.short_title || record.latest_message_title || record.work_title || '暂无标题'
         return (
@@ -138,6 +139,7 @@ const PreviewSection = ({
       title: '原链接',
       dataIndex: 'original_url',
       key: 'original_url',
+      width: 360,
       render: (value: string) => (
         <a href={value} target="_blank" rel="noreferrer" className="resource-ops-transfer-url" title={value}>
           {value}
@@ -338,11 +340,13 @@ const PreviewSection = ({
               </div>
 
               <Table
+                className="resource-ops-transfer-preview-table"
                 style={{ marginTop: 16 }}
                 rowKey="link_target_id"
                 loading={previewLoading}
                 dataSource={previewData.items}
                 columns={columns}
+                tableLayout="fixed"
                 rowSelection={{
                   selectedRowKeys: selectedPreviewKeys,
                   preserveSelectedRowKeys: true,
@@ -355,7 +359,7 @@ const PreviewSection = ({
                   total: previewData.total,
                   showSizeChanger: true,
                 }}
-                scroll={{ x: 1180 }}
+                scroll={{ x: 1240 }}
                 locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无符合条件的源链" /> }}
               />
             </>

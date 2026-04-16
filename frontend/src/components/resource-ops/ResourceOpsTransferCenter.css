@@ -287,6 +287,21 @@
   white-space: nowrap;
 }
 
+.resource-ops-transfer-preview-table .ant-table-cell {
+  min-width: 0;
+}
+
+.resource-ops-transfer-preview-table .resource-ops-transfer-title-cell {
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.resource-ops-transfer-preview-table .resource-ops-transfer-title-main,
+.resource-ops-transfer-preview-table .resource-ops-transfer-url {
+  max-width: 100%;
+}
+
 .resource-ops-transfer-title-sub {
   color: rgba(0, 0, 0, 0.45);
   font-size: 12px;
