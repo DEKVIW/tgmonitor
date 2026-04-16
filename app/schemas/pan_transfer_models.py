@@ -586,7 +586,7 @@ class PanTransferPublishRuleUpdateRequest(PanTransferBaseModel):
 
 class PanTransferFollowTaskCreateRequest(PanTransferBaseModel):
     task_name: str | None = Field(default=None, max_length=255)
-    check_interval_minutes: int | None = Field(default=360, ge=15, le=10080)
+    check_interval_minutes: int | None = Field(default=180, ge=15, le=10080)
     candidate_policy: "PanTransferFollowTaskCandidatePolicy | None" = None
     automation: dict = Field(default_factory=dict)
 
@@ -599,7 +599,7 @@ class PanTransferFollowTaskCreateRequest(PanTransferBaseModel):
 
 
 class PanTransferFollowTaskCandidatePolicy(PanTransferBaseModel):
-    lookback_days: int = Field(default=30, ge=1, le=90)
+    lookback_days: int = Field(default=3, ge=1, le=90)
     max_recall_candidates: int = Field(default=12, ge=1, le=30)
     max_judge_candidates: int = Field(default=6, ge=1, le=12)
 

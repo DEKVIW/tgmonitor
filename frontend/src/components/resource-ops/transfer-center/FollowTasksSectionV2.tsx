@@ -12,7 +12,7 @@ import {
   SearchOutlined,
   SyncOutlined,
 } from '@ant-design/icons'
-import { Alert, Button, Card, Checkbox, Descriptions, Drawer, Dropdown, Empty, InputNumber, Modal, Segmented, Space, Table, Tag, Tooltip, Typography, message } from 'antd'
+import { Alert, Button, Card, Checkbox, Collapse, Descriptions, Drawer, Dropdown, Empty, InputNumber, Modal, Segmented, Space, Table, Tag, Tooltip, Typography, message } from 'antd'
 import type { MenuProps } from 'antd'
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table'
 
@@ -105,6 +105,11 @@ const DIRECTORY_ROOT_LABELS: Record<FollowSyncSourceKind, string> = {
   current: '当前原链',
   candidate: '候选原链',
 }
+
+const DEFAULT_FOLLOW_CHECK_INTERVAL_MINUTES = 180
+const DEFAULT_FOLLOW_LOOKBACK_DAYS = 3
+const DEFAULT_FOLLOW_MAX_RECALL_CANDIDATES = 12
+const DEFAULT_FOLLOW_MAX_JUDGE_CANDIDATES = 6
 
 const LINK_ROOT_LABELS: Record<FollowLinkChip['key'], string> = {
   source: '原链',
@@ -383,11 +388,11 @@ const getFollowTaskTitle = (record: PanTransferFollowTaskItem) =>
 
 const buildFollowSettingsDraft = (task: PanTransferFollowTaskItem): FollowTaskSettingsDraft => ({
   taskId: task.id,
-  check_interval_minutes: Number(task.check_interval_minutes || 360),
+  check_interval_minutes: Number(task.check_interval_minutes || DEFAULT_FOLLOW_CHECK_INTERVAL_MINUTES),
   candidate_policy: {
-    lookback_days: Number(task.candidate_policy?.lookback_days || 30),
-    max_recall_candidates: Number(task.candidate_policy?.max_recall_candidates || 12),
-    max_judge_candidates: Number(task.candidate_policy?.max_judge_candidates || 6),
+    lookback_days: Number(task.candidate_policy?.lookback_days || DEFAULT_FOLLOW_LOOKBACK_DAYS),
+    max_recall_candidates: Number(task.candidate_policy?.max_recall_candidates || DEFAULT_FOLLOW_MAX_RECALL_CANDIDATES),
+    max_judge_candidates: Number(task.candidate_policy?.max_judge_candidates || DEFAULT_FOLLOW_MAX_JUDGE_CANDIDATES),
   },
 })
 
@@ -1239,6 +1244,10 @@ const FollowTasksSectionV2 = ({ refreshToken, isActive = true }: FollowTasksSect
     [visibleDetailLogs]
   )
   const hasCandidate = Boolean(detailTask?.last_candidate_link_target_id && detailTask?.last_candidate_url)
+  const detailLinkItems = detailTask ? buildFollowLinkItems(detailTask) : []
+  const detailReferenceTitles = detailTask?.identity_snapshot.reference_titles ?? []
+  const detailSearchQueries = detailTask?.identity_snapshot.search_queries ?? []
+  const detailRecallQueries = detailTask?.candidate_recall.queries ?? []
   const manualPreviewColumns: ColumnsType<PanTransferLinkDirectoryEntry> = [
     {
       title: '名称',
@@ -1476,159 +1485,140 @@ const FollowTasksSectionV2 = ({ refreshToken, isActive = true }: FollowTasksSect
             />
 
             {activeSettingsDraft ? (
-              <Card size="small" title="追更设置" className="resource-ops-follow-sync-card">
-                <Space direction="vertical" size={12} style={{ width: '100%' }}>
-                  <Descriptions
-                    size="small"
-                    column={2}
-                    items={[
-                      {
-                        key: 'interval',
-                        label: '巡检间隔',
-                        children: (
-                          <InputNumber
-                            min={15}
-                            max={10080}
-                            step={15}
-                            value={activeSettingsDraft.check_interval_minutes}
-                            addonAfter="分钟"
-                            style={{ width: '100%' }}
-                            onChange={(value) =>
-                              setSettingsDraft((current) =>
-                                current && current.taskId === detailTask.id
-                                  ? { ...current, check_interval_minutes: Number(value || 360) }
-                                  : buildFollowSettingsDraft({
-                                      ...detailTask,
-                                      check_interval_minutes: Number(value || 360),
-                                    })
-                              )
-                            }
-                          />
-                        ),
-                      },
-                      {
-                        key: 'lookback',
-                        label: '候选时间范围',
-                        children: (
-                          <InputNumber
-                            min={1}
-                            max={90}
-                            value={activeSettingsDraft.candidate_policy.lookback_days}
-                            addonAfter="天"
-                            style={{ width: '100%' }}
-                            onChange={(value) =>
-                              setSettingsDraft((current) =>
-                                current && current.taskId === detailTask.id
-                                  ? {
-                                      ...current,
-                                      candidate_policy: {
-                                        ...current.candidate_policy,
-                                        lookback_days: Number(value || 30),
-                                      },
-                                    }
-                                  : buildFollowSettingsDraft({
-                                      ...detailTask,
-                                      candidate_policy: {
-                                        ...detailTask.candidate_policy,
-                                        lookback_days: Number(value || 30),
-                                      },
-                                    })
-                              )
-                            }
-                          />
-                        ),
-                      },
-                      {
-                        key: 'recall',
-                        label: '最多召回候选',
-                        children: (
-                          <InputNumber
-                            min={1}
-                            max={30}
-                            value={activeSettingsDraft.candidate_policy.max_recall_candidates}
-                            style={{ width: '100%' }}
-                            onChange={(value) =>
-                              setSettingsDraft((current) => {
-                                const nextValue = Number(value || 12)
-                                if (current && current.taskId === detailTask.id) {
-                                  return {
-                                    ...current,
-                                    candidate_policy: {
-                                      ...current.candidate_policy,
-                                      max_recall_candidates: nextValue,
-                                      max_judge_candidates: Math.min(current.candidate_policy.max_judge_candidates, nextValue),
-                                    },
-                                  }
-                                }
-                                const nextDraft = buildFollowSettingsDraft(detailTask)
-                                return {
-                                  ...nextDraft,
-                                  candidate_policy: {
-                                    ...nextDraft.candidate_policy,
-                                    max_recall_candidates: nextValue,
-                                    max_judge_candidates: Math.min(nextDraft.candidate_policy.max_judge_candidates, nextValue),
-                                  },
-                                }
+              <Card
+                size="small"
+                title="追更设置"
+                className="resource-ops-follow-sync-card"
+                extra={
+                  <Button
+                    type="primary"
+                    loading={savingSettingsTaskId === detailTask.id}
+                    onClick={() => void saveTaskSettings()}
+                  >
+                    保存设置
+                  </Button>
+                }
+              >
+                <div className="resource-ops-follow-settings-grid">
+                  <div className="resource-ops-follow-settings-field">
+                    <label>巡检间隔：</label>
+                    <InputNumber
+                      min={15}
+                      max={10080}
+                      step={15}
+                      value={activeSettingsDraft.check_interval_minutes}
+                      addonAfter="分钟"
+                      style={{ width: '100%' }}
+                      onChange={(value) =>
+                        setSettingsDraft((current) =>
+                          current && current.taskId === detailTask.id
+                            ? { ...current, check_interval_minutes: Number(value || DEFAULT_FOLLOW_CHECK_INTERVAL_MINUTES) }
+                            : buildFollowSettingsDraft({
+                                ...detailTask,
+                                check_interval_minutes: Number(value || DEFAULT_FOLLOW_CHECK_INTERVAL_MINUTES),
                               })
-                            }
-                          />
-                        ),
-                      },
-                      {
-                        key: 'judge',
-                        label: '最多 AI 判定',
-                        children: (
-                          <InputNumber
-                            min={1}
-                            max={Math.max(1, activeSettingsDraft.candidate_policy.max_recall_candidates)}
-                            value={activeSettingsDraft.candidate_policy.max_judge_candidates}
-                            style={{ width: '100%' }}
-                            onChange={(value) =>
-                              setSettingsDraft((current) =>
-                                current && current.taskId === detailTask.id
-                                  ? {
-                                      ...current,
-                                      candidate_policy: {
-                                        ...current.candidate_policy,
-                                        max_judge_candidates: Math.min(
-                                          Number(value || current.candidate_policy.max_judge_candidates || 1),
-                                          current.candidate_policy.max_recall_candidates
-                                        ),
-                                      },
-                                    }
-                                  : buildFollowSettingsDraft(detailTask)
-                              )
-                            }
-                          />
-                        ),
-                      },
-                    ]}
-                  />
-                  <small>这里只开放任务级巡检参数，内部召回策略保持系统默认，不对前台暴露。</small>
-                  <div>
-                    <Button
-                      type="primary"
-                      loading={savingSettingsTaskId === detailTask.id}
-                      onClick={() => void saveTaskSettings()}
-                    >
-                      保存设置
-                    </Button>
+                        )
+                      }
+                    />
                   </div>
-                </Space>
+
+                  <div className="resource-ops-follow-settings-field">
+                    <label>候选时间范围：</label>
+                    <InputNumber
+                      min={1}
+                      max={90}
+                      value={activeSettingsDraft.candidate_policy.lookback_days}
+                      addonAfter="天"
+                      style={{ width: '100%' }}
+                      onChange={(value) =>
+                        setSettingsDraft((current) =>
+                          current && current.taskId === detailTask.id
+                            ? {
+                                ...current,
+                                candidate_policy: {
+                                  ...current.candidate_policy,
+                                  lookback_days: Number(value || DEFAULT_FOLLOW_LOOKBACK_DAYS),
+                                },
+                              }
+                            : buildFollowSettingsDraft({
+                                ...detailTask,
+                                candidate_policy: {
+                                  ...detailTask.candidate_policy,
+                                  lookback_days: Number(value || DEFAULT_FOLLOW_LOOKBACK_DAYS),
+                                },
+                              })
+                        )
+                      }
+                    />
+                  </div>
+
+                  <div className="resource-ops-follow-settings-field">
+                    <label>最多召回候选：</label>
+                    <InputNumber
+                      min={1}
+                      max={30}
+                      value={activeSettingsDraft.candidate_policy.max_recall_candidates}
+                      style={{ width: '100%' }}
+                      onChange={(value) =>
+                        setSettingsDraft((current) => {
+                          const nextValue = Number(value || DEFAULT_FOLLOW_MAX_RECALL_CANDIDATES)
+                          if (current && current.taskId === detailTask.id) {
+                            return {
+                              ...current,
+                              candidate_policy: {
+                                ...current.candidate_policy,
+                                max_recall_candidates: nextValue,
+                                max_judge_candidates: Math.min(current.candidate_policy.max_judge_candidates, nextValue),
+                              },
+                            }
+                          }
+                          const nextDraft = buildFollowSettingsDraft(detailTask)
+                          return {
+                            ...nextDraft,
+                            candidate_policy: {
+                              ...nextDraft.candidate_policy,
+                              max_recall_candidates: nextValue,
+                              max_judge_candidates: Math.min(nextDraft.candidate_policy.max_judge_candidates, nextValue),
+                            },
+                          }
+                        })
+                      }
+                    />
+                  </div>
+
+                  <div className="resource-ops-follow-settings-field">
+                    <label>最多 AI 判定：</label>
+                    <InputNumber
+                      min={1}
+                      max={Math.max(1, activeSettingsDraft.candidate_policy.max_recall_candidates)}
+                      value={activeSettingsDraft.candidate_policy.max_judge_candidates}
+                      style={{ width: '100%' }}
+                      onChange={(value) =>
+                        setSettingsDraft((current) =>
+                          current && current.taskId === detailTask.id
+                            ? {
+                                ...current,
+                                candidate_policy: {
+                                  ...current.candidate_policy,
+                                  max_judge_candidates: Math.min(
+                                    Number(value || current.candidate_policy.max_judge_candidates || DEFAULT_FOLLOW_MAX_JUDGE_CANDIDATES),
+                                    current.candidate_policy.max_recall_candidates
+                                  ),
+                                },
+                              }
+                            : buildFollowSettingsDraft(detailTask)
+                        )
+                      }
+                    />
+                  </div>
+                </div>
               </Card>
             ) : null}
 
             <Card size="small" title="AI 识别身份" className="resource-ops-follow-sync-card">
-              <div className="resource-ops-follow-sync-meta">
+              <div className="resource-ops-follow-sync-meta resource-ops-follow-identity-card">
                 <span>{detailTask.identity_snapshot.core_title || getFollowTaskTitle(detailTask)}</span>
-                {detailTask.identity_snapshot.aliases.length > 0 ? (
-                  <Space wrap size={[6, 6]}>
-                    {detailTask.identity_snapshot.aliases.map((alias) => (
-                      <Tag key={alias}>{alias}</Tag>
-                    ))}
-                  </Space>
-                ) : null}
-                <small>{`识别输入标题：${detailTask.identity_snapshot.resource_title || getFollowTaskTitle(detailTask)}`}</small>
+                <small>{`当前资源标题：${detailTask.identity_snapshot.resource_title || getFollowTaskTitle(detailTask)}`}</small>
                 <small>
                   {[
                     detailTask.identity_snapshot.release_year ? `年份 ${detailTask.identity_snapshot.release_year}` : null,
@@ -1639,9 +1629,6 @@ const FollowTasksSectionV2 = ({ refreshToken, isActive = true }: FollowTasksSect
                     .filter(Boolean)
                     .join(' · ') || '当前还没有更多结构化身份信息'}
                 </small>
-                {detailTask.identity_snapshot.search_queries.length > 0 ? (
-                  <small>{`召回关键词：${detailTask.identity_snapshot.search_queries.join(' / ')}`}</small>
-                ) : null}
                 <small>
                   {[
                     detailTask.identity_snapshot.source ? `来源 ${detailTask.identity_snapshot.source}` : null,
@@ -1658,7 +1645,7 @@ const FollowTasksSectionV2 = ({ refreshToken, isActive = true }: FollowTasksSect
             </Card>
 
             <Card size="small" title="候选判定" className="resource-ops-follow-sync-card">
-              <div className="resource-ops-follow-sync-meta">
+              <div className="resource-ops-follow-sync-meta resource-ops-follow-candidate-card">
                 <span>{getFollowCandidateAssessmentSummary(detailTask)}</span>
                 <small>
                   {`召回 ${detailTask.candidate_recall.recall_count || 0} 条 · 最多评估 ${detailTask.candidate_recall.judge_limit || 0} 条`}
@@ -1688,11 +1675,51 @@ const FollowTasksSectionV2 = ({ refreshToken, isActive = true }: FollowTasksSect
                       .join(' · ')}
                   </small>
                 ) : null}
-                {detailTask.candidate_recall.queries.length > 0 ? (
-                  <small>{`召回查询：${detailTask.candidate_recall.queries.join(' / ')}`}</small>
-                ) : null}
                 {detailTask.candidate_assessment.reason ? (
                   <small>{`判定说明：${detailTask.candidate_assessment.reason}`}</small>
+                ) : null}
+                {(detailReferenceTitles.length > 0 || detailSearchQueries.length > 0 || detailRecallQueries.length > 0) ? (
+                  <Collapse
+                    ghost
+                    className="resource-ops-follow-advanced-collapse"
+                    items={[
+                      {
+                        key: 'recall',
+                        label: '识别与召回详情',
+                        children: (
+                          <div className="resource-ops-follow-sync-meta resource-ops-follow-advanced-meta">
+                            {detailReferenceTitles.length > 0 ? (
+                              <div className="resource-ops-follow-reference-list">
+                                {detailReferenceTitles.map((title, index) => (
+                                  <div key={`${title}-${index}`} className="resource-ops-follow-reference-item">
+                                    {title}
+                                  </div>
+                                ))}
+                              </div>
+                            ) : null}
+                            {detailSearchQueries.length > 0 ? (
+                              <div className="resource-ops-follow-chip-row">
+                                {detailSearchQueries.map((query) => (
+                                  <Tag key={query} className="resource-ops-follow-query-tag">
+                                    {query}
+                                  </Tag>
+                                ))}
+                              </div>
+                            ) : null}
+                            {detailRecallQueries.length > 0 ? (
+                              <div className="resource-ops-follow-chip-row">
+                                {detailRecallQueries.map((query) => (
+                                  <Tag key={query} className="resource-ops-follow-query-tag">
+                                    {query}
+                                  </Tag>
+                                ))}
+                              </div>
+                            ) : null}
+                          </div>
+                        ),
+                      },
+                    ]}
+                  />
                 ) : null}
               </div>
             </Card>
@@ -1700,7 +1727,7 @@ const FollowTasksSectionV2 = ({ refreshToken, isActive = true }: FollowTasksSect
             <Card size="small" title="链接状态" className="resource-ops-follow-sync-card">
               <div className="resource-ops-transfer-link-stack">
                 <div className="resource-ops-transfer-link-row">
-                  {buildFollowLinkItems(detailTask).map((item) => {
+                  {detailLinkItems.map((item) => {
                     const statusMeta = getLinkChipMeta(item.status)
                     const tip = [item.url, item.detail].filter(Boolean).join('\n')
                     const menu: MenuProps = {

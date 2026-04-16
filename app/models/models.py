@@ -427,7 +427,7 @@ class PanTransferSyncTask(Base):
     last_candidate_url = Column(Text, nullable=True)
     last_candidate_title = Column(String(255), nullable=True)
     last_candidate_message_time = Column(DateTime, nullable=True, index=True)
-    check_interval_minutes = Column(Integer, nullable=False, default=360)
+    check_interval_minutes = Column(Integer, nullable=False, default=180)
     last_checked_at = Column(DateTime, nullable=True, index=True)
     next_check_at = Column(DateTime, nullable=True, index=True)
     locked_by = Column(String(128), nullable=True, index=True)
