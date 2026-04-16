@@ -12,7 +12,7 @@ import {
   SearchOutlined,
   SyncOutlined,
 } from '@ant-design/icons'
-import { Alert, Button, Card, Checkbox, Descriptions, Drawer, Dropdown, Empty, Modal, Segmented, Space, Table, Tag, Tooltip, Typography, message } from 'antd'
+import { Alert, Button, Card, Checkbox, Descriptions, Drawer, Dropdown, Empty, InputNumber, Modal, Segmented, Space, Table, Tag, Tooltip, Typography, message } from 'antd'
 import type { MenuProps } from 'antd'
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table'
 
@@ -27,8 +27,10 @@ import {
   previewPanTransferLinkDirectory,
   queuePanTransferFollowTaskCheck,
   resumePanTransferFollowTask,
+  updatePanTransferFollowTaskSettings,
 } from '@/api/panTransfer'
 import type {
+  PanTransferFollowTaskCandidatePolicy,
   PanTransferFollowTaskDetailResponse,
   PanTransferFollowTaskItem,
   PanTransferFollowTaskLogItem,
@@ -36,6 +38,7 @@ import type {
   PanTransferLinkDirectoryEntry,
   PanTransferLinkDirectoryPreviewResponse,
 } from '@/types/panTransfer'
+import { usePageVisibility } from '@/hooks/usePageVisibility'
 import { formatServerDateTime } from '@/utils/dateTime'
 import AppLogTerminal from '@/components/common/AppLogTerminal'
 
@@ -45,6 +48,7 @@ const { Title, Paragraph, Link } = Typography
 
 type FollowTasksSectionProps = {
   refreshToken: number
+  isActive?: boolean
 }
 
 type FollowStatusFilter = 'all' | 'active' | 'paused'
@@ -55,6 +59,12 @@ type DirectoryTrailItem = {
   label: string
   entryId?: string | null
   entryPath?: string | null
+}
+
+type FollowTaskSettingsDraft = {
+  taskId: number
+  check_interval_minutes: number
+  candidate_policy: PanTransferFollowTaskCandidatePolicy
 }
 
 const TASK_STATUS_META: Record<string, { color: string; label: string }> = {
@@ -83,6 +93,8 @@ const FOLLOW_CHANGE_LABELS: Record<string, string> = {
   sync_failed: '同步失败，等待人工处理',
 }
 
+const FOLLOW_TRANSIENT_TASK_STATES = new Set(['queued', 'checking', 'sync_queued'])
+
 const FOLLOW_RULE_TONE: Record<string, { color: string; label: string }> = {
   info: { color: 'processing', label: '推荐' },
   warning: { color: 'warning', label: '人工确认' },
@@ -105,6 +117,7 @@ const formatDateTime = (value?: string | null, format = 'YYYY-MM-DD HH:mm') =>
 
 const FOLLOW_STAGE_LABELS: Record<string, string> = {
   setup: '建立',
+  settings: '设置',
   queue: '排队',
   check: '巡检',
   source: '原链',
@@ -168,6 +181,9 @@ const buildFollowLogSummary = (log: PanTransferFollowTaskLogItem) => {
   }
   if (messageText === 'Follow task queued for immediate check') {
     return '已加入立即检查队列'
+  }
+  if (messageText === 'Updated follow task settings') {
+    return '已更新追更设置'
   }
   if (messageText === 'Follow task paused') {
     return '已暂停追更任务'
@@ -365,6 +381,16 @@ const getFollowStatusSummary = (record: PanTransferFollowTaskItem) => {
 const getFollowTaskTitle = (record: PanTransferFollowTaskItem) =>
   record.source_message_title || record.work_title || record.topic_title || record.task_name || `追更任务 #${record.id}`
 
+const buildFollowSettingsDraft = (task: PanTransferFollowTaskItem): FollowTaskSettingsDraft => ({
+  taskId: task.id,
+  check_interval_minutes: Number(task.check_interval_minutes || 360),
+  candidate_policy: {
+    lookback_days: Number(task.candidate_policy?.lookback_days || 30),
+    max_recall_candidates: Number(task.candidate_policy?.max_recall_candidates || 12),
+    max_judge_candidates: Number(task.candidate_policy?.max_judge_candidates || 6),
+  },
+})
+
 const getFollowCandidateAssessmentSummary = (record: PanTransferFollowTaskItem) => {
   const assessment = record.candidate_assessment
   if (assessment.should_promote) {
@@ -514,7 +540,8 @@ const formatSize = (value?: number | null) => {
 const getFollowSyncKey = (taskId: number, sourceKind: FollowSyncSourceKind, syncMode: 'standard' | FollowSyncMode = 'standard') =>
   `${taskId}:${sourceKind}:${syncMode}`
 
-const FollowTasksSectionV2 = ({ refreshToken }: FollowTasksSectionProps) => {
+const FollowTasksSectionV2 = ({ refreshToken, isActive = true }: FollowTasksSectionProps) => {
+  const isPageVisible = usePageVisibility()
   const [tasks, setTasks] = useState<PanTransferFollowTaskItem[]>([])
   const [loading, setLoading] = useState(false)
   const [statusFilter, setStatusFilter] = useState<FollowStatusFilter>('all')
@@ -525,6 +552,8 @@ const FollowTasksSectionV2 = ({ refreshToken }: FollowTasksSectionProps) => {
   const [detailOpen, setDetailOpen] = useState(false)
   const [detailLoading, setDetailLoading] = useState(false)
   const [detailData, setDetailData] = useState<PanTransferFollowTaskDetailResponse | null>(null)
+  const [settingsDraft, setSettingsDraft] = useState<FollowTaskSettingsDraft | null>(null)
+  const [savingSettingsTaskId, setSavingSettingsTaskId] = useState<number | null>(null)
   const [manualSyncOpen, setManualSyncOpen] = useState(false)
   const [manualSyncSubmitting, setManualSyncSubmitting] = useState(false)
   const [manualPreviewLoading, setManualPreviewLoading] = useState(false)
@@ -544,8 +573,15 @@ const FollowTasksSectionV2 = ({ refreshToken }: FollowTasksSectionProps) => {
   const [clearedLogMarkerByTaskId, setClearedLogMarkerByTaskId] = useState<Record<number, number>>({})
   const [clearingDetailLogsTaskId, setClearingDetailLogsTaskId] = useState<number | null>(null)
 
-  const loadTasks = async (page = pagination.page, pageSize = pagination.pageSize, filter = statusFilter) => {
-    setLoading(true)
+  const loadTasks = async (
+    page = pagination.page,
+    pageSize = pagination.pageSize,
+    filter = statusFilter,
+    options?: { silent?: boolean }
+  ) => {
+    if (!(options?.silent ?? false)) {
+      setLoading(true)
+    }
     try {
       const response = await listPanTransferFollowTasks(page, pageSize, filter === 'all' ? undefined : filter)
       setTasks(response.items)
@@ -553,7 +589,9 @@ const FollowTasksSectionV2 = ({ refreshToken }: FollowTasksSectionProps) => {
     } catch (error) {
       message.error(getErrorMessage(error, '加载追更任务失败'))
     } finally {
-      setLoading(false)
+      if (!(options?.silent ?? false)) {
+        setLoading(false)
+      }
     }
   }
 
@@ -564,6 +602,7 @@ const FollowTasksSectionV2 = ({ refreshToken }: FollowTasksSectionProps) => {
     try {
       const response = await getPanTransferFollowTaskDetail(taskId)
       setDetailData(response)
+      setSettingsDraft((current) => (current?.taskId === response.task.id ? current : buildFollowSettingsDraft(response.task)))
       if (options?.open ?? true) {
         setDetailOpen(true)
       }
@@ -667,21 +706,42 @@ const FollowTasksSectionV2 = ({ refreshToken }: FollowTasksSectionProps) => {
   }, [refreshToken, statusFilter])
 
   useEffect(() => {
-    if (!detailOpen || !detailData) return
-    if (!['queued', 'checking', 'sync_queued'].includes(detailData.task.task_state)) return
+    if (!isActive || !isPageVisible) return
 
-    const taskId = detailData.task.id
+    void loadTasks(pagination.page, pagination.pageSize, statusFilter, { silent: true })
+
+    if (detailOpen && detailData) {
+      void loadTaskDetail(detailData.task.id, { open: false, silent: true })
+    }
+  }, [detailData?.task.id, detailOpen, isActive, isPageVisible, pagination.page, pagination.pageSize, statusFilter])
+
+  useEffect(() => {
+    const hasTransientTaskOnPage = tasks.some((item) => FOLLOW_TRANSIENT_TASK_STATES.has(item.task_state))
+    const shouldPollList = isActive && hasTransientTaskOnPage
+    const shouldPollDetail =
+      isActive &&
+      detailOpen &&
+      detailData !== null &&
+      FOLLOW_TRANSIENT_TASK_STATES.has(detailData.task.task_state)
+
+    if (!isPageVisible || (!shouldPollList && !shouldPollDetail)) return
+
     const timer = window.setInterval(() => {
-      void loadTaskDetail(taskId, { open: false, silent: true })
-      void loadTasks(pagination.page, pagination.pageSize, statusFilter)
+      if (shouldPollList) {
+        void loadTasks(pagination.page, pagination.pageSize, statusFilter, { silent: true })
+      }
+      if (shouldPollDetail && detailData) {
+        void loadTaskDetail(detailData.task.id, { open: false, silent: true })
+      }
     }, 4000)
     return () => window.clearInterval(timer)
-  }, [detailOpen, detailData?.task.id, detailData?.task.task_state, pagination.page, pagination.pageSize, statusFilter])
+  }, [detailData, detailOpen, isActive, isPageVisible, pagination.page, pagination.pageSize, statusFilter, tasks])
 
   useEffect(() => {
     if (!detailOpen) {
       setManualSyncOpen(false)
       resetManualSyncState()
+      setSettingsDraft(null)
     }
   }, [detailOpen])
 
@@ -746,6 +806,25 @@ const FollowTasksSectionV2 = ({ refreshToken }: FollowTasksSectionProps) => {
     } catch (error) {
       message.error(getErrorMessage(error, record.status === 'active' ? '暂停追更任务失败' : '恢复追更任务失败'))
       return null
+    }
+  }
+
+  const saveTaskSettings = async () => {
+    if (!detailTask || !settingsDraft) return
+    setSavingSettingsTaskId(detailTask.id)
+    try {
+      const response = await updatePanTransferFollowTaskSettings(detailTask.id, {
+        check_interval_minutes: settingsDraft.check_interval_minutes,
+        candidate_policy: settingsDraft.candidate_policy,
+      })
+      setDetailData(response)
+      setSettingsDraft(buildFollowSettingsDraft(response.task))
+      message.success(`追更任务 #${detailTask.id} 设置已保存`)
+      await loadTasks(pagination.page, pagination.pageSize, statusFilter, { silent: true })
+    } catch (error) {
+      message.error(getErrorMessage(error, '保存追更设置失败'))
+    } finally {
+      setSavingSettingsTaskId(null)
     }
   }
 
@@ -1145,6 +1224,8 @@ const FollowTasksSectionV2 = ({ refreshToken }: FollowTasksSectionProps) => {
   ]
 
   const detailTask = detailData?.task ?? null
+  const activeSettingsDraft =
+    detailTask && settingsDraft?.taskId === detailTask.id ? settingsDraft : detailTask ? buildFollowSettingsDraft(detailTask) : null
   const detailLogs = detailData?.logs ?? []
   const detailLogMarker = detailTask ? clearedLogMarkerByTaskId[detailTask.id] || 0 : 0
   const visibleDetailLogs = detailLogs.filter((log) => log.id > detailLogMarker)
@@ -1394,6 +1475,149 @@ const FollowTasksSectionV2 = ({ refreshToken }: FollowTasksSectionProps) => {
               ]}
             />
 
+            {activeSettingsDraft ? (
+              <Card size="small" title="追更设置" className="resource-ops-follow-sync-card">
+                <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                  <Descriptions
+                    size="small"
+                    column={2}
+                    items={[
+                      {
+                        key: 'interval',
+                        label: '巡检间隔',
+                        children: (
+                          <InputNumber
+                            min={15}
+                            max={10080}
+                            step={15}
+                            value={activeSettingsDraft.check_interval_minutes}
+                            addonAfter="分钟"
+                            style={{ width: '100%' }}
+                            onChange={(value) =>
+                              setSettingsDraft((current) =>
+                                current && current.taskId === detailTask.id
+                                  ? { ...current, check_interval_minutes: Number(value || 360) }
+                                  : buildFollowSettingsDraft({
+                                      ...detailTask,
+                                      check_interval_minutes: Number(value || 360),
+                                    })
+                              )
+                            }
+                          />
+                        ),
+                      },
+                      {
+                        key: 'lookback',
+                        label: '候选时间范围',
+                        children: (
+                          <InputNumber
+                            min={1}
+                            max={90}
+                            value={activeSettingsDraft.candidate_policy.lookback_days}
+                            addonAfter="天"
+                            style={{ width: '100%' }}
+                            onChange={(value) =>
+                              setSettingsDraft((current) =>
+                                current && current.taskId === detailTask.id
+                                  ? {
+                                      ...current,
+                                      candidate_policy: {
+                                        ...current.candidate_policy,
+                                        lookback_days: Number(value || 30),
+                                      },
+                                    }
+                                  : buildFollowSettingsDraft({
+                                      ...detailTask,
+                                      candidate_policy: {
+                                        ...detailTask.candidate_policy,
+                                        lookback_days: Number(value || 30),
+                                      },
+                                    })
+                              )
+                            }
+                          />
+                        ),
+                      },
+                      {
+                        key: 'recall',
+                        label: '最多召回候选',
+                        children: (
+                          <InputNumber
+                            min={1}
+                            max={30}
+                            value={activeSettingsDraft.candidate_policy.max_recall_candidates}
+                            style={{ width: '100%' }}
+                            onChange={(value) =>
+                              setSettingsDraft((current) => {
+                                const nextValue = Number(value || 12)
+                                if (current && current.taskId === detailTask.id) {
+                                  return {
+                                    ...current,
+                                    candidate_policy: {
+                                      ...current.candidate_policy,
+                                      max_recall_candidates: nextValue,
+                                      max_judge_candidates: Math.min(current.candidate_policy.max_judge_candidates, nextValue),
+                                    },
+                                  }
+                                }
+                                const nextDraft = buildFollowSettingsDraft(detailTask)
+                                return {
+                                  ...nextDraft,
+                                  candidate_policy: {
+                                    ...nextDraft.candidate_policy,
+                                    max_recall_candidates: nextValue,
+                                    max_judge_candidates: Math.min(nextDraft.candidate_policy.max_judge_candidates, nextValue),
+                                  },
+                                }
+                              })
+                            }
+                          />
+                        ),
+                      },
+                      {
+                        key: 'judge',
+                        label: '最多 AI 判定',
+                        children: (
+                          <InputNumber
+                            min={1}
+                            max={Math.max(1, activeSettingsDraft.candidate_policy.max_recall_candidates)}
+                            value={activeSettingsDraft.candidate_policy.max_judge_candidates}
+                            style={{ width: '100%' }}
+                            onChange={(value) =>
+                              setSettingsDraft((current) =>
+                                current && current.taskId === detailTask.id
+                                  ? {
+                                      ...current,
+                                      candidate_policy: {
+                                        ...current.candidate_policy,
+                                        max_judge_candidates: Math.min(
+                                          Number(value || current.candidate_policy.max_judge_candidates || 1),
+                                          current.candidate_policy.max_recall_candidates
+                                        ),
+                                      },
+                                    }
+                                  : buildFollowSettingsDraft(detailTask)
+                              )
+                            }
+                          />
+                        ),
+                      },
+                    ]}
+                  />
+                  <small>这里只开放任务级巡检参数，内部召回策略保持系统默认，不对前台暴露。</small>
+                  <div>
+                    <Button
+                      type="primary"
+                      loading={savingSettingsTaskId === detailTask.id}
+                      onClick={() => void saveTaskSettings()}
+                    >
+                      保存设置
+                    </Button>
+                  </div>
+                </Space>
+              </Card>
+            ) : null}
+
             <Card size="small" title="AI 识别身份" className="resource-ops-follow-sync-card">
               <div className="resource-ops-follow-sync-meta">
                 <span>{detailTask.identity_snapshot.core_title || getFollowTaskTitle(detailTask)}</span>
@@ -1404,6 +1628,7 @@ const FollowTasksSectionV2 = ({ refreshToken }: FollowTasksSectionProps) => {
                     ))}
                   </Space>
                 ) : null}
+                <small>{`识别输入标题：${detailTask.identity_snapshot.resource_title || getFollowTaskTitle(detailTask)}`}</small>
                 <small>
                   {[
                     detailTask.identity_snapshot.release_year ? `年份 ${detailTask.identity_snapshot.release_year}` : null,

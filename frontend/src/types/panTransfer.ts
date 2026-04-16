@@ -264,7 +264,19 @@ export interface PanTransferPublishRuleUpdateRequest {
 export interface PanTransferFollowTaskCreateRequest {
   task_name?: string | null
   check_interval_minutes?: number | null
+  candidate_policy?: PanTransferFollowTaskCandidatePolicy | null
   automation?: Record<string, unknown>
+}
+
+export interface PanTransferFollowTaskCandidatePolicy {
+  lookback_days: number
+  max_recall_candidates: number
+  max_judge_candidates: number
+}
+
+export interface PanTransferFollowTaskSettingsUpdateRequest {
+  check_interval_minutes?: number | null
+  candidate_policy?: Partial<PanTransferFollowTaskCandidatePolicy> | null
 }
 
 export interface PanTransferFollowTaskSyncSelectionEntry {
@@ -297,6 +309,7 @@ export interface PanTransferFollowTaskLogItem {
 }
 
 export interface PanTransferFollowTaskIdentitySnapshot {
+  resource_title?: string | null
   core_title?: string | null
   aliases: string[]
   release_year?: number | null
@@ -414,6 +427,7 @@ export interface PanTransferFollowTaskItem {
   identity_snapshot: PanTransferFollowTaskIdentitySnapshot
   candidate_assessment: PanTransferFollowTaskCandidateAssessment
   candidate_recall: PanTransferFollowTaskCandidateRecall
+  candidate_policy: PanTransferFollowTaskCandidatePolicy
   extra_json: Record<string, unknown>
   created_by?: string | null
   updated_by?: string | null

@@ -587,6 +587,7 @@ class PanTransferPublishRuleUpdateRequest(PanTransferBaseModel):
 class PanTransferFollowTaskCreateRequest(PanTransferBaseModel):
     task_name: str | None = Field(default=None, max_length=255)
     check_interval_minutes: int | None = Field(default=360, ge=15, le=10080)
+    candidate_policy: "PanTransferFollowTaskCandidatePolicy | None" = None
     automation: dict = Field(default_factory=dict)
 
     @field_validator("task_name")
@@ -595,6 +596,26 @@ class PanTransferFollowTaskCreateRequest(PanTransferBaseModel):
         if value is None:
             return None
         return _normalize_text(value, field_name="task_name", allow_empty=True) or None
+
+
+class PanTransferFollowTaskCandidatePolicy(PanTransferBaseModel):
+    lookback_days: int = Field(default=30, ge=1, le=90)
+    max_recall_candidates: int = Field(default=12, ge=1, le=30)
+    max_judge_candidates: int = Field(default=6, ge=1, le=12)
+
+    @model_validator(mode="after")
+    def validate_candidate_policy(self) -> "PanTransferFollowTaskCandidatePolicy":
+        if self.max_judge_candidates > self.max_recall_candidates:
+            raise ValueError("max_judge_candidates cannot be greater than max_recall_candidates")
+        return self
+
+
+class PanTransferFollowTaskSettingsUpdateRequest(PanTransferBaseModel):
+    check_interval_minutes: int | None = Field(default=None, ge=15, le=10080)
+    candidate_policy: PanTransferFollowTaskCandidatePolicy | None = None
+
+
+PanTransferFollowTaskCreateRequest.model_rebuild()
 
 
 class PanTransferFollowTaskSyncSelectionEntry(PanTransferBaseModel):
@@ -690,6 +711,7 @@ class PanTransferFollowTaskLogItem(PanTransferBaseModel):
 
 
 class PanTransferFollowTaskIdentitySnapshot(PanTransferBaseModel):
+    resource_title: str | None = None
     core_title: str | None = None
     aliases: list[str] = Field(default_factory=list)
     release_year: int | None = None
@@ -807,6 +829,7 @@ class PanTransferFollowTaskItem(PanTransferBaseModel):
     identity_snapshot: PanTransferFollowTaskIdentitySnapshot = Field(default_factory=PanTransferFollowTaskIdentitySnapshot)
     candidate_assessment: PanTransferFollowTaskCandidateAssessment = Field(default_factory=PanTransferFollowTaskCandidateAssessment)
     candidate_recall: PanTransferFollowTaskCandidateRecall = Field(default_factory=PanTransferFollowTaskCandidateRecall)
+    candidate_policy: PanTransferFollowTaskCandidatePolicy = Field(default_factory=PanTransferFollowTaskCandidatePolicy)
     extra_json: dict = Field(default_factory=dict)
     created_by: str | None = None
     updated_by: str | None = None

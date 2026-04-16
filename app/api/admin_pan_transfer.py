@@ -16,6 +16,7 @@ from app.schemas.pan_transfer_models import (
     PanTransferBatchDetailResponse,
     PanTransferBatchListResponse,
     PanTransferFollowTaskCreateRequest,
+    PanTransferFollowTaskSettingsUpdateRequest,
     PanTransferFollowTaskDetailResponse,
     PanTransferFollowTaskListResponse,
     PanTransferFollowTaskSyncRequest,
@@ -70,6 +71,7 @@ from app.services.pan_transfer import (
     start_pan_transfer_batch,
     update_pan_transfer_publish_rule,
     update_pan_transfer_publish_record,
+    update_pan_transfer_follow_task_settings,
     update_pan_transfer_account,
     validate_pan_transfer_account,
     validate_pan_transfer_publish_record,
@@ -832,6 +834,36 @@ async def get_pan_transfer_follow_task_detail_api(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to load follow task detail: {exc}",
+        ) from exc
+
+
+@router.patch("/follow-tasks/{task_id}/settings", response_model=PanTransferFollowTaskDetailResponse, summary="Update follow task settings")
+async def update_pan_transfer_follow_task_settings_api(
+    task_id: int,
+    payload: PanTransferFollowTaskSettingsUpdateRequest,
+    current_user: dict[str, Any] = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+) -> PanTransferFollowTaskDetailResponse:
+    try:
+        result = update_pan_transfer_follow_task_settings(
+            db,
+            task_id=task_id,
+            payload=payload.model_dump(exclude_unset=True),
+            operator=str(current_user.get("username") or current_user.get("account") or "admin"),
+        )
+        db.commit()
+        return PanTransferFollowTaskDetailResponse(**result)
+    except LookupError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update follow task settings: {exc}",
         ) from exc
 
 

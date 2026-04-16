@@ -29,6 +29,7 @@ from .follow_tasks import (
     PAN_TRANSFER_SYNC_STATE_IDLE,
     PAN_TRANSFER_SYNC_STATE_SYNC_QUEUED,
     _append_follow_task_log,
+    _ensure_follow_task_identity_snapshot,
     _get_follow_task,
     _normalize_source_message_snapshot,
     _normalize_optional_int,
@@ -442,6 +443,16 @@ def handle_follow_sync_item_success(
     task.extra_json = extra_json
     session.add(task)
     session.flush()
+    identity_snapshot, identity_updated = _ensure_follow_task_identity_snapshot(session, task=task)
+
+    if identity_updated:
+        _append_follow_task_log(
+            session,
+            task=task,
+            stage="identity",
+            message="Built follow task identity snapshot",
+            payload=identity_snapshot,
+        )
 
     _append_follow_task_log(
         session,

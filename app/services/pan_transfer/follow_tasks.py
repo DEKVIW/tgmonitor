@@ -53,10 +53,16 @@ PAN_TRANSFER_SYNC_DEFAULT_INTERVAL_MINUTES = 6 * 60
 PAN_TRANSFER_SYNC_MIN_INTERVAL_MINUTES = 15
 PAN_TRANSFER_SYNC_MAX_INTERVAL_MINUTES = 7 * 24 * 60
 PAN_TRANSFER_SYNC_CANDIDATE_LOOKBACK_DAYS = 30
+PAN_TRANSFER_SYNC_MIN_CANDIDATE_LOOKBACK_DAYS = 1
+PAN_TRANSFER_SYNC_MAX_CANDIDATE_LOOKBACK_DAYS = 90
 PAN_TRANSFER_FOLLOW_IDENTITY_ROUTE_KEY = "pan_transfer_follow_identity_extract"
 PAN_TRANSFER_FOLLOW_CANDIDATE_JUDGE_ROUTE_KEY = "pan_transfer_follow_candidate_judge"
 PAN_TRANSFER_FOLLOW_MAX_RECALL_CANDIDATES = 12
 PAN_TRANSFER_FOLLOW_MAX_JUDGE_CANDIDATES = 6
+PAN_TRANSFER_FOLLOW_MIN_RECALL_CANDIDATES = 1
+PAN_TRANSFER_FOLLOW_RECALL_CANDIDATES_LIMIT = 30
+PAN_TRANSFER_FOLLOW_MIN_JUDGE_CANDIDATES = 1
+PAN_TRANSFER_FOLLOW_JUDGE_CANDIDATES_LIMIT = 12
 
 FOLLOW_EPISODE_PATTERNS = (
     re.compile(r"更\s*(\d{1,4})\s*集"),
@@ -133,6 +139,51 @@ def _normalize_interval_minutes(value: Any) -> int:
         raise ValueError(
             f"check_interval_minutes must be between {PAN_TRANSFER_SYNC_MIN_INTERVAL_MINUTES} and {PAN_TRANSFER_SYNC_MAX_INTERVAL_MINUTES}"
         )
+    return normalized
+
+
+def _normalize_candidate_lookback_days(value: Any) -> int:
+    if value in (None, ""):
+        return PAN_TRANSFER_SYNC_CANDIDATE_LOOKBACK_DAYS
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("candidate_lookback_days must be an integer") from exc
+    if normalized < PAN_TRANSFER_SYNC_MIN_CANDIDATE_LOOKBACK_DAYS or normalized > PAN_TRANSFER_SYNC_MAX_CANDIDATE_LOOKBACK_DAYS:
+        raise ValueError(
+            f"candidate_lookback_days must be between {PAN_TRANSFER_SYNC_MIN_CANDIDATE_LOOKBACK_DAYS} and {PAN_TRANSFER_SYNC_MAX_CANDIDATE_LOOKBACK_DAYS}"
+        )
+    return normalized
+
+
+def _normalize_max_recall_candidates(value: Any) -> int:
+    if value in (None, ""):
+        return PAN_TRANSFER_FOLLOW_MAX_RECALL_CANDIDATES
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("candidate_max_recall_candidates must be an integer") from exc
+    if normalized < PAN_TRANSFER_FOLLOW_MIN_RECALL_CANDIDATES or normalized > PAN_TRANSFER_FOLLOW_RECALL_CANDIDATES_LIMIT:
+        raise ValueError(
+            f"candidate_max_recall_candidates must be between {PAN_TRANSFER_FOLLOW_MIN_RECALL_CANDIDATES} and {PAN_TRANSFER_FOLLOW_RECALL_CANDIDATES_LIMIT}"
+        )
+    return normalized
+
+
+def _normalize_max_judge_candidates(value: Any, *, max_recall_candidates: int) -> int:
+    if value in (None, ""):
+        normalized = PAN_TRANSFER_FOLLOW_MAX_JUDGE_CANDIDATES
+    else:
+        try:
+            normalized = int(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("candidate_max_judge_candidates must be an integer") from exc
+    if normalized < PAN_TRANSFER_FOLLOW_MIN_JUDGE_CANDIDATES or normalized > PAN_TRANSFER_FOLLOW_JUDGE_CANDIDATES_LIMIT:
+        raise ValueError(
+            f"candidate_max_judge_candidates must be between {PAN_TRANSFER_FOLLOW_MIN_JUDGE_CANDIDATES} and {PAN_TRANSFER_FOLLOW_JUDGE_CANDIDATES_LIMIT}"
+        )
+    if normalized > max_recall_candidates:
+        raise ValueError("candidate_max_judge_candidates cannot be greater than candidate_max_recall_candidates")
     return normalized
 
 
@@ -261,10 +312,20 @@ def _normalize_source_message_snapshot(value: Mapping[str, Any] | None) -> dict[
     return {key: value for key, value in snapshot.items() if value not in (None, [], "")}
 
 
-def _collect_follow_reference_texts(task: PanTransferSyncTask) -> list[str]:
+def _resolve_follow_task_resource_title(task: PanTransferSyncTask) -> str:
     source_message_snapshot = _normalize_source_message_snapshot(_get_task_extra_section(task, "source_message_snapshot"))
+    return (
+        _normalize_text(source_message_snapshot.get("title"), max_length=255)
+        or _normalize_text(task.work_title, max_length=255)
+        or _normalize_text(task.topic_title, max_length=255)
+        or _normalize_text(task.task_name, max_length=255)
+        or f"resource_{int(task.id)}"
+    )
+
+
+def _collect_follow_reference_texts(task: PanTransferSyncTask) -> list[str]:
     texts = [
-        _normalize_text(source_message_snapshot.get("title"), max_length=255),
+        _resolve_follow_task_resource_title(task),
         _normalize_text(task.work_title, max_length=255),
         _normalize_text(task.topic_title, max_length=255),
         _normalize_text(task.task_name, max_length=255),
@@ -273,10 +334,28 @@ def _collect_follow_reference_texts(task: PanTransferSyncTask) -> list[str]:
     return _dedupe_texts([item for item in texts if item], max_items=8, max_length=255)
 
 
+def _build_follow_candidate_policy(raw_value: Any) -> dict[str, int]:
+    raw = dict(raw_value or {}) if isinstance(raw_value, dict) else {}
+    max_recall_candidates = _normalize_max_recall_candidates(raw.get("max_recall_candidates"))
+    return {
+        "lookback_days": _normalize_candidate_lookback_days(raw.get("lookback_days")),
+        "max_recall_candidates": max_recall_candidates,
+        "max_judge_candidates": _normalize_max_judge_candidates(
+            raw.get("max_judge_candidates"),
+            max_recall_candidates=max_recall_candidates,
+        ),
+    }
+
+
+def _get_follow_candidate_policy(task: PanTransferSyncTask) -> dict[str, int]:
+    return _build_follow_candidate_policy(_get_task_extra_section(task, "candidate_policy"))
+
+
 def _build_follow_identity_fallback(task: PanTransferSyncTask) -> dict[str, Any]:
+    resource_title = _resolve_follow_task_resource_title(task)
     reference_titles = _collect_follow_reference_texts(task)
     cleaned_titles = _dedupe_texts([_clean_follow_title(item) for item in reference_titles], max_items=6)
-    core_title = cleaned_titles[0] if cleaned_titles else (_clean_follow_title(task.topic_title) or _normalize_text(task.topic_title, max_length=255))
+    core_title = cleaned_titles[0] if cleaned_titles else (_clean_follow_title(resource_title) or resource_title)
     aliases = _dedupe_texts(reference_titles + cleaned_titles, max_items=6)
     latest_episode = _extract_follow_episode_hint(*reference_titles)
     season = _extract_follow_season_hint(*reference_titles)
@@ -297,6 +376,7 @@ def _build_follow_identity_fallback(task: PanTransferSyncTask) -> dict[str, Any]
             break
     search_queries = _dedupe_texts([core_title, *(aliases[:4])], max_items=4, max_length=80)
     return {
+        "resource_title": resource_title,
         "core_title": core_title or (_normalize_text(task.topic_title, max_length=255) or f"resource_{int(task.id)}"),
         "aliases": aliases,
         "release_year": release_year,
@@ -339,6 +419,27 @@ def _build_follow_identity_user_prompt(task: PanTransferSyncTask) -> str:
     )
 
 
+def _build_follow_identity_user_prompt_v2(task: PanTransferSyncTask) -> str:
+    resource_title = _resolve_follow_task_resource_title(task)
+    reference_titles = _collect_follow_reference_texts(task)
+    payload = {
+        "platform": _normalize_text(task.platform, max_length=64) or None,
+        "resource_title": resource_title,
+        "alternate_titles": [item for item in reference_titles if item != resource_title][:4],
+    }
+    return (
+        "Extract a follow-tracking identity from the current resource title.\n"
+        "Return JSON only with keys: core_title, aliases, release_year, season, latest_episode, content_type, search_queries, reason.\n"
+        "Rules:\n"
+        "1. Use resource_title as the primary input and treat alternate_titles only as fallback context.\n"
+        "2. core_title should keep only the work name itself and strip year, resolution, frame rate, episode range, actor list, and update copy.\n"
+        "3. aliases should contain only compact alternate names for the same work, without noisy metadata.\n"
+        "4. search_queries should be ordered from strict to loose for in-site recall, with at most 4 items.\n"
+        "5. latest_episode should only be filled when the current resource title clearly shows the latest episode; otherwise use null.\n"
+        f"{_normalize_log_payload(payload)}"
+    )
+
+
 def _extract_follow_identity_with_ai(session: Session, *, task: PanTransferSyncTask) -> dict[str, Any]:
     route_result = execute_text_route(
         session,
@@ -348,7 +449,7 @@ def _extract_follow_identity_with_ai(session: Session, *, task: PanTransferSyncT
             "你要从资源标题中提取作品核心标题和召回关键词。"
             "必须只返回 JSON 对象，不要输出解释。"
         ),
-        user_prompt=_build_follow_identity_user_prompt(task),
+        user_prompt=_build_follow_identity_user_prompt_v2(task),
         metadata={
             "source": "pan_transfer_follow_identity",
             "task_id": int(task.id),
@@ -370,7 +471,9 @@ def _extract_follow_identity_with_ai(session: Session, *, task: PanTransferSyncT
         max_items=4,
         max_length=80,
     )
+    resource_title = _resolve_follow_task_resource_title(task)
     return {
+        "resource_title": resource_title,
         "core_title": core_title,
         "aliases": aliases,
         "release_year": _normalize_optional_int(parsed.get("release_year")),
@@ -394,7 +497,9 @@ def _ensure_follow_task_identity_snapshot(
     task: PanTransferSyncTask,
 ) -> tuple[dict[str, Any], bool]:
     existing = _get_task_extra_section(task, "identity_snapshot")
-    if existing.get("core_title"):
+    current_resource_title = _resolve_follow_task_resource_title(task)
+    existing_resource_title = _normalize_text(existing.get("resource_title"), max_length=255)
+    if existing.get("core_title") and existing_resource_title == current_resource_title:
         return existing, False
     try:
         snapshot = _extract_follow_identity_with_ai(session, task=task)
@@ -406,6 +511,7 @@ def _ensure_follow_task_identity_snapshot(
         )
         snapshot = _build_follow_identity_fallback(task)
         snapshot["identity_error"] = _normalize_text(exc, max_length=500) or type(exc).__name__
+    snapshot["resource_title"] = current_resource_title
     _set_task_extra_section(task, "identity_snapshot", snapshot)
     if not _normalize_text(task.work_title, max_length=255):
         task.topic_title = _normalize_text(snapshot.get("core_title"), max_length=255) or task.topic_title
@@ -640,6 +746,7 @@ def _serialize_follow_task(row: PanTransferSyncTask) -> dict[str, Any]:
     identity_snapshot = dict(extra_json.get("identity_snapshot") or {})
     candidate_assessment = dict(extra_json.get("candidate_assessment") or {})
     candidate_recall = dict(extra_json.get("candidate_recall") or {})
+    candidate_policy = _build_follow_candidate_policy(extra_json.get("candidate_policy"))
     source_message_snapshot = _normalize_source_message_snapshot(dict(extra_json.get("source_message_snapshot") or {}))
     return {
         "id": int(row.id),
@@ -693,6 +800,7 @@ def _serialize_follow_task(row: PanTransferSyncTask) -> dict[str, Any]:
         "identity_snapshot": identity_snapshot,
         "candidate_assessment": candidate_assessment,
         "candidate_recall": candidate_recall,
+        "candidate_policy": candidate_policy,
         "extra_json": extra_json,
         "created_by": str(row.created_by or "") or None,
         "updated_by": str(row.updated_by or "") or None,
@@ -845,6 +953,7 @@ def create_pan_transfer_follow_task_from_batch_item(
         source_message_snapshot["message_time"] = _serialize_json_value(item.latest_message_time)
     topic_payload = _build_follow_topic_payload(session, item=item)
     interval_minutes = _normalize_interval_minutes((payload or {}).get("check_interval_minutes"))
+    candidate_policy = _build_follow_candidate_policy((payload or {}).get("candidate_policy"))
     task_name = (
         _normalize_text((payload or {}).get("task_name"), max_length=255)
         or topic_payload["topic_title"]
@@ -914,6 +1023,7 @@ def create_pan_transfer_follow_task_from_batch_item(
             "resolved_paths": resolved_paths,
             "publish_binding": _build_follow_publish_binding_snapshot(publish_record),
             "automation": _build_task_automation_config((payload or {}).get("automation")),
+            "candidate_policy": candidate_policy,
             "created_from_batch_item": {
                 "batch_id": int(item.batch_id),
                 "item_id": int(item.id),
@@ -1018,6 +1128,59 @@ def resume_pan_transfer_follow_task(
         stage="control",
         message="Follow task resumed and queued",
         payload={"operator": _normalize_text(operator, max_length=128) or None},
+    )
+    session.flush()
+    return get_pan_transfer_follow_task_detail(session, task_id=int(task.id))
+
+
+def update_pan_transfer_follow_task_settings(
+    session: Session,
+    *,
+    task_id: int,
+    payload: dict[str, Any] | None,
+    operator: str | None,
+) -> dict[str, Any]:
+    ensure_runtime_storage_tables()
+    task = _get_follow_task(session, task_id=task_id)
+    update_payload = dict(payload or {})
+
+    next_interval_minutes = int(task.check_interval_minutes or PAN_TRANSFER_SYNC_DEFAULT_INTERVAL_MINUTES)
+    if "check_interval_minutes" in update_payload:
+        next_interval_minutes = _normalize_interval_minutes(update_payload.get("check_interval_minutes"))
+        task.check_interval_minutes = next_interval_minutes
+
+    next_candidate_policy = _get_follow_candidate_policy(task)
+    if "candidate_policy" in update_payload:
+        raw_candidate_policy = update_payload.get("candidate_policy")
+        merged_candidate_policy = {
+            **next_candidate_policy,
+            **(dict(raw_candidate_policy) if isinstance(raw_candidate_policy, dict) else {}),
+        }
+        next_candidate_policy = _build_follow_candidate_policy(merged_candidate_policy)
+        _set_task_extra_section(task, "candidate_policy", next_candidate_policy)
+
+    if str(task.status or "") == PAN_TRANSFER_SYNC_STATUS_ACTIVE and str(task.task_state or "") not in {
+        PAN_TRANSFER_SYNC_STATE_QUEUED,
+        PAN_TRANSFER_SYNC_STATE_CHECKING,
+        PAN_TRANSFER_SYNC_STATE_SYNC_QUEUED,
+    }:
+        task.next_check_at = _next_check_time(interval_minutes=next_interval_minutes)
+    if str(task.status or "") == PAN_TRANSFER_SYNC_STATUS_PAUSED:
+        task.next_check_at = None
+
+    task.updated_by = _normalize_text(operator, max_length=128) or task.updated_by
+    session.add(task)
+    session.flush()
+    _append_follow_task_log(
+        session,
+        task=task,
+        stage="settings",
+        message="Updated follow task settings",
+        payload={
+            "operator": _normalize_text(operator, max_length=128) or None,
+            "check_interval_minutes": next_interval_minutes,
+            "candidate_policy": next_candidate_policy,
+        },
     )
     session.flush()
     return get_pan_transfer_follow_task_detail(session, task_id=int(task.id))
@@ -1137,8 +1300,9 @@ def _merge_follow_candidate_lists(*candidate_lists: list[dict[str, Any]]) -> lis
 def _list_follow_candidates_by_work(session: Session, *, task: PanTransferSyncTask) -> list[dict[str, Any]]:
     if task.work_id is None:
         return []
+    candidate_policy = _get_follow_candidate_policy(task)
     excluded_ids = _build_task_excluded_target_ids(task)
-    earliest_message_time = utcnow() - timedelta(days=PAN_TRANSFER_SYNC_CANDIDATE_LOOKBACK_DAYS)
+    earliest_message_time = utcnow() - timedelta(days=int(candidate_policy["lookback_days"]))
     latest_ref_subquery = (
         session.query(
             MessageLinkRef.link_target_id.label("link_target_id"),
@@ -1180,7 +1344,7 @@ def _list_follow_candidates_by_work(session: Session, *, task: PanTransferSyncTa
         latest_ref.message_timestamp.desc().nullslast(),
         LinkTarget.last_seen_at.desc(),
         LinkTarget.id.desc(),
-    ).limit(PAN_TRANSFER_FOLLOW_MAX_RECALL_CANDIDATES)
+    ).limit(int(candidate_policy["max_recall_candidates"]))
     return [
         _build_follow_candidate_payload(row, fallback_title=_normalize_text(task.topic_title, max_length=255) or f"task_{int(task.id)}")
         for row in query.all()
@@ -1203,8 +1367,9 @@ def _list_follow_candidates_by_identity(
     queries = _build_follow_candidate_search_queries(task, snapshot)
     if not queries:
         return []
+    candidate_policy = _get_follow_candidate_policy(task)
     excluded_ids = _build_task_excluded_target_ids(task)
-    earliest_message_time = utcnow() - timedelta(days=PAN_TRANSFER_SYNC_CANDIDATE_LOOKBACK_DAYS)
+    earliest_message_time = utcnow() - timedelta(days=int(candidate_policy["lookback_days"]))
     latest_ref_subquery = (
         session.query(
             MessageLinkRef.link_target_id.label("link_target_id"),
@@ -1251,7 +1416,7 @@ def _list_follow_candidates_by_identity(
         latest_ref.message_timestamp.desc().nullslast(),
         LinkTarget.last_seen_at.desc(),
         LinkTarget.id.desc(),
-    ).limit(PAN_TRANSFER_FOLLOW_MAX_RECALL_CANDIDATES)
+    ).limit(int(candidate_policy["max_recall_candidates"]))
     return [
         _build_follow_candidate_payload(row, fallback_title=_normalize_text(snapshot.get("core_title"), max_length=255) or f"task_{int(task.id)}")
         for row in query.all()
@@ -1275,35 +1440,20 @@ def _judge_follow_candidate_fallback(
     snapshot: dict[str, Any],
     candidate: dict[str, Any],
 ) -> dict[str, Any]:
+    candidate_title = _normalize_text(candidate.get("title"), max_length=255)
+    current_resource_title = _normalize_text(snapshot.get("resource_title"), max_length=255) or _resolve_follow_task_resource_title(task)
     query_keys = [
         _normalize_match_key(snapshot.get("core_title")),
         *[_normalize_match_key(item) for item in list(snapshot.get("aliases") or [])],
         *[_normalize_match_key(item) for item in list(snapshot.get("search_queries") or [])],
     ]
-    candidate_blob = " ".join(
-        [
-            _normalize_match_key(candidate.get("title")),
-            _normalize_match_key(candidate.get("display_text")),
-            _normalize_match_key(candidate.get("description")),
-        ]
-    )
-    same_work = any(key and key in candidate_blob for key in query_keys)
+    candidate_key = _normalize_match_key(candidate_title)
+    same_work = any(key and key in candidate_key for key in query_keys)
     current_episode = _normalize_optional_int(snapshot.get("latest_episode")) or _extract_follow_episode_hint(
-        task.topic_title,
-        task.work_title,
+        current_resource_title,
     )
-    candidate_episode = _extract_follow_episode_hint(
-        candidate.get("title"),
-        candidate.get("display_text"),
-        candidate.get("description"),
-    )
-    reference_message_time = _get_follow_reference_message_time(task, snapshot)
-    candidate_message_time = candidate.get("latest_message_time")
-    is_newer = False
-    if same_work and current_episode is not None and candidate_episode is not None:
-        is_newer = candidate_episode > current_episode
-    elif same_work and reference_message_time is not None and isinstance(candidate_message_time, datetime):
-        is_newer = candidate_message_time > reference_message_time
+    candidate_episode = _extract_follow_episode_hint(candidate_title)
+    is_newer = bool(same_work and current_episode is not None and candidate_episode is not None and candidate_episode > current_episode)
     return {
         "is_same_work": same_work,
         "is_newer": is_newer,
@@ -1358,6 +1508,39 @@ def _build_follow_candidate_judge_user_prompt(
     )
 
 
+def _build_follow_candidate_judge_user_prompt_v2(
+    task: PanTransferSyncTask,
+    *,
+    snapshot: dict[str, Any],
+    candidate: dict[str, Any],
+) -> str:
+    payload = {
+        "tracked_resource": {
+            "platform": _normalize_text(task.platform, max_length=64) or None,
+            "resource_title": _normalize_text(snapshot.get("resource_title"), max_length=255) or _resolve_follow_task_resource_title(task),
+            "core_title": snapshot.get("core_title"),
+            "aliases": list(snapshot.get("aliases") or []),
+            "release_year": snapshot.get("release_year"),
+            "season": snapshot.get("season"),
+            "latest_episode": snapshot.get("latest_episode"),
+            "search_queries": list(snapshot.get("search_queries") or []),
+        },
+        "candidate": {
+            "title": _normalize_text(candidate.get("title"), max_length=255) or None,
+        },
+    }
+    return (
+        "Decide whether this candidate source should be promoted for follow sync.\n"
+        "Return JSON only with keys: is_same_work, is_newer, should_promote, confidence, current_episode, candidate_episode, reason.\n"
+        "Rules:\n"
+        "1. First determine whether the candidate is the same work.\n"
+        "2. should_promote can be true only when it is the same work and clearly newer than the tracked resource.\n"
+        "3. Treat title formatting differences as the same work when the core work identity still matches.\n"
+        "4. Prefer episode progress as the main newer signal.\n"
+        f"{_normalize_log_payload(payload)}"
+    )
+
+
 def _judge_follow_candidate_with_ai(
     session: Session,
     *,
@@ -1373,7 +1556,7 @@ def _judge_follow_candidate_with_ai(
             "你只负责判断候选是不是同一作品，以及是不是比当前资源更新。"
             "必须只返回 JSON。"
         ),
-        user_prompt=_build_follow_candidate_judge_user_prompt(task, snapshot=snapshot, candidate=candidate),
+        user_prompt=_build_follow_candidate_judge_user_prompt_v2(task, snapshot=snapshot, candidate=candidate),
         metadata={
             "source": "pan_transfer_follow_candidate_judge",
             "task_id": int(task.id),
@@ -1408,10 +1591,11 @@ def _build_follow_candidate_recall_snapshot(
     snapshot: dict[str, Any],
     candidates: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    candidate_policy = _get_follow_candidate_policy(task)
     return {
         "queries": _build_follow_candidate_search_queries(task, snapshot),
         "recall_count": len(candidates),
-        "judge_limit": PAN_TRANSFER_FOLLOW_MAX_JUDGE_CANDIDATES,
+        "judge_limit": int(candidate_policy["max_judge_candidates"]),
         "items": [
             {
                 "link_target_id": _normalize_optional_int(item.get("link_target_id")),
@@ -1430,10 +1614,11 @@ def _pick_follow_candidate(
     task: PanTransferSyncTask,
     snapshot: dict[str, Any],
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None, dict[str, Any]]:
+    candidate_policy = _get_follow_candidate_policy(task)
     recalled_candidates = _merge_follow_candidate_lists(
         _list_follow_candidates_by_work(session, task=task),
         _list_follow_candidates_by_identity(session, task=task, snapshot=snapshot),
-    )[:PAN_TRANSFER_FOLLOW_MAX_RECALL_CANDIDATES]
+    )[: int(candidate_policy["max_recall_candidates"])]
     recall_snapshot = _build_follow_candidate_recall_snapshot(task=task, snapshot=snapshot, candidates=recalled_candidates)
     if not recalled_candidates:
         return (
@@ -1448,7 +1633,7 @@ def _pick_follow_candidate(
         )
 
     last_assessment: dict[str, Any] | None = None
-    for candidate in recalled_candidates[:PAN_TRANSFER_FOLLOW_MAX_JUDGE_CANDIDATES]:
+    for candidate in recalled_candidates[: int(candidate_policy["max_judge_candidates"])]:
         try:
             assessment = _judge_follow_candidate_with_ai(session, task=task, snapshot=snapshot, candidate=candidate)
         except Exception as exc:

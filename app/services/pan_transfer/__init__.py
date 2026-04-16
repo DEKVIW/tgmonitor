@@ -28,6 +28,7 @@ from .follow_tasks import (
     process_next_pan_transfer_follow_task,
     queue_pan_transfer_follow_task_check,
     resume_pan_transfer_follow_task,
+    update_pan_transfer_follow_task_settings,
 )
 from .follow_sync import create_pan_transfer_follow_sync_batch
 from .preview import preview_manual_pan_transfer_selection
@@ -87,6 +88,7 @@ __all__ = [
     "start_pan_transfer_batch",
     "update_pan_transfer_publish_rule",
     "update_pan_transfer_publish_record",
+    "update_pan_transfer_follow_task_settings",
     "update_pan_transfer_account",
     "validate_pan_transfer_publish_record",
     "validate_pan_transfer_account",

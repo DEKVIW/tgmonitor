@@ -22,6 +22,7 @@ import {
   updatePanTransferAccount,
   validatePanTransferAccount,
 } from '@/api/panTransfer'
+import { usePageVisibility } from '@/hooks/usePageVisibility'
 import type {
   PanTransferAccountCreateRequest,
   PanTransferAccountItem,
@@ -77,6 +78,7 @@ const renderBatchCreateLabel = (label: string, tip: string) => (
 
 const ResourceOpsTransferCenterMain = () => {
   const [activeTab, setActiveTab] = useState('accounts')
+  const isPageVisible = usePageVisibility()
   const [accounts, setAccounts] = useState<PanTransferAccountItem[]>([])
   const [accountsLoading, setAccountsLoading] = useState(false)
   const [accountModalOpen, setAccountModalOpen] = useState(false)
@@ -133,8 +135,14 @@ const ResourceOpsTransferCenterMain = () => {
     }
   }
 
-  const loadBatches = async (page = batchPagination.page, pageSize = batchPagination.pageSize) => {
-    setBatchLoading(true)
+  const loadBatches = async (
+    page = batchPagination.page,
+    pageSize = batchPagination.pageSize,
+    options?: { silent?: boolean }
+  ) => {
+    if (!(options?.silent ?? false)) {
+      setBatchLoading(true)
+    }
     try {
       const response = await listPanTransferBatches(page, pageSize)
       setBatches(response.items)
@@ -142,7 +150,9 @@ const ResourceOpsTransferCenterMain = () => {
     } catch (error) {
       message.error(getErrorMessage(error, '加载转存批次失败'))
     } finally {
-      setBatchLoading(false)
+      if (!(options?.silent ?? false)) {
+        setBatchLoading(false)
+      }
     }
   }
 
@@ -178,17 +188,32 @@ const ResourceOpsTransferCenterMain = () => {
   }, [])
 
   useEffect(() => {
-    if (!detailOpen || !detailData || detailData.batch.status !== 'running') {
+    const shouldPollBatchList = activeTab === 'batches' && batches.some((item) => item.status === 'running')
+    const shouldPollBatchDetail = detailOpen && detailData?.batch.status === 'running'
+
+    if (!isPageVisible || (!shouldPollBatchList && !shouldPollBatchDetail)) {
       return
     }
 
-    const batchId = detailData.batch.id
     const timer = window.setInterval(() => {
-      void loadBatchDetail(batchId, { open: false, silent: true })
+      if (shouldPollBatchList) {
+        void loadBatches(batchPagination.page, batchPagination.pageSize, { silent: true })
+      }
+      if (shouldPollBatchDetail && detailData) {
+        void loadBatchDetail(detailData.batch.id, { open: false, silent: true })
+      }
     }, 4000)
 
     return () => window.clearInterval(timer)
-  }, [detailOpen, detailData?.batch.id, detailData?.batch.status])
+  }, [
+    activeTab,
+    batchPagination.page,
+    batchPagination.pageSize,
+    batches,
+    detailData,
+    detailOpen,
+    isPageVisible,
+  ])
 
   const missingPlatforms = useMemo(() => {
     const enabledPlatforms = new Set(accounts.filter((item) => item.is_enabled).map((item) => item.platform))
@@ -745,7 +770,7 @@ const ResourceOpsTransferCenterMain = () => {
           {
             key: 'follow',
             label: '追更同步',
-            children: <FollowTasksSection refreshToken={followRefreshToken} />,
+            children: <FollowTasksSection refreshToken={followRefreshToken} isActive={activeTab === 'follow'} />,
           },
           {
             key: 'publish',
