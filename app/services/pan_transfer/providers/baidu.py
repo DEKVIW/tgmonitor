@@ -14,6 +14,7 @@ from app.services.link_check.constants import PLATFORM_BAIDU
 from .base import (
     PanTransferAccountValidationResult,
     PanTransferDeleteResult,
+    PanTransferIncrementalPlanResult,
     PanTransferProvider,
     PanTransferProviderError,
     PanTransferShareResult,
@@ -114,7 +115,19 @@ def _build_share_list_short_url(share_key: str, *, requires_prefix_strip: bool) 
     return share_key
 
 
-def _normalize_source_selection(raw_value: dict[str, Any] | None) -> dict[str, Any] | None:
+def _normalize_target_relative_path(value: Any) -> str | None:
+    parts = [part for part in str(value or "").replace("\\", "/").split("/") if part.strip()]
+    if not parts:
+        return None
+    return "/".join(parts)
+
+
+def _join_target_relative_path(base_path: str | None, child_name: str) -> str:
+    parts = [part for part in [base_path, str(child_name or "").strip()] if part]
+    return "/".join(parts)
+
+
+def _normalize_selection_group(raw_value: dict[str, Any] | None) -> dict[str, Any] | None:
     raw = dict(raw_value or {})
     selected_entries = raw.get("selected_entries")
     if not isinstance(selected_entries, list) or not selected_entries:
@@ -140,16 +153,53 @@ def _normalize_source_selection(raw_value: dict[str, Any] | None) -> dict[str, A
         "parent_entry_id": str(raw.get("parent_entry_id") or "").strip() or None,
         "parent_path": str(raw.get("parent_path") or "").strip() or None,
         "parent_name": str(raw.get("parent_name") or "").strip() or None,
+        "target_relative_path": _normalize_target_relative_path(raw.get("target_relative_path")),
         "selected_entries": normalized_entries,
+        "selected_count": len(normalized_entries),
     }
+
+
+def _normalize_source_selection(raw_value: dict[str, Any] | None) -> dict[str, Any] | None:
+    raw = dict(raw_value or {})
+    normalized_groups: list[dict[str, Any]] = []
+    raw_groups = raw.get("selection_groups")
+    if isinstance(raw_groups, list):
+        for row in raw_groups:
+            if not isinstance(row, dict):
+                continue
+            normalized_group = _normalize_selection_group(row)
+            if normalized_group is not None:
+                normalized_groups.append(normalized_group)
+    if not normalized_groups:
+        fallback_group = _normalize_selection_group(raw)
+        if fallback_group is not None:
+            normalized_groups.append(fallback_group)
+    if not normalized_groups:
+        return None
+    return {
+        "selection_groups": normalized_groups,
+        "selected_count": sum(int(group.get("selected_count") or 0) for group in normalized_groups),
+    }
+
+
+def _match_baidu_row(rows: list[dict[str, Any]], *, name: str, is_dir: bool) -> dict[str, Any] | None:
+    return next(
+        (
+            dict(row or {})
+            for row in rows
+            if str(row.get("server_filename") or "").strip() == name
+            and int(row.get("isdir") or 0) == (1 if is_dir else 0)
+        ),
+        None,
+    )
 
 
 def _select_baidu_share_items(
     rows: list[dict[str, Any]],
     *,
-    source_selection: dict[str, Any] | None,
+    selection_group: dict[str, Any] | None,
 ) -> list[dict[str, Any]]:
-    selection = _normalize_source_selection(source_selection)
+    selection = _normalize_selection_group(selection_group)
     if selection is None:
         return [dict(row or {}) for row in rows if str(row.get("fs_id") or "").strip()]
 
@@ -171,15 +221,7 @@ def _select_baidu_share_items(
                 None,
             )
         if matched is None:
-            matched = next(
-                (
-                    row
-                    for row in available_rows
-                    if str(row.get("server_filename") or "").strip() == entry_name
-                    and int(row.get("isdir") or 0) == (1 if entry_is_dir else 0)
-                ),
-                None,
-            )
+            matched = _match_baidu_row(available_rows, name=entry_name, is_dir=entry_is_dir)
         if matched is None:
             missing_entries.append(entry_name or entry_path or entry_id or "unknown")
             continue
@@ -499,6 +541,160 @@ class BaiduPanTransferProvider(PanTransferProvider):
             payload=result,
         )
 
+    async def build_incremental_source_plan(
+        self,
+        *,
+        credential_value: str,
+        account_name: str,
+        original_url: str,
+        original_passcode: str | None,
+        staging_root: str,
+        staging_folder_name: str,
+        staging_folder_id: str | None = None,
+    ) -> PanTransferIncrementalPlanResult:
+        del account_name, staging_folder_id
+
+        async def ensure_path_exists(client: _BaiduClient, *, path: str, bdstoken: str) -> None:
+            current_path = ""
+            for segment in [part for part in str(path or "").split("/") if part]:
+                current_path = f"{current_path}/{segment}" if current_path else f"/{segment}"
+                listing = await client.list_dir(current_path, bdstoken=bdstoken)
+                if isinstance(listing, int):
+                    errno = await client.create_dir(current_path, bdstoken=bdstoken)
+                    if errno not in {0, -8}:
+                        raise PanTransferProviderError(f"Baidu failed to create directory {current_path}: errno {errno}")
+
+        async def collect_incremental_groups(
+            client: _BaiduClient,
+            *,
+            share_key: str,
+            requires_prefix_strip: bool,
+            share_dir_path: str | None,
+            target_dir_path: str,
+            target_relative_path: str | None,
+            bdstoken: str,
+        ) -> tuple[list[dict[str, Any]], int, list[dict[str, Any]]]:
+            share_rows = await client.list_share_dir(
+                share_key=share_key,
+                requires_prefix_strip=requires_prefix_strip,
+                dir_path=share_dir_path,
+            )
+            if not share_rows:
+                return [], 0, []
+            target_rows = await client.list_dir(target_dir_path, bdstoken=bdstoken)
+            if isinstance(target_rows, int):
+                raise PanTransferProviderError(
+                    f"Baidu failed to inspect target directory {target_dir_path}: errno {target_rows}"
+                )
+            groups: list[dict[str, Any]] = []
+            selected_entries: list[dict[str, Any]] = []
+            conflicts: list[dict[str, Any]] = []
+            selected_count = 0
+            for share_row in share_rows:
+                entry_id = str(share_row.get("fs_id") or "").strip()
+                entry_name = str(share_row.get("server_filename") or "").strip()
+                if not entry_id or not entry_name:
+                    continue
+                entry_is_dir = int(share_row.get("isdir") or 0) == 1
+                matched_same_type = _match_baidu_row(target_rows, name=entry_name, is_dir=entry_is_dir)
+                matched_other_type = None if matched_same_type is not None else _match_baidu_row(target_rows, name=entry_name, is_dir=not entry_is_dir)
+                if matched_other_type is not None:
+                    conflicts.append(
+                        {
+                            "name": entry_name,
+                            "share_is_dir": entry_is_dir,
+                            "target_is_dir": int(matched_other_type.get("isdir") or 0) == 1,
+                            "target_relative_path": target_relative_path,
+                        }
+                    )
+                    continue
+                if matched_same_type is None:
+                    entry_path = str(share_row.get("path") or "").strip() or (
+                        f"{share_dir_path.rstrip('/')}/{entry_name}" if share_dir_path else f"/{entry_name}"
+                    )
+                    selected_entries.append(
+                        {
+                            "name": entry_name,
+                            "is_dir": entry_is_dir,
+                            "entry_id": entry_id,
+                            "path": entry_path,
+                        }
+                    )
+                    selected_count += 1
+                    continue
+                if not entry_is_dir:
+                    continue
+                child_share_dir_path = str(share_row.get("path") or "").strip() or (
+                    f"{share_dir_path.rstrip('/')}/{entry_name}" if share_dir_path else f"/{entry_name}"
+                )
+                child_target_dir_path = str(matched_same_type.get("path") or "").strip() or (
+                    f"{target_dir_path.rstrip('/')}/{entry_name}"
+                )
+                child_groups, child_count, child_conflicts = await collect_incremental_groups(
+                    client,
+                    share_key=share_key,
+                    requires_prefix_strip=requires_prefix_strip,
+                    share_dir_path=child_share_dir_path,
+                    target_dir_path=child_target_dir_path,
+                    target_relative_path=_join_target_relative_path(target_relative_path, entry_name),
+                    bdstoken=bdstoken,
+                )
+                groups.extend(child_groups)
+                conflicts.extend(child_conflicts)
+                selected_count += child_count
+            if selected_entries:
+                groups.insert(
+                    0,
+                    {
+                        "parent_entry_id": None,
+                        "parent_path": share_dir_path,
+                        "parent_name": share_dir_path.split("/")[-1] if share_dir_path else None,
+                        "target_relative_path": target_relative_path,
+                        "selected_entries": selected_entries,
+                        "selected_count": len(selected_entries),
+                    },
+                )
+            return groups, selected_count, conflicts
+
+        async with _BaiduClient(credential_value) as client:
+            bdstoken, validation_payload = await client.get_bdstoken()
+            share_key = _extract_share_key(original_url)
+            share_access_key, requires_prefix_strip, url_passcode = _extract_share_access_context(original_url)
+            resolved_passcode = original_passcode or url_passcode
+            if resolved_passcode:
+                await client.verify_pass_code(share_key=share_key, passcode=resolved_passcode, bdstoken=bdstoken)
+
+            parent_path = "/" + "/".join(part for part in str(staging_root or "").split("/") if part)
+            parent_path = parent_path if parent_path != "/" else ""
+            if parent_path:
+                await ensure_path_exists(client, path=parent_path, bdstoken=bdstoken)
+            target_path = f"{parent_path}/{staging_folder_name}" if parent_path else f"/{staging_folder_name}"
+            errno = await client.create_dir(target_path, bdstoken=bdstoken)
+            if errno not in {0, -8}:
+                raise PanTransferProviderError(f"Baidu failed to prepare staging directory: errno {errno}")
+
+            selection_groups, selected_count, conflicts = await collect_incremental_groups(
+                client,
+                share_key=share_access_key,
+                requires_prefix_strip=requires_prefix_strip,
+                share_dir_path=None,
+                target_dir_path=target_path,
+                target_relative_path=None,
+                bdstoken=bdstoken,
+            )
+            return PanTransferIncrementalPlanResult(
+                selection_groups=selection_groups,
+                selected_count=selected_count,
+                payload={
+                    "validation": validation_payload,
+                    "share_key": share_key,
+                    "selection_group_count": len(selection_groups),
+                    "selected_count": selected_count,
+                    "conflict_count": len(conflicts),
+                    "conflicts": conflicts[:20],
+                },
+            )
+
     async def transfer_to_staging(
         self,
         *,
@@ -522,22 +718,8 @@ class BaiduPanTransferProvider(PanTransferProvider):
                 await client.verify_pass_code(share_key=share_key, passcode=resolved_passcode, bdstoken=bdstoken)
 
             response_text = await client.get_transfer_page(url=original_url)
-            share_id, share_user_id, fs_ids = _parse_transfer_payload(response_text)
+            share_id, share_user_id, _ = _parse_transfer_payload(response_text)
             normalized_selection = _normalize_source_selection(source_selection)
-            if normalized_selection is not None:
-                share_rows = await client.list_share_dir(
-                    share_key=share_access_key,
-                    requires_prefix_strip=requires_prefix_strip,
-                    dir_path=str(normalized_selection.get("parent_path") or "").strip() or None,
-                )
-                selected_rows = _select_baidu_share_items(share_rows, source_selection=normalized_selection)
-                if not selected_rows:
-                    raise PanTransferProviderError("Baidu share has no transferable content", retryable=False)
-                fs_ids = [
-                    str(row.get("fs_id") or "").strip()
-                    for row in selected_rows
-                    if str(row.get("fs_id") or "").strip()
-                ]
 
             parent_path = "/" + "/".join(part for part in str(staging_root or "").split("/") if part)
             parent_path = parent_path if parent_path != "/" else ""
@@ -593,13 +775,70 @@ class BaiduPanTransferProvider(PanTransferProvider):
                             },
                         )
 
-            await client.transfer_file(
-                share_id=share_id,
-                share_user_id=share_user_id,
-                fs_ids=fs_ids,
-                target_path=target_path,
-                bdstoken=bdstoken,
-            )
+            selection_groups = list((normalized_selection or {}).get("selection_groups") or [])
+            if not selection_groups:
+                selection_groups = [
+                    {
+                        "parent_entry_id": None,
+                        "parent_path": None,
+                        "parent_name": None,
+                        "target_relative_path": None,
+                        "selected_entries": [],
+                        "selected_count": 0,
+                    }
+                ]
+
+            async def ensure_path_exists(path: str) -> None:
+                current_path = ""
+                for segment in [part for part in str(path or "").split("/") if part]:
+                    current_path = f"{current_path}/{segment}" if current_path else f"/{segment}"
+                    listing = await client.list_dir(current_path, bdstoken=bdstoken)
+                    if isinstance(listing, int):
+                        errno = await client.create_dir(current_path, bdstoken=bdstoken)
+                        if errno not in {0, -8}:
+                            raise PanTransferProviderError(f"Baidu failed to create directory {current_path}: errno {errno}")
+
+            total_selected_count = 0
+            applied_groups: list[dict[str, Any]] = []
+            for selection_group in selection_groups:
+                selection_parent_path = str(selection_group.get("parent_path") or "").strip() or None
+                share_rows = await client.list_share_dir(
+                    share_key=share_access_key,
+                    requires_prefix_strip=requires_prefix_strip,
+                    dir_path=selection_parent_path,
+                )
+                selected_rows = _select_baidu_share_items(share_rows, selection_group=selection_group)
+                if not selected_rows:
+                    continue
+                group_fs_ids = [
+                    str(row.get("fs_id") or "").strip()
+                    for row in selected_rows
+                    if str(row.get("fs_id") or "").strip()
+                ]
+                if not group_fs_ids:
+                    continue
+                target_relative_path = _normalize_target_relative_path(selection_group.get("target_relative_path"))
+                group_target_path = target_path
+                if target_relative_path:
+                    group_target_path = f"{target_path.rstrip('/')}/{target_relative_path}"
+                    await ensure_path_exists(group_target_path)
+                await client.transfer_file(
+                    share_id=share_id,
+                    share_user_id=share_user_id,
+                    fs_ids=group_fs_ids,
+                    target_path=group_target_path,
+                    bdstoken=bdstoken,
+                )
+                total_selected_count += len(group_fs_ids)
+                applied_groups.append(
+                    {
+                        "parent_path": selection_parent_path,
+                        "target_relative_path": target_relative_path,
+                        "selected_count": len(group_fs_ids),
+                    }
+                )
+            if total_selected_count <= 0:
+                raise PanTransferProviderError("Baidu share has no transferable content", retryable=False)
 
             list_parent_path = parent_path or "/"
             rows = await client.list_dir(list_parent_path, bdstoken=bdstoken)
@@ -626,11 +865,13 @@ class BaiduPanTransferProvider(PanTransferProvider):
                     "share_key": share_key,
                     "share_id": share_id,
                     "share_user_id": share_user_id,
-                    "source_fs_id_count": len(fs_ids),
+                    "source_fs_id_count": total_selected_count,
                     "transfer_target_path": target_path,
                     "selection_applied": normalized_selection is not None,
-                    "selection_parent_path": (normalized_selection or {}).get("parent_path"),
-                    "selected_entry_count": len(fs_ids),
+                    "selection_parent_path": applied_groups[0].get("parent_path") if len(applied_groups) == 1 else None,
+                    "selection_group_count": len(applied_groups),
+                    "selection_groups": applied_groups,
+                    "selected_entry_count": total_selected_count,
                     "clear_existing_contents": bool(clear_existing_contents),
                 },
             )

@@ -13,6 +13,7 @@ from app.services.link_check.constants import PLATFORM_QUARK
 from .base import (
     PanTransferAccountValidationResult,
     PanTransferDeleteResult,
+    PanTransferIncrementalPlanResult,
     PanTransferProvider,
     PanTransferProviderError,
     PanTransferShareResult,
@@ -63,7 +64,19 @@ def _map_share_expire_days(days: int | None) -> int:
     return 4
 
 
-def _normalize_source_selection(raw_value: dict[str, Any] | None) -> dict[str, Any] | None:
+def _normalize_target_relative_path(value: Any) -> str | None:
+    parts = [part for part in str(value or "").replace("\\", "/").split("/") if part.strip()]
+    if not parts:
+        return None
+    return "/".join(parts)
+
+
+def _join_target_relative_path(base_path: str | None, child_name: str) -> str:
+    parts = [part for part in [base_path, str(child_name or "").strip()] if part]
+    return "/".join(parts)
+
+
+def _normalize_selection_group(raw_value: dict[str, Any] | None) -> dict[str, Any] | None:
     raw = dict(raw_value or {})
     selected_entries = raw.get("selected_entries")
     if not isinstance(selected_entries, list) or not selected_entries:
@@ -89,16 +102,53 @@ def _normalize_source_selection(raw_value: dict[str, Any] | None) -> dict[str, A
         "parent_entry_id": str(raw.get("parent_entry_id") or "").strip() or None,
         "parent_path": str(raw.get("parent_path") or "").strip() or None,
         "parent_name": str(raw.get("parent_name") or "").strip() or None,
+        "target_relative_path": _normalize_target_relative_path(raw.get("target_relative_path")),
         "selected_entries": normalized_entries,
+        "selected_count": len(normalized_entries),
     }
+
+
+def _normalize_source_selection(raw_value: dict[str, Any] | None) -> dict[str, Any] | None:
+    raw = dict(raw_value or {})
+    normalized_groups: list[dict[str, Any]] = []
+    raw_groups = raw.get("selection_groups")
+    if isinstance(raw_groups, list):
+        for row in raw_groups:
+            if not isinstance(row, dict):
+                continue
+            normalized_group = _normalize_selection_group(row)
+            if normalized_group is None:
+                continue
+            normalized_groups.append(normalized_group)
+    if not normalized_groups:
+        fallback_group = _normalize_selection_group(raw)
+        if fallback_group is not None:
+            normalized_groups.append(fallback_group)
+    if not normalized_groups:
+        return None
+    return {
+        "selection_groups": normalized_groups,
+        "selected_count": sum(int(group.get("selected_count") or 0) for group in normalized_groups),
+    }
+
+
+def _match_quark_row(rows: list[dict[str, Any]], *, name: str, is_dir: bool) -> dict[str, Any] | None:
+    return next(
+        (
+            dict(row or {})
+            for row in rows
+            if str(row.get("file_name") or "").strip() == name and bool(row.get("dir")) == is_dir
+        ),
+        None,
+    )
 
 
 def _select_quark_share_items(
     rows: list[dict[str, Any]],
     *,
-    source_selection: dict[str, Any] | None,
+    selection_group: dict[str, Any] | None,
 ) -> list[dict[str, Any]]:
-    selection = _normalize_source_selection(source_selection)
+    selection = _normalize_selection_group(selection_group)
     if selection is None:
         return [dict(row or {}) for row in rows if str(row.get("fid") or "").strip()]
 
@@ -114,14 +164,7 @@ def _select_quark_share_items(
             None,
         )
         if matched is None:
-            matched = next(
-                (
-                    row
-                    for row in available_rows
-                    if str(row.get("file_name") or "").strip() == entry_name and bool(row.get("dir")) == entry_is_dir
-                ),
-                None,
-            )
+            matched = _match_quark_row(available_rows, name=entry_name, is_dir=entry_is_dir)
         if matched is None:
             missing_entries.append(entry_name or entry_id or "unknown")
             continue
@@ -559,6 +602,134 @@ class QuarkPanTransferProvider(PanTransferProvider):
             payload=user_info,
         )
 
+    async def build_incremental_source_plan(
+        self,
+        *,
+        credential_value: str,
+        account_name: str,
+        original_url: str,
+        original_passcode: str | None,
+        staging_root: str,
+        staging_folder_name: str,
+        staging_folder_id: str | None = None,
+    ) -> PanTransferIncrementalPlanResult:
+        del account_name
+
+        async def collect_incremental_groups(
+            client: _QuarkClient,
+            *,
+            pwd_id: str,
+            stoken: str,
+            share_parent_id: str,
+            share_parent_path: str | None,
+            target_parent_id: str,
+            target_relative_path: str | None,
+        ) -> tuple[list[dict[str, Any]], int, list[dict[str, Any]]]:
+            share_rows = await client.get_share_detail(pwd_id=pwd_id, stoken=stoken, parent_id=share_parent_id)
+            if not share_rows:
+                return [], 0, []
+            target_rows = await client.list_dir_all(parent_id=target_parent_id)
+            groups: list[dict[str, Any]] = []
+            selected_entries: list[dict[str, Any]] = []
+            conflicts: list[dict[str, Any]] = []
+            selected_count = 0
+            for share_row in share_rows:
+                entry_id = str(share_row.get("fid") or "").strip()
+                entry_name = str(share_row.get("file_name") or "").strip()
+                if not entry_id or not entry_name:
+                    continue
+                entry_is_dir = bool(share_row.get("dir"))
+                matched_same_type = _match_quark_row(target_rows, name=entry_name, is_dir=entry_is_dir)
+                matched_other_type = None if matched_same_type is not None else _match_quark_row(target_rows, name=entry_name, is_dir=not entry_is_dir)
+                if matched_other_type is not None:
+                    conflicts.append(
+                        {
+                            "name": entry_name,
+                            "share_is_dir": entry_is_dir,
+                            "target_is_dir": bool(matched_other_type.get("dir")),
+                            "target_relative_path": target_relative_path,
+                        }
+                    )
+                    continue
+                if matched_same_type is None:
+                    entry_path = _join_target_relative_path(share_parent_path, entry_name)
+                    selected_entries.append(
+                        {
+                            "name": entry_name,
+                            "is_dir": entry_is_dir,
+                            "entry_id": entry_id,
+                            "path": f"/{entry_path}" if entry_path else f"/{entry_name}",
+                        }
+                    )
+                    selected_count += 1
+                    continue
+                if not entry_is_dir:
+                    continue
+                child_groups, child_count, child_conflicts = await collect_incremental_groups(
+                    client,
+                    pwd_id=pwd_id,
+                    stoken=stoken,
+                    share_parent_id=entry_id,
+                    share_parent_path=f"{share_parent_path.rstrip('/')}/{entry_name}" if share_parent_path else f"/{entry_name}",
+                    target_parent_id=str(matched_same_type.get("fid") or "").strip(),
+                    target_relative_path=_join_target_relative_path(target_relative_path, entry_name),
+                )
+                groups.extend(child_groups)
+                conflicts.extend(child_conflicts)
+                selected_count += child_count
+            if selected_entries:
+                groups.insert(
+                    0,
+                    {
+                        "parent_entry_id": None if share_parent_id == "0" else share_parent_id,
+                        "parent_path": share_parent_path,
+                        "parent_name": share_parent_path.split("/")[-1] if share_parent_path else None,
+                        "target_relative_path": target_relative_path,
+                        "selected_entries": selected_entries,
+                        "selected_count": len(selected_entries),
+                    },
+                )
+            return groups, selected_count, conflicts
+
+        async with _QuarkClient(credential_value) as client:
+            parent_id = "0"
+            for segment in [part for part in str(staging_root or "").split("/") if part]:
+                matched = await client.ensure_dir(parent_id=parent_id, folder_name=segment)
+                parent_id = str(matched.get("fid") or "").strip()
+                if not parent_id:
+                    raise PanTransferProviderError("Quark staging root is missing fid", retryable=False)
+
+            folder_id = str(staging_folder_id or "").strip()
+            if not folder_id:
+                staging_folder = await client.ensure_dir(parent_id=parent_id, folder_name=staging_folder_name)
+                folder_id = str(staging_folder.get("fid") or "").strip()
+            if not folder_id:
+                raise PanTransferProviderError("Quark staging directory is missing fid", retryable=False)
+
+            pwd_id = _extract_pwd_id(original_url)
+            passcode = _extract_passcode(original_url, fallback=original_passcode)
+            stoken = await client.get_stoken(pwd_id=pwd_id, passcode=passcode)
+            selection_groups, selected_count, conflicts = await collect_incremental_groups(
+                client,
+                pwd_id=pwd_id,
+                stoken=stoken,
+                share_parent_id="0",
+                share_parent_path=None,
+                target_parent_id=folder_id,
+                target_relative_path=None,
+            )
+            return PanTransferIncrementalPlanResult(
+                selection_groups=selection_groups,
+                selected_count=selected_count,
+                payload={
+                    "pwd_id": pwd_id,
+                    "selection_group_count": len(selection_groups),
+                    "selected_count": selected_count,
+                    "conflict_count": len(conflicts),
+                    "conflicts": conflicts[:20],
+                },
+            )
+
     async def transfer_to_staging(
         self,
         *,
@@ -591,15 +762,6 @@ class QuarkPanTransferProvider(PanTransferProvider):
             passcode = _extract_passcode(original_url, fallback=original_passcode)
             stoken = await client.get_stoken(pwd_id=pwd_id, passcode=passcode)
             normalized_selection = _normalize_source_selection(source_selection)
-            selection_parent_id = str((normalized_selection or {}).get("parent_entry_id") or "").strip() or "0"
-            share_items = await client.get_share_detail(pwd_id=pwd_id, stoken=stoken, parent_id=selection_parent_id)
-            if not share_items:
-                raise PanTransferProviderError("Quark share has no transferable content", retryable=False)
-
-            selected_share_items = _select_quark_share_items(share_items, source_selection=normalized_selection)
-            if not selected_share_items:
-                raise PanTransferProviderError("Quark share has no transferable content", retryable=False)
-
             if clear_existing_contents:
                 existing_rows = await client.list_dir_all(parent_id=staging_folder_id)
                 existing_ids = [str(row.get("fid") or "").strip() for row in existing_rows if str(row.get("fid") or "").strip()]
@@ -625,24 +787,70 @@ class QuarkPanTransferProvider(PanTransferProvider):
                             },
                         )
 
-            fid_list = [str(item.get("fid") or "") for item in selected_share_items if str(item.get("fid") or "").strip()]
-            fid_token_list = [
-                str(item.get("share_fid_token") or "")
-                for item in selected_share_items
-                if str(item.get("share_fid_token") or "").strip()
-            ]
-            if not fid_list or len(fid_list) != len(fid_token_list):
-                raise PanTransferProviderError("Quark share detail is missing required transfer identifiers", retryable=False)
+            selection_groups = list((normalized_selection or {}).get("selection_groups") or [])
+            if not selection_groups:
+                selection_groups = [
+                    {
+                        "parent_entry_id": None,
+                        "parent_path": None,
+                        "parent_name": None,
+                        "target_relative_path": None,
+                        "selected_entries": [],
+                        "selected_count": 0,
+                    }
+                ]
 
-            save_task_id = await client.get_share_save_task_id(
-                pwd_id=pwd_id,
-                stoken=stoken,
-                fid_list=fid_list,
-                fid_token_list=fid_token_list,
-                target_parent_id=staging_folder_id,
-                source_parent_id=selection_parent_id,
-            )
-            await client.wait_task(task_id=save_task_id)
+            async def ensure_target_parent_id(target_relative_path: str | None) -> str:
+                parent_id = staging_folder_id
+                for segment in [part for part in str(target_relative_path or "").split("/") if part]:
+                    matched = await client.ensure_dir(parent_id=parent_id, folder_name=segment)
+                    parent_id = str(matched.get("fid") or "").strip()
+                    if not parent_id:
+                        raise PanTransferProviderError("Quark target directory is missing fid", retryable=False)
+                return parent_id
+
+            total_selected_count = 0
+            save_task_ids: list[str] = []
+            applied_groups: list[dict[str, Any]] = []
+            for selection_group in selection_groups:
+                selection_parent_id = str(selection_group.get("parent_entry_id") or "").strip() or "0"
+                share_items = await client.get_share_detail(pwd_id=pwd_id, stoken=stoken, parent_id=selection_parent_id)
+                if not share_items:
+                    raise PanTransferProviderError("Quark share has no transferable content", retryable=False)
+                selected_share_items = _select_quark_share_items(share_items, selection_group=selection_group)
+                if not selected_share_items:
+                    continue
+                fid_list = [str(item.get("fid") or "") for item in selected_share_items if str(item.get("fid") or "").strip()]
+                fid_token_list = [
+                    str(item.get("share_fid_token") or "")
+                    for item in selected_share_items
+                    if str(item.get("share_fid_token") or "").strip()
+                ]
+                if not fid_list or len(fid_list) != len(fid_token_list):
+                    raise PanTransferProviderError("Quark share detail is missing required transfer identifiers", retryable=False)
+                target_relative_path = _normalize_target_relative_path(selection_group.get("target_relative_path"))
+                target_parent_id = await ensure_target_parent_id(target_relative_path)
+                save_task_id = await client.get_share_save_task_id(
+                    pwd_id=pwd_id,
+                    stoken=stoken,
+                    fid_list=fid_list,
+                    fid_token_list=fid_token_list,
+                    target_parent_id=target_parent_id,
+                    source_parent_id=selection_parent_id,
+                )
+                await client.wait_task(task_id=save_task_id)
+                total_selected_count += len(fid_list)
+                save_task_ids.append(save_task_id)
+                applied_groups.append(
+                    {
+                        "parent_entry_id": None if selection_parent_id == "0" else selection_parent_id,
+                        "parent_path": selection_group.get("parent_path"),
+                        "target_relative_path": target_relative_path,
+                        "selected_count": len(fid_list),
+                    }
+                )
+            if total_selected_count <= 0:
+                raise PanTransferProviderError("Quark share has no transferable content", retryable=False)
             return PanTransferTransferResult(
                 staging_root=parent_path,
                 staging_folder_name=staging_folder_name,
@@ -650,12 +858,15 @@ class QuarkPanTransferProvider(PanTransferProvider):
                 payload={
                     "validation": validation_payload,
                     "pwd_id": pwd_id,
-                    "saved_item_count": len(fid_list),
-                    "save_task_id": save_task_id,
+                    "saved_item_count": total_selected_count,
+                    "save_task_id": save_task_ids[-1] if save_task_ids else None,
+                    "save_task_ids": save_task_ids,
                     "title_hint": str(title_hint or staging_folder_name),
                     "selection_applied": normalized_selection is not None,
-                    "selection_parent_id": None if selection_parent_id == "0" else selection_parent_id,
-                    "selected_entry_count": len(fid_list),
+                    "selection_parent_id": applied_groups[0].get("parent_entry_id") if len(applied_groups) == 1 else None,
+                    "selection_group_count": len(applied_groups),
+                    "selection_groups": applied_groups,
+                    "selected_entry_count": total_selected_count,
                     "clear_existing_contents": bool(clear_existing_contents),
                 },
             )

@@ -30,6 +30,7 @@ import {
   updatePanTransferFollowTaskSettings,
 } from '@/api/panTransfer'
 import type {
+  PanTransferFollowTaskAutomationConfig,
   PanTransferFollowTaskCandidatePolicy,
   PanTransferFollowTaskDetailResponse,
   PanTransferFollowTaskItem,
@@ -65,6 +66,7 @@ type FollowTaskSettingsDraft = {
   taskId: number
   check_interval_minutes: number
   candidate_policy: PanTransferFollowTaskCandidatePolicy
+  automation: PanTransferFollowTaskAutomationConfig
 }
 
 const TASK_STATUS_META: Record<string, { color: string; label: string }> = {
@@ -112,6 +114,23 @@ const DEFAULT_FOLLOW_CHECK_INTERVAL_MINUTES = 180
 const DEFAULT_FOLLOW_LOOKBACK_DAYS = 3
 const DEFAULT_FOLLOW_MAX_RECALL_CANDIDATES = 12
 const DEFAULT_FOLLOW_MAX_JUDGE_CANDIDATES = 6
+const DEFAULT_FOLLOW_AUTOMATION_CONFIG: PanTransferFollowTaskAutomationConfig = {
+  enabled: false,
+  mode: 'stable_origin_incremental',
+  reuse_existing_share_if_valid: true,
+  update_publish_record: true,
+  stop_reason: null,
+  stopped_at: null,
+  cooldown_until: null,
+  last_auto_check_at: null,
+  last_auto_sync_at: null,
+}
+
+const FOLLOW_AUTOMATION_STOP_REASON_LABELS: Record<string, string> = {
+  source_invalid: '初始原链已失效，已放开巡检改走候选路线',
+  source_switched: '当前来源已不是最初原链，稳定原链自动模式已停止',
+  structure_conflict: '原链目录结构与现有资源目录不兼容，需要人工处理',
+}
 
 const LINK_ROOT_LABELS: Record<FollowLinkChip['key'], string> = {
   source: '原链',
@@ -125,6 +144,7 @@ const formatDateTime = (value?: string | null, format = 'YYYY-MM-DD HH:mm') =>
 const FOLLOW_STAGE_LABELS: Record<string, string> = {
   setup: '建立',
   settings: '设置',
+  automation: '自动规则',
   queue: '排队',
   check: '巡检',
   source: '原链',
@@ -212,6 +232,25 @@ const buildFollowLogSummary = (log: PanTransferFollowTaskLogItem) => {
   }
   if (messageText === 'Built follow task identity snapshot') {
     return identitySummary ? `已更新作品识别快照 -> ${identitySummary}` : '已更新作品识别快照'
+  }
+  if (messageText === 'Stable-origin auto incremental sync batch was queued') {
+    const details = [
+      batchId > 0 ? `批次 #${batchId}` : '',
+      selectedCount > 0 ? `已补充 ${selectedCount} 项` : '',
+    ].filter(Boolean)
+    return details.length > 0 ? `规则1命中新内容 -> ${details.join(' · ')}` : '规则1命中新内容，已创建自动增量同步批次'
+  }
+  if (messageText === 'Stable-origin auto incremental check found no new content') {
+    return '规则1巡检完成，初始原链暂无新增内容'
+  }
+  if (messageText === 'Stable-origin auto incremental mode was disabled because the original source is no longer valid') {
+    return '规则1已停用：初始原链失效，已恢复候选巡检'
+  }
+  if (messageText === 'Stable-origin auto incremental mode was disabled because the current source changed') {
+    return '规则1已停用：当前来源已不是最初原链'
+  }
+  if (messageText === 'Stable-origin auto incremental mode stopped because the resource directory structure needs manual review') {
+    return '规则1已停用：目录结构需要人工确认'
   }
   if (messageText.startsWith('Removed the stored candidate source because link validation finished with status:')) {
     return `已移除旧候选原链 -> ${candidateStatus}`
@@ -303,6 +342,9 @@ const getFollowLogTone = (log: PanTransferFollowTaskLogItem) => {
   if (
     level === 'warning' ||
     messageText === 'Detected a recent candidate source link for this tracked resource' ||
+    messageText === 'Stable-origin auto incremental mode was disabled because the original source is no longer valid' ||
+    messageText === 'Stable-origin auto incremental mode was disabled because the current source changed' ||
+    messageText === 'Stable-origin auto incremental mode stopped because the resource directory structure needs manual review' ||
     messageText.startsWith('Removed the stored candidate source') ||
     messageText.startsWith('Discarded a detected candidate source') ||
     messageText.startsWith('Discarded a same-episode source') ||
@@ -316,6 +358,8 @@ const getFollowLogTone = (log: PanTransferFollowTaskLogItem) => {
     messageText.startsWith('Source link validation finished with status: valid') ||
     messageText.startsWith('Current share validation finished with status: valid') ||
     messageText === 'Built follow task identity snapshot' ||
+    messageText === 'Stable-origin auto incremental sync batch was queued' ||
+    messageText === 'Stable-origin auto incremental check found no new content' ||
     messageText === 'Replaced same-episode source links with the current valid share' ||
     messageText === 'Same-episode source already matched the current valid share' ||
     messageText === 'Rewrote the matched same-episode message link to the current valid share' ||
@@ -339,12 +383,31 @@ const clearFollowLogMarker = (markers: Record<number, number>, taskId: number) =
   return next
 }
 
-const getAutomationSummary = (task: PanTransferFollowTaskItem) => {
-  const automation = (task.extra_json?.automation as Record<string, unknown> | undefined) || {}
-  if (!automation.enabled) {
-    return '自动换源与自动前台回写已预埋，当前默认关闭。'
+const getFollowAutomation = (
+  task: Pick<PanTransferFollowTaskItem, 'automation'> | { automation?: Partial<PanTransferFollowTaskAutomationConfig> | null }
+): PanTransferFollowTaskAutomationConfig => ({
+  ...DEFAULT_FOLLOW_AUTOMATION_CONFIG,
+  ...(task.automation || {}),
+})
+
+const getAutomationSummary = (task: Pick<PanTransferFollowTaskItem, 'automation'>) => {
+  const automation = getFollowAutomation(task)
+  if (automation.enabled) {
+    const details = [
+      automation.last_auto_sync_at ? `最近自动同步 ${formatDateTime(automation.last_auto_sync_at)}` : '',
+      automation.last_auto_check_at ? `最近自动巡检 ${formatDateTime(automation.last_auto_check_at)}` : '',
+    ].filter(Boolean)
+    return details.length > 0
+      ? `规则1已启用，只对最初原链做自动增量；${details.join(' · ')}`
+      : '规则1已启用，只对最初原链做自动增量，命中新内容后会自动转存并统一回填。'
   }
-  return '已启用自动模式：候选命中后可进入自动同步链路。'
+  if (automation.stop_reason) {
+    const reasonLabel =
+      FOLLOW_AUTOMATION_STOP_REASON_LABELS[String(automation.stop_reason).toLowerCase()] || String(automation.stop_reason)
+    const stoppedAt = automation.stopped_at ? ` · 停止于 ${formatDateTime(automation.stopped_at)}` : ''
+    return `规则1当前停用：${reasonLabel}${stoppedAt}`
+  }
+  return '规则1当前关闭，系统只会巡检和挑选候选，不会自动增量转存。'
 }
 
 const getLinkChipMeta = (value?: string | null) => {
@@ -430,6 +493,7 @@ const buildFollowSettingsDraft = (task: PanTransferFollowTaskItem): FollowTaskSe
     max_recall_candidates: Number(task.candidate_policy?.max_recall_candidates || DEFAULT_FOLLOW_MAX_RECALL_CANDIDATES),
     max_judge_candidates: Number(task.candidate_policy?.max_judge_candidates || DEFAULT_FOLLOW_MAX_JUDGE_CANDIDATES),
   },
+  automation: getFollowAutomation(task),
 })
 
 const getFollowCandidateAssessmentSummary = (record: PanTransferFollowTaskItem) => {
@@ -458,6 +522,9 @@ const getFollowRuleAlertType = (record: PanTransferFollowTaskItem): 'info' | 'wa
 
 const getRuleExecutionHelp = (record: PanTransferFollowTaskItem) => {
   const executionMode = String(record.rule_assessment?.execution_mode || '').toLowerCase()
+  if (record.rule_assessment?.rule_key === 'auto_origin_incremental') {
+    return '当前更适合先巡检一次，由系统自动校验最初原链并决定是否补充缺失内容。'
+  }
   if (executionMode === 'manual_modal') {
     return '当前建议先进入人工确认，核对目录或文件后再同步。'
   }
@@ -470,7 +537,7 @@ const getRuleExecutionHelp = (record: PanTransferFollowTaskItem) => {
   if (executionMode === 'busy') {
     return '当前已有检查或同步在进行，请先等待本轮完成。'
   }
-  return '当前可直接按规则复用现有资源目录继续同步。'
+  return '当前建议先检查状态，再按规则选择人工增量或全量替换。'
 }
 
 const buildFollowLinkItems = (record: PanTransferFollowTaskItem): FollowLinkChip[] => {
@@ -578,9 +645,6 @@ const formatSize = (value?: number | null) => {
   return `${size.toFixed(index === 0 ? 0 : 2)} ${units[index]}`
 }
 
-const getFollowSyncKey = (taskId: number, sourceKind: FollowSyncSourceKind, syncMode: 'standard' | FollowSyncMode = 'standard') =>
-  `${taskId}:${sourceKind}:${syncMode}`
-
 const FollowTasksSectionV2 = ({ refreshToken, isActive = true }: FollowTasksSectionProps) => {
   const isPageVisible = usePageVisibility()
   const [tasks, setTasks] = useState<PanTransferFollowTaskItem[]>([])
@@ -589,7 +653,6 @@ const FollowTasksSectionV2 = ({ refreshToken, isActive = true }: FollowTasksSect
   const [pagination, setPagination] = useState({ page: 1, pageSize: 10, total: 0 })
   const [queueingTaskId, setQueueingTaskId] = useState<number | null>(null)
   const [clearingCandidateTaskId, setClearingCandidateTaskId] = useState<number | null>(null)
-  const [syncingTaskKey, setSyncingTaskKey] = useState<string | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
   const [detailLoading, setDetailLoading] = useState(false)
   const [detailData, setDetailData] = useState<PanTransferFollowTaskDetailResponse | null>(null)
@@ -809,31 +872,6 @@ const FollowTasksSectionV2 = ({ refreshToken, isActive = true }: FollowTasksSect
     }
   }
 
-  const triggerFollowSync = async (
-    taskId: number,
-    sourceKind: FollowSyncSourceKind,
-    syncMode: 'standard' | FollowSyncMode = 'standard'
-  ) => {
-    const syncKey = getFollowSyncKey(taskId, sourceKind, syncMode)
-    setSyncingTaskKey(syncKey)
-    try {
-      const response = await createPanTransferFollowSyncBatch(taskId, {
-        source_kind: sourceKind,
-        sync_mode: syncMode,
-        reuse_existing_share_if_valid: true,
-        update_publish_record: true,
-      })
-      await loadTaskDetail(taskId, { open: false })
-      await loadTasks(pagination.page, pagination.pageSize, statusFilter)
-      return response
-    } catch (error) {
-      message.error(getErrorMessage(error, '创建追更同步批次失败'))
-      return null
-    } finally {
-      setSyncingTaskKey(null)
-    }
-  }
-
   const toggleTaskStatus = async (record: PanTransferFollowTaskItem) => {
     try {
       const response =
@@ -857,6 +895,7 @@ const FollowTasksSectionV2 = ({ refreshToken, isActive = true }: FollowTasksSect
       const response = await updatePanTransferFollowTaskSettings(detailTask.id, {
         check_interval_minutes: settingsDraft.check_interval_minutes,
         candidate_policy: settingsDraft.candidate_policy,
+        automation: settingsDraft.automation,
       })
       setDetailData(response)
       setSettingsDraft(buildFollowSettingsDraft(response.task))
@@ -914,15 +953,8 @@ const FollowTasksSectionV2 = ({ refreshToken, isActive = true }: FollowTasksSect
 
   const runRuleAction = async (
     task: PanTransferFollowTaskItem,
-    ruleKey: 'safe_sync' | 'replace_all' | 'candidate_manual'
+    ruleKey: 'manual_incremental' | 'replace_all'
   ) => {
-    if (ruleKey === 'safe_sync') {
-      const response = await triggerFollowSync(task.id, 'current', 'standard')
-      if (response) {
-        message.success(`已创建规则一安全同步批次 #${response.batch_id}`)
-      }
-      return
-    }
     if (ruleKey === 'replace_all') {
       await openManualSyncModal(task, task.last_candidate_url ? 'candidate' : 'current', 'replace_all')
       return
@@ -933,7 +965,7 @@ const FollowTasksSectionV2 = ({ refreshToken, isActive = true }: FollowTasksSect
   const runRecommendedAction = async (task: PanTransferFollowTaskItem) => {
     const executionMode = String(task.rule_assessment?.execution_mode || '').toLowerCase()
     if (executionMode === 'manual_modal') {
-      await runRuleAction(task, 'candidate_manual')
+      await runRuleAction(task, 'manual_incremental')
       return
     }
     if (executionMode === 'recheck_only') {
@@ -956,10 +988,7 @@ const FollowTasksSectionV2 = ({ refreshToken, isActive = true }: FollowTasksSect
       message.info('当前已有检查或同步在进行，请先等待本轮完成。')
       return
     }
-    const response = await triggerFollowSync(task.id, 'current', 'standard')
-    if (response) {
-      message.success(`已按推荐规则创建同步批次 #${response.batch_id}`)
-    }
+    await runRuleAction(task, 'manual_incremental')
   }
 
   const buildMoreActionsMenu = (record: PanTransferFollowTaskItem): MenuProps => ({
@@ -1216,7 +1245,9 @@ const FollowTasksSectionV2 = ({ refreshToken, isActive = true }: FollowTasksSect
           executionMode === 'manual_modal'
             ? `执行推荐：${record.rule_assessment.rule_label}`
             : executionMode === 'recheck_only'
-              ? '执行推荐：先重新检查'
+              ? record.rule_assessment.rule_key === 'auto_origin_incremental'
+                ? '执行推荐：按规则1立即巡检'
+                : '执行推荐：先重新检查'
               : executionMode === 'wait_candidate'
                 ? '当前先等待候选原链'
                 : executionMode === 'busy'
@@ -1246,10 +1277,7 @@ const FollowTasksSectionV2 = ({ refreshToken, isActive = true }: FollowTasksSect
                   !record.rule_assessment.can_execute ||
                   ((executionMode === 'recheck_only' || executionMode === 'wait_candidate') && record.status !== 'active')
                 }
-                loading={
-                  syncingTaskKey === getFollowSyncKey(record.id, 'current', 'standard') ||
-                  syncingTaskKey === getFollowSyncKey(record.id, 'candidate', 'standard')
-                }
+                loading={executionMode === 'recheck_only' ? queueingTaskId === record.id : false}
                 onClick={() => void runRecommendedAction(record)}
               />
             </Tooltip>
@@ -1280,6 +1308,20 @@ const FollowTasksSectionV2 = ({ refreshToken, isActive = true }: FollowTasksSect
     [visibleDetailLogs]
   )
   const hasCandidate = Boolean(detailTask?.last_candidate_link_target_id && detailTask?.last_candidate_url)
+  const detailAutomation = detailTask ? getFollowAutomation(detailTask) : DEFAULT_FOLLOW_AUTOMATION_CONFIG
+  const automationDraftChanged = Boolean(
+    detailTask &&
+      activeSettingsDraft &&
+      activeSettingsDraft.automation.enabled !== detailAutomation.enabled
+  )
+  const automationDraftSummary =
+    detailTask && activeSettingsDraft
+      ? automationDraftChanged
+        ? activeSettingsDraft.automation.enabled
+          ? '保存后规则1会重新启用，并在下一轮巡检时按最初原链自动增量。'
+          : '保存后规则1会关闭，后续只保留巡检与候选判定，不再自动增量。'
+        : getAutomationSummary(detailTask)
+      : ''
   const detailLinkItems = detailTask ? buildFollowLinkItems(detailTask) : []
   const detailReferenceTitles = detailTask?.identity_snapshot.reference_titles ?? []
   const detailSearchQueries = detailTask?.identity_snapshot.search_queries ?? []
@@ -1535,117 +1577,160 @@ const FollowTasksSectionV2 = ({ refreshToken, isActive = true }: FollowTasksSect
                   </Button>
                 }
               >
-                <div className="resource-ops-follow-settings-grid">
-                  <div className="resource-ops-follow-settings-field">
-                    <label>巡检间隔：</label>
-                    <InputNumber
-                      min={15}
-                      max={10080}
-                      step={15}
-                      value={activeSettingsDraft.check_interval_minutes}
-                      addonAfter="分钟"
-                      style={{ width: '100%' }}
-                      onChange={(value) =>
-                        setSettingsDraft((current) =>
-                          current && current.taskId === detailTask.id
-                            ? { ...current, check_interval_minutes: Number(value || DEFAULT_FOLLOW_CHECK_INTERVAL_MINUTES) }
-                            : buildFollowSettingsDraft({
-                                ...detailTask,
-                                check_interval_minutes: Number(value || DEFAULT_FOLLOW_CHECK_INTERVAL_MINUTES),
-                              })
-                        )
-                      }
-                    />
-                  </div>
+                <div className="resource-ops-follow-settings-stack">
+                  <div className="resource-ops-follow-settings-grid">
+                    <div className="resource-ops-follow-settings-field">
+                      <label>巡检间隔：</label>
+                      <InputNumber
+                        min={15}
+                        max={10080}
+                        step={15}
+                        value={activeSettingsDraft.check_interval_minutes}
+                        addonAfter="分钟"
+                        style={{ width: '100%' }}
+                        onChange={(value) =>
+                          setSettingsDraft((current) =>
+                            current && current.taskId === detailTask.id
+                              ? { ...current, check_interval_minutes: Number(value || DEFAULT_FOLLOW_CHECK_INTERVAL_MINUTES) }
+                              : buildFollowSettingsDraft({
+                                  ...detailTask,
+                                  check_interval_minutes: Number(value || DEFAULT_FOLLOW_CHECK_INTERVAL_MINUTES),
+                                })
+                          )
+                        }
+                      />
+                    </div>
 
-                  <div className="resource-ops-follow-settings-field">
-                    <label>候选时间范围：</label>
-                    <InputNumber
-                      min={1}
-                      max={90}
-                      value={activeSettingsDraft.candidate_policy.lookback_days}
-                      addonAfter="天"
-                      style={{ width: '100%' }}
-                      onChange={(value) =>
-                        setSettingsDraft((current) =>
-                          current && current.taskId === detailTask.id
-                            ? {
+                    <div className="resource-ops-follow-settings-field">
+                      <label>候选时间范围：</label>
+                      <InputNumber
+                        min={1}
+                        max={90}
+                        value={activeSettingsDraft.candidate_policy.lookback_days}
+                        addonAfter="天"
+                        style={{ width: '100%' }}
+                        onChange={(value) =>
+                          setSettingsDraft((current) =>
+                            current && current.taskId === detailTask.id
+                              ? {
+                                  ...current,
+                                  candidate_policy: {
+                                    ...current.candidate_policy,
+                                    lookback_days: Number(value || DEFAULT_FOLLOW_LOOKBACK_DAYS),
+                                  },
+                                }
+                              : buildFollowSettingsDraft({
+                                  ...detailTask,
+                                  candidate_policy: {
+                                    ...detailTask.candidate_policy,
+                                    lookback_days: Number(value || DEFAULT_FOLLOW_LOOKBACK_DAYS),
+                                  },
+                                })
+                          )
+                        }
+                      />
+                    </div>
+
+                    <div className="resource-ops-follow-settings-field">
+                      <label>最多召回候选：</label>
+                      <InputNumber
+                        min={1}
+                        max={30}
+                        value={activeSettingsDraft.candidate_policy.max_recall_candidates}
+                        style={{ width: '100%' }}
+                        onChange={(value) =>
+                          setSettingsDraft((current) => {
+                            const nextValue = Number(value || DEFAULT_FOLLOW_MAX_RECALL_CANDIDATES)
+                            if (current && current.taskId === detailTask.id) {
+                              return {
                                 ...current,
                                 candidate_policy: {
                                   ...current.candidate_policy,
-                                  lookback_days: Number(value || DEFAULT_FOLLOW_LOOKBACK_DAYS),
+                                  max_recall_candidates: nextValue,
+                                  max_judge_candidates: Math.min(current.candidate_policy.max_judge_candidates, nextValue),
                                 },
                               }
-                            : buildFollowSettingsDraft({
-                                ...detailTask,
-                                candidate_policy: {
-                                  ...detailTask.candidate_policy,
-                                  lookback_days: Number(value || DEFAULT_FOLLOW_LOOKBACK_DAYS),
-                                },
-                              })
-                        )
-                      }
-                    />
-                  </div>
-
-                  <div className="resource-ops-follow-settings-field">
-                    <label>最多召回候选：</label>
-                    <InputNumber
-                      min={1}
-                      max={30}
-                      value={activeSettingsDraft.candidate_policy.max_recall_candidates}
-                      style={{ width: '100%' }}
-                      onChange={(value) =>
-                        setSettingsDraft((current) => {
-                          const nextValue = Number(value || DEFAULT_FOLLOW_MAX_RECALL_CANDIDATES)
-                          if (current && current.taskId === detailTask.id) {
+                            }
+                            const nextDraft = buildFollowSettingsDraft(detailTask)
                             return {
-                              ...current,
+                              ...nextDraft,
                               candidate_policy: {
-                                ...current.candidate_policy,
+                                ...nextDraft.candidate_policy,
                                 max_recall_candidates: nextValue,
-                                max_judge_candidates: Math.min(current.candidate_policy.max_judge_candidates, nextValue),
+                                max_judge_candidates: Math.min(nextDraft.candidate_policy.max_judge_candidates, nextValue),
                               },
                             }
-                          }
-                          const nextDraft = buildFollowSettingsDraft(detailTask)
-                          return {
-                            ...nextDraft,
-                            candidate_policy: {
-                              ...nextDraft.candidate_policy,
-                              max_recall_candidates: nextValue,
-                              max_judge_candidates: Math.min(nextDraft.candidate_policy.max_judge_candidates, nextValue),
-                            },
-                          }
-                        })
-                      }
-                    />
+                          })
+                        }
+                      />
+                    </div>
+
+                    <div className="resource-ops-follow-settings-field">
+                      <label>最多 AI 判定：</label>
+                      <InputNumber
+                        min={1}
+                        max={Math.max(1, activeSettingsDraft.candidate_policy.max_recall_candidates)}
+                        value={activeSettingsDraft.candidate_policy.max_judge_candidates}
+                        style={{ width: '100%' }}
+                        onChange={(value) =>
+                          setSettingsDraft((current) =>
+                            current && current.taskId === detailTask.id
+                              ? {
+                                  ...current,
+                                  candidate_policy: {
+                                    ...current.candidate_policy,
+                                    max_judge_candidates: Math.min(
+                                      Number(value || current.candidate_policy.max_judge_candidates || DEFAULT_FOLLOW_MAX_JUDGE_CANDIDATES),
+                                      current.candidate_policy.max_recall_candidates
+                                    ),
+                                  },
+                                }
+                              : buildFollowSettingsDraft(detailTask)
+                          )
+                        }
+                      />
+                    </div>
                   </div>
 
-                  <div className="resource-ops-follow-settings-field">
-                    <label>最多 AI 判定：</label>
-                    <InputNumber
-                      min={1}
-                      max={Math.max(1, activeSettingsDraft.candidate_policy.max_recall_candidates)}
-                      value={activeSettingsDraft.candidate_policy.max_judge_candidates}
-                      style={{ width: '100%' }}
-                      onChange={(value) =>
-                        setSettingsDraft((current) =>
-                          current && current.taskId === detailTask.id
-                            ? {
-                                ...current,
-                                candidate_policy: {
-                                  ...current.candidate_policy,
-                                  max_judge_candidates: Math.min(
-                                    Number(value || current.candidate_policy.max_judge_candidates || DEFAULT_FOLLOW_MAX_JUDGE_CANDIDATES),
-                                    current.candidate_policy.max_recall_candidates
-                                  ),
-                                },
-                              }
-                            : buildFollowSettingsDraft(detailTask)
-                        )
-                      }
-                    />
+                  <div className="resource-ops-follow-automation-panel">
+                    <div className="resource-ops-follow-automation-head">
+                      <div className="resource-ops-follow-sync-meta">
+                        <span>规则1：稳定原链自动增量</span>
+                        <small>只对最初绑定的原链生效。巡检时会先校验原链，再自动补充资源目录里缺失的内容；一旦原链失效或来源切换，自动规则会立即停用。</small>
+                      </div>
+                      <Checkbox
+                        checked={activeSettingsDraft.automation.enabled}
+                        onChange={(event) =>
+                          setSettingsDraft((current) =>
+                            current && current.taskId === detailTask.id
+                              ? {
+                                  ...current,
+                                  automation: {
+                                    ...current.automation,
+                                    enabled: event.target.checked,
+                                  },
+                                }
+                              : {
+                                  ...buildFollowSettingsDraft(detailTask),
+                                  automation: {
+                                    ...getFollowAutomation(detailTask),
+                                    enabled: event.target.checked,
+                                  },
+                                }
+                          )
+                        }
+                      >
+                        启用自动规则
+                      </Checkbox>
+                    </div>
+                    <div className="resource-ops-follow-chip-row">
+                      <Tag color={activeSettingsDraft.automation.enabled ? 'processing' : 'default'}>
+                        {activeSettingsDraft.automation.enabled ? '自动增量已启用' : '自动增量已关闭'}
+                      </Tag>
+                      <Tag color={activeSettingsDraft.automation.update_publish_record ? 'success' : 'default'}>统一回填前台</Tag>
+                      <Tag color={activeSettingsDraft.automation.reuse_existing_share_if_valid ? 'success' : 'default'}>优先复用有效分享</Tag>
+                    </div>
+                    <small className="resource-ops-follow-automation-summary">{automationDraftSummary}</small>
                   </div>
                 </div>
               </Card>
@@ -1815,7 +1900,11 @@ const FollowTasksSectionV2 = ({ refreshToken, isActive = true }: FollowTasksSect
                   </div>
                 }
                 action={
-                  String(detailTask.rule_assessment.execution_mode || '').toLowerCase() === 'recheck_only' ? (
+                  detailTask.rule_assessment.rule_key === 'auto_origin_incremental' ? (
+                    <Button size="small" disabled={detailTask.status !== 'active'} loading={queueingTaskId === detailTask.id} onClick={() => void queueTaskCheck(detailTask.id)}>
+                      立即按规则1巡检
+                    </Button>
+                  ) : String(detailTask.rule_assessment.execution_mode || '').toLowerCase() === 'recheck_only' ? (
                     <Button size="small" disabled={detailTask.status !== 'active'} onClick={() => void queueTaskCheck(detailTask.id)}>
                       先重新检查
                     </Button>
@@ -1834,44 +1923,56 @@ const FollowTasksSectionV2 = ({ refreshToken, isActive = true }: FollowTasksSect
 
             <Card size="small" title="规则处理" className="resource-ops-follow-sync-card">
               <div className="resource-ops-follow-rule-grid">
-                <div className={`resource-ops-follow-rule-card${detailTask.rule_assessment.rule_key === 'safe_sync_current' ? ' is-recommended' : ''}`}>
+                <div className={`resource-ops-follow-rule-card${detailTask.rule_assessment.rule_key === 'auto_origin_incremental' ? ' is-recommended' : ''}`}>
                   <div className="resource-ops-follow-rule-card-head">
-                    <span>规则一：安全同步</span>
-                    <Tag color="processing">默认</Tag>
+                    <span>规则1：稳定原链自动增量</span>
+                    <Tag color={detailAutomation.enabled ? 'processing' : 'default'}>{detailAutomation.enabled ? '已启用' : '未启用'}</Tag>
                   </div>
-                  <small>适合当前原链仍可用，或只是想刷新对外分享。复用现有资源目录，不主动删除旧内容。</small>
+                  <small>适合最初绑定的原链长期稳定更新。系统会先巡检，再自动把缺失内容补进现有资源目录，并统一回填最新分享与前台绑定。</small>
                   <Button
-                    type={detailTask.rule_assessment.rule_key === 'safe_sync_current' ? 'primary' : 'default'}
-                    loading={syncingTaskKey === getFollowSyncKey(detailTask.id, 'current', 'standard')}
-                    onClick={() => void runRuleAction(detailTask, 'safe_sync')}
+                    type={detailTask.rule_assessment.rule_key === 'auto_origin_incremental' ? 'primary' : 'default'}
+                    loading={queueingTaskId === detailTask.id}
+                    disabled={!detailAutomation.enabled || detailTask.status !== 'active'}
+                    onClick={() => void queueTaskCheck(detailTask.id)}
                   >
-                    执行规则一
+                    {detailAutomation.enabled ? '立即按规则1巡检' : '先在上方启用规则1'}
+                  </Button>
+                </div>
+
+                <div
+                  className={`resource-ops-follow-rule-card${
+                    detailTask.rule_assessment.rule_key === 'candidate_manual_incremental' ||
+                    detailTask.rule_assessment.rule_key === 'manual_incremental_current'
+                      ? ' is-recommended'
+                      : ''
+                  }`}
+                >
+                  <div className="resource-ops-follow-rule-card-head">
+                    <span>规则2：人工增量同步</span>
+                    <Tag color={hasCandidate ? 'warning' : 'default'}>{hasCandidate ? '优先候选' : '当前原链'}</Tag>
+                  </div>
+                  <small>人工挑选目录或文件后增量写入现有资源目录。适合候选出现后的稳妥接管，也适合自动规则关闭时手动补内容。</small>
+                  <Button
+                    type={
+                      detailTask.rule_assessment.rule_key === 'candidate_manual_incremental' ||
+                      detailTask.rule_assessment.rule_key === 'manual_incremental_current'
+                        ? 'primary'
+                        : 'default'
+                    }
+                    onClick={() => void runRuleAction(detailTask, 'manual_incremental')}
+                  >
+                    {hasCandidate ? '用候选做人工增量' : '用当前原链做人工增量'}
                   </Button>
                 </div>
 
                 <div className="resource-ops-follow-rule-card is-danger">
                   <div className="resource-ops-follow-rule-card-head">
-                    <span>规则二：全量替换</span>
+                    <span>规则3：人工全量替换</span>
                     <Tag color="error">高风险</Tag>
                   </div>
-                  <small>先清空当前资源目录，再导入你手动确认的目录或文件。不会默认执行，必须显式确认。</small>
+                  <small>先清空当前资源目录，再导入你人工确认后的完整内容。只在目录结构完全变动或需要彻底换版时使用。</small>
                   <Button danger onClick={() => void runRuleAction(detailTask, 'replace_all')}>
                     进入高风险处理
-                  </Button>
-                </div>
-
-                <div className={`resource-ops-follow-rule-card${detailTask.rule_assessment.rule_key === 'candidate_manual_review' ? ' is-recommended' : ''}`}>
-                  <div className="resource-ops-follow-rule-card-head">
-                    <span>规则三：候选人工确认</span>
-                    <Tag color={hasCandidate ? 'warning' : 'default'}>{hasCandidate ? '有候选' : '无候选'}</Tag>
-                  </div>
-                  <small>适合候选原链命中后先人工核对目录结构，再决定增量同步还是其它处理，避免误写入。</small>
-                  <Button
-                    disabled={!hasCandidate}
-                    type={detailTask.rule_assessment.rule_key === 'candidate_manual_review' ? 'primary' : 'default'}
-                    onClick={() => void runRuleAction(detailTask, 'candidate_manual')}
-                  >
-                    进入人工确认
                   </Button>
                 </div>
               </div>
@@ -1886,9 +1987,6 @@ const FollowTasksSectionV2 = ({ refreshToken, isActive = true }: FollowTasksSect
                     {detailTask.last_candidate_url}
                   </Link>
                   <div className="resource-ops-follow-sync-actions">
-                    <Button size="small" onClick={() => void openManualSyncModal(detailTask, 'candidate', 'incremental')}>
-                      进入人工确认
-                    </Button>
                     <Button
                       size="small"
                       icon={<CloseCircleOutlined />}

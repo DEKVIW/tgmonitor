@@ -26,11 +26,14 @@ from app.services.ai_center import execute_text_route, extract_json_object_from_
 from app.services.resource_ops import get_work_binding_lookup
 
 from .common import normalize_relative_path, utcnow
+from .providers import decrypt_account_credential, get_pan_transfer_provider
+from .providers.base import PanTransferProviderError
 from .replacement import replace_link_target_references_with_url, rewrite_message_link_ref_with_url
 from .validation import validate_share_url
 
 
 logger = logging.getLogger(__name__)
+_UNSET = object()
 
 
 PAN_TRANSFER_SYNC_STATUS_ACTIVE = "active"
@@ -64,6 +67,10 @@ PAN_TRANSFER_FOLLOW_MIN_RECALL_CANDIDATES = 1
 PAN_TRANSFER_FOLLOW_RECALL_CANDIDATES_LIMIT = 30
 PAN_TRANSFER_FOLLOW_MIN_JUDGE_CANDIDATES = 1
 PAN_TRANSFER_FOLLOW_JUDGE_CANDIDATES_LIMIT = 12
+PAN_TRANSFER_FOLLOW_AUTOMATION_MODE_STABLE_ORIGIN_INCREMENTAL = "stable_origin_incremental"
+PAN_TRANSFER_FOLLOW_AUTOMATION_STOP_SOURCE_INVALID = "source_invalid"
+PAN_TRANSFER_FOLLOW_AUTOMATION_STOP_SOURCE_SWITCHED = "source_switched"
+PAN_TRANSFER_FOLLOW_AUTOMATION_STOP_STRUCTURE_CONFLICT = "structure_conflict"
 
 FOLLOW_EPISODE_PATTERNS = (
     re.compile(r"更\s*(\d{1,4})\s*集"),
@@ -323,6 +330,133 @@ def _normalize_source_message_snapshot(value: Mapping[str, Any] | None) -> dict[
     return {key: value for key, value in snapshot.items() if value not in (None, [], "")}
 
 
+def _normalize_follow_source_origin(value: Mapping[str, Any] | None) -> dict[str, Any]:
+    raw = dict(value or {})
+    normalized = {
+        "link_target_id": _normalize_optional_int(raw.get("link_target_id")),
+        "source_url": _normalize_text(raw.get("source_url")) or None,
+        "source_share_key": _normalize_text(raw.get("source_share_key"), max_length=255) or None,
+        "source_message_snapshot": _normalize_source_message_snapshot(raw.get("source_message_snapshot")),
+    }
+    return {
+        key: value
+        for key, value in normalized.items()
+        if value not in (None, {}, [])
+    }
+
+
+def _build_follow_source_origin(
+    *,
+    link_target_id: int | None,
+    source_url: str | None,
+    source_share_key: str | None,
+    source_message_snapshot: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    return _normalize_follow_source_origin(
+        {
+            "link_target_id": link_target_id,
+            "source_url": source_url,
+            "source_share_key": source_share_key,
+            "source_message_snapshot": source_message_snapshot,
+        }
+    )
+
+
+def _build_task_automation_config(raw_value: Any) -> dict[str, Any]:
+    raw = dict(raw_value or {}) if isinstance(raw_value, dict) else {}
+    return {
+        "enabled": bool(raw.get("enabled")),
+        "mode": PAN_TRANSFER_FOLLOW_AUTOMATION_MODE_STABLE_ORIGIN_INCREMENTAL,
+        "reuse_existing_share_if_valid": bool(raw.get("reuse_existing_share_if_valid", True)),
+        "update_publish_record": bool(raw.get("update_publish_record", True)),
+        "stop_reason": _normalize_text(raw.get("stop_reason"), max_length=64) or None,
+        "stopped_at": _serialize_json_value(_parse_datetime(raw.get("stopped_at")) or raw.get("stopped_at")),
+        "cooldown_until": _serialize_json_value(_parse_datetime(raw.get("cooldown_until")) or raw.get("cooldown_until")),
+        "last_auto_check_at": _serialize_json_value(_parse_datetime(raw.get("last_auto_check_at")) or raw.get("last_auto_check_at")),
+        "last_auto_sync_at": _serialize_json_value(_parse_datetime(raw.get("last_auto_sync_at")) or raw.get("last_auto_sync_at")),
+    }
+
+
+def _get_task_automation_config(task: PanTransferSyncTask) -> dict[str, Any]:
+    return _build_task_automation_config(_get_task_extra_section(task, "automation"))
+
+
+def _set_task_automation_config(task: PanTransferSyncTask, value: Mapping[str, Any] | None) -> dict[str, Any]:
+    normalized = _build_task_automation_config(value)
+    _set_task_extra_section(task, "automation", normalized)
+    return normalized
+
+
+def _set_follow_task_automation_state(
+    task: PanTransferSyncTask,
+    *,
+    enabled: bool | object = _UNSET,
+    stop_reason: str | None | object = _UNSET,
+    stopped_at: datetime | None | object = _UNSET,
+    cooldown_until: datetime | None | object = _UNSET,
+    last_auto_check_at: datetime | None | object = _UNSET,
+    last_auto_sync_at: datetime | None | object = _UNSET,
+) -> dict[str, Any]:
+    current = _get_task_automation_config(task)
+    updated = dict(current)
+    if enabled is not _UNSET:
+        updated["enabled"] = bool(enabled)
+    if stop_reason is not _UNSET:
+        updated["stop_reason"] = _normalize_text(stop_reason, max_length=64) or None
+    if stopped_at is not _UNSET:
+        updated["stopped_at"] = _serialize_json_value(stopped_at) if stopped_at is not None else None
+    if cooldown_until is not _UNSET:
+        updated["cooldown_until"] = _serialize_json_value(cooldown_until) if cooldown_until is not None else None
+    if last_auto_check_at is not _UNSET:
+        updated["last_auto_check_at"] = _serialize_json_value(last_auto_check_at) if last_auto_check_at is not None else None
+    if last_auto_sync_at is not _UNSET:
+        updated["last_auto_sync_at"] = _serialize_json_value(last_auto_sync_at) if last_auto_sync_at is not None else None
+    if updated.get("enabled"):
+        updated["stop_reason"] = None
+        updated["stopped_at"] = None
+    return _set_task_automation_config(task, updated)
+
+
+def _get_follow_task_source_origin(
+    session: Session,
+    *,
+    task: PanTransferSyncTask,
+) -> dict[str, Any]:
+    existing = _normalize_follow_source_origin(_get_task_extra_section(task, "source_origin"))
+    if existing.get("link_target_id") and existing.get("source_url"):
+        return existing
+    batch_item = session.get(PanTransferBatchItem, int(task.source_batch_item_id or 0)) if task.source_batch_item_id is not None else None
+    source_target = None
+    origin_link_target_id = None
+    origin_source_url = None
+    origin_source_share_key = None
+    origin_snapshot: dict[str, Any] | None = None
+    if batch_item is not None and batch_item.link_target_id is not None:
+        origin_link_target_id = int(batch_item.link_target_id)
+        source_target = session.get(LinkTarget, int(batch_item.link_target_id))
+        origin_source_url = _normalize_text(getattr(source_target, "original_url", None)) or _normalize_text(batch_item.original_url) or None
+        origin_source_share_key = _normalize_text(getattr(source_target, "share_key", None), max_length=255) or None
+        origin_snapshot = _normalize_source_message_snapshot(dict(dict(batch_item.extra_json or {}).get("source_message_snapshot") or {}))
+        if not origin_snapshot.get("message_time") and batch_item.latest_message_time is not None:
+            origin_snapshot["message_time"] = _serialize_json_value(batch_item.latest_message_time)
+    if origin_link_target_id is None:
+        origin_link_target_id = _normalize_optional_int(task.source_link_target_id)
+        source_target = session.get(LinkTarget, int(origin_link_target_id)) if origin_link_target_id is not None else None
+        origin_source_url = _normalize_text(getattr(source_target, "original_url", None)) or _normalize_text(task.source_url) or None
+        origin_source_share_key = _normalize_text(getattr(source_target, "share_key", None), max_length=255) or _normalize_text(task.source_share_key, max_length=255) or None
+        origin_snapshot = _normalize_source_message_snapshot(_get_task_extra_section(task, "source_message_snapshot"))
+    origin = _build_follow_source_origin(
+        link_target_id=origin_link_target_id,
+        source_url=origin_source_url,
+        source_share_key=origin_source_share_key,
+        source_message_snapshot=origin_snapshot,
+    )
+    _set_task_extra_section(task, "source_origin", origin)
+    session.add(task)
+    session.flush()
+    return origin
+
+
 def _resolve_follow_task_resource_title(task: PanTransferSyncTask) -> str:
     source_message_snapshot = _normalize_source_message_snapshot(_get_task_extra_section(task, "source_message_snapshot"))
     return (
@@ -343,6 +477,110 @@ def _collect_follow_reference_texts(task: PanTransferSyncTask) -> list[str]:
         _normalize_text(task.last_candidate_title, max_length=255),
     ]
     return _dedupe_texts([item for item in texts if item], max_items=8, max_length=255)
+
+
+def _get_latest_link_target_message_snapshot(
+    session: Session,
+    *,
+    link_target_id: int,
+    fallback_snapshot: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    row = (
+        session.query(
+            MessageLinkRef.display_text.label("display_text"),
+            MessageLinkRef.message_timestamp.label("message_timestamp"),
+            Message.title.label("message_title"),
+            Message.description.label("message_description"),
+            Message.tags.label("message_tags"),
+            Message.timestamp.label("message_created_at"),
+        )
+        .outerjoin(Message, Message.id == MessageLinkRef.message_id)
+        .filter(MessageLinkRef.link_target_id == int(link_target_id))
+        .order_by(
+            MessageLinkRef.message_timestamp.desc().nullslast(),
+            Message.timestamp.desc().nullslast(),
+            MessageLinkRef.id.desc(),
+        )
+        .first()
+    )
+    fallback = _normalize_source_message_snapshot(fallback_snapshot)
+    if row is None:
+        return fallback
+    message_time = getattr(row, "message_timestamp", None) or getattr(row, "message_created_at", None)
+    snapshot = _normalize_source_message_snapshot(
+        {
+            "title": _normalize_text(getattr(row, "message_title", None), max_length=255)
+            or _normalize_text(getattr(row, "display_text", None), max_length=255)
+            or fallback.get("title"),
+            "description": _normalize_text(getattr(row, "message_description", None), max_length=2000)
+            or fallback.get("description"),
+            "tags": list(getattr(row, "message_tags", None) or fallback.get("tags") or []),
+            "message_time": message_time or fallback.get("message_time"),
+        }
+    )
+    if not snapshot.get("title") and fallback.get("title"):
+        snapshot["title"] = fallback.get("title")
+    return snapshot
+
+
+def _refresh_follow_task_source_message_snapshot(
+    session: Session,
+    *,
+    task: PanTransferSyncTask,
+    fallback_snapshot: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    link_target_id = _normalize_optional_int(task.source_link_target_id)
+    if link_target_id is None:
+        snapshot = _normalize_source_message_snapshot(fallback_snapshot or _get_task_extra_section(task, "source_message_snapshot"))
+    else:
+        snapshot = _get_latest_link_target_message_snapshot(
+            session,
+            link_target_id=link_target_id,
+            fallback_snapshot=fallback_snapshot or _get_task_extra_section(task, "source_message_snapshot"),
+        )
+    current_snapshot = _normalize_source_message_snapshot(_get_task_extra_section(task, "source_message_snapshot"))
+    if snapshot != current_snapshot:
+        _set_task_extra_section(task, "source_message_snapshot", snapshot)
+        session.add(task)
+        session.flush()
+    return snapshot
+
+
+def _is_follow_task_using_origin_source(task: PanTransferSyncTask, *, origin: Mapping[str, Any] | None) -> bool:
+    normalized_origin = _normalize_follow_source_origin(origin)
+    origin_link_target_id = _normalize_optional_int(normalized_origin.get("link_target_id"))
+    current_link_target_id = _normalize_optional_int(task.source_link_target_id)
+    if origin_link_target_id is not None and current_link_target_id != origin_link_target_id:
+        return False
+    origin_source_url = _normalize_text(normalized_origin.get("source_url"))
+    if origin_source_url and _normalize_text(task.source_url) and _normalize_text(task.source_url) != origin_source_url:
+        return False
+    return origin_link_target_id is not None or bool(origin_source_url)
+
+
+def _schedule_follow_task_next_check(
+    task: PanTransferSyncTask,
+    *,
+    now: datetime | None = None,
+) -> datetime | None:
+    if str(task.status or "") != PAN_TRANSFER_SYNC_STATUS_ACTIVE:
+        task.next_check_at = None
+        return None
+
+    current_state = _normalize_text(task.task_state, max_length=32).lower()
+    if current_state in {
+        PAN_TRANSFER_SYNC_STATE_CHECKING,
+        PAN_TRANSFER_SYNC_STATE_SYNC_QUEUED,
+    }:
+        task.next_check_at = None
+        return None
+
+    del now
+    next_check_at = _next_check_time(
+        interval_minutes=int(task.check_interval_minutes or PAN_TRANSFER_SYNC_DEFAULT_INTERVAL_MINUTES)
+    )
+    task.next_check_at = next_check_at
+    return next_check_at
 
 
 def _build_follow_candidate_policy(raw_value: Any) -> dict[str, int]:
@@ -578,19 +816,6 @@ def _serialize_follow_task_log(row: PanTransferSyncTaskLog) -> dict[str, Any]:
     }
 
 
-def _build_task_automation_config(raw_value: Any) -> dict[str, Any]:
-    raw = dict(raw_value or {}) if isinstance(raw_value, dict) else {}
-    switch_source_mode = _normalize_text(raw.get("switch_source_mode"), max_length=64).lower() or "source_invalid_only"
-    if switch_source_mode not in {"disabled", "source_invalid_only", "candidate_preferred"}:
-        switch_source_mode = "source_invalid_only"
-    return {
-        "enabled": bool(raw.get("enabled")),
-        "switch_source_mode": switch_source_mode,
-        "reuse_existing_share_if_valid": bool(raw.get("reuse_existing_share_if_valid", True)),
-        "update_publish_record": bool(raw.get("update_publish_record", True)),
-    }
-
-
 def _build_follow_task_rule_assessment(row: PanTransferSyncTask) -> dict[str, Any]:
     task_state = _normalize_text(row.task_state, max_length=32).lower() or PAN_TRANSFER_SYNC_STATE_IDLE
     source_status = _normalize_text(row.source_link_status, max_length=32).lower() or "unknown"
@@ -683,6 +908,112 @@ def _build_follow_task_rule_assessment(row: PanTransferSyncTask) -> dict[str, An
     }
 
 
+def _build_follow_task_rule_assessment_v2(row: PanTransferSyncTask) -> dict[str, Any]:
+    task_state = _normalize_text(row.task_state, max_length=32).lower() or PAN_TRANSFER_SYNC_STATE_IDLE
+    source_status = _normalize_text(row.source_link_status, max_length=32).lower() or "unknown"
+    share_status = _normalize_text(row.current_share_status, max_length=32).lower() or "unknown"
+    has_candidate = bool(_normalize_text(row.last_candidate_url))
+    has_error = bool(_normalize_text(row.last_error_message, max_length=2000))
+    extra_json = dict(row.extra_json or {})
+    automation = _build_task_automation_config(extra_json.get("automation"))
+    source_origin = _normalize_follow_source_origin(extra_json.get("source_origin"))
+    auto_ready = bool(automation.get("enabled")) and _is_follow_task_using_origin_source(row, origin=source_origin)
+
+    if task_state in {
+        PAN_TRANSFER_SYNC_STATE_QUEUED,
+        PAN_TRANSFER_SYNC_STATE_CHECKING,
+        PAN_TRANSFER_SYNC_STATE_SYNC_QUEUED,
+    }:
+        return {
+            "rule_key": "busy",
+            "rule_label": "等待当前任务完成",
+            "summary": "当前已经有巡检或同步在进行，先等待本轮完成，再决定是否执行新的追更处理。",
+            "recommended_source_kind": None,
+            "recommended_sync_mode": None,
+            "execution_mode": "busy",
+            "risk_level": "info",
+            "requires_manual_confirmation": False,
+            "can_execute": False,
+        }
+
+    if has_error:
+        return {
+            "rule_key": "recheck_required",
+            "rule_label": "先重新检查",
+            "summary": "最近一次追更检查出现异常，建议先重新检查，确认原链、分享和候选状态后再继续处理。",
+            "recommended_source_kind": None,
+            "recommended_sync_mode": None,
+            "execution_mode": "recheck_only",
+            "risk_level": "warning",
+            "requires_manual_confirmation": False,
+            "can_execute": True,
+        }
+
+    if source_status in {"invalid", "error"}:
+        return {
+            "rule_key": "await_candidate",
+            "rule_label": "等待候选原链",
+            "summary": "当前原链已经不可用，稳定原链自动增量会立即停用，并放开巡检去寻找新的候选原链。",
+            "recommended_source_kind": None,
+            "recommended_sync_mode": None,
+            "execution_mode": "wait_candidate",
+            "risk_level": "warning",
+            "requires_manual_confirmation": False,
+            "can_execute": False,
+        }
+
+    if auto_ready and source_status in {"valid", "healthy"}:
+        return {
+            "rule_key": "auto_origin_incremental",
+            "rule_label": "规则1：稳定原链自动增量",
+            "summary": "仅对最初绑定的原链生效。巡检时会自动对比资源目录，只补充缺失内容，不再主动找候选原链。",
+            "recommended_source_kind": "current",
+            "recommended_sync_mode": "incremental",
+            "execution_mode": "recheck_only",
+            "risk_level": "info",
+            "requires_manual_confirmation": False,
+            "can_execute": True,
+        }
+
+    if has_candidate:
+        return {
+            "rule_key": "candidate_manual_incremental",
+            "rule_label": "规则2：候选人工增量",
+            "summary": "已发现候选原链。建议先进入人工增量同步，确认目录或文件后再写入现有资源目录。",
+            "recommended_source_kind": "candidate",
+            "recommended_sync_mode": "incremental",
+            "execution_mode": "manual_modal",
+            "risk_level": "warning",
+            "requires_manual_confirmation": True,
+            "can_execute": True,
+        }
+
+    if share_status in {"invalid", "error"}:
+        return {
+            "rule_key": "manual_incremental_current",
+            "rule_label": "规则2：人工增量同步",
+            "summary": "当前对外分享异常，但原链仍可用。可人工选择当前原链中的目录或文件，同步到现有资源目录后再生成新的分享。",
+            "recommended_source_kind": "current",
+            "recommended_sync_mode": "incremental",
+            "execution_mode": "manual_modal",
+            "risk_level": "warning",
+            "requires_manual_confirmation": True,
+            "can_execute": True,
+        }
+
+    return {
+        "rule_key": "manual_incremental_current",
+        "rule_label": "规则2：人工增量同步",
+        "summary": "当前原链仍可用，但未启用自动增量。可人工挑选需要补充的目录或文件，增量写入现有资源目录。",
+        "recommended_source_kind": "current",
+        "recommended_sync_mode": "incremental",
+        "execution_mode": "manual_modal",
+        "risk_level": "info",
+        "requires_manual_confirmation": True,
+        "can_execute": True,
+    }
+
+
 def _build_follow_publish_binding_snapshot(row: PanTransferPublishRecord | None) -> dict[str, Any]:
     if row is None:
         return {}
@@ -758,6 +1089,7 @@ def _serialize_follow_task(row: PanTransferSyncTask) -> dict[str, Any]:
     candidate_assessment = dict(extra_json.get("candidate_assessment") or {})
     candidate_recall = dict(extra_json.get("candidate_recall") or {})
     candidate_policy = _build_follow_candidate_policy(extra_json.get("candidate_policy"))
+    automation = _build_task_automation_config(extra_json.get("automation"))
     source_message_snapshot = _normalize_source_message_snapshot(dict(extra_json.get("source_message_snapshot") or {}))
     return {
         "id": int(row.id),
@@ -807,11 +1139,12 @@ def _serialize_follow_task(row: PanTransferSyncTask) -> dict[str, Any]:
         "last_sync_batch_item_id": _normalize_optional_int(last_sync.get("batch_item_id")),
         "last_sync_source_kind": _normalize_text(last_sync.get("source_kind"), max_length=32) or None,
         "last_sync_started_at": _parse_datetime(last_sync.get("started_at")),
-        "rule_assessment": _build_follow_task_rule_assessment(row),
+        "rule_assessment": _build_follow_task_rule_assessment_v2(row),
         "identity_snapshot": identity_snapshot,
         "candidate_assessment": candidate_assessment,
         "candidate_recall": candidate_recall,
         "candidate_policy": candidate_policy,
+        "automation": automation,
         "extra_json": extra_json,
         "created_by": str(row.created_by or "") or None,
         "updated_by": str(row.updated_by or "") or None,
@@ -1030,6 +1363,12 @@ def create_pan_transfer_follow_task_from_batch_item(
         next_check_at=utcnow(),
         extra_json={
             "source_message_snapshot": _normalize_source_message_snapshot(source_message_snapshot),
+            "source_origin": _build_follow_source_origin(
+                link_target_id=int(item.link_target_id),
+                source_url=source_url,
+                source_share_key=source_share_key,
+                source_message_snapshot=source_message_snapshot,
+            ),
             "path_strategy": path_strategy,
             "resolved_paths": resolved_paths,
             "publish_binding": _build_follow_publish_binding_snapshot(publish_record),
@@ -1170,12 +1509,27 @@ def update_pan_transfer_follow_task_settings(
         next_candidate_policy = _build_follow_candidate_policy(merged_candidate_policy)
         _set_task_extra_section(task, "candidate_policy", next_candidate_policy)
 
+    next_automation = _get_task_automation_config(task)
+    if "automation" in update_payload:
+        raw_automation = update_payload.get("automation")
+        merged_automation = {
+            **next_automation,
+            **(dict(raw_automation) if isinstance(raw_automation, dict) else {}),
+        }
+        next_automation = _build_task_automation_config(merged_automation)
+        if bool(next_automation.get("enabled")):
+            next_automation["stop_reason"] = None
+            next_automation["stopped_at"] = None
+        elif isinstance(raw_automation, dict) and "enabled" in raw_automation:
+            next_automation["stop_reason"] = None
+            next_automation["stopped_at"] = None
+            next_automation["cooldown_until"] = None
+        _set_task_automation_config(task, next_automation)
+
     if str(task.status or "") == PAN_TRANSFER_SYNC_STATUS_ACTIVE and str(task.task_state or "") not in {
         PAN_TRANSFER_SYNC_STATE_QUEUED,
-        PAN_TRANSFER_SYNC_STATE_CHECKING,
-        PAN_TRANSFER_SYNC_STATE_SYNC_QUEUED,
     }:
-        task.next_check_at = _next_check_time(interval_minutes=next_interval_minutes)
+        _schedule_follow_task_next_check(task)
     if str(task.status or "") == PAN_TRANSFER_SYNC_STATUS_PAUSED:
         task.next_check_at = None
 
@@ -1191,6 +1545,7 @@ def update_pan_transfer_follow_task_settings(
             "operator": _normalize_text(operator, max_length=128) or None,
             "check_interval_minutes": next_interval_minutes,
             "candidate_policy": next_candidate_policy,
+            "automation": next_automation,
         },
     )
     session.flush()
@@ -1746,6 +2101,164 @@ def _apply_follow_task_state_without_candidate(task: PanTransferSyncTask) -> Non
     task.last_change_type = "no_change"
 
 
+async def _handle_follow_task_origin_automation(
+    session: Session,
+    *,
+    task: PanTransferSyncTask,
+    worker_name: str,
+) -> bool:
+    automation = _get_task_automation_config(task)
+    if not bool(automation.get("enabled")):
+        return False
+
+    now = utcnow()
+    origin = _get_follow_task_source_origin(session, task=task)
+    _set_follow_task_automation_state(task, enabled=True, last_auto_check_at=now)
+    session.add(task)
+    session.flush()
+
+    if not _is_follow_task_using_origin_source(task, origin=origin):
+        _set_follow_task_automation_state(
+            task,
+            enabled=False,
+            stop_reason=PAN_TRANSFER_FOLLOW_AUTOMATION_STOP_SOURCE_SWITCHED,
+            stopped_at=now,
+            cooldown_until=None,
+            last_auto_check_at=now,
+        )
+        session.add(task)
+        session.flush()
+        _append_follow_task_log(
+            session,
+            task=task,
+            stage="automation",
+            level="warning",
+            message="Stable-origin auto incremental mode was disabled because the current source changed",
+            payload={
+                "origin": origin,
+                "current_source_link_target_id": _normalize_optional_int(task.source_link_target_id),
+                "current_source_url": _normalize_text(task.source_url) or None,
+            },
+        )
+        return False
+
+    if not _is_healthy_link_status(task.source_link_status):
+        _set_follow_task_automation_state(
+            task,
+            enabled=False,
+            stop_reason=PAN_TRANSFER_FOLLOW_AUTOMATION_STOP_SOURCE_INVALID,
+            stopped_at=now,
+            cooldown_until=None,
+            last_auto_check_at=now,
+        )
+        session.add(task)
+        session.flush()
+        _append_follow_task_log(
+            session,
+            task=task,
+            stage="automation",
+            level="warning",
+            message="Stable-origin auto incremental mode was disabled because the original source is no longer valid",
+            payload={
+                "origin": origin,
+                "source_status": _normalize_text(task.source_link_status, max_length=32) or None,
+            },
+        )
+        return False
+
+    account = session.get(PanTransferAccount, int(task.target_account_id or 0))
+    if account is None:
+        raise PanTransferProviderError("target account not found", retryable=False)
+    if not bool(account.is_enabled):
+        raise PanTransferProviderError("target account is disabled", retryable=False)
+    source_target = session.get(LinkTarget, int(task.source_link_target_id or 0))
+
+    credential_value = decrypt_account_credential(account)
+    provider = get_pan_transfer_provider(str(task.platform or ""))
+    from .follow_sync import _resolve_follow_sync_paths, create_pan_transfer_follow_sync_batch
+
+    _, resolved_paths = _resolve_follow_sync_paths(task)
+    plan = await provider.build_incremental_source_plan(
+        credential_value=credential_value,
+        account_name=str(account.account_name or ""),
+        original_url=str(task.source_url or ""),
+        original_passcode=_normalize_text(getattr(source_target, "passcode", None), max_length=64) or None,
+        staging_root=str(resolved_paths.get("staging_root") or ""),
+        staging_folder_name=str(resolved_paths.get("staging_folder_name") or ""),
+        staging_folder_id=None,
+    )
+
+    conflict_count = int((plan.payload or {}).get("conflict_count") or 0)
+    if conflict_count > 0:
+        _set_follow_task_automation_state(
+            task,
+            enabled=False,
+            stop_reason=PAN_TRANSFER_FOLLOW_AUTOMATION_STOP_STRUCTURE_CONFLICT,
+            stopped_at=now,
+            cooldown_until=None,
+            last_auto_check_at=now,
+        )
+        _clear_follow_task_candidate_fields(task)
+        _apply_follow_task_state_without_candidate(task)
+        session.add(task)
+        session.flush()
+        _append_follow_task_log(
+            session,
+            task=task,
+            stage="automation",
+            level="warning",
+            message="Stable-origin auto incremental mode stopped because the resource directory structure needs manual review",
+            payload=plan.payload,
+        )
+        return True
+
+    if int(plan.selected_count or 0) <= 0:
+        _clear_follow_task_candidate_fields(task)
+        _apply_follow_task_state_without_candidate(task)
+        session.add(task)
+        session.flush()
+        _append_follow_task_log(
+            session,
+            task=task,
+            stage="automation",
+            message="Stable-origin auto incremental check found no new content",
+            payload=plan.payload,
+        )
+        return True
+
+    _clear_follow_task_candidate_fields(task)
+    session.add(task)
+    session.flush()
+    result = create_pan_transfer_follow_sync_batch(
+        session,
+        task_id=int(task.id),
+        payload={
+            "source_kind": "current",
+            "sync_mode": "incremental",
+            "selection_groups": list(plan.selection_groups or []),
+            "reuse_existing_share_if_valid": bool(automation.get("reuse_existing_share_if_valid", True)),
+            "update_publish_record": bool(automation.get("update_publish_record", True)),
+            "trigger_mode": "automation",
+        },
+        operator=worker_name,
+    )
+    _set_follow_task_automation_state(task, enabled=True, last_auto_check_at=now)
+    session.add(task)
+    session.flush()
+    _append_follow_task_log(
+        session,
+        task=task,
+        stage="automation",
+        message="Stable-origin auto incremental sync batch was queued",
+        payload={
+            **dict(plan.payload or {}),
+            "batch_id": int(result.get("batch_id") or 0),
+            "batch_item_id": int(result.get("batch_item_id") or 0),
+        },
+    )
+    return True
+
+
 async def _process_pan_transfer_follow_task_async(
     session: Session,
     *,
@@ -1790,6 +2303,11 @@ async def _process_pan_transfer_follow_task_async(
         payload=dict(share_status),
     )
 
+    _refresh_follow_task_source_message_snapshot(
+        session,
+        task=task,
+        fallback_snapshot=_get_task_extra_section(task, "source_message_snapshot"),
+    )
     identity_snapshot, identity_created = _ensure_follow_task_identity_snapshot(session, task=task)
     if identity_created:
         _append_follow_task_log(
@@ -1799,6 +2317,9 @@ async def _process_pan_transfer_follow_task_async(
             message="Built follow task identity snapshot",
             payload=identity_snapshot,
         )
+
+    if await _handle_follow_task_origin_automation(session, task=task, worker_name=worker_name):
+        return
 
     healthy_existing_candidate: dict[str, Any] | None = None
     existing_candidate_assessment: dict[str, Any] | None = None
@@ -2144,6 +2665,12 @@ def process_next_pan_transfer_follow_task(session: Session, *, worker_name: str)
             PanTransferSyncTask.status == PAN_TRANSFER_SYNC_STATUS_ACTIVE,
             PanTransferSyncTask.next_check_at.isnot(None),
             PanTransferSyncTask.next_check_at <= now,
+            ~PanTransferSyncTask.task_state.in_(
+                [
+                    PAN_TRANSFER_SYNC_STATE_CHECKING,
+                    PAN_TRANSFER_SYNC_STATE_SYNC_QUEUED,
+                ]
+            ),
         )
         .order_by(PanTransferSyncTask.next_check_at.asc(), PanTransferSyncTask.id.asc())
         .with_for_update(skip_locked=True)
@@ -2166,7 +2693,7 @@ def process_next_pan_transfer_follow_task(session: Session, *, worker_name: str)
         task.locked_by = None
         task.locked_at = None
         task.last_checked_at = utcnow()
-        task.next_check_at = _next_check_time(interval_minutes=int(task.check_interval_minutes or PAN_TRANSFER_SYNC_DEFAULT_INTERVAL_MINUTES))
+        _schedule_follow_task_next_check(task, now=task.last_checked_at)
         task.last_error_message = None
         session.add(task)
         session.flush()
@@ -2189,8 +2716,8 @@ def process_next_pan_transfer_follow_task(session: Session, *, worker_name: str)
         task.locked_by = None
         task.locked_at = None
         task.last_checked_at = utcnow()
-        task.next_check_at = _next_check_time(interval_minutes=int(task.check_interval_minutes or PAN_TRANSFER_SYNC_DEFAULT_INTERVAL_MINUTES))
         task.last_error_message = error_message
+        _schedule_follow_task_next_check(task, now=task.last_checked_at)
         session.add(task)
         session.flush()
         _append_follow_task_log(

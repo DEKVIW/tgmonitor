@@ -890,6 +890,12 @@
   line-height: 1.6;
 }
 
+.resource-ops-follow-settings-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
 .resource-ops-follow-settings-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -914,6 +920,34 @@
 
 .resource-ops-follow-settings-field .ant-input-number {
   width: 100%;
+}
+
+.resource-ops-follow-automation-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(248, 251, 255, 0.96) 0%, rgba(255, 255, 255, 0.98) 100%);
+}
+
+.resource-ops-follow-automation-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.resource-ops-follow-automation-head .ant-checkbox-wrapper {
+  flex: 0 0 auto;
+  color: rgba(15, 23, 42, 0.82);
+  font-weight: 500;
+}
+
+.resource-ops-follow-automation-summary {
+  color: rgba(15, 23, 42, 0.64);
+  line-height: 1.6;
 }
 
 .resource-ops-follow-sync-card .ant-card-extra .ant-btn {
@@ -1058,6 +1092,10 @@
 
   .resource-ops-follow-settings-field {
     grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .resource-ops-follow-automation-head {
+    flex-direction: column;
   }
 
   .resource-ops-transfer-card-head {

@@ -588,7 +588,7 @@ class PanTransferFollowTaskCreateRequest(PanTransferBaseModel):
     task_name: str | None = Field(default=None, max_length=255)
     check_interval_minutes: int | None = Field(default=180, ge=15, le=10080)
     candidate_policy: "PanTransferFollowTaskCandidatePolicy | None" = None
-    automation: dict = Field(default_factory=dict)
+    automation: "PanTransferFollowTaskAutomationConfig | None" = None
 
     @field_validator("task_name")
     @classmethod
@@ -610,9 +610,22 @@ class PanTransferFollowTaskCandidatePolicy(PanTransferBaseModel):
         return self
 
 
+class PanTransferFollowTaskAutomationConfig(PanTransferBaseModel):
+    enabled: bool = False
+    mode: str = Field(default="stable_origin_incremental", max_length=64)
+    reuse_existing_share_if_valid: bool = True
+    update_publish_record: bool = True
+    stop_reason: str | None = Field(default=None, max_length=64)
+    stopped_at: datetime | None = None
+    cooldown_until: datetime | None = None
+    last_auto_check_at: datetime | None = None
+    last_auto_sync_at: datetime | None = None
+
+
 class PanTransferFollowTaskSettingsUpdateRequest(PanTransferBaseModel):
     check_interval_minutes: int | None = Field(default=None, ge=15, le=10080)
     candidate_policy: PanTransferFollowTaskCandidatePolicy | None = None
+    automation: PanTransferFollowTaskAutomationConfig | None = None
 
 
 PanTransferFollowTaskCreateRequest.model_rebuild()
@@ -833,6 +846,7 @@ class PanTransferFollowTaskItem(PanTransferBaseModel):
     candidate_assessment: PanTransferFollowTaskCandidateAssessment = Field(default_factory=PanTransferFollowTaskCandidateAssessment)
     candidate_recall: PanTransferFollowTaskCandidateRecall = Field(default_factory=PanTransferFollowTaskCandidateRecall)
     candidate_policy: PanTransferFollowTaskCandidatePolicy = Field(default_factory=PanTransferFollowTaskCandidatePolicy)
+    automation: PanTransferFollowTaskAutomationConfig = Field(default_factory=PanTransferFollowTaskAutomationConfig)
     extra_json: dict = Field(default_factory=dict)
     created_by: str | None = None
     updated_by: str | None = None

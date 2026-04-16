@@ -31,6 +31,13 @@ class PanTransferTransferResult:
 
 
 @dataclass(slots=True)
+class PanTransferIncrementalPlanResult:
+    selection_groups: list[dict[str, Any]] = field(default_factory=list)
+    selected_count: int = 0
+    payload: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
 class PanTransferShareResult:
     new_share_url: str
     share_title: str | None = None
@@ -55,6 +62,19 @@ class PanTransferProvider:
     platform: str = ""
 
     async def validate_account(self, *, credential_value: str, account_name: str) -> PanTransferAccountValidationResult:
+        raise NotImplementedError
+
+    async def build_incremental_source_plan(
+        self,
+        *,
+        credential_value: str,
+        account_name: str,
+        original_url: str,
+        original_passcode: str | None,
+        staging_root: str,
+        staging_folder_name: str,
+        staging_folder_id: str | None = None,
+    ) -> PanTransferIncrementalPlanResult:
         raise NotImplementedError
 
     async def transfer_to_staging(

@@ -265,7 +265,7 @@ export interface PanTransferFollowTaskCreateRequest {
   task_name?: string | null
   check_interval_minutes?: number | null
   candidate_policy?: PanTransferFollowTaskCandidatePolicy | null
-  automation?: Record<string, unknown>
+  automation?: Partial<PanTransferFollowTaskAutomationConfig> | null
 }
 
 export interface PanTransferFollowTaskCandidatePolicy {
@@ -274,9 +274,22 @@ export interface PanTransferFollowTaskCandidatePolicy {
   max_judge_candidates: number
 }
 
+export interface PanTransferFollowTaskAutomationConfig {
+  enabled: boolean
+  mode: string
+  reuse_existing_share_if_valid: boolean
+  update_publish_record: boolean
+  stop_reason?: string | null
+  stopped_at?: string | null
+  cooldown_until?: string | null
+  last_auto_check_at?: string | null
+  last_auto_sync_at?: string | null
+}
+
 export interface PanTransferFollowTaskSettingsUpdateRequest {
   check_interval_minutes?: number | null
   candidate_policy?: Partial<PanTransferFollowTaskCandidatePolicy> | null
+  automation?: Partial<PanTransferFollowTaskAutomationConfig> | null
 }
 
 export interface PanTransferFollowTaskSyncSelectionEntry {
@@ -431,6 +444,7 @@ export interface PanTransferFollowTaskItem {
   candidate_assessment: PanTransferFollowTaskCandidateAssessment
   candidate_recall: PanTransferFollowTaskCandidateRecall
   candidate_policy: PanTransferFollowTaskCandidatePolicy
+  automation: PanTransferFollowTaskAutomationConfig
   extra_json: Record<string, unknown>
   created_by?: string | null
   updated_by?: string | null

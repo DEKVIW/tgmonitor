@@ -122,14 +122,39 @@ def _get_source_selection(item: PanTransferBatchItem) -> dict[str, Any] | None:
     raw_value = dict(item.extra_json or {}).get("source_selection")
     if not isinstance(raw_value, dict):
         return None
+    raw_groups = raw_value.get("selection_groups")
+    if isinstance(raw_groups, list) and raw_groups:
+        normalized_groups = [
+            {
+                "parent_entry_id": str(group.get("parent_entry_id") or "").strip() or None,
+                "parent_path": str(group.get("parent_path") or "").strip() or None,
+                "parent_name": str(group.get("parent_name") or "").strip() or None,
+                "target_relative_path": str(group.get("target_relative_path") or "").strip() or None,
+                "selected_entries": [dict(row or {}) for row in list(group.get("selected_entries") or []) if isinstance(row, dict)],
+                "selected_count": int(group.get("selected_count") or len(list(group.get("selected_entries") or [])) or 0),
+            }
+            for group in raw_groups
+            if isinstance(group, dict) and isinstance(group.get("selected_entries"), list) and list(group.get("selected_entries") or [])
+        ]
+        if normalized_groups:
+            return {
+                "selection_groups": normalized_groups,
+                "selected_count": sum(int(group.get("selected_count") or 0) for group in normalized_groups),
+            }
     selected_entries = raw_value.get("selected_entries")
     if not isinstance(selected_entries, list) or not selected_entries:
         return None
     return {
-        "parent_entry_id": str(raw_value.get("parent_entry_id") or "").strip() or None,
-        "parent_path": str(raw_value.get("parent_path") or "").strip() or None,
-        "parent_name": str(raw_value.get("parent_name") or "").strip() or None,
-        "selected_entries": [dict(row or {}) for row in selected_entries if isinstance(row, dict)],
+        "selection_groups": [
+            {
+                "parent_entry_id": str(raw_value.get("parent_entry_id") or "").strip() or None,
+                "parent_path": str(raw_value.get("parent_path") or "").strip() or None,
+                "parent_name": str(raw_value.get("parent_name") or "").strip() or None,
+                "target_relative_path": str(raw_value.get("target_relative_path") or "").strip() or None,
+                "selected_entries": [dict(row or {}) for row in selected_entries if isinstance(row, dict)],
+                "selected_count": int(raw_value.get("selected_count") or len(selected_entries) or 0),
+            }
+        ],
         "selected_count": int(raw_value.get("selected_count") or len(selected_entries) or 0),
     }
 
@@ -260,6 +285,8 @@ async def _process_pan_transfer_item_async(
     share_request = _get_share_request(item)
     follow_sync_context = _get_follow_sync_context(item)
     source_selection = _get_source_selection(item)
+    selection_groups = list((source_selection or {}).get("selection_groups") or [])
+    selection_parent_path = selection_groups[0].get("parent_path") if len(selection_groups) == 1 else None
     sync_mode = str((follow_sync_context or {}).get("sync_mode") or "standard").strip().lower() or "standard"
     clear_existing_contents = bool((follow_sync_context or {}).get("clear_existing_contents"))
 
@@ -291,7 +318,8 @@ async def _process_pan_transfer_item_async(
                     "path_source": execution_plan.get("source"),
                     "sync_mode": sync_mode,
                     "selected_entry_count": int((source_selection or {}).get("selected_count") or 0),
-                    "selection_parent_path": (source_selection or {}).get("parent_path"),
+                    "selection_group_count": len(selection_groups),
+                    "selection_parent_path": selection_parent_path,
                     "clear_existing_contents": clear_existing_contents,
                 },
             )
@@ -321,7 +349,8 @@ async def _process_pan_transfer_item_async(
                     "path_source": execution_plan.get("source"),
                     "sync_mode": sync_mode,
                     "selected_entry_count": int((source_selection or {}).get("selected_count") or 0),
-                    "selection_parent_path": (source_selection or {}).get("parent_path"),
+                    "selection_group_count": len(selection_groups),
+                    "selection_parent_path": selection_parent_path,
                     "clear_existing_contents": clear_existing_contents,
                     **_extract_error_payload(exc),
                 }
@@ -386,7 +415,8 @@ async def _process_pan_transfer_item_async(
                     "share_target_mode": execution_plan.get("share_target_mode"),
                     "sync_mode": sync_mode,
                     "selected_entry_count": int((source_selection or {}).get("selected_count") or 0),
-                    "selection_parent_path": (source_selection or {}).get("parent_path"),
+                    "selection_group_count": len(selection_groups),
+                    "selection_parent_path": selection_parent_path,
                     "clear_existing_contents": clear_existing_contents,
                     "provider_payload": dict(transfer_result.payload or {}),
                 },
@@ -418,7 +448,8 @@ async def _process_pan_transfer_item_async(
                     "path_source": execution_plan.get("source"),
                     "sync_mode": sync_mode,
                     "selected_entry_count": int((source_selection or {}).get("selected_count") or 0),
-                    "selection_parent_path": (source_selection or {}).get("parent_path"),
+                    "selection_group_count": len(selection_groups),
+                    "selection_parent_path": selection_parent_path,
                     "clear_existing_contents": clear_existing_contents,
                 },
             )

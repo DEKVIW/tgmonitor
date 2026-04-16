@@ -9,6 +9,7 @@ from app.models.models import (
     PanTransferAccount,
     PanTransferBatch,
     PanTransferBatchItem,
+    PanTransferPublishRecord,
     PanTransferSyncTask,
     ensure_runtime_storage_tables,
 )
@@ -29,12 +30,21 @@ from .follow_tasks import (
     PAN_TRANSFER_SYNC_STATE_IDLE,
     PAN_TRANSFER_SYNC_STATE_SYNC_QUEUED,
     _append_follow_task_log,
+    _apply_follow_task_state_without_candidate,
+    _clear_follow_task_candidate_fields,
     _ensure_follow_task_identity_snapshot,
+    _get_follow_task_source_origin,
     _get_follow_task,
+    _get_latest_link_target_message_snapshot,
+    _get_task_automation_config,
+    _is_follow_task_using_origin_source,
     _normalize_source_message_snapshot,
     _normalize_optional_int,
     _parse_datetime,
+    _refresh_follow_task_source_message_snapshot,
+    _schedule_follow_task_next_check,
     _serialize_json_value,
+    _set_follow_task_automation_state,
     _normalize_text,
     _serialize_follow_task,
     _sync_follow_task_publish_binding,
@@ -58,8 +68,15 @@ def _normalize_sync_mode(value: Any) -> str:
     return normalized
 
 
-def _normalize_source_selection(payload: dict[str, Any] | None, *, sync_mode: str) -> dict[str, Any] | None:
-    raw = dict(payload or {})
+def _normalize_target_relative_path(value: Any) -> str | None:
+    parts = [part for part in str(value or "").replace("\\", "/").split("/") if part.strip()]
+    if not parts:
+        return None
+    return "/".join(parts)
+
+
+def _normalize_selection_group_payload(raw_value: dict[str, Any] | None) -> dict[str, Any] | None:
+    raw = dict(raw_value or {})
     raw_entries = raw.get("selected_entries")
     normalized_entries: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str]] = set()
@@ -85,21 +102,58 @@ def _normalize_source_selection(payload: dict[str, Any] | None, *, sync_mode: st
                     "path": path,
                 }
             )
-
-    if sync_mode == "standard":
-        if normalized_entries:
-            raise ValueError("selected_entries are only supported for incremental or replace_all mode")
-        return None
-
     if not normalized_entries:
-        raise ValueError("selected_entries cannot be empty for manual follow sync")
-
+        return None
     return {
-        "parent_entry_id": _normalize_text(raw.get("selection_parent_entry_id"), max_length=255) or None,
-        "parent_path": _normalize_text(raw.get("selection_parent_path"), max_length=1024) or None,
-        "parent_name": _normalize_text(raw.get("selection_parent_name"), max_length=255) or None,
+        "parent_entry_id": _normalize_text(
+            raw.get("selection_parent_entry_id") or raw.get("parent_entry_id"),
+            max_length=255,
+        )
+        or None,
+        "parent_path": _normalize_text(
+            raw.get("selection_parent_path") or raw.get("parent_path"),
+            max_length=1024,
+        )
+        or None,
+        "parent_name": _normalize_text(
+            raw.get("selection_parent_name") or raw.get("parent_name"),
+            max_length=255,
+        )
+        or None,
+        "target_relative_path": _normalize_target_relative_path(raw.get("target_relative_path")),
         "selected_entries": normalized_entries,
         "selected_count": len(normalized_entries),
+    }
+
+
+def _normalize_source_selection(payload: dict[str, Any] | None, *, sync_mode: str) -> dict[str, Any] | None:
+    raw = dict(payload or {})
+    normalized_groups: list[dict[str, Any]] = []
+    raw_groups = raw.get("selection_groups")
+    if isinstance(raw_groups, list):
+        for row in raw_groups:
+            if not isinstance(row, dict):
+                continue
+            normalized_group = _normalize_selection_group_payload(row)
+            if normalized_group is None:
+                continue
+            normalized_groups.append(normalized_group)
+    if not normalized_groups:
+        fallback_group = _normalize_selection_group_payload(raw)
+        if fallback_group is not None:
+            normalized_groups.append(fallback_group)
+
+    if sync_mode == "standard":
+        if normalized_groups:
+            raise ValueError("selected entries are only supported for incremental or replace_all mode")
+        return None
+
+    if not normalized_groups:
+        raise ValueError("selected_entries cannot be empty for follow sync")
+
+    return {
+        "selection_groups": normalized_groups,
+        "selected_count": sum(int(group.get("selected_count") or 0) for group in normalized_groups),
     }
 
 
@@ -176,15 +230,17 @@ def _resolve_follow_sync_source(
         source_target = session.get(LinkTarget, int(link_target_id))
         if source_target is None:
             raise LookupError("candidate source link target not found")
-        source_snapshot = _normalize_source_message_snapshot(
-            {
+        source_snapshot = _get_latest_link_target_message_snapshot(
+            session,
+            link_target_id=int(link_target_id),
+            fallback_snapshot={
                 "title": _normalize_text(task.last_candidate_title, max_length=255)
                 or _normalize_text(task.topic_title, max_length=255)
                 or None,
                 "description": None,
                 "tags": [],
                 "message_time": task.last_candidate_message_time,
-            }
+            },
         )
         return source_target, _normalize_text(source_target.original_url), source_snapshot
 
@@ -194,7 +250,11 @@ def _resolve_follow_sync_source(
     source_target = session.get(LinkTarget, int(link_target_id))
     if source_target is None:
         raise LookupError("source link target not found")
-    source_snapshot = _normalize_source_message_snapshot(dict(dict(task.extra_json or {}).get("source_message_snapshot") or {}))
+    source_snapshot = _refresh_follow_task_source_message_snapshot(
+        session,
+        task=task,
+        fallback_snapshot=dict(dict(task.extra_json or {}).get("source_message_snapshot") or {}),
+    )
     if not source_snapshot.get("title"):
         source_snapshot["title"] = (
             _normalize_text(task.work_title, max_length=255)
@@ -235,6 +295,8 @@ def create_pan_transfer_follow_sync_batch(
 
     path_strategy, resolved_paths = _resolve_follow_sync_paths(task)
     source_selection = _normalize_source_selection(payload, sync_mode=sync_mode)
+    selection_groups = list((source_selection or {}).get("selection_groups") or [])
+    selection_parent_path = selection_groups[0].get("parent_path") if len(selection_groups) == 1 else None
     confirm_full_replace = bool((payload or {}).get("confirm_full_replace"))
     if sync_mode == "replace_all" and not confirm_full_replace:
         raise ValueError("confirm_full_replace is required for replace_all mode")
@@ -262,6 +324,7 @@ def create_pan_transfer_follow_sync_batch(
             "update_publish_record": update_publish_record,
             "confirm_full_replace": confirm_full_replace,
             "source_selection": source_selection,
+            "selection_group_count": len(selection_groups),
             "path_strategy": path_strategy,
             "resolved_paths": resolved_paths,
         },
@@ -320,6 +383,7 @@ def create_pan_transfer_follow_sync_batch(
                 "share_target_mode": _normalize_text(task.share_target_mode, max_length=32) or "resource_dir",
                 "publish_record_id": int(publish_record.id) if publish_record is not None else None,
                 "update_publish_record": update_publish_record,
+                "selection_group_count": len(selection_groups),
             },
             "source_selection": source_selection,
         },
@@ -338,6 +402,7 @@ def create_pan_transfer_follow_sync_batch(
         "started_at": utcnow().isoformat() + "Z",
         "trigger_mode": trigger_mode,
         "selected_count": int((source_selection or {}).get("selected_count") or 0),
+        "selection_group_count": len(selection_groups),
     }
     extra_json["last_sync"] = last_sync
     task.extra_json = extra_json
@@ -365,7 +430,8 @@ def create_pan_transfer_follow_sync_batch(
             "trigger_mode": trigger_mode,
             "clear_existing_contents": clear_existing_contents,
             "selected_count": int((source_selection or {}).get("selected_count") or 0),
-            "selection_parent_path": (source_selection or {}).get("parent_path"),
+            "selection_group_count": len(selection_groups),
+            "selection_parent_path": selection_parent_path,
         },
     )
     session.flush()
@@ -380,6 +446,59 @@ def create_pan_transfer_follow_sync_batch(
 def _get_follow_sync_context(item: PanTransferBatchItem) -> dict[str, Any] | None:
     raw_value = dict(item.extra_json or {}).get("follow_sync_context")
     return dict(raw_value) if isinstance(raw_value, dict) else None
+
+
+def _build_follow_sync_success_source_snapshot(
+    session: Session,
+    *,
+    source_link_target_id: int | None,
+    fallback_snapshot: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if source_link_target_id is None:
+        return _normalize_source_message_snapshot(fallback_snapshot)
+    return _get_latest_link_target_message_snapshot(
+        session,
+        link_target_id=int(source_link_target_id),
+        fallback_snapshot=fallback_snapshot,
+    )
+
+
+def _apply_follow_sync_success_automation(
+    session: Session,
+    *,
+    task: PanTransferSyncTask,
+    source_kind: str,
+    trigger_mode: str,
+    synced_at,
+) -> dict[str, Any]:
+    origin = _get_follow_task_source_origin(session, task=task)
+    current_automation = _get_task_automation_config(task)
+    if not _is_follow_task_using_origin_source(task, origin=origin):
+        return _set_follow_task_automation_state(
+            task,
+            enabled=False,
+            stop_reason="source_switched",
+            stopped_at=synced_at,
+            cooldown_until=None,
+        )
+    if source_kind != "current":
+        return _set_follow_task_automation_state(
+            task,
+            enabled=bool(current_automation.get("enabled")),
+            cooldown_until=None,
+        )
+    if bool(current_automation.get("enabled")) or trigger_mode == "automation":
+        return _set_follow_task_automation_state(
+            task,
+            enabled=bool(current_automation.get("enabled")),
+            cooldown_until=None,
+            last_auto_sync_at=synced_at if trigger_mode == "automation" else None,
+        )
+    return _set_follow_task_automation_state(
+        task,
+        enabled=False,
+        cooldown_until=None,
+    )
 
 
 def handle_follow_sync_item_success(
@@ -399,6 +518,11 @@ def handle_follow_sync_item_success(
     if task is None:
         return
 
+    source_kind = _normalize_text(context.get("source_kind"), max_length=32) or "current"
+    sync_mode = _normalize_text(context.get("sync_mode"), max_length=32) or "standard"
+    trigger_mode = _normalize_text(context.get("trigger_mode"), max_length=32).lower() or "manual"
+    synced_at = utcnow()
+
     source_link_target_id = _normalize_optional_int(context.get("source_link_target_id"))
     source_target = session.get(LinkTarget, int(source_link_target_id)) if source_link_target_id is not None else None
     if source_link_target_id is not None:
@@ -407,40 +531,54 @@ def handle_follow_sync_item_success(
     if source_url:
         task.source_url = source_url
     source_share_key = _normalize_text(getattr(source_target, "share_key", None), max_length=255) or None
-    if source_share_key:
-        task.source_share_key = source_share_key
+    task.source_share_key = source_share_key or task.source_share_key
+
+    source_message_snapshot = _build_follow_sync_success_source_snapshot(
+        session,
+        source_link_target_id=source_link_target_id,
+        fallback_snapshot=dict(dict(item.extra_json or {}).get("source_message_snapshot") or {}),
+    )
+    _clear_follow_task_candidate_fields(task)
 
     if _normalize_text(item.new_share_url):
         task.current_share_url = _normalize_text(item.new_share_url)
     task.current_share_link_target_id = int(item.new_link_target_id) if item.new_link_target_id is not None else task.current_share_link_target_id
     task.current_share_status = _normalize_text(item.validation_status, max_length=32).lower() or task.current_share_status
     task.task_state = PAN_TRANSFER_SYNC_STATE_IDLE
-    task.last_change_type = "candidate_applied" if _normalize_text(context.get("source_kind"), max_length=32) == "candidate" else "sync_completed"
+    task.last_change_type = "candidate_applied" if source_kind == "candidate" else "sync_completed"
     task.last_error_message = None
     task.updated_by = _normalize_text(worker_name, max_length=128) or task.updated_by
 
-    if _normalize_text(context.get("source_kind"), max_length=32) == "candidate":
-        task.last_candidate_link_target_id = None
-        task.last_candidate_url = None
-        task.last_candidate_title = None
-        task.last_candidate_message_time = None
-
     extra_json = dict(task.extra_json or {})
-    source_message_snapshot = _normalize_source_message_snapshot(
-        dict(dict(item.extra_json or {}).get("source_message_snapshot") or {})
-    )
     if source_message_snapshot:
         extra_json["source_message_snapshot"] = source_message_snapshot
     extra_json["last_sync"] = {
         "batch_id": int(item.batch_id),
         "batch_item_id": int(item.id),
-        "source_kind": _normalize_text(context.get("source_kind"), max_length=32) or "current",
-        "sync_mode": _normalize_text(context.get("sync_mode"), max_length=32) or "standard",
+        "source_kind": source_kind,
+        "sync_mode": sync_mode,
         "started_at": _normalize_text(dict(extra_json.get("last_sync") or {}).get("started_at")) or None,
-        "finished_at": utcnow().isoformat() + "Z",
+        "finished_at": synced_at.isoformat() + "Z",
         "share_url": _normalize_text(item.new_share_url) or None,
+        "trigger_mode": trigger_mode,
     }
     task.extra_json = extra_json
+    session.add(task)
+    session.flush()
+
+    _refresh_follow_task_source_message_snapshot(
+        session,
+        task=task,
+        fallback_snapshot=source_message_snapshot,
+    )
+    automation = _apply_follow_sync_success_automation(
+        session,
+        task=task,
+        source_kind=source_kind,
+        trigger_mode=trigger_mode,
+        synced_at=synced_at,
+    )
+    _schedule_follow_task_next_check(task, now=synced_at)
     session.add(task)
     session.flush()
     identity_snapshot, identity_updated = _ensure_follow_task_identity_snapshot(session, task=task)
@@ -462,16 +600,19 @@ def handle_follow_sync_item_success(
         payload={
             "batch_id": int(item.batch_id),
             "batch_item_id": int(item.id),
-            "source_kind": _normalize_text(context.get("source_kind"), max_length=32) or "current",
-            "sync_mode": _normalize_text(context.get("sync_mode"), max_length=32) or "standard",
+            "source_kind": source_kind,
+            "sync_mode": sync_mode,
+            "trigger_mode": trigger_mode,
             "new_share_url": _normalize_text(item.new_share_url) or None,
             "new_link_target_id": int(item.new_link_target_id) if item.new_link_target_id is not None else None,
+            "automation": automation,
         },
     )
 
+    publish_record = bind_follow_task_publish_record(session, task=task)
     publish_record_id = _normalize_optional_int(context.get("publish_record_id")) or _normalize_optional_int(task.publish_record_id)
     if publish_record_id is not None and bool(context.get("update_publish_record")) and _normalize_text(item.new_share_url):
-        publish_record = sync_pan_transfer_publish_record_source_url(
+        publish_record_payload = sync_pan_transfer_publish_record_source_url(
             session,
             record_id=int(publish_record_id),
             source_url=str(item.new_share_url or ""),
@@ -481,15 +622,13 @@ def handle_follow_sync_item_success(
                 "follow_task_id": int(task.id),
                 "batch_id": int(item.batch_id),
                 "batch_item_id": int(item.id),
-                "source_kind": _normalize_text(context.get("source_kind"), max_length=32) or "current",
-                "sync_mode": _normalize_text(context.get("sync_mode"), max_length=32) or "standard",
+                "source_kind": source_kind,
+                "sync_mode": sync_mode,
+                "trigger_mode": trigger_mode,
             },
         )
-        publish_record_row = session.get(PanTransferPublishRecord, int(publish_record["id"]))
-        _sync_follow_task_publish_binding(
-            task,
-            publish_record=publish_record_row,
-        )
+        publish_record = session.get(PanTransferPublishRecord, int(publish_record_payload["id"]))
+        _sync_follow_task_publish_binding(task, publish_record=publish_record)
         session.add(task)
         session.flush()
         _append_follow_task_log(
@@ -532,6 +671,7 @@ def handle_follow_sync_item_failure(
     last_sync["error_message"] = _normalize_text(error_message, max_length=2000) or None
     extra_json["last_sync"] = last_sync
     task.extra_json = extra_json
+    _schedule_follow_task_next_check(task)
     session.add(task)
     session.flush()
 
