@@ -166,10 +166,50 @@
   align-items: start;
 }
 
+.link-check-runtime-panel {
+  padding: 18px;
+  border-radius: 24px;
+  border: 1px solid rgba(216, 227, 238, 0.92);
+  background:
+    radial-gradient(circle at top right, rgba(11, 107, 203, 0.06), transparent 38%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.96));
+  box-shadow: var(--shadow-soft);
+}
+
 .link-check-runtime-section {
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+
+.link-check-runtime-manual-shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.link-check-runtime-editor-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.06fr) minmax(300px, 0.94fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.link-check-runtime-editor-main,
+.link-check-runtime-manual-preview-column {
+  display: grid;
+  gap: 14px;
+}
+
+.link-check-runtime-manual-form-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.link-check-runtime-manual-preview-column {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
 }
 
 .link-check-runtime-segmented-row,
@@ -188,6 +228,11 @@
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 14px 16px;
+}
+
+.link-check-runtime-field-grid--manual {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  align-items: end;
 }
 
 .link-check-runtime-field {
@@ -227,6 +272,158 @@
   flex-wrap: wrap;
 }
 
+.link-check-runtime-cleanup-select {
+  width: min(100%, 340px);
+}
+
+.link-check-runtime-plan-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 14px;
+}
+
+.link-check-runtime-plan-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  min-height: 176px;
+  padding: 14px 16px;
+  border: 1px solid rgba(216, 227, 238, 0.9);
+  border-radius: 18px;
+  background: rgba(248, 250, 252, 0.96);
+  cursor: pointer;
+  text-align: left;
+  transition:
+    border-color 0.2s ease,
+    box-shadow 0.2s ease,
+    transform 0.2s ease;
+}
+
+.link-check-runtime-plan-card:hover {
+  border-color: rgba(11, 107, 203, 0.36);
+  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.06);
+  transform: translateY(-1px);
+}
+
+.link-check-runtime-plan-card.is-active {
+  border-color: rgba(11, 107, 203, 0.48);
+  background: linear-gradient(180deg, rgba(241, 247, 255, 0.98), rgba(248, 250, 252, 0.98));
+  box-shadow: 0 0 0 3px rgba(11, 107, 203, 0.08);
+}
+
+.link-check-runtime-plan-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+}
+
+.link-check-runtime-plan-card-title-block {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.link-check-runtime-plan-card-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+  min-width: 0;
+  line-height: 1.5;
+}
+
+.link-check-runtime-plan-card-meta {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  white-space: normal;
+  word-break: break-word;
+}
+
+.link-check-runtime-plan-card > .link-check-runtime-plan-card-meta {
+  display: none;
+}
+
+.link-check-runtime-plan-card-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.link-check-runtime-plan-card-tags .ant-tag {
+  margin-inline-end: 0;
+}
+
+.link-check-runtime-plan-card-actions {
+  display: flex;
+  width: 100%;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 10px;
+  border-top: 1px solid rgba(216, 227, 238, 0.84);
+}
+
+.link-check-runtime-plan-card-actions .ant-btn {
+  flex: 1 1 0;
+}
+
+.link-check-runtime-plan-card-switch {
+  flex: 0 0 auto;
+}
+
+.link-check-runtime-choice-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.link-check-runtime-choice-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  padding: 16px;
+  border-radius: 20px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(255, 255, 255, 0.94);
+  cursor: pointer;
+  text-align: left;
+  transition:
+    transform 0.16s ease,
+    border-color 0.16s ease,
+    box-shadow 0.16s ease;
+}
+
+.link-check-runtime-choice-card:hover {
+  transform: translateY(-1px);
+  border-color: rgba(11, 107, 203, 0.34);
+  box-shadow: 0 14px 26px rgba(21, 49, 74, 0.08);
+}
+
+.link-check-runtime-choice-card.is-active {
+  border-color: rgba(11, 107, 203, 0.58);
+  box-shadow: 0 16px 28px rgba(11, 107, 203, 0.12);
+}
+
+.link-check-runtime-choice-icon {
+  font-size: 18px;
+  color: var(--primary-strong);
+}
+
+.link-check-runtime-choice-title {
+  color: var(--text-primary);
+  font-weight: 700;
+}
+
+.link-check-runtime-choice-description {
+  color: var(--text-secondary);
+  line-height: 1.65;
+}
+
 .link-check-runtime-preview-panel,
 .link-check-runtime-summary-card,
 .link-check-runtime-metric-card,
@@ -241,6 +438,11 @@
   flex-direction: column;
   gap: 14px;
   padding: 16px 18px;
+}
+
+.link-check-runtime-preview-panel--toolbox,
+.link-check-runtime-manual-form-panel {
+  min-height: auto;
 }
 
 .link-check-runtime-panel-title {
@@ -294,6 +496,24 @@
   font-size: 12px;
   line-height: 1.6;
   color: var(--text-secondary);
+}
+
+.link-check-runtime-manual-actions {
+  align-items: center;
+  justify-content: center;
+  min-width: 180px;
+  padding: 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(216, 227, 238, 0.9);
+  background: rgba(248, 250, 252, 0.98);
+}
+
+.link-check-runtime-plan-modal .ant-modal-content {
+  border-radius: 24px;
+}
+
+.link-check-runtime-plan-modal .ant-modal-body {
+  padding-top: 8px;
 }
 
 .link-check-runtime-task-header {
@@ -441,7 +661,12 @@
 }
 
 @media (max-width: 1200px) {
-  .link-check-runtime-main-grid {
+  .link-check-runtime-main-grid,
+  .link-check-runtime-editor-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .link-check-runtime-manual-preview-column {
     grid-template-columns: 1fr;
   }
 }
@@ -466,9 +691,11 @@
   }
 
   .link-check-runtime-field-grid,
+  .link-check-runtime-field-grid--manual,
   .link-check-runtime-metric-grid,
   .link-check-runtime-summary-grid,
-  .link-check-runtime-result-grid {
+  .link-check-runtime-result-grid,
+  .link-check-runtime-choice-grid {
     grid-template-columns: 1fr;
   }
 
@@ -490,5 +717,15 @@
 
   .link-check-runtime-history-scope {
     max-width: 220px;
+  }
+
+  .link-check-runtime-plan-card-actions {
+    flex-direction: column;
+  }
+
+  .link-check-runtime-manual-actions {
+    width: 100%;
+    min-width: 0;
+    justify-content: flex-start;
   }
 }

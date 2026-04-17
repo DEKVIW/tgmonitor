@@ -5,6 +5,7 @@ import {
   Button,
   Card,
   DatePicker,
+  Input,
   InputNumber,
   Modal,
   Progress,
@@ -26,7 +27,9 @@ import {
   ClockCircleOutlined,
   ClusterOutlined,
   DeleteOutlined,
+  EditOutlined,
   EyeOutlined,
+  PlusOutlined,
   PauseCircleOutlined,
   PlayCircleOutlined,
   RadarChartOutlined,
@@ -37,22 +40,25 @@ import {
 
 import {
   applyLinkCheckCleanup,
+  createLinkCheckPlan,
+  deleteLinkCheckPlan,
   deleteLinkCheckHistories,
   deleteLinkCheckHistory,
   getActiveLinkCheckTask,
   getLinkCheckDateRange,
   getLinkCheckHistory,
-  getLinkCheckPlan,
+  getLinkCheckPlans,
   getLinkCheckResult,
   getLinkCheckTaskStatus,
   previewLinkCheckTask,
   startLinkCheckTask,
   stopLinkCheckTask,
-  updateLinkCheckPlan,
+  updateLinkCheckPlanById,
 } from '@/api/admin'
 import HintTooltip from '@/components/common/HintTooltip'
 import type {
   LinkCheckDateRange,
+  LinkCheckPlanCreate,
   LinkCheckHistoryBatchDeleteResult,
   LinkCheckPlanResponse,
   LinkCheckPlanUpdate,
@@ -74,6 +80,7 @@ type DateRangeValue = [Dayjs, Dayjs] | null
 type ManualSelectionMode = 'smart_count' | 'time_range'
 type TraversalOrder = 'newest_first' | 'oldest_first'
 type CleanupMode = 'none' | 'remove_invalid_links' | 'delete_message_if_empty'
+type PlanMode = 'backfill' | 'frontier'
 type InvalidLinkDetail = LinkCheckTaskResult['details'][number]
 
 type ManualDraft = {
@@ -85,14 +92,17 @@ type ManualDraft = {
 }
 
 type PlanDraft = {
+  name: string
+  plan_mode: PlanMode
   is_enabled: boolean
   schedule_time: Dayjs
+  schedule_priority: number
   timezone: string
   cycle_days: number
   batch_link_target: number
   max_batches_per_run: number
   max_concurrent: number
-  traversal_order: TraversalOrder
+  overlap_message_count: number
   cleanup_mode: CleanupMode
   cleanup_min_consecutive_invalid_runs: number
 }
@@ -159,6 +169,11 @@ const cleanupModeLabelMap: Record<CleanupMode, string> = {
   delete_message_if_empty: '移除失效链接并清空空消息',
 }
 
+const planModeLabelMap: Record<PlanMode, string> = {
+  backfill: '补库巡检',
+  frontier: '追新巡检',
+}
+
 const resultStatusLabelMap: Record<string, string> = {
   valid: '有效',
   invalid: '失效',
@@ -178,6 +193,26 @@ const cleanupOptions = [
   { value: 'none', label: '只检测，不自动清理' },
   { value: 'remove_invalid_links', label: '自动移除失效链接' },
   { value: 'delete_message_if_empty', label: '移除失效链接，空消息则删整条' },
+]
+
+const planModeChoiceOptions: Array<{
+  value: PlanMode
+  icon: ReactNode
+  title: string
+  description: string
+}> = [
+  {
+    value: 'backfill',
+    icon: <CalendarOutlined />,
+    title: '补库巡检',
+    description: '最早优先，适合按批次慢慢补扫旧库消息。',
+  },
+  {
+    value: 'frontier',
+    icon: <RadarChartOutlined />,
+    title: '追新巡检',
+    description: '最新优先，适合回看最新消息并快速追新。',
+  },
 ]
 
 const createDefaultManualDraft = (): ManualDraft => ({
@@ -229,32 +264,78 @@ const toPlanTimeValue = (hour: number, minute: number) =>
   dayjs().hour(hour).minute(minute).second(0).millisecond(0)
 
 const buildPlanDraftFromResponse = (plan: LinkCheckPlanResponse): PlanDraft => ({
+  name: plan.name,
+  plan_mode: plan.plan_mode,
   is_enabled: plan.is_enabled,
   schedule_time: toPlanTimeValue(plan.schedule_hour, plan.schedule_minute),
+  schedule_priority: plan.schedule_priority,
   timezone: plan.timezone,
   cycle_days: plan.cycle_days,
   batch_link_target: plan.batch_link_target,
   max_batches_per_run: plan.max_batches_per_run,
   max_concurrent: plan.max_concurrent,
-  traversal_order: plan.traversal_order,
+  overlap_message_count: plan.overlap_message_count,
   cleanup_mode: plan.cleanup_mode,
   cleanup_min_consecutive_invalid_runs: plan.cleanup_min_consecutive_invalid_runs,
 })
 
-const buildPlanPayload = (planName: string, draft: PlanDraft): LinkCheckPlanUpdate => ({
-  name: planName,
+const buildPlanPayload = (draft: PlanDraft): LinkCheckPlanUpdate => ({
+  name: draft.name.trim(),
+  plan_mode: draft.plan_mode,
   is_enabled: draft.is_enabled,
   schedule_hour: draft.schedule_time.hour(),
   schedule_minute: draft.schedule_time.minute(),
+  schedule_priority: draft.schedule_priority,
   timezone: draft.timezone,
   cycle_days: draft.cycle_days,
   batch_link_target: draft.batch_link_target,
   max_batches_per_run: draft.max_batches_per_run,
   max_concurrent: draft.max_concurrent,
-  traversal_order: draft.traversal_order,
+  traversal_order: draft.plan_mode === 'frontier' ? 'newest_first' : 'oldest_first',
+  overlap_message_count: draft.overlap_message_count,
   cleanup_mode: draft.cleanup_mode,
   cleanup_min_consecutive_invalid_runs: draft.cleanup_min_consecutive_invalid_runs,
 })
+
+const buildPlanCreatePayload = (planMode: PlanMode): LinkCheckPlanCreate => {
+  if (planMode === 'frontier') {
+    return {
+      name: planModeLabelMap.frontier,
+      plan_mode: 'frontier',
+      is_enabled: false,
+      schedule_hour: 3,
+      schedule_minute: 0,
+      schedule_priority: 50,
+      timezone: 'Asia/Shanghai',
+      cycle_days: 7,
+      batch_link_target: 600,
+      max_batches_per_run: 2,
+      max_concurrent: 5,
+      traversal_order: 'newest_first',
+      overlap_message_count: 200,
+      cleanup_mode: 'none',
+      cleanup_min_consecutive_invalid_runs: 2,
+    }
+  }
+
+  return {
+    name: planModeLabelMap.backfill,
+    plan_mode: 'backfill',
+    is_enabled: false,
+    schedule_hour: 1,
+    schedule_minute: 0,
+    schedule_priority: 100,
+    timezone: 'Asia/Shanghai',
+    cycle_days: 7,
+    batch_link_target: 900,
+    max_batches_per_run: 3,
+    max_concurrent: 5,
+    traversal_order: 'oldest_first',
+    overlap_message_count: 200,
+    cleanup_mode: 'none',
+    cleanup_min_consecutive_invalid_runs: 2,
+  }
+}
 
 const buildDefaultRange = (bounds?: LinkCheckDateRange | null): DateRangeValue => {
   if (!bounds?.max_date) {
@@ -358,10 +439,14 @@ const LinkCheckManagerRuntime = () => {
   const [manualPreview, setManualPreview] = useState<LinkCheckPreviewResponse | null>(null)
   const [manualPreviewLoading, setManualPreviewLoading] = useState(false)
   const [manualPreviewError, setManualPreviewError] = useState<string | null>(null)
-  const [planData, setPlanData] = useState<LinkCheckPlanResponse | null>(null)
+  const [plansData, setPlansData] = useState<LinkCheckPlanResponse[]>([])
+  const [selectedPlanId, setSelectedPlanId] = useState<number | null>(null)
   const [planDraft, setPlanDraft] = useState<PlanDraft | null>(null)
   const [planLoading, setPlanLoading] = useState(false)
   const [planSaving, setPlanSaving] = useState(false)
+  const [planEditorModalOpen, setPlanEditorModalOpen] = useState(false)
+  const [planCreateModalOpen, setPlanCreateModalOpen] = useState(false)
+  const [pendingPlanMode, setPendingPlanMode] = useState<PlanMode>('backfill')
   const [taskStarting, setTaskStarting] = useState(false)
   const [taskStopping, setTaskStopping] = useState(false)
   const [currentTask, setCurrentTask] = useState<LinkCheckTaskStatus | null>(null)
@@ -383,23 +468,29 @@ const LinkCheckManagerRuntime = () => {
   const selectedHistoryRows = history.filter((item) => selectedHistoryIds.includes(item.id))
   const selectedHistoryCheckTimes = selectedHistoryRows.map((item) => item.check_time)
   const latestHistory = history[0] || null
+  const planData = useMemo(
+    () => plansData.find((item) => item.id === selectedPlanId) || plansData[0] || null,
+    [plansData, selectedPlanId]
+  )
   const planOverview = planData?.overview
   const taskLinkLimit = planOverview?.task_link_limit ?? manualPreview?.task_link_limit ?? 5000
   const taskConcurrencyLimit = planOverview?.task_concurrency_limit ?? 10
   const manualPreviewRequest = buildPreviewRequestFromDraft(manualDraft)
+  const enabledPlanCount = plansData.filter((item) => item.is_enabled).length
+  const refreshingPlanCount = plansData.filter((item) => item.overview?.refreshing).length
 
   const planBaseline = useMemo(() => {
     if (!planData) {
       return ''
     }
-    return JSON.stringify(buildPlanPayload(planData.name, buildPlanDraftFromResponse(planData)))
+    return JSON.stringify(buildPlanPayload(buildPlanDraftFromResponse(planData)))
   }, [planData])
 
   const planCurrent = useMemo(() => {
     if (!planData || !planDraft) {
       return ''
     }
-    return JSON.stringify(buildPlanPayload(planData.name, planDraft))
+    return JSON.stringify(buildPlanPayload(planDraft))
   }, [planData, planDraft])
 
   const planDirty = Boolean(planData && planDraft && planBaseline !== planCurrent)
@@ -424,6 +515,23 @@ const LinkCheckManagerRuntime = () => {
   useEffect(() => {
     setSelectedHistoryIds((current) => current.filter((id) => history.some((item) => item.id === id)))
   }, [history])
+
+  useEffect(() => {
+    if (!plansData.length) {
+      setSelectedPlanId(null)
+      setPlanDraft(null)
+      setPlanEditorModalOpen(false)
+      return
+    }
+
+    const fallbackPlan = plansData.find((item) => item.id === selectedPlanId) || plansData[0]
+    if (fallbackPlan.id !== selectedPlanId) {
+      setSelectedPlanId(fallbackPlan.id)
+    }
+    if (fallbackPlan.id !== selectedPlanId || !planDraft || !planEditorModalOpen || !planDirty) {
+      setPlanDraft(buildPlanDraftFromResponse(fallbackPlan))
+    }
+  }, [plansData, selectedPlanId, planDraft, planEditorModalOpen, planDirty])
 
   useEffect(() => {
     if (!dateBounds) {
@@ -475,14 +583,14 @@ const LinkCheckManagerRuntime = () => {
     }
 
     const timer = window.setTimeout(() => {
-      void loadPlan({ surfaceError: false })
+      void loadPlans({ surfaceError: false })
     }, 2500)
 
     return () => window.clearTimeout(timer)
   }, [planOverview?.refreshing, planOverview?.generated_at, planSaving, planDirty])
 
   const loadInitialData = async () => {
-    await Promise.all([loadDateBounds(), loadPlan(), loadHistory(), restoreActiveTask()])
+    await Promise.all([loadDateBounds(), loadPlans(), loadHistory(), restoreActiveTask()])
   }
 
   const loadDateBounds = async () => {
@@ -497,13 +605,12 @@ const LinkCheckManagerRuntime = () => {
     }
   }
 
-  const loadPlan = async (options?: { surfaceError?: boolean }) => {
+  const loadPlans = async (options?: { surfaceError?: boolean }) => {
     const surfaceError = options?.surfaceError ?? true
     setPlanLoading(true)
     try {
-      const result = await getLinkCheckPlan()
-      setPlanData(result)
-      setPlanDraft(buildPlanDraftFromResponse(result))
+      const result = await getLinkCheckPlans()
+      setPlansData(result)
     } catch (error: any) {
       if (surfaceError) {
         message.error(error.response?.data?.detail || '加载自动巡检计划失败')
@@ -554,7 +661,7 @@ const LinkCheckManagerRuntime = () => {
 
         if (status.status === 'completed' || status.status === 'failed' || status.status === 'stopped') {
           stopPolling()
-          await Promise.all([loadHistory(), loadPlan()])
+          await Promise.all([loadHistory(), loadPlans()])
         }
       } catch (error: any) {
         if (error?.response?.status !== 404) {
@@ -613,6 +720,38 @@ const LinkCheckManagerRuntime = () => {
     }))
   }
 
+  const openPlanCreateModal = () => {
+    setPendingPlanMode('backfill')
+    setPlanCreateModalOpen(true)
+  }
+
+  const handleOpenPlanEditor = (plan: LinkCheckPlanResponse) => {
+    setSelectedPlanId(plan.id)
+    setPlanEditorModalOpen(true)
+  }
+
+  const handleClosePlanEditorModal = () => {
+    const closeModal = () => {
+      if (planData) {
+        setPlanDraft(buildPlanDraftFromResponse(planData))
+      }
+      setPlanEditorModalOpen(false)
+    }
+
+    if (planDirty) {
+      Modal.confirm({
+        title: '放弃当前未保存的修改？',
+        content: '关闭后会丢弃这条巡检配置的未保存编辑。',
+        okText: '放弃修改',
+        cancelText: '继续编辑',
+        onOk: closeModal,
+      })
+      return
+    }
+
+    closeModal()
+  }
+
   const handleSavePlan = async () => {
     if (!planData || !planDraft) {
       return
@@ -620,8 +759,9 @@ const LinkCheckManagerRuntime = () => {
 
     setPlanSaving(true)
     try {
-      const updated = await updateLinkCheckPlan(buildPlanPayload(planData.name, planDraft))
-      setPlanData(updated)
+      const updated = await updateLinkCheckPlanById(planData.id, buildPlanPayload(planDraft))
+      setPlansData((current) => current.map((item) => (item.id === updated.id ? updated : item)))
+      setSelectedPlanId(updated.id)
       setPlanDraft(buildPlanDraftFromResponse(updated))
       message.success(updated.overview?.refreshing ? '自动巡检计划已保存，概览正在后台刷新' : '自动巡检计划已保存')
     } catch (error: any) {
@@ -629,6 +769,75 @@ const LinkCheckManagerRuntime = () => {
     } finally {
       setPlanSaving(false)
     }
+  }
+
+  const handleCreatePlan = async (planMode: PlanMode) => {
+    setPlanSaving(true)
+    try {
+      const created = await createLinkCheckPlan(buildPlanCreatePayload(planMode))
+      setPlansData((current) =>
+        [...current, created].sort(
+          (left, right) =>
+            left.schedule_hour - right.schedule_hour ||
+            left.schedule_minute - right.schedule_minute ||
+            left.schedule_priority - right.schedule_priority ||
+            left.id - right.id
+        )
+      )
+      setSelectedPlanId(created.id)
+      setPlanDraft(buildPlanDraftFromResponse(created))
+      setPlanEditorModalOpen(true)
+      setPlanCreateModalOpen(false)
+      message.success(`${planModeLabelMap[planMode]}已创建`)
+    } catch (error: any) {
+      message.error(error.response?.data?.detail || '创建自动巡检计划失败')
+    } finally {
+      setPlanSaving(false)
+    }
+  }
+
+  const handleTogglePlanEnabled = async (plan: LinkCheckPlanResponse, nextEnabled: boolean) => {
+    setPlanSaving(true)
+    try {
+      const updated = await updateLinkCheckPlanById(plan.id, {
+        ...buildPlanPayload(buildPlanDraftFromResponse(plan)),
+        is_enabled: nextEnabled,
+      })
+      setPlansData((current) => current.map((item) => (item.id === updated.id ? updated : item)))
+      if (selectedPlanId === updated.id) {
+        setPlanDraft(buildPlanDraftFromResponse(updated))
+      }
+      message.success(nextEnabled ? '已启用自动巡检配置' : '已停用自动巡检配置')
+    } catch (error: any) {
+      message.error(error.response?.data?.detail || '切换自动巡检配置失败')
+    } finally {
+      setPlanSaving(false)
+    }
+  }
+
+  const handleDeletePlan = (plan: LinkCheckPlanResponse) => {
+    Modal.confirm({
+      title: `删除计划“${plan.name}”？`,
+      content: '仅删除这条自动巡检配置，不会删除消息、链接和巡检历史。',
+      okText: '删除计划',
+      cancelText: '取消',
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        setPlanSaving(true)
+        try {
+          await deleteLinkCheckPlan(plan.id)
+          setPlansData((current) => current.filter((item) => item.id !== plan.id))
+          if (selectedPlanId === plan.id) {
+            setPlanEditorModalOpen(false)
+          }
+          message.success('自动巡检计划已删除')
+        } catch (error: any) {
+          message.error(error.response?.data?.detail || '删除自动巡检计划失败')
+        } finally {
+          setPlanSaving(false)
+        }
+      },
+    })
   }
 
   const handleStartTask = async () => {
@@ -793,7 +1002,7 @@ const LinkCheckManagerRuntime = () => {
           )
           const refreshed = await getLinkCheckResult(selectedResult.stats.check_time)
           setSelectedResult(refreshed)
-          await Promise.all([loadHistory(), loadPlan({ surfaceError: false })])
+          await Promise.all([loadHistory(), loadPlans({ surfaceError: false })])
         } catch (error: any) {
           message.error(error.response?.data?.detail || '应用死链清理失败')
         } finally {
@@ -1072,8 +1281,9 @@ const LinkCheckManagerRuntime = () => {
             </Button>
           }
         >
-          <div className="link-check-runtime-section">
-            <div className="link-check-runtime-segmented-row">
+          <div className="link-check-runtime-section link-check-runtime-manual-shell">
+            <div className="link-check-runtime-panel link-check-runtime-manual-form-panel">
+              <div className="link-check-runtime-segmented-row">
               <div className="link-check-runtime-field-label">
                 <Text strong>检测方式</Text>
                 <HintTooltip content="推荐优先用智能分批，它按链接数量切片，能稳定控制每次任务规模。" />
@@ -1088,7 +1298,7 @@ const LinkCheckManagerRuntime = () => {
               />
             </div>
 
-            <div className="link-check-runtime-field-grid">
+              <div className="link-check-runtime-field-grid link-check-runtime-field-grid--manual">
               {manualDraft.selection_mode === 'smart_count' ? (
                 <>
                   <div className="link-check-runtime-field">
@@ -1168,8 +1378,11 @@ const LinkCheckManagerRuntime = () => {
               </div>
             </div>
 
-            <div className="link-check-runtime-preview-panel">
-              <div className="link-check-runtime-panel-heading">
+            </div>
+
+            <div className="link-check-runtime-manual-preview-column">
+              <div className="link-check-runtime-preview-panel link-check-runtime-preview-panel--toolbox">
+                <div className="link-check-runtime-panel-heading">
                 <div>
                   <span className="link-check-runtime-panel-title">本次预估</span>
                   <Text type="secondary">先确认命中的规模，再启动任务</Text>
@@ -1214,9 +1427,9 @@ const LinkCheckManagerRuntime = () => {
               ) : (
                 <Alert type="info" showIcon message="补全条件后会自动生成预估" />
               )}
-            </div>
+              </div>
 
-            <div className="link-check-runtime-actions">
+              <div className="link-check-runtime-actions link-check-runtime-manual-actions">
               <Button
                 type="primary"
                 icon={<PlayCircleOutlined />}
@@ -1228,11 +1441,12 @@ const LinkCheckManagerRuntime = () => {
               </Button>
             </div>
           </div>
+          </div>
         </Card>
 
         <Card
           className="link-check-runtime-card"
-          loading={planLoading && !planData}
+          loading={planLoading && !plansData.length}
           title={
             <div className="link-check-runtime-card-heading">
               <div className="link-check-runtime-card-heading-main">
@@ -1243,31 +1457,136 @@ const LinkCheckManagerRuntime = () => {
           }
           extra={
             <div className="link-check-runtime-inline-actions">
-              {planOverview?.refreshing ? <Tag color="processing">概览刷新中</Tag> : null}
-              <div className="link-check-runtime-inline-switch">
-                <Text>启用</Text>
-                <Switch
-                  checked={Boolean(planDraft?.is_enabled)}
-                  onChange={(checked) =>
-                    setPlanDraft((current) => (current ? { ...current, is_enabled: checked } : current))
-                  }
-                />
-              </div>
-              <Button
-                type="primary"
-                icon={<SaveOutlined />}
-                loading={planSaving}
-                disabled={!planDirty || !planDraft}
-                onClick={() => void handleSavePlan()}
-              >
-                保存计划
+              <Tag>{plansData.length} 个配置</Tag>
+              <Tag color={enabledPlanCount ? 'processing' : 'default'}>{enabledPlanCount} 个启用中</Tag>
+              {refreshingPlanCount > 0 ? <Tag color="processing">{refreshingPlanCount} 个概览刷新中</Tag> : null}
+              <Button type="primary" icon={<PlusOutlined />} loading={planSaving} onClick={openPlanCreateModal}>
+                添加配置
               </Button>
             </div>
           }
         >
           {planDraft ? (
             <div className="link-check-runtime-section">
-              <div className="link-check-runtime-field-grid">
+              <div className="link-check-runtime-plan-list">
+                {plansData.map((plan) => {
+                  const active = plan.id === planData?.id
+                  const scheduleLabel = `${String(plan.schedule_hour).padStart(2, '0')}:${String(plan.schedule_minute).padStart(2, '0')}`
+                  const modeLabel = planModeLabelMap[plan.plan_mode as PlanMode] || plan.plan_mode
+                  return (
+                    <div
+                      key={plan.id}
+                      className={`link-check-runtime-plan-card${active ? ' is-active' : ''}`}
+                      onClick={() => setSelectedPlanId(plan.id)}
+                    >
+                      <div className="link-check-runtime-plan-card-header">
+                        <div className="link-check-runtime-plan-card-title-block">
+                          <span className="link-check-runtime-plan-card-title">{plan.name}</span>
+                          <span className="link-check-runtime-plan-card-meta">
+                            {modeLabel} · {scheduleLabel}
+                          </span>
+                        </div>
+                        <div
+                          className="link-check-runtime-plan-card-switch"
+                          onClick={(event) => event.stopPropagation()}
+                        >
+                          <Switch
+                            size="small"
+                            checked={plan.is_enabled}
+                            loading={planSaving}
+                            onChange={(checked) => void handleTogglePlanEnabled(plan, checked)}
+                          />
+                        </div>
+                      </div>
+                      <div className="link-check-runtime-plan-card-tags">
+                        <Tag color={plan.is_enabled ? 'success' : 'default'}>{plan.is_enabled ? '已启用' : '已停用'}</Tag>
+                        <Tag>{`周期 ${plan.cycle_days} 天`}</Tag>
+                        <Tag>{`每批 ${formatCount(plan.batch_link_target)}`}</Tag>
+                        {plan.overview?.refreshing ? <Tag color="processing">概览刷新中</Tag> : null}
+                      </div>
+                      <div
+                        className="link-check-runtime-plan-card-actions"
+                        onClick={(event) => event.stopPropagation()}
+                      >
+                        <Button
+                          size="small"
+                          type={active ? 'primary' : 'default'}
+                          icon={<EditOutlined />}
+                          onClick={() => handleOpenPlanEditor(plan)}
+                        >
+                          编辑
+                        </Button>
+                        <Button size="small" danger icon={<DeleteOutlined />} onClick={() => handleDeletePlan(plan)}>
+                          删除
+                        </Button>
+                      </div>
+                      <span className="link-check-runtime-plan-card-meta">
+                        {(planModeLabelMap[plan.plan_mode as PlanMode] || plan.plan_mode) +
+                          ` · ${String(plan.schedule_hour).padStart(2, '0')}:${String(plan.schedule_minute).padStart(2, '0')}`}
+                      </span>
+                    </div>
+                  )
+                })}
+              </div>
+
+              <Modal
+                title={planData ? `编辑巡检配置 · ${planData.name}` : '编辑巡检配置'}
+                open={planEditorModalOpen}
+                width={1080}
+                destroyOnClose={false}
+                onCancel={handleClosePlanEditorModal}
+                className="link-check-runtime-plan-modal"
+                footer={
+                  <Space>
+                    <Button onClick={handleClosePlanEditorModal}>取消</Button>
+                    {planData ? (
+                      <Button danger loading={planSaving} onClick={() => handleDeletePlan(planData)}>
+                        删除
+                      </Button>
+                    ) : null}
+                    <Button
+                      type="primary"
+                      icon={<SaveOutlined />}
+                      loading={planSaving}
+                      disabled={!planDirty || !planDraft}
+                      onClick={() => void handleSavePlan()}
+                    >
+                      保存计划
+                    </Button>
+                  </Space>
+                }
+              >
+                <div className="link-check-runtime-editor-layout">
+                  <div className="link-check-runtime-editor-main">
+                    <div className="link-check-runtime-panel">
+                      <div className="link-check-runtime-panel-heading">
+                        <div>
+                          <span className="link-check-runtime-panel-title">基础配置</span>
+                          <Text type="secondary">先确定类型、执行时间和启停状态，再调整批次参数。</Text>
+                        </div>
+                        <div className="link-check-runtime-inline-switch">
+                          <Text>启用</Text>
+                          <Switch
+                            checked={Boolean(planDraft?.is_enabled)}
+                            onChange={(checked) =>
+                              setPlanDraft((current) => (current ? { ...current, is_enabled: checked } : current))
+                            }
+                          />
+                        </div>
+                      </div>
+
+                      <div className="link-check-runtime-field-grid">
+                <div className="link-check-runtime-field">
+                  {createFieldLabel('计划名称', '用于区分不同自动巡检计划。')}
+                  <Input
+                    className="link-check-runtime-compact-control"
+                    value={planDraft.name}
+                    maxLength={128}
+                    onChange={(event) =>
+                      setPlanDraft((current) => (current ? { ...current, name: event.target.value } : current))
+                    }
+                  />
+                </div>
                 <div className="link-check-runtime-field">
                   {createFieldLabel('执行时间', '每天在这个时间点启动计划任务。')}
                   <TimePicker
@@ -1338,18 +1657,49 @@ const LinkCheckManagerRuntime = () => {
                   />
                 </div>
                 <div className="link-check-runtime-field">
-                  {createFieldLabel('遍历方向', '最新优先更适合追新，最早优先适合逐步补扫旧资源。')}
-                  <Select
+                  {createFieldLabel('执行顺位', '同一时间到期时，数值越小越先执行。')}
+                  <InputNumber
                     className="link-check-runtime-compact-control"
-                    value={planDraft.traversal_order}
-                    options={directionOptions}
+                    min={1}
+                    max={9999}
+                    value={planDraft.schedule_priority}
                     onChange={(value) =>
                       setPlanDraft((current) =>
-                        current ? { ...current, traversal_order: value as TraversalOrder } : current
+                        current ? { ...current, schedule_priority: Math.max(1, Number(value || 1)) } : current
                       )
                     }
                   />
                 </div>
+                <div className="link-check-runtime-field">
+                  {createFieldLabel('遍历方向', '最新优先更适合追新，最早优先适合逐步补扫旧资源。')}
+                  <Select
+                    className="link-check-runtime-compact-control"
+                    value={planDraft.plan_mode}
+                    options={[
+                      { value: 'backfill', label: planModeLabelMap.backfill },
+                      { value: 'frontier', label: planModeLabelMap.frontier },
+                    ]}
+                    onChange={(value) =>
+                      setPlanDraft((current) => (current ? { ...current, plan_mode: value as PlanMode } : current))
+                    }
+                  />
+                </div>
+                {planDraft.plan_mode === 'frontier' ? (
+                  <div className="link-check-runtime-field">
+                    {createFieldLabel('回看条数', '追新计划会回看一小段最新消息，避免边界漏扫。')}
+                    <InputNumber
+                      className="link-check-runtime-compact-control"
+                      min={0}
+                      max={5000}
+                      value={planDraft.overlap_message_count}
+                      onChange={(value) =>
+                        setPlanDraft((current) =>
+                          current ? { ...current, overlap_message_count: Math.max(0, Number(value || 0)) } : current
+                        )
+                      }
+                    />
+                  </div>
+                ) : null}
                 <div className="link-check-runtime-field is-wide">
                   {createFieldLabel('自动清理', '巡检完成后是否直接清理失效链接。建议先从只检测开始。')}
                   <div className="link-check-runtime-inline-grid">
@@ -1385,6 +1735,8 @@ const LinkCheckManagerRuntime = () => {
                   </div>
                 </div>
               </div>
+
+                    </div>
 
               <div className="link-check-runtime-preview-panel">
                 <div className="link-check-runtime-panel-heading">
@@ -1455,10 +1807,44 @@ const LinkCheckManagerRuntime = () => {
                   />
                 ) : null}
               </div>
+                  </div>
+                </div>
+              </Modal>
             </div>
-          ) : null}
+          ) : (
+            <Alert type="info" showIcon message="当前还没有自动巡检计划，请先新增补库或追新计划。" />
+          )}
         </Card>
       </div>
+
+      <Modal
+        title="添加自动巡检配置"
+        open={planCreateModalOpen}
+        onCancel={() => setPlanCreateModalOpen(false)}
+        footer={
+          <Space>
+            <Button onClick={() => setPlanCreateModalOpen(false)}>取消</Button>
+            <Button type="primary" loading={planSaving} onClick={() => void handleCreatePlan(pendingPlanMode)}>
+              创建配置
+            </Button>
+          </Space>
+        }
+      >
+        <div className="link-check-runtime-choice-grid">
+          {planModeChoiceOptions.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              className={`link-check-runtime-choice-card${pendingPlanMode === option.value ? ' is-active' : ''}`}
+              onClick={() => setPendingPlanMode(option.value)}
+            >
+              <span className="link-check-runtime-choice-icon">{option.icon}</span>
+              <span className="link-check-runtime-choice-title">{option.title}</span>
+              <span className="link-check-runtime-choice-description">{option.description}</span>
+            </button>
+          ))}
+        </div>
+      </Modal>
 
       <Card
         className="link-check-runtime-card"
