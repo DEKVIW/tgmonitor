@@ -15,12 +15,12 @@ class Settings(BaseSettings):
     # 数据库配置（同步 + 可选异步）
     DATABASE_URL: str
     DATABASE_URL_ASYNC: Optional[str] = None
-    DB_POOL_SIZE: int = 3
-    DB_MAX_OVERFLOW: int = 3
+    DB_POOL_SIZE: int = 8
+    DB_MAX_OVERFLOW: int = 8
     DB_POOL_TIMEOUT: int = 30
     DB_POOL_RECYCLE: int = 1800
-    DB_ASYNC_POOL_SIZE: int = 2
-    DB_ASYNC_MAX_OVERFLOW: int = 2
+    DB_ASYNC_POOL_SIZE: int = 4
+    DB_ASYNC_MAX_OVERFLOW: int = 4
     DB_ASYNC_POOL_TIMEOUT: int = 30
     DB_ASYNC_POOL_RECYCLE: int = 1800
 

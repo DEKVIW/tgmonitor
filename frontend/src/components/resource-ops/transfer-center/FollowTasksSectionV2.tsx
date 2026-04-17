@@ -177,6 +177,25 @@ const formatFollowSyncMode = (value: unknown) => {
   return '安全同步'
 }
 
+const getFollowIdentitySourceLabel = (value: unknown) => {
+  const normalized = String(value || '').trim().toLowerCase()
+  if (normalized === 'rule') return '规则识别'
+  if (normalized === 'ai') return 'AI识别'
+  return normalized || '未记录'
+}
+
+const getFollowJudgeSourceLabel = (value: unknown) => {
+  const normalized = String(value || '').trim().toLowerCase()
+  if (normalized === 'rule') return '规则判定'
+  if (normalized === 'ai') return 'AI判定'
+  if (normalized === 'stored_candidate') return '已存候选复核'
+  if (normalized === 'fallback') return '规则回退'
+  if (normalized === 'none') return '未判定'
+  return normalized || '未判定'
+}
+
+const prependFollowSourceLabel = (label: string | null, text: string) => (label ? `[${label}] ${text}` : text)
+
 const buildFollowIdentitySummary = (payload: Record<string, unknown>) => {
   const segments: string[] = []
   const coreTitle = String(payload.core_title || '').trim()
@@ -193,6 +212,10 @@ const buildFollowIdentitySummary = (payload: Record<string, unknown>) => {
 const buildFollowLogSummary = (log: PanTransferFollowTaskLogItem) => {
   const messageText = String(log.message || '')
   const payload = log.payload || {}
+  const candidateAssessment =
+    payload.candidate_assessment && typeof payload.candidate_assessment === 'object'
+      ? (payload.candidate_assessment as Record<string, unknown>)
+      : {}
   const candidateTitle = String(payload.title || payload.candidate_title || '').trim()
   const candidateStatus = formatFollowLogStatus(payload.candidate_status)
   const candidateTime = payload.latest_message_time ? formatDateTime(String(payload.latest_message_time), 'YYYY-MM-DD HH:mm') : ''
@@ -202,6 +225,8 @@ const buildFollowLogSummary = (log: PanTransferFollowTaskLogItem) => {
   const nextCheckAt = String(payload.next_check_at || '').trim()
   const newShareUrl = String(payload.new_share_url || payload.source_url || '').trim()
   const identitySummary = buildFollowIdentitySummary(payload)
+  const identitySourceLabel = payload.source ? getFollowIdentitySourceLabel(payload.source) : null
+  const judgeSourceLabel = getFollowJudgeSourceLabel(candidateAssessment.judge_source || payload.judge_source)
 
   if (messageText === 'Follow task created from transfer batch item') {
     return '已从转存批次创建追更任务'
@@ -231,7 +256,9 @@ const buildFollowLogSummary = (log: PanTransferFollowTaskLogItem) => {
     return `当前分享校验完成 -> ${formatFollowLogStatus(messageText.split(':').pop())}`
   }
   if (messageText === 'Built follow task identity snapshot') {
-    return identitySummary ? `已更新作品识别快照 -> ${identitySummary}` : '已更新作品识别快照'
+    return identitySummary
+      ? `已更新作品识别快照 -> ${prependFollowSourceLabel(identitySourceLabel, identitySummary)}`
+      : prependFollowSourceLabel(identitySourceLabel, '已更新作品识别快照')
   }
   if (messageText === 'Stable-origin auto incremental sync batch was queued') {
     const details = [
@@ -252,19 +279,28 @@ const buildFollowLogSummary = (log: PanTransferFollowTaskLogItem) => {
   if (messageText === 'Stable-origin auto incremental mode stopped because the resource directory structure needs manual review') {
     return '规则1已停用：目录结构需要人工确认'
   }
+  if (messageText === 'Removed the stored candidate source because it no longer qualifies for promotion') {
+    return candidateTitle
+      ? prependFollowSourceLabel(judgeSourceLabel, `已移除已有候选原链 -> ${candidateTitle}`)
+      : prependFollowSourceLabel(judgeSourceLabel, '已移除已有候选原链')
+  }
   if (messageText.startsWith('Removed the stored candidate source because link validation finished with status:')) {
     return `已移除旧候选原链 -> ${candidateStatus}`
   }
   if (messageText.startsWith('Discarded a detected candidate source because link validation finished with status:')) {
-    return candidateTitle ? `已丢弃本轮候选原链 -> ${candidateTitle} · ${candidateStatus}` : `已丢弃本轮候选原链 -> ${candidateStatus}`
+    return candidateTitle
+      ? prependFollowSourceLabel(judgeSourceLabel, `已丢弃本轮候选原链 -> ${candidateTitle} · ${candidateStatus}`)
+      : prependFollowSourceLabel(judgeSourceLabel, `已丢弃本轮候选原链 -> ${candidateStatus}`)
   }
   if (messageText === 'Detected a recent candidate source link for this tracked resource') {
-    if (candidateTitle && candidateTime) return `发现新候选原链 -> ${candidateTitle} · ${candidateTime}`
-    if (candidateTitle) return `发现新候选原链 -> ${candidateTitle}`
-    return '发现新候选原链'
+    if (candidateTitle && candidateTime) return prependFollowSourceLabel(judgeSourceLabel, `发现新候选原链 -> ${candidateTitle} · ${candidateTime}`)
+    if (candidateTitle) return prependFollowSourceLabel(judgeSourceLabel, `发现新候选原链 -> ${candidateTitle}`)
+    return prependFollowSourceLabel(judgeSourceLabel, '发现新候选原链')
   }
   if (messageText === 'Keeping the stored candidate source because it is still valid') {
-    return candidateTitle ? `保留已有候选原链 -> ${candidateTitle}` : '保留已有候选原链'
+    return candidateTitle
+      ? prependFollowSourceLabel(judgeSourceLabel, `保留已有候选原链 -> ${candidateTitle}`)
+      : prependFollowSourceLabel(judgeSourceLabel, '保留已有候选原链')
   }
   if (messageText === 'No new candidate found and the current source link is invalid') {
     return '当前原链已失效，且本轮未发现新候选'
@@ -276,11 +312,13 @@ const buildFollowLogSummary = (log: PanTransferFollowTaskLogItem) => {
     return '本轮未发现新的候选原链'
   }
   if (messageText.startsWith('Discarded a same-episode source because link validation finished with status:')) {
-    return candidateTitle ? `已丢弃同集数来源 -> ${candidateTitle} · ${candidateStatus}` : `已丢弃同集数来源 -> ${candidateStatus}`
+    return candidateTitle
+      ? prependFollowSourceLabel(judgeSourceLabel, `已丢弃同集来源 -> ${candidateTitle} · ${candidateStatus}`)
+      : prependFollowSourceLabel(judgeSourceLabel, `已丢弃同集来源 -> ${candidateStatus}`)
   }
   if (messageText === 'Replaced same-episode source links with the current valid share') {
-    if (candidateTitle) return `已用当前有效分享回写同集数来源 -> ${candidateTitle}`
-    return '已用当前有效分享回写同集数来源'
+    if (candidateTitle) return prependFollowSourceLabel(judgeSourceLabel, `已用当前有效分享回写同集来源 -> ${candidateTitle}`)
+    return prependFollowSourceLabel(judgeSourceLabel, '已用当前有效分享回写同集来源')
   }
   if (messageText === 'Same-episode source already matched the current valid share') {
     return '同集数来源已指向当前有效分享'
@@ -289,8 +327,8 @@ const buildFollowLogSummary = (log: PanTransferFollowTaskLogItem) => {
     return `同集数来源回写失败 -> ${messageText.replace('Failed to replace same-episode source links with the current share:', '').trim() || '未知错误'}`
   }
   if (messageText === 'Rewrote the matched same-episode message link to the current valid share') {
-    if (candidateTitle) return `已将命中消息回写为当前有效分享 -> ${candidateTitle}`
-    return '已将命中消息回写为当前有效分享'
+    if (candidateTitle) return prependFollowSourceLabel(judgeSourceLabel, `已将命中消息回写为当前有效分享 -> ${candidateTitle}`)
+    return prependFollowSourceLabel(judgeSourceLabel, '已将命中消息回写为当前有效分享')
   }
   if (messageText === 'Matched same-episode message link already pointed to the current valid share') {
     return '命中消息已指向当前有效分享'
@@ -498,6 +536,22 @@ const buildFollowSettingsDraft = (task: PanTransferFollowTaskItem): FollowTaskSe
 
 const getFollowCandidateAssessmentSummary = (record: PanTransferFollowTaskItem) => {
   const assessment = record.candidate_assessment
+  const judgeLabel = getFollowJudgeSourceLabel(assessment.judge_source)
+  if (assessment.should_promote) {
+    return assessment.candidate_origin === 'stored_candidate'
+      ? '已存候选复核仍有效，可继续作为追更来源'
+      : `${judgeLabel}当前候选可提升为追更来源`
+  }
+  if (assessment.is_same_work && assessment.is_newer === false) {
+    return `${judgeLabel}认为是同一作品，但没有明显更新`
+  }
+  if (assessment.is_same_work === false) {
+    return `${judgeLabel}认为召回结果不是同一作品`
+  }
+  if (assessment.reason) {
+    return assessment.reason
+  }
+  return '本次检查没有形成新的候选命中'
   if (assessment.should_promote) {
     return 'AI 判定当前候选可提升为追更来源'
   }
@@ -1752,12 +1806,12 @@ const FollowTasksSectionV2 = ({ refreshToken, isActive = true }: FollowTasksSect
                 </small>
                 <small>
                   {[
-                    detailTask.identity_snapshot.source ? `来源 ${detailTask.identity_snapshot.source}` : null,
+                    detailTask.identity_snapshot.source ? `识别方式 ${getFollowIdentitySourceLabel(detailTask.identity_snapshot.source)}` : null,
                     detailTask.identity_snapshot.used_model ? `模型 ${detailTask.identity_snapshot.used_model}` : null,
                     detailTask.identity_snapshot.updated_at ? `更新时间 ${formatDateTime(detailTask.identity_snapshot.updated_at)}` : null,
                   ]
                     .filter(Boolean)
-                    .join(' · ') || '尚未记录 AI 执行元数据'}
+                    .join(' · ') || '尚未记录识别来源'}
                 </small>
                 {detailTask.identity_snapshot.identity_error ? (
                   <small>{`回退原因：${detailTask.identity_snapshot.identity_error}`}</small>
@@ -1770,6 +1824,17 @@ const FollowTasksSectionV2 = ({ refreshToken, isActive = true }: FollowTasksSect
                 <span>{getFollowCandidateAssessmentSummary(detailTask)}</span>
                 <small>
                   {`召回 ${detailTask.candidate_recall.recall_count || 0} 条 · 最多评估 ${detailTask.candidate_recall.judge_limit || 0} 条`}
+                </small>
+                <small>
+                  {[
+                    detailTask.candidate_assessment.judge_source
+                      ? `判定方式 ${getFollowJudgeSourceLabel(detailTask.candidate_assessment.judge_source)}`
+                      : null,
+                    detailTask.candidate_assessment.used_model ? `模型 ${detailTask.candidate_assessment.used_model}` : null,
+                    detailTask.candidate_assessment.checked_at ? `判定时间 ${formatDateTime(detailTask.candidate_assessment.checked_at)}` : null,
+                  ]
+                    .filter(Boolean)
+                    .join(' · ') || '尚未记录候选判定来源'}
                 </small>
                 <small>
                   {[

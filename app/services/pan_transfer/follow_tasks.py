@@ -2211,11 +2211,49 @@ def _judge_follow_candidate_fallback(
         tracked_identity,
         candidate_identity,
         tracked_message_time=_get_follow_reference_message_time(task, snapshot),
-        candidate_message_time=candidate.get("latest_message_time"),
+        candidate_message_time=_parse_datetime(candidate.get("latest_message_time")),
     )
     assessment = decision.to_dict()
     assessment["tracked_identity"] = tracked_identity.to_dict()
     assessment["candidate_identity"] = candidate_identity.to_dict()
+    return assessment
+
+
+def _assess_follow_candidate(
+    session: Session,
+    *,
+    task: PanTransferSyncTask,
+    snapshot: dict[str, Any],
+    candidate: dict[str, Any],
+    recall_snapshot: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    assessment = _judge_follow_candidate_fallback(task, snapshot=snapshot, candidate=candidate)
+    if bool(assessment.get("needs_ai_review")) and not bool(dict(assessment.get("candidate_identity") or {}).get("should_skip_ai")):
+        try:
+            ai_assessment = _judge_follow_candidate_with_ai(session, task=task, snapshot=snapshot, candidate=candidate)
+        except Exception as exc:
+            logger.warning(
+                "follow candidate judge fell back task_id=%s candidate=%s error=%s",
+                int(task.id),
+                int(candidate.get("link_target_id") or 0),
+                _normalize_text(exc, max_length=1000) or type(exc).__name__,
+            )
+            assessment["judge_error"] = _normalize_text(exc, max_length=500) or type(exc).__name__
+        else:
+            ai_assessment["tracked_identity"] = assessment.get("tracked_identity")
+            ai_assessment["candidate_identity"] = assessment.get("candidate_identity")
+            ai_assessment["rule_reason"] = assessment.get("reason")
+            ai_assessment["needs_ai_review"] = False
+            assessment = ai_assessment
+    assessment["checked_at"] = _serialize_json_value(utcnow())
+    assessment["candidate_link_target_id"] = _normalize_optional_int(candidate.get("link_target_id"))
+    assessment["candidate_title"] = (
+        _normalize_text(candidate.get("title"), max_length=255)
+        or _normalize_text(candidate.get("display_text"), max_length=255)
+        or None
+    )
+    assessment["recall_count"] = len(list((recall_snapshot or {}).get("items") or []))
+    assessment["queries"] = list((recall_snapshot or {}).get("queries") or list(snapshot.get("search_queries") or []))
     return assessment
 
 
@@ -2255,29 +2293,13 @@ def _pick_follow_candidate(
     same_episode_candidate: dict[str, Any] | None = None
     same_episode_assessment: dict[str, Any] | None = None
     for candidate in recalled_candidates[: int(candidate_policy["max_judge_candidates"])]:
-        assessment = _judge_follow_candidate_fallback(task, snapshot=snapshot, candidate=candidate)
-        if bool(assessment.get("needs_ai_review")) and not bool(dict(assessment.get("candidate_identity") or {}).get("should_skip_ai")):
-            try:
-                ai_assessment = _judge_follow_candidate_with_ai(session, task=task, snapshot=snapshot, candidate=candidate)
-            except Exception as exc:
-                logger.warning(
-                    "follow candidate judge fell back task_id=%s candidate=%s error=%s",
-                    int(task.id),
-                    int(candidate.get("link_target_id") or 0),
-                    _normalize_text(exc, max_length=1000) or type(exc).__name__,
-                )
-                assessment["judge_error"] = _normalize_text(exc, max_length=500) or type(exc).__name__
-            else:
-                ai_assessment["tracked_identity"] = assessment.get("tracked_identity")
-                ai_assessment["candidate_identity"] = assessment.get("candidate_identity")
-                ai_assessment["rule_reason"] = assessment.get("reason")
-                ai_assessment["needs_ai_review"] = False
-                assessment = ai_assessment
-        assessment["checked_at"] = _serialize_json_value(utcnow())
-        assessment["candidate_link_target_id"] = int(candidate.get("link_target_id") or 0)
-        assessment["candidate_title"] = _normalize_text(candidate.get("title"), max_length=255) or None
-        assessment["recall_count"] = len(recalled_candidates)
-        assessment["queries"] = list(recall_snapshot.get("queries") or [])
+        assessment = _assess_follow_candidate(
+            session,
+            task=task,
+            snapshot=snapshot,
+            candidate=candidate,
+            recall_snapshot=recall_snapshot,
+        )
         last_assessment = assessment
         if assessment.get("should_promote"):
             recall_snapshot["selected_link_target_id"] = _normalize_optional_int(candidate.get("link_target_id"))
@@ -2528,6 +2550,8 @@ async def _process_pan_transfer_follow_task_async(
 
     healthy_existing_candidate: dict[str, Any] | None = None
     existing_candidate_assessment: dict[str, Any] | None = None
+    existing_same_episode_candidate: dict[str, Any] | None = None
+    existing_same_episode_assessment: dict[str, Any] | None = None
     if task.last_candidate_url:
         existing_candidate_payload = {
             "link_target_id": int(task.last_candidate_link_target_id) if task.last_candidate_link_target_id is not None else None,
@@ -2540,22 +2564,37 @@ async def _process_pan_transfer_follow_task_async(
             existing_candidate_status.get("status"), max_length=32
         ).lower() or "unknown"
         if _is_healthy_link_status(normalized_existing_candidate_status):
-            healthy_existing_candidate = existing_candidate_payload
-            existing_candidate_assessment = {
-                "is_same_work": True,
-                "is_newer": True,
-                "should_promote": True,
-                "confidence": 1.0,
-                "current_episode": _normalize_optional_int(identity_snapshot.get("latest_episode")),
-                "candidate_episode": None,
-                "reason": "stored_candidate_still_valid",
-                "judge_source": "stored_candidate",
-                "candidate_link_target_id": existing_candidate_payload.get("link_target_id"),
-                "candidate_title": existing_candidate_payload.get("title"),
-                "checked_at": _serialize_json_value(utcnow()),
-                "validation_status": normalized_existing_candidate_status,
-                "validation_detail_message": existing_candidate_status.get("detail_message"),
-            }
+            existing_candidate_assessment = _assess_follow_candidate(
+                session,
+                task=task,
+                snapshot=identity_snapshot,
+                candidate=existing_candidate_payload,
+            )
+            existing_candidate_assessment["validation_status"] = normalized_existing_candidate_status
+            existing_candidate_assessment["validation_detail_message"] = existing_candidate_status.get("detail_message")
+            existing_candidate_assessment["candidate_origin"] = "stored_candidate"
+            if existing_candidate_assessment.get("should_promote"):
+                healthy_existing_candidate = existing_candidate_payload
+            elif _is_same_episode_follow_replacement_candidate(existing_candidate_assessment):
+                existing_same_episode_candidate = dict(existing_candidate_payload)
+                existing_same_episode_assessment = dict(existing_candidate_assessment)
+            else:
+                _clear_follow_task_candidate_fields(task)
+                session.add(task)
+                session.flush()
+                _append_follow_task_log(
+                    session,
+                    task=task,
+                    stage="candidate",
+                    level="info",
+                    message="Removed the stored candidate source because it no longer qualifies for promotion",
+                    payload={
+                        **existing_candidate_payload,
+                        "candidate_status": normalized_existing_candidate_status,
+                        "candidate_detail_message": existing_candidate_status.get("detail_message"),
+                        "candidate_assessment": existing_candidate_assessment,
+                    },
+                )
         else:
             _clear_follow_task_candidate_fields(task)
             session.add(task)
@@ -2582,6 +2621,9 @@ async def _process_pan_transfer_follow_task_async(
         task=task,
         snapshot=identity_snapshot,
     )
+    if same_episode_candidate is None and existing_same_episode_candidate is not None:
+        same_episode_candidate = existing_same_episode_candidate
+        same_episode_assessment = existing_same_episode_assessment
     selected_candidate: dict[str, Any] | None = None
     selected_assessment = dict(candidate_assessment or {}) if candidate_assessment else None
     if candidate is None and same_episode_assessment is not None:

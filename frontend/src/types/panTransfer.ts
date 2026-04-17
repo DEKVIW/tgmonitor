@@ -362,6 +362,7 @@ export interface PanTransferFollowTaskCandidateAssessment {
   is_same_work?: boolean | null
   is_newer?: boolean | null
   should_promote?: boolean | null
+  candidate_origin?: string | null
   confidence?: number | null
   current_episode?: number | null
   candidate_episode?: number | null
