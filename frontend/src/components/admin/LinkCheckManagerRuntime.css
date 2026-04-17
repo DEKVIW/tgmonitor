@@ -185,8 +185,16 @@
 .link-check-runtime-manual-shell {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 12px;
+  gap: 14px;
   align-items: start;
+}
+
+.link-check-runtime-manual-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 .link-check-runtime-editor-layout {
@@ -204,12 +212,21 @@
 
 .link-check-runtime-manual-form-panel {
   display: grid;
-  gap: 14px;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: 18px;
 }
 
 .link-check-runtime-manual-preview-column {
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: stretch;
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+.link-check-runtime-manual-inline-fields {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) minmax(160px, 180px);
+  gap: 12px 14px;
+  align-items: end;
 }
 
 .link-check-runtime-segmented-row,
@@ -231,8 +248,12 @@
 }
 
 .link-check-runtime-field-grid--manual {
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) minmax(160px, 180px);
   align-items: end;
+}
+
+.link-check-runtime-field--manual-range {
+  grid-column: 1 / 3;
 }
 
 .link-check-runtime-field {
@@ -445,6 +466,79 @@
   min-height: auto;
 }
 
+.link-check-runtime-manual-preview-column .link-check-runtime-preview-panel {
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+.link-check-runtime-manual-preview-column .link-check-runtime-panel-heading {
+  display: none;
+}
+
+.link-check-runtime-manual-preview-column .link-check-runtime-preview-scope {
+  gap: 8px;
+}
+
+.link-check-runtime-manual-preview-column .link-check-runtime-metric-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+}
+
+.link-check-runtime-manual-preview-column .link-check-runtime-metric-card {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  min-width: 0;
+}
+
+.link-check-runtime-manual-preview-column .link-check-runtime-metric-label::after {
+  content: ':';
+  margin-left: 2px;
+}
+
+.link-check-runtime-manual-preview-column .link-check-runtime-metric-value {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.link-check-runtime-manual-preview-column .ant-alert {
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+.link-check-runtime-manual-preview-column .ant-alert-icon {
+  display: none;
+}
+
+.link-check-runtime-manual-shell .link-check-runtime-compact-control {
+  width: 100%;
+  max-width: none;
+}
+
+.link-check-runtime-manual-summary {
+  display: grid;
+  gap: 6px;
+}
+
+.link-check-runtime-manual-summary .link-check-runtime-panel-heading {
+  margin-bottom: 2px;
+}
+
+.link-check-runtime-manual-summary .ant-typography {
+  display: block;
+  margin-bottom: 0;
+}
+
+.link-check-runtime-manual-actions {
+  display: none;
+}
+
 .link-check-runtime-panel-title {
   font-size: 14px;
   font-weight: 700;
@@ -513,7 +607,67 @@
 }
 
 .link-check-runtime-plan-modal .ant-modal-body {
-  padding-top: 8px;
+  padding-top: 10px;
+}
+
+.link-check-runtime-plan-modal-body {
+  display: grid;
+  gap: 16px;
+}
+
+.link-check-runtime-plan-modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(216, 227, 238, 0.92);
+}
+
+.link-check-runtime-plan-modal-head-main {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.link-check-runtime-plan-modal-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px 14px;
+}
+
+.link-check-runtime-plan-modal .link-check-runtime-compact-control,
+.link-check-runtime-plan-modal .link-check-runtime-cleanup-select {
+  width: 100%;
+  max-width: none;
+}
+
+.link-check-runtime-plan-modal-overview {
+  display: grid;
+  gap: 12px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(216, 227, 238, 0.92);
+}
+
+.link-check-runtime-plan-modal-overview-list,
+.link-check-runtime-plan-modal-alerts {
+  display: grid;
+  gap: 10px;
+}
+
+.link-check-runtime-plan-modal-overview-row {
+  display: grid;
+  gap: 4px;
+  padding-bottom: 10px;
+  border-bottom: 1px dashed rgba(216, 227, 238, 0.92);
+}
+
+.link-check-runtime-plan-modal-overview-row:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.link-check-runtime-plan-modal .link-check-runtime-panel-heading {
+  margin-bottom: 0;
 }
 
 .link-check-runtime-task-header {
@@ -669,6 +823,16 @@
   .link-check-runtime-manual-preview-column {
     grid-template-columns: 1fr;
   }
+
+  .link-check-runtime-manual-inline-fields,
+  .link-check-runtime-field-grid--manual,
+  .link-check-runtime-plan-modal .link-check-runtime-field-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .link-check-runtime-field--manual-range {
+    grid-column: 1 / -1;
+  }
 }
 
 @media (max-width: 768px) {
@@ -692,6 +856,7 @@
 
   .link-check-runtime-field-grid,
   .link-check-runtime-field-grid--manual,
+  .link-check-runtime-manual-inline-fields,
   .link-check-runtime-metric-grid,
   .link-check-runtime-summary-grid,
   .link-check-runtime-result-grid,
@@ -723,9 +888,18 @@
     flex-direction: column;
   }
 
+  .link-check-runtime-plan-modal-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
   .link-check-runtime-manual-actions {
     width: 100%;
     min-width: 0;
     justify-content: flex-start;
+  }
+
+  .link-check-runtime-plan-modal .link-check-runtime-field-grid {
+    grid-template-columns: 1fr;
   }
 }
