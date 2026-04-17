@@ -15,11 +15,11 @@ export interface SiteBrandingState {
 const SITE_BRANDING_STORAGE_KEY = 'tg-site-branding-cache'
 
 const DEFAULT_SITE_BRANDING: SiteBrandingState = {
-  site_name: 'TG\u9891\u9053\u76d1\u63a7',
-  site_title: 'TG\u9891\u9053\u76d1\u63a7',
-  site_description: 'Telegram \u9891\u9053\u7f51\u76d8\u8d44\u6e90\u76d1\u63a7\u4e0e\u68c0\u7d22',
-  site_keywords: 'telegram,\u7f51\u76d8,\u9891\u9053\u76d1\u63a7,\u8d44\u6e90\u641c\u7d22',
-  brand_icon: '\u{1F4F1}',
+  site_name: '',
+  site_title: '',
+  site_description: '',
+  site_keywords: '',
+  brand_icon: '',
   site_favicon_url: '/favicon.svg',
 }
 

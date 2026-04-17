@@ -30,7 +30,8 @@ const LoginRuntime = () => {
     securityConfig.loaded && securityConfig.turnstile_ready && securityConfig.login_challenge_enabled
 
   const submitDisabled = !securityConfig.loaded || (loginChallengeEnabled && !turnstileToken)
-  const hasBrandingSnapshot = hasCachedSiteBranding() || siteBranding.site_name !== 'TG频道监控'
+  const hasBrandingSnapshot =
+    hasCachedSiteBranding() || Boolean(siteBranding.site_name.trim() || siteBranding.site_title.trim())
   const linuxdoState = providerState?.linuxdo
   const linuxdoVisible = !!linuxdoState?.visible
 

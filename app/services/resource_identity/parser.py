@@ -38,16 +38,16 @@ MUSIC_NOISE_PATTERN = re.compile(
 )
 YEAR_PATTERN = re.compile(r"(?<!\d)((?:19|20)\d{2})(?!\d)")
 SEASON_PATTERNS = (
-    re.compile(r"第\s*([零一二三四五六七八九十百两\d]+)\s*季"),
     re.compile(r"\bSeason\s*([0-9]{1,2})\b", re.IGNORECASE),
-    re.compile(r"\bS(?:eason\s*)?0*([1-9][0-9]?)(?=E|\b|全)", re.IGNORECASE),
+    re.compile(r"(?<![A-Za-z0-9])S(?:eason\s*)?0*([1-9][0-9]?)(?=E|\b|全)", re.IGNORECASE),
+    re.compile(r"第\s*([零一二三四五六七八九十百两\d]+)\s*季"),
     re.compile(r"年番\s*([0-9]{1,2})", re.IGNORECASE),
 )
 EPISODE_PATTERNS = (
-    re.compile(r"S\d{1,2}\s*E\d{1,4}\s*[-~至]\s*E?\s*0*(\d{1,4})", re.IGNORECASE),
+    re.compile(r"(?<![A-Za-z0-9])S\d{1,2}\s*E\d{1,4}\s*[-~至]\s*E?\s*0*(\d{1,4})", re.IGNORECASE),
     re.compile(r"第\s*\d{1,4}\s*[-~至]\s*(\d{1,4})\s*集"),
-    re.compile(r"\bS\d{1,2}E0*(\d{1,4})\b", re.IGNORECASE),
-    re.compile(r"\bEP?\s*0*(\d{1,4})\b", re.IGNORECASE),
+    re.compile(r"(?<![A-Za-z0-9])S\d{1,2}E0*(\d{1,4})(?!\d)", re.IGNORECASE),
+    re.compile(r"(?<![A-Za-z0-9])EP?\s*0*(\d{1,4})(?!\d)", re.IGNORECASE),
     re.compile(r"更新(?:至)?\s*(?:EP|E|第)?\s*0*(\d{1,4})\s*集?", re.IGNORECASE),
     re.compile(r"更至?\s*0*(\d{1,4})\s*集?", re.IGNORECASE),
     re.compile(r"更\s*0*(\d{1,4})\s*集?", re.IGNORECASE),
@@ -186,9 +186,23 @@ def _detect_non_target_reason(text: str) -> str | None:
         return "course_material"
     if SOFTWARE_NOISE_PATTERN.search(normalized):
         return "software_or_game"
-    if MUSIC_NOISE_PATTERN.search(normalized):
+    if MUSIC_NOISE_PATTERN.search(normalized) and not _looks_like_structured_video_title(normalized):
         return "music_audio"
     return None
+
+
+def _looks_like_structured_video_title(text: str) -> bool:
+    normalized = normalize_text(text, max_length=500)
+    if not normalized:
+        return False
+    if _extract_season(normalized) is not None:
+        return True
+    if _extract_episode(normalized) is not None:
+        return True
+    issue_no, _issue_sort_value = _extract_issue(normalized)
+    if issue_no is not None:
+        return True
+    return False
 
 
 def _extract_year(text: str) -> int | None:

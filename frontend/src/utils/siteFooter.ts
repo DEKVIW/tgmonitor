@@ -11,7 +11,7 @@ export interface SiteFooterState {
 }
 
 const DEFAULT_SITE_FOOTER: SiteFooterState = {
-  site_name: 'TG频道监控',
+  site_name: '',
   footer_builder_enabled: false,
   footer_builder_sections: [],
   footer_builder_bottom_html: '',

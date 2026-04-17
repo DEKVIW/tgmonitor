@@ -62,8 +62,8 @@ PAN_TRANSFER_SYNC_MIN_CANDIDATE_LOOKBACK_DAYS = 1
 PAN_TRANSFER_SYNC_MAX_CANDIDATE_LOOKBACK_DAYS = 90
 PAN_TRANSFER_FOLLOW_IDENTITY_ROUTE_KEY = "pan_transfer_follow_identity_extract"
 PAN_TRANSFER_FOLLOW_CANDIDATE_JUDGE_ROUTE_KEY = "pan_transfer_follow_candidate_judge"
-PAN_TRANSFER_FOLLOW_MAX_RECALL_CANDIDATES = 12
-PAN_TRANSFER_FOLLOW_MAX_JUDGE_CANDIDATES = 6
+PAN_TRANSFER_FOLLOW_MAX_RECALL_CANDIDATES = 6
+PAN_TRANSFER_FOLLOW_MAX_JUDGE_CANDIDATES = 3
 PAN_TRANSFER_FOLLOW_MIN_RECALL_CANDIDATES = 1
 PAN_TRANSFER_FOLLOW_RECALL_CANDIDATES_LIMIT = 30
 PAN_TRANSFER_FOLLOW_MIN_JUDGE_CANDIDATES = 1
@@ -1913,6 +1913,8 @@ def _build_follow_candidate_judge_user_prompt_v2(
         "2. should_promote can be true only when it is the same work and clearly newer than the tracked resource.\n"
         "3. Treat title formatting differences as the same work when the core work identity still matches.\n"
         "4. Prefer episode progress as the main newer signal.\n"
+        "5. If current_episode equals candidate_episode, it is not newer and should_promote must be false.\n"
+        "6. Same-episode candidates can replace a link, but they must never be promoted as a newer follow source.\n"
         f"{_normalize_log_payload(payload)}"
     )
 
@@ -1947,7 +1949,7 @@ def _judge_follow_candidate_with_ai(
     should_promote = _normalize_optional_bool(parsed.get("should_promote"))
     if same_work is None or is_newer is None or should_promote is None:
         raise ValueError("candidate judge route returned invalid booleans")
-    return {
+    assessment = {
         "is_same_work": same_work,
         "is_newer": is_newer,
         "should_promote": should_promote,
@@ -1959,6 +1961,7 @@ def _judge_follow_candidate_with_ai(
         "used_model": _normalize_text(route_result.model_id, max_length=255) or None,
         "used_api_mode": _normalize_text(route_result.used_api_mode, max_length=64) or None,
     }
+    return _apply_follow_candidate_hard_rules(assessment)
 
 
 def _build_follow_candidate_recall_snapshot(
@@ -2219,6 +2222,78 @@ def _judge_follow_candidate_fallback(
     return assessment
 
 
+def _apply_follow_candidate_hard_rules(
+    assessment: dict[str, Any] | None,
+    *,
+    fallback_assessment: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    normalized = dict(assessment or {})
+    fallback = dict(fallback_assessment or {})
+    original_is_newer = _normalize_optional_bool(normalized.get("is_newer"))
+    original_should_promote = _normalize_optional_bool(normalized.get("should_promote"))
+
+    same_work = _normalize_optional_bool(normalized.get("is_same_work"))
+    fallback_same_work = _normalize_optional_bool(fallback.get("is_same_work"))
+    if same_work is None and fallback_same_work is not None:
+        same_work = fallback_same_work
+        normalized["is_same_work"] = same_work
+
+    current_episode = _normalize_optional_int(normalized.get("current_episode"))
+    candidate_episode = _normalize_optional_int(normalized.get("candidate_episode"))
+    if current_episode is None:
+        current_episode = _normalize_optional_int(fallback.get("current_episode"))
+        if current_episode is not None:
+            normalized["current_episode"] = current_episode
+    if candidate_episode is None:
+        candidate_episode = _normalize_optional_int(fallback.get("candidate_episode"))
+        if candidate_episode is not None:
+            normalized["candidate_episode"] = candidate_episode
+
+    current_issue = _normalize_text(normalized.get("current_issue_no"), max_length=32) or _normalize_text(
+        fallback.get("current_issue_no"),
+        max_length=32,
+    )
+    candidate_issue = _normalize_text(normalized.get("candidate_issue_no"), max_length=32) or _normalize_text(
+        fallback.get("candidate_issue_no"),
+        max_length=32,
+    )
+    if current_issue:
+        normalized["current_issue_no"] = current_issue
+    if candidate_issue:
+        normalized["candidate_issue_no"] = candidate_issue
+
+    guard_reason = None
+    if same_work is not True:
+        normalized["is_newer"] = False
+        normalized["should_promote"] = False
+        if original_should_promote is True or original_is_newer is True:
+            guard_reason = "rule_guard_not_same_work"
+    else:
+        if current_issue and candidate_issue and current_issue == candidate_issue:
+            normalized["is_newer"] = False
+            normalized["should_promote"] = False
+            normalized["same_episode_replace"] = True
+            guard_reason = "rule_guard_same_issue"
+        if current_episode is not None and candidate_episode is not None:
+            if candidate_episode == current_episode:
+                normalized["is_newer"] = False
+                normalized["should_promote"] = False
+                normalized["same_episode_replace"] = True
+                guard_reason = "rule_guard_same_episode"
+            elif candidate_episode < current_episode:
+                normalized["is_newer"] = False
+                normalized["should_promote"] = False
+                guard_reason = "rule_guard_older_episode"
+        if _normalize_optional_bool(normalized.get("is_newer")) is False:
+            normalized["should_promote"] = False
+
+    if guard_reason:
+        normalized["rule_guard_reason"] = guard_reason
+        normalized["reason"] = guard_reason
+
+    return normalized
+
+
 def _assess_follow_candidate(
     session: Session,
     *,
@@ -2228,6 +2303,7 @@ def _assess_follow_candidate(
     recall_snapshot: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     assessment = _judge_follow_candidate_fallback(task, snapshot=snapshot, candidate=candidate)
+    rule_assessment = dict(assessment)
     if bool(assessment.get("needs_ai_review")) and not bool(dict(assessment.get("candidate_identity") or {}).get("should_skip_ai")):
         try:
             ai_assessment = _judge_follow_candidate_with_ai(session, task=task, snapshot=snapshot, candidate=candidate)
@@ -2245,6 +2321,7 @@ def _assess_follow_candidate(
             ai_assessment["rule_reason"] = assessment.get("reason")
             ai_assessment["needs_ai_review"] = False
             assessment = ai_assessment
+    assessment = _apply_follow_candidate_hard_rules(assessment, fallback_assessment=rule_assessment)
     assessment["checked_at"] = _serialize_json_value(utcnow())
     assessment["candidate_link_target_id"] = _normalize_optional_int(candidate.get("link_target_id"))
     assessment["candidate_title"] = (

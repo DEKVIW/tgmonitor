@@ -394,7 +394,7 @@ const SystemConfigModern = () => {
                 <Input
                   value={draft.site_name}
                   onChange={(event) => updateDraft('site_name', event.target.value)}
-                  placeholder="TG频道监控"
+                  placeholder="填写站点名称"
                   disabled={saving}
                 />
               </div>
@@ -404,7 +404,7 @@ const SystemConfigModern = () => {
                 <Input
                   value={draft.site_title}
                   onChange={(event) => updateDraft('site_title', event.target.value)}
-                  placeholder="TG频道监控"
+                  placeholder="填写浏览器标题"
                   disabled={saving}
                 />
               </div>
@@ -436,7 +436,7 @@ const SystemConfigModern = () => {
                   rows={3}
                   value={draft.site_description}
                   onChange={(event) => updateDraft('site_description', event.target.value)}
-                  placeholder="Telegram 频道网盘资源监控与检索"
+                  placeholder="填写站点简介"
                   className="system-config-modern-textarea"
                   disabled={saving}
                 />
