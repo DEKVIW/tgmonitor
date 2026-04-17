@@ -123,11 +123,11 @@ FLOAT_SYSTEM_SETTINGS_FIELDS = {
 
 def build_default_system_settings_values() -> dict[str, Any]:
     return {
-        'site_name': 'TG频道监控',
-        'site_title': 'TG频道监控',
-        'site_description': 'Telegram 频道网盘资源监控与检索',
-        'site_keywords': 'telegram,网盘,频道监控,资源搜索',
-        'brand_icon': '📱',
+        'site_name': '',
+        'site_title': '',
+        'site_description': '',
+        'site_keywords': '',
+        'brand_icon': '',
         'site_favicon_url': '/favicon.svg',
         'public_dashboard_enabled': bool(settings.PUBLIC_DASHBOARD_ENABLED),
         'public_ads_enabled': bool(settings.PUBLIC_ADS_ENABLED),

@@ -144,11 +144,11 @@ class SystemConfigResponse(BaseModel):
 
 
 class SystemConfigUpdate(BaseModel):
-    site_name: str = Field(default="TG频道监控", max_length=255)
-    site_title: str = Field(default="TG频道监控", max_length=255)
-    site_description: str = Field(default="Telegram 频道网盘资源监控与检索", max_length=2000)
-    site_keywords: str = Field(default="telegram,网盘,频道监控,资源搜索", max_length=2000)
-    brand_icon: str = Field(default="📱", max_length=32)
+    site_name: str = Field(default="", max_length=255)
+    site_title: str = Field(default="", max_length=255)
+    site_description: str = Field(default="", max_length=2000)
+    site_keywords: str = Field(default="", max_length=2000)
+    brand_icon: str = Field(default="", max_length=32)
     site_favicon_url: str = Field(default="/favicon.svg", max_length=1000)
     public_dashboard_enabled: bool
     public_ads_enabled: bool
@@ -946,6 +946,9 @@ class LinkCheckTaskStatus(BaseModel):
     duration: Optional[float] = None
     logs: List[str] = Field(default_factory=list)
     error: Optional[str] = None
+    plan_id: Optional[int] = None
+    plan_name: Optional[str] = None
+    plan_mode: Optional[str] = None
 
 
 class LinkCheckTaskHistory(BaseModel):
@@ -962,6 +965,9 @@ class LinkCheckTaskHistory(BaseModel):
     trigger_source: Optional[str] = None
     task_mode: Optional[str] = None
     scope_label: Optional[str] = None
+    plan_id: Optional[int] = None
+    plan_name: Optional[str] = None
+    plan_mode: Optional[str] = None
 
 
 class LinkCheckTaskResult(BaseModel):
@@ -988,7 +994,12 @@ class LinkCheckPlanOverview(BaseModel):
     summary: str = ""
     next_run_at: Optional[str] = None
     last_run_at: Optional[str] = None
+    plan_mode: Optional[str] = None
+    schedule_priority: int = 0
     cursor_message_id: Optional[int] = None
+    window_lower_message_id: Optional[int] = None
+    window_upper_message_id: Optional[int] = None
+    completed_through_message_id: Optional[int] = None
     cycle_started_at: Optional[str] = None
     cycle_completed_at: Optional[str] = None
     task_link_limit: int = 0
@@ -1000,17 +1011,28 @@ class LinkCheckPlanOverview(BaseModel):
 
 class LinkCheckPlanUpdate(BaseModel):
     name: Optional[str] = Field(default=None, max_length=128)
+    plan_mode: str = Field(default="backfill", max_length=32)
     is_enabled: bool = False
     schedule_hour: int = Field(default=1, ge=0, le=23)
     schedule_minute: int = Field(default=0, ge=0, le=59)
+    schedule_priority: int = Field(default=100, ge=1, le=9999)
     timezone: str = Field(default="Asia/Shanghai", max_length=64)
     cycle_days: int = Field(default=7, ge=1, le=90)
     batch_link_target: int = Field(default=900, ge=100, le=5000)
     max_batches_per_run: int = Field(default=3, ge=1, le=12)
     max_concurrent: int = Field(default=5, ge=1, le=10)
     traversal_order: str = Field(default="newest_first", max_length=32)
+    overlap_message_count: int = Field(default=200, ge=0, le=5000)
     cleanup_mode: str = Field(default="none", max_length=32)
     cleanup_min_consecutive_invalid_runs: int = Field(default=2, ge=1, le=10)
+
+    @field_validator("plan_mode")
+    @classmethod
+    def validate_plan_mode(cls, value: str) -> str:
+        normalized = _normalize_text(value, field_name="plan_mode").lower()
+        if normalized not in {"backfill", "frontier"}:
+            raise ValueError("plan_mode must be backfill or frontier")
+        return normalized
 
     @field_validator("traversal_order")
     @classmethod
@@ -1029,18 +1051,25 @@ class LinkCheckPlanUpdate(BaseModel):
         return normalized
 
 
+class LinkCheckPlanCreate(LinkCheckPlanUpdate):
+    pass
+
+
 class LinkCheckPlanResponse(BaseModel):
     id: int
     name: str
+    plan_mode: str
     is_enabled: bool
     schedule_hour: int
     schedule_minute: int
+    schedule_priority: int
     timezone: str
     cycle_days: int
     batch_link_target: int
     max_batches_per_run: int
     max_concurrent: int
     traversal_order: str
+    overlap_message_count: int
     cleanup_mode: str
     cleanup_min_consecutive_invalid_runs: int
     next_run_at: Optional[str] = None
@@ -1048,12 +1077,20 @@ class LinkCheckPlanResponse(BaseModel):
     last_status: Optional[str] = None
     last_error_message: Optional[str] = None
     cursor_message_id: Optional[int] = None
+    window_lower_message_id: Optional[int] = None
+    window_upper_message_id: Optional[int] = None
+    completed_through_message_id: Optional[int] = None
     cycle_started_at: Optional[str] = None
     cycle_completed_at: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
     updated_by: Optional[str] = None
     overview: LinkCheckPlanOverview
+
+
+class LinkCheckPlanDeleteResult(BaseModel):
+    success: bool
+    deleted_plan_id: int
 
 
 class LinkCleanupApplyRequest(BaseModel):
