@@ -19,7 +19,6 @@ from app.services.resource_ops.recognition_service import (
 )
 from app.services.resource_ops.settings import (
     get_resource_ops_runtime_config,
-    is_resource_ops_ai_ready,
     update_resource_ops_runtime_meta,
     update_resource_ops_worker_state,
 )
@@ -107,10 +106,6 @@ def process_next_recognition_task(session: Session, *, worker_name: str) -> bool
     ensure_runtime_storage_tables()
     config = get_resource_ops_runtime_config(session)
 
-    if not is_resource_ops_ai_ready(session=session, config=config):
-        _set_worker_idle(session, worker_name=worker_name, last_error=None)
-        return False
-
     task = claim_next_recognition_task(session, worker_name=worker_name)
     if task is None:
         _set_worker_idle(session, worker_name=worker_name, last_error=None)
@@ -133,7 +128,8 @@ def process_next_recognition_task(session: Session, *, worker_name: str) -> bool
         work_payload = dict(result.get("work") or {})
         recognized_title = work_payload.get("work_title") or work_payload.get("work_canonical_title")
 
-        if str(result.get("status") or "").lower() == "matched":
+        result_status = str(result.get("status") or "").lower()
+        if result_status in {"matched", "ignored"}:
             mark_recognition_task_success(
                 session,
                 task=task,
@@ -144,11 +140,12 @@ def process_next_recognition_task(session: Session, *, worker_name: str) -> bool
                 session,
                 last_sync_summary={
                     "processed_count": 1,
-                    "matched_count": 1,
+                    "matched_count": 1 if result_status == "matched" else 0,
                     "error_count": 0,
                     "pending_count": binding_summary["pending_count"],
                     "link_target_id": int(task.link_target_id),
                     "recognized_title": recognized_title,
+                    "status": result_status,
                 },
                 updated_by=worker_name,
             )

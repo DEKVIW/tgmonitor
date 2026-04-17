@@ -23,6 +23,7 @@ from app.models.models import (
     ensure_runtime_storage_tables,
 )
 from app.services.ai_center import execute_text_route, extract_json_object_from_text
+from app.services.resource_identity import compare_follow_candidate, parse_resource_identity
 from app.services.resource_ops import get_work_binding_lookup
 
 from .common import normalize_relative_path, utcnow
@@ -2099,6 +2100,210 @@ def _apply_follow_task_state_without_candidate(task: PanTransferSyncTask) -> Non
         return
     task.task_state = PAN_TRANSFER_SYNC_STATE_IDLE
     task.last_change_type = "no_change"
+
+
+def _build_follow_identity_rule_snapshot(task: PanTransferSyncTask) -> tuple[dict[str, Any], Any]:
+    resource_title = _resolve_follow_task_resource_title(task)
+    reference_titles = _collect_follow_reference_texts(task)
+    alternate_titles = [title for title in reference_titles if title != resource_title][:4]
+    identity = parse_resource_identity(resource_title, alternate_titles=alternate_titles)
+    source_message_snapshot = _normalize_source_message_snapshot(_get_task_extra_section(task, "source_message_snapshot"))
+    reference_message_time = _serialize_json_value(
+        _parse_datetime(source_message_snapshot.get("message_time")) or task.last_candidate_message_time
+    )
+    snapshot = {
+        "resource_title": resource_title,
+        "core_title": _normalize_text(identity.core_title, max_length=255)
+        or _clean_follow_title(resource_title)
+        or resource_title,
+        "aliases": _dedupe_texts(identity.aliases or reference_titles, max_items=6, max_length=255),
+        "release_year": identity.release_year,
+        "season": identity.season,
+        "latest_episode": identity.episode,
+        "latest_issue": identity.issue_no,
+        "content_type": _normalize_text(identity.content_type, max_length=32) or None,
+        "search_queries": _dedupe_texts(identity.search_queries or [identity.core_title or resource_title], max_items=4, max_length=80),
+        "reference_titles": reference_titles,
+        "reference_message_time": reference_message_time,
+        "reason": _normalize_text(identity.reason, max_length=255) or "rule_title_parse",
+        "source": "rule",
+        "updated_at": _serialize_json_value(utcnow()),
+        "used_model": None,
+        "used_api_mode": None,
+        "parse_confidence": float(identity.confidence or 0),
+        "is_target_work": bool(identity.is_target_work),
+        "needs_ai_review": bool(identity.needs_ai_review),
+        "is_complete": bool(identity.is_complete),
+        "parsed_identity": identity.to_dict(),
+    }
+    return snapshot, identity
+
+
+def _build_follow_identity_fallback(task: PanTransferSyncTask) -> dict[str, Any]:
+    snapshot, _identity = _build_follow_identity_rule_snapshot(task)
+    return snapshot
+
+
+def _build_follow_candidate_search_queries(task: PanTransferSyncTask, snapshot: dict[str, Any]) -> list[str]:
+    queries = list(snapshot.get("search_queries") or [])
+    if not queries:
+        queries.extend([snapshot.get("core_title"), task.work_title, task.topic_title])
+    return _dedupe_texts([item for item in queries if _is_useful_follow_query(item)], max_items=4, max_length=80)
+
+
+def _ensure_follow_task_identity_snapshot(
+    session: Session,
+    *,
+    task: PanTransferSyncTask,
+) -> tuple[dict[str, Any], bool]:
+    existing = _get_task_extra_section(task, "identity_snapshot")
+    current_resource_title = _resolve_follow_task_resource_title(task)
+    existing_resource_title = _normalize_text(existing.get("resource_title"), max_length=255)
+    if existing.get("core_title") and existing_resource_title == current_resource_title:
+        return existing, False
+
+    rule_snapshot, rule_identity = _build_follow_identity_rule_snapshot(task)
+    snapshot = dict(rule_snapshot)
+    if rule_identity.needs_ai_review and not rule_identity.should_skip_ai:
+        try:
+            snapshot = _extract_follow_identity_with_ai(session, task=task)
+        except Exception as exc:
+            logger.warning(
+                "follow identity extraction fell back task_id=%s error=%s",
+                int(task.id),
+                _normalize_text(exc, max_length=1000) or type(exc).__name__,
+            )
+            snapshot = dict(rule_snapshot)
+            snapshot["identity_error"] = _normalize_text(exc, max_length=500) or type(exc).__name__
+        else:
+            snapshot["reference_titles"] = rule_snapshot.get("reference_titles")
+            snapshot["reference_message_time"] = rule_snapshot.get("reference_message_time")
+            snapshot["latest_issue"] = rule_identity.issue_no
+            snapshot["parse_confidence"] = float(rule_identity.confidence or 0)
+            snapshot["is_target_work"] = bool(rule_identity.is_target_work)
+            snapshot["needs_ai_review"] = False
+            snapshot["is_complete"] = bool(rule_identity.is_complete)
+            snapshot["rule_identity"] = rule_identity.to_dict()
+    snapshot["resource_title"] = current_resource_title
+    snapshot.setdefault("parsed_identity", rule_identity.to_dict())
+    _set_task_extra_section(task, "identity_snapshot", snapshot)
+    if not _normalize_text(task.work_title, max_length=255):
+        task.topic_title = _normalize_text(snapshot.get("core_title"), max_length=255) or task.topic_title
+    session.add(task)
+    session.flush()
+    return snapshot, True
+
+
+def _judge_follow_candidate_fallback(
+    task: PanTransferSyncTask,
+    *,
+    snapshot: dict[str, Any],
+    candidate: dict[str, Any],
+) -> dict[str, Any]:
+    tracked_resource_title = _normalize_text(snapshot.get("resource_title"), max_length=255) or _resolve_follow_task_resource_title(task)
+    tracked_identity = parse_resource_identity(
+        tracked_resource_title,
+        alternate_titles=list(snapshot.get("reference_titles") or [])[:4],
+    )
+    candidate_title = _normalize_text(candidate.get("title"), max_length=255) or _normalize_text(candidate.get("display_text"), max_length=255)
+    candidate_identity = parse_resource_identity(candidate_title)
+    decision = compare_follow_candidate(
+        tracked_identity,
+        candidate_identity,
+        tracked_message_time=_get_follow_reference_message_time(task, snapshot),
+        candidate_message_time=candidate.get("latest_message_time"),
+    )
+    assessment = decision.to_dict()
+    assessment["tracked_identity"] = tracked_identity.to_dict()
+    assessment["candidate_identity"] = candidate_identity.to_dict()
+    return assessment
+
+
+def _pick_follow_candidate(
+    session: Session,
+    *,
+    task: PanTransferSyncTask,
+    snapshot: dict[str, Any],
+) -> tuple[
+    dict[str, Any] | None,
+    dict[str, Any] | None,
+    dict[str, Any],
+    dict[str, Any] | None,
+    dict[str, Any] | None,
+]:
+    candidate_policy = _get_follow_candidate_policy(task)
+    recalled_candidates = _merge_follow_candidate_lists(
+        _list_follow_candidates_by_work(session, task=task),
+        _list_follow_candidates_by_identity(session, task=task, snapshot=snapshot),
+    )[: int(candidate_policy["max_recall_candidates"])]
+    recall_snapshot = _build_follow_candidate_recall_snapshot(task=task, snapshot=snapshot, candidates=recalled_candidates)
+    if not recalled_candidates:
+        return (
+            None,
+            {
+                "judge_source": "none",
+                "reason": "no_recalled_candidate",
+                "recall_count": 0,
+                "queries": list(recall_snapshot.get("queries") or []),
+            },
+            recall_snapshot,
+            None,
+            None,
+        )
+
+    last_assessment: dict[str, Any] | None = None
+    same_episode_candidate: dict[str, Any] | None = None
+    same_episode_assessment: dict[str, Any] | None = None
+    for candidate in recalled_candidates[: int(candidate_policy["max_judge_candidates"])]:
+        assessment = _judge_follow_candidate_fallback(task, snapshot=snapshot, candidate=candidate)
+        if bool(assessment.get("needs_ai_review")) and not bool(dict(assessment.get("candidate_identity") or {}).get("should_skip_ai")):
+            try:
+                ai_assessment = _judge_follow_candidate_with_ai(session, task=task, snapshot=snapshot, candidate=candidate)
+            except Exception as exc:
+                logger.warning(
+                    "follow candidate judge fell back task_id=%s candidate=%s error=%s",
+                    int(task.id),
+                    int(candidate.get("link_target_id") or 0),
+                    _normalize_text(exc, max_length=1000) or type(exc).__name__,
+                )
+                assessment["judge_error"] = _normalize_text(exc, max_length=500) or type(exc).__name__
+            else:
+                ai_assessment["tracked_identity"] = assessment.get("tracked_identity")
+                ai_assessment["candidate_identity"] = assessment.get("candidate_identity")
+                ai_assessment["rule_reason"] = assessment.get("reason")
+                ai_assessment["needs_ai_review"] = False
+                assessment = ai_assessment
+        assessment["checked_at"] = _serialize_json_value(utcnow())
+        assessment["candidate_link_target_id"] = int(candidate.get("link_target_id") or 0)
+        assessment["candidate_title"] = _normalize_text(candidate.get("title"), max_length=255) or None
+        assessment["recall_count"] = len(recalled_candidates)
+        assessment["queries"] = list(recall_snapshot.get("queries") or [])
+        last_assessment = assessment
+        if assessment.get("should_promote"):
+            recall_snapshot["selected_link_target_id"] = _normalize_optional_int(candidate.get("link_target_id"))
+            return candidate, assessment, recall_snapshot, same_episode_candidate, same_episode_assessment
+        if same_episode_candidate is None and _is_same_episode_follow_replacement_candidate(assessment):
+            same_episode_candidate = dict(candidate)
+            same_episode_assessment = dict(assessment)
+    return None, last_assessment, recall_snapshot, same_episode_candidate, same_episode_assessment
+
+
+def _is_same_episode_follow_replacement_candidate(assessment: dict[str, Any] | None) -> bool:
+    if not isinstance(assessment, dict):
+        return False
+    if bool(assessment.get("same_episode_replace")):
+        return True
+    if _normalize_optional_bool(assessment.get("is_same_work")) is not True:
+        return False
+    if _normalize_optional_bool(assessment.get("is_newer")) is not False:
+        return False
+    current_issue = _normalize_text(assessment.get("current_issue_no"), max_length=32)
+    candidate_issue = _normalize_text(assessment.get("candidate_issue_no"), max_length=32)
+    if current_issue and candidate_issue and current_issue == candidate_issue:
+        return True
+    current_episode = _normalize_optional_int(assessment.get("current_episode"))
+    candidate_episode = _normalize_optional_int(assessment.get("candidate_episode"))
+    return current_episode is not None and current_episode == candidate_episode
 
 
 async def _handle_follow_task_origin_automation(

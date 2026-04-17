@@ -19,6 +19,7 @@ from app.models.models import (
     ResourceWorkBinding,
     ensure_runtime_storage_tables,
 )
+from app.services.resource_identity import ParsedResourceIdentity, parse_resource_identity
 from app.services.resource_ops.ai_title_client import recognize_resource_with_ai_center
 from app.services.resource_ops.recognition_queue import (
     CLICK_RECOGNITION_PRIORITY,
@@ -227,6 +228,8 @@ def _get_candidate_by_link_target_id(session: Session, *, link_target_id: int) -
 def _candidate_needs_pending_processing(
     candidate: RecognitionCandidate,
 ) -> bool:
+    if bool(dict(candidate.binding_extra_json or {}).get("terminal_skip")):
+        return False
     if candidate.work_id is not None and candidate.match_status == "matched":
         return False
     return True
@@ -281,6 +284,29 @@ def _get_primary_title(candidate: RecognitionCandidate, session: Session | None 
     return candidate.share_key or f"link_target_{candidate.link_target_id}"
 
 
+def _build_recognition_context(
+    session: Session,
+    *,
+    candidate: RecognitionCandidate,
+) -> dict[str, Any]:
+    primary_title = _get_primary_title(candidate, session)
+    recent_titles = _get_recent_candidate_titles(session, link_target_id=candidate.link_target_id, limit=5)
+    if primary_title and primary_title not in recent_titles:
+        recent_titles.insert(0, primary_title)
+    alternate_titles = [title for title in recent_titles if title != primary_title]
+    return {
+        "primary_title": primary_title,
+        "recent_titles": recent_titles[:5],
+        "alternate_titles": alternate_titles[:4],
+    }
+
+
+def _serialize_identity_payload(identity: ParsedResourceIdentity | None) -> dict[str, Any] | None:
+    if identity is None:
+        return None
+    return identity.to_dict()
+
+
 def _ensure_work_aliases(session: Session, *, work_id: int, aliases: Iterable[str], source: str) -> None:
     normalized_pairs = {
         (_normalize_text(alias, max_length=255), _normalize_alias(alias))
@@ -306,7 +332,7 @@ def _ensure_work_aliases(session: Session, *, work_id: int, aliases: Iterable[st
         )
 
 
-def _upsert_ai_work(session: Session, *, candidate: dict[str, Any]) -> ResourceWork:
+def _upsert_recognized_work(session: Session, *, candidate: dict[str, Any]) -> ResourceWork:
     provider = "ai"
     provider_work_id = _normalize_text(candidate.get("provider_work_id"), max_length=128)
     work = (
@@ -344,9 +370,13 @@ def _upsert_ai_work(session: Session, *, candidate: dict[str, Any]) -> ResourceW
         session,
         work_id=int(work.id),
         aliases=candidate.get("aliases") or [],
-        source="ai",
+        source=_normalize_text((candidate.get("extra_json") or {}).get("provider"), max_length=32) or "ai",
     )
     return work
+
+
+def _upsert_ai_work(session: Session, *, candidate: dict[str, Any]) -> ResourceWork:
+    return _upsert_recognized_work(session, candidate=candidate)
 
 
 def _ensure_binding(session: Session, *, link_target_id: int) -> ResourceWorkBinding:
@@ -507,8 +537,11 @@ def _build_ai_work_candidate(
     session: Session,
     *,
     candidate: RecognitionCandidate,
+    context: dict[str, Any] | None = None,
+    rule_identity: ParsedResourceIdentity | None = None,
 ) -> dict[str, Any]:
-    primary_title = _get_primary_title(candidate, session)
+    recognition_context = context or _build_recognition_context(session, candidate=candidate)
+    primary_title = _normalize_text(recognition_context.get("primary_title"), max_length=255)
 
     result = recognize_resource_with_ai_center(
         session,
@@ -543,7 +576,52 @@ def _build_ai_work_candidate(
             "used_model": used_model,
             "used_api_mode": used_api_mode,
             "source_link_target_id": candidate.link_target_id,
+            "recent_titles": list(recognition_context.get("recent_titles") or []),
+            "rule_identity": _serialize_identity_payload(rule_identity),
         },
+        "match_source": "ai",
+        "match_reason": f"AI 归并为：{canonical_title}",
+    }
+
+
+def _build_rule_work_candidate(
+    *,
+    candidate: RecognitionCandidate,
+    context: dict[str, Any],
+    identity: ParsedResourceIdentity,
+) -> dict[str, Any]:
+    canonical_title = _normalize_text(identity.core_title, max_length=255)
+    if not canonical_title:
+        raise ValueError("rule identity did not produce a canonical title")
+
+    aliases: list[str] = []
+    for value in [canonical_title, *(identity.aliases or []), _normalize_text(context.get("primary_title"), max_length=255)]:
+        normalized = _normalize_text(value, max_length=255)
+        if normalized and normalized not in aliases:
+            aliases.append(normalized)
+
+    return {
+        "provider_work_id": _build_ai_provider_work_id(canonical_title),
+        "canonical_title": canonical_title,
+        "original_title": _normalize_text(context.get("primary_title"), max_length=255) or canonical_title,
+        "release_year": identity.release_year,
+        "media_type": _normalize_text(identity.content_type, max_length=32) or None,
+        "confidence": float(identity.confidence or 0),
+        "aliases": aliases,
+        "extra_json": {
+            "provider": "rule",
+            "reason": _normalize_text(identity.reason, max_length=255) or "rule_title_parse",
+            "query_title": _normalize_text(context.get("primary_title"), max_length=255) or canonical_title,
+            "season": identity.season,
+            "year": identity.release_year,
+            "used_model": None,
+            "used_api_mode": None,
+            "source_link_target_id": candidate.link_target_id,
+            "parsed_identity": identity.to_dict(),
+            "recent_titles": list(context.get("recent_titles") or []),
+        },
+        "match_source": "rule",
+        "match_reason": f"规则归并为：{canonical_title}",
     }
 
 
@@ -553,27 +631,36 @@ def _apply_binding_success(
     binding: ResourceWorkBinding,
     candidate: RecognitionCandidate,
     work: ResourceWork,
-    ai_payload: dict[str, Any],
+    recognized_payload: dict[str, Any],
 ) -> None:
     extra_json = dict(binding.extra_json or {})
+    payload_extra = dict(recognized_payload.get("extra_json") or {})
     extra_json.update(
         {
-            "query_title": (ai_payload.get("extra_json") or {}).get("query_title") or candidate.latest_message_title or candidate.display_text,
-            "season": (ai_payload.get("extra_json") or {}).get("season"),
-            "year": (ai_payload.get("extra_json") or {}).get("year"),
-            "used_model": (ai_payload.get("extra_json") or {}).get("used_model"),
-            "used_api_mode": (ai_payload.get("extra_json") or {}).get("used_api_mode"),
+            "query_title": payload_extra.get("query_title") or candidate.latest_message_title or candidate.display_text,
+            "season": payload_extra.get("season"),
+            "year": payload_extra.get("year"),
+            "used_model": payload_extra.get("used_model"),
+            "used_api_mode": payload_extra.get("used_api_mode"),
+            "recognition_source": _normalize_text(recognized_payload.get("match_source"), max_length=32) or "ai",
+            "terminal_skip": False,
         }
     )
+    if payload_extra.get("parsed_identity") is not None:
+        extra_json["parsed_identity"] = dict(payload_extra.get("parsed_identity") or {})
+    if payload_extra.get("rule_identity") is not None:
+        extra_json["rule_identity"] = dict(payload_extra.get("rule_identity") or {})
+    if payload_extra.get("recent_titles") is not None:
+        extra_json["recent_titles"] = list(payload_extra.get("recent_titles") or [])
     binding.work_id = int(work.id)
     binding.match_status = "matched"
-    binding.provider = "ai"
+    binding.provider = work.provider
     binding.provider_work_id = work.provider_work_id
-    binding.confidence = float(ai_payload.get("confidence") or 0)
-    binding.match_source = "ai"
-    binding.query_title = (ai_payload.get("extra_json") or {}).get("query_title") or candidate.latest_message_title or candidate.display_text
+    binding.confidence = float(recognized_payload.get("confidence") or 0)
+    binding.match_source = _normalize_text(recognized_payload.get("match_source"), max_length=32) or "ai"
+    binding.query_title = payload_extra.get("query_title") or candidate.latest_message_title or candidate.display_text
     binding.candidate_title = work.canonical_title
-    binding.reason = f"AI 归并为：{work.canonical_title}"
+    binding.reason = _normalize_text(recognized_payload.get("match_reason"), max_length=255) or f"归并为：{work.canonical_title}"
     binding.last_attempted_at = _utcnow()
     binding.matched_at = binding.last_attempted_at
     binding.error_message = None
@@ -588,16 +675,21 @@ def _apply_binding_error(
     binding: ResourceWorkBinding,
     candidate: RecognitionCandidate,
     reason: str,
+    match_source: str = "ai",
+    extra_payload: dict[str, Any] | None = None,
 ) -> None:
     extra_json = dict(binding.extra_json or {})
     extra_json.update(
         {
             "query_title": candidate.latest_message_title or candidate.display_text,
+            "recognition_source": _normalize_text(match_source, max_length=32) or "ai",
         }
     )
+    if extra_payload:
+        extra_json.update(dict(extra_payload))
     binding.match_status = "error"
     binding.confidence = 0.0
-    binding.match_source = "ai"
+    binding.match_source = _normalize_text(match_source, max_length=32) or "ai"
     binding.query_title = candidate.latest_message_title or candidate.display_text
     binding.reason = _normalize_text(reason, max_length=255) or "AI 识别失败"
     binding.last_attempted_at = _utcnow()
@@ -613,10 +705,15 @@ def _apply_preserved_binding_error(
     binding: ResourceWorkBinding,
     candidate: RecognitionCandidate,
     reason: str,
+    match_source: str = "ai",
+    extra_payload: dict[str, Any] | None = None,
 ) -> None:
     extra_json = dict(binding.extra_json or {})
     extra_json["query_title"] = _get_primary_title(candidate)
     extra_json["last_error"] = _normalize_text(reason, max_length=500)
+    extra_json["recognition_source"] = _normalize_text(match_source, max_length=32) or "ai"
+    if extra_payload:
+        extra_json.update(dict(extra_payload))
     binding.last_attempted_at = _utcnow()
     binding.error_message = _normalize_text(reason, max_length=500)
     binding.extra_json = extra_json
@@ -647,7 +744,7 @@ def get_work_binding_summary(session: Session) -> dict[str, Any]:
     }
 
 
-def resolve_link_target_work(
+def _legacy_resolve_link_target_work(
     session: Session,
     *,
     link_target_id: int,
@@ -655,8 +752,6 @@ def resolve_link_target_work(
     config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     runtime_config = config or get_resource_ops_runtime_config(session)
-    if not is_resource_ops_ai_ready(session=session, config=runtime_config):
-        raise ValueError("请先启用并配置可用的 AI 识别")
 
     candidate = candidate_row or _get_candidate_by_link_target_id(session, link_target_id=int(link_target_id))
     if candidate is None:
@@ -706,6 +801,123 @@ def resolve_link_target_work(
         }
 
 
+def resolve_link_target_work(
+    session: Session,
+    *,
+    link_target_id: int,
+    candidate_row: RecognitionCandidate | None = None,
+    config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    runtime_config = config or get_resource_ops_runtime_config(session)
+    candidate = candidate_row or _get_candidate_by_link_target_id(session, link_target_id=int(link_target_id))
+    if candidate is None:
+        raise LookupError(f"link_target {link_target_id} not found")
+
+    binding = _ensure_binding(session, link_target_id=candidate.link_target_id)
+    had_matched_binding = binding.work_id is not None and binding.match_status == "matched"
+    recognition_context = _build_recognition_context(session, candidate=candidate)
+    rule_identity = parse_resource_identity(
+        recognition_context.get("primary_title"),
+        alternate_titles=recognition_context.get("alternate_titles") or [],
+    )
+
+    try:
+        if rule_identity.should_skip_ai:
+            skip_reason = f"规则判定为非目标资源：{_normalize_text(rule_identity.reason, max_length=120) or 'rule_skip'}"
+            terminal_payload = {
+                "parsed_identity": rule_identity.to_dict(),
+                "terminal_skip": True,
+            }
+            if had_matched_binding:
+                _apply_preserved_binding_error(
+                    session,
+                    binding=binding,
+                    candidate=candidate,
+                    reason=skip_reason,
+                    match_source="rule",
+                    extra_payload=terminal_payload,
+                )
+            else:
+                _apply_binding_error(
+                    session,
+                    binding=binding,
+                    candidate=candidate,
+                    reason=skip_reason,
+                    match_source="rule",
+                    extra_payload=terminal_payload,
+                )
+            info = get_work_binding_lookup(session, link_target_ids=[candidate.link_target_id]).get(candidate.link_target_id)
+            return {
+                "link_target_id": candidate.link_target_id,
+                "status": "ignored",
+                "reason": skip_reason,
+                "work": info,
+            }
+
+        if rule_identity.core_title and not rule_identity.needs_ai_review:
+            recognized_payload = _build_rule_work_candidate(
+                candidate=candidate,
+                context=recognition_context,
+                identity=rule_identity,
+            )
+        else:
+            if not is_resource_ops_ai_ready(session=session, config=runtime_config):
+                raise ValueError("规则识别结果不够确定，且当前没有可用的 AI 回退配置")
+            recognized_payload = _build_ai_work_candidate(
+                session,
+                candidate=candidate,
+                context=recognition_context,
+                rule_identity=rule_identity,
+            )
+
+        work = _upsert_recognized_work(session, candidate=recognized_payload)
+        _apply_binding_success(
+            session,
+            binding=binding,
+            candidate=candidate,
+            work=work,
+            recognized_payload=recognized_payload,
+        )
+        info = get_work_binding_lookup(session, link_target_ids=[candidate.link_target_id]).get(candidate.link_target_id)
+        return {
+            "link_target_id": candidate.link_target_id,
+            "status": "matched",
+            "reason": _normalize_text(recognized_payload.get("match_reason"), max_length=255) or f"归并为：{work.canonical_title}",
+            "work": info,
+        }
+    except Exception as exc:
+        error_reason = _normalize_text(exc, max_length=255) or type(exc).__name__
+        error_payload = {
+            "parsed_identity": rule_identity.to_dict(),
+            "terminal_skip": False,
+        }
+        if had_matched_binding:
+            _apply_preserved_binding_error(
+                session,
+                binding=binding,
+                candidate=candidate,
+                reason=error_reason,
+                match_source="rule" if rule_identity.core_title else "ai",
+                extra_payload=error_payload,
+            )
+        else:
+            _apply_binding_error(
+                session,
+                binding=binding,
+                candidate=candidate,
+                reason=error_reason,
+                match_source="rule" if rule_identity.core_title else "ai",
+                extra_payload=error_payload,
+            )
+        info = get_work_binding_lookup(session, link_target_ids=[candidate.link_target_id]).get(candidate.link_target_id)
+        return {
+            "link_target_id": candidate.link_target_id,
+            "status": "error",
+            "reason": error_reason,
+            "work": info,
+        }
+
+
 def build_recognition_log_line(result: dict[str, Any]) -> str:
     work_payload = dict(result.get("work") or {})
     query_title = _normalize_text(work_payload.get("work_query_title"), max_length=160) or "-"
@@ -713,9 +925,13 @@ def build_recognition_log_line(result: dict[str, Any]) -> str:
         work_payload.get("work_title") or work_payload.get("work_canonical_title"),
         max_length=160,
     ) or "-"
-    if _normalize_text(result.get("status"), max_length=16).lower() == "matched":
-        return f"[OK] {query_title} -> {resolved_title}"
-    return f"[ERR] {query_title} -> {_normalize_text(result.get('reason'), max_length=220) or 'AI error'}"
+    match_source = _normalize_text(work_payload.get("work_match_source"), max_length=32) or "unknown"
+    status = _normalize_text(result.get("status"), max_length=16).lower()
+    if status == "matched":
+        return f"[OK][{match_source}] {query_title} -> {resolved_title}"
+    if status == "ignored":
+        return f"[SKIP][{match_source}] {query_title} -> {_normalize_text(result.get('reason'), max_length=220) or 'ignored'}"
+    return f"[ERR][{match_source}] {query_title} -> {_normalize_text(result.get('reason'), max_length=220) or 'recognition error'}"
 
 
 _build_recognition_log_line = build_recognition_log_line
@@ -760,8 +976,6 @@ def sync_resource_work_bindings(
         normalized_mode = "all"
     if normalized_mode not in {"pending", "all"}:
         raise ValueError("invalid recognition mode")
-    if not is_resource_ops_ai_ready(session=session, config=config):
-        raise ValueError("请先启用并配置可用的 AI 识别")
     link_target_ids = _collect_processing_target_ids(session, mode=normalized_mode)
     enqueue_result = enqueue_recognition_tasks(
         session,
@@ -808,7 +1022,7 @@ def sync_resource_work_bindings_for_link_targets(
         "skipped_matched_count": 0,
     }
     message = "disabled"
-    if bool(config.get("auto_recognition_enabled")) and is_resource_ops_ai_ready(session=session, config=config):
+    if bool(config.get("auto_recognition_enabled")):
         enqueue_result = enqueue_recognition_tasks(
             session,
             link_target_ids=normalized_ids,

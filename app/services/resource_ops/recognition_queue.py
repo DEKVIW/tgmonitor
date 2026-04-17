@@ -51,19 +51,22 @@ def _normalize_positive_ids(values: Iterable[int]) -> list[int]:
 def _matched_link_target_ids(session: Session, *, link_target_ids: list[int]) -> set[int]:
     if not link_target_ids:
         return set()
-    return {
-        int(link_target_id)
-        for (link_target_id,) in (
-            session.query(ResourceWorkBinding.link_target_id)
-            .filter(
-                ResourceWorkBinding.link_target_id.in_(link_target_ids),
-                ResourceWorkBinding.work_id.isnot(None),
-                ResourceWorkBinding.match_status == "matched",
-            )
-            .all()
-        )
-        if link_target_id is not None
-    }
+    rows = (
+        session.query(ResourceWorkBinding)
+        .filter(ResourceWorkBinding.link_target_id.in_(link_target_ids))
+        .all()
+    )
+    matched_ids: set[int] = set()
+    for row in rows:
+        if row.link_target_id is None:
+            continue
+        extra_json = dict(row.extra_json or {})
+        if row.work_id is not None and str(row.match_status or "").lower() == "matched":
+            matched_ids.add(int(row.link_target_id))
+            continue
+        if bool(extra_json.get("terminal_skip")):
+            matched_ids.add(int(row.link_target_id))
+    return matched_ids
 
 
 def enqueue_recognition_tasks(
