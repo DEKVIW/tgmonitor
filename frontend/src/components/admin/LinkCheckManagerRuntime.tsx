@@ -234,8 +234,23 @@ const parseBackendDateTime = (value?: string | null) => {
   return parsed.isValid() ? parsed : null
 }
 
+const parseRuntimeDateTime = (value?: string | null) => {
+  const normalized = value?.trim()
+  if (!normalized) {
+    return null
+  }
+
+  const parsed = dayjs(normalized)
+  return parsed.isValid() ? parsed : null
+}
+
 const formatDateTime = (value?: string | null, format = 'YYYY-MM-DD HH:mm') => {
   const parsed = parseBackendDateTime(value)
+  return parsed ? parsed.format(format) : '-'
+}
+
+const formatRuntimeDateTime = (value?: string | null, format = 'YYYY-MM-DD HH:mm') => {
+  const parsed = parseRuntimeDateTime(value)
   return parsed ? parsed.format(format) : '-'
 }
 
@@ -1109,9 +1124,11 @@ const LinkCheckManagerRuntime = () => {
       dataIndex: 'check_time',
       key: 'check_time',
       sorter: (a, b) =>
-        (parseBackendDateTime(a.check_time)?.valueOf() || 0) - (parseBackendDateTime(b.check_time)?.valueOf() || 0),
+        (parseRuntimeDateTime(a.check_time)?.valueOf() || 0) - (parseRuntimeDateTime(b.check_time)?.valueOf() || 0),
       defaultSortOrder: 'descend',
-      render: (value: string) => <span title={formatDateTime(value, 'YYYY-MM-DD HH:mm:ss')}>{formatDateTime(value)}</span>,
+      render: (value: string) => (
+        <span title={formatRuntimeDateTime(value, 'YYYY-MM-DD HH:mm:ss')}>{formatRuntimeDateTime(value)}</span>
+      ),
     },
     {
       title: '来源',
@@ -1291,7 +1308,7 @@ const LinkCheckManagerRuntime = () => {
           ]
         : latestHistory
           ? [
-              { label: latestHistory.check_time ? formatDateTime(latestHistory.check_time, 'MM-DD HH:mm') : '暂无时间', tone: 'neutral' },
+              { label: latestHistory.check_time ? formatRuntimeDateTime(latestHistory.check_time, 'MM-DD HH:mm') : '暂无时间', tone: 'neutral' },
               { label: `${formatCount(latestHistory.total_links)} 链接`, tone: 'accent' },
               { label: `${latestHistory.invalid_links} 失效`, tone: 'warning' },
             ]
@@ -1589,7 +1606,7 @@ const LinkCheckManagerRuntime = () => {
               <Modal
                 title={planDraft ? `编辑巡检配置 · ${planDraft.name || editingPlanData?.name || ''}` : '编辑巡检配置'}
                 open={planEditorModalOpen}
-                width={1080}
+                width={1240}
                 destroyOnClose={false}
                 onCancel={handleClosePlanEditorModal}
                 className="link-check-runtime-plan-modal"
@@ -1620,7 +1637,6 @@ const LinkCheckManagerRuntime = () => {
                         <div className="link-check-runtime-panel-heading">
                           <div>
                             <span className="link-check-runtime-panel-title">基础配置</span>
-                            <Text type="secondary">先确定计划节奏，再调整批次和清理策略。</Text>
                           </div>
                         </div>
                         <Space size={[8, 8]} wrap>
@@ -1768,39 +1784,36 @@ const LinkCheckManagerRuntime = () => {
                           />
                         </div>
                       ) : null}
-                      <div className="link-check-runtime-field is-wide">
+                      <div className="link-check-runtime-field">
                         {createFieldLabel('自动清理', '巡检完成后是否直接清理失效链接。建议先从只检测开始。')}
-                        <div className="link-check-runtime-inline-grid">
-                          <Select
-                            className="link-check-runtime-cleanup-select"
-                            value={planDraft.cleanup_mode}
-                            options={cleanupOptions}
-                            onChange={(value) =>
-                              setPlanDraft((current) => (current ? { ...current, cleanup_mode: value as CleanupMode } : current))
-                            }
-                          />
-                          {planDraft.cleanup_mode !== 'none' ? (
-                            <>
-                              <InputNumber
-                                className="link-check-runtime-compact-control"
-                                min={1}
-                                max={10}
-                                value={planDraft.cleanup_min_consecutive_invalid_runs}
-                                onChange={(value) =>
-                                  setPlanDraft((current) =>
-                                    current
-                                      ? {
-                                          ...current,
-                                          cleanup_min_consecutive_invalid_runs: Math.max(1, Number(value || 1)),
-                                        }
-                                      : current
-                                  )
-                                }
-                              />
-                              <Text type="secondary">连续 {planDraft.cleanup_min_consecutive_invalid_runs} 次失效后才执行</Text>
-                            </>
-                          ) : null}
-                        </div>
+                        <Select
+                          className="link-check-runtime-compact-control"
+                          value={planDraft.cleanup_mode}
+                          options={cleanupOptions}
+                          onChange={(value) =>
+                            setPlanDraft((current) => (current ? { ...current, cleanup_mode: value as CleanupMode } : current))
+                          }
+                        />
+                      </div>
+                      <div className="link-check-runtime-field">
+                        {createFieldLabel('连续失效次数', '达到这个连续失效次数后，才会执行自动清理。')}
+                        <InputNumber
+                          className="link-check-runtime-compact-control"
+                          min={1}
+                          max={10}
+                          disabled={planDraft.cleanup_mode === 'none'}
+                          value={planDraft.cleanup_min_consecutive_invalid_runs}
+                          onChange={(value) =>
+                            setPlanDraft((current) =>
+                              current
+                                ? {
+                                    ...current,
+                                    cleanup_min_consecutive_invalid_runs: Math.max(1, Number(value || 1)),
+                                  }
+                                : current
+                            )
+                          }
+                        />
                       </div>
                     </div>
 
@@ -1808,7 +1821,6 @@ const LinkCheckManagerRuntime = () => {
                       <div className="link-check-runtime-panel-heading">
                         <div>
                           <span className="link-check-runtime-panel-title">计划概览</span>
-                          <Text type="secondary">这里用简洁文字展示覆盖节奏和风险提示。</Text>
                         </div>
                         <Space size={[8, 8]} wrap>
                           <Tag color={editingPlanOverview?.can_finish_within_cycle ? 'success' : 'warning'}>
@@ -1818,72 +1830,52 @@ const LinkCheckManagerRuntime = () => {
                         </Space>
                       </div>
 
-                      <div className="link-check-runtime-plan-modal-overview-list">
-                        <div className="link-check-runtime-plan-modal-overview-row">
-                          <Text strong>执行节奏</Text>
-                          <Text type="secondary">
-                            每日 {planDraft.schedule_time.format('HH:mm')} 执行，单次最多 {planDraft.max_batches_per_run} 批，
-                            每批约 {formatCount(planDraft.batch_link_target)} 条链接。
-                          </Text>
+                      <div className="link-check-runtime-plan-modal-overview-grid">
+                        <div className="link-check-runtime-plan-modal-overview-column">
+                          <div className="link-check-runtime-plan-modal-overview-row">
+                            <Text strong>执行节奏</Text>
+                            <Text type="secondary">
+                              每日 {planDraft.schedule_time.format('HH:mm')} 执行，单次最多 {planDraft.max_batches_per_run} 批，
+                              每批约 {formatCount(planDraft.batch_link_target)} 条链接。
+                            </Text>
+                          </div>
+                          <div className="link-check-runtime-plan-modal-overview-row">
+                            <Text strong>覆盖预估</Text>
+                            <Text type="secondary">
+                              目标 {planDraft.cycle_days} 天完成一轮；
+                              {editingPlanOverview?.estimated_days_to_complete_cycle
+                                ? `当前预估 ${editingPlanOverview.estimated_days_to_complete_cycle} 天 / 轮。`
+                                : '当前还没有可用的周期预估。'}
+                              {editingPlanOverview?.summary ? ` ${editingPlanOverview.summary}` : ''}
+                              {editingPlanOverview?.warnings.length ? ` 风险提示：${editingPlanOverview.warnings.join('；')}` : ''}
+                            </Text>
+                          </div>
                         </div>
-                        <div className="link-check-runtime-plan-modal-overview-row">
-                          <Text strong>覆盖预估</Text>
-                          <Text type="secondary">
-                            目标 {planDraft.cycle_days} 天完成一轮；
-                            {editingPlanOverview?.estimated_days_to_complete_cycle
-                              ? `当前预估 ${editingPlanOverview.estimated_days_to_complete_cycle} 天 / 轮。`
-                              : '当前还没有可用的周期预估。'}
-                          </Text>
+                        <div className="link-check-runtime-plan-modal-overview-column">
+                          <div className="link-check-runtime-plan-modal-overview-row">
+                            <Text strong>自动清理</Text>
+                            <Text type="secondary">
+                              {cleanupModeLabelMap[planDraft.cleanup_mode]}
+                              {planDraft.cleanup_mode === 'none'
+                                ? '，只做巡检，不自动改动消息。'
+                                : `，连续 ${planDraft.cleanup_min_consecutive_invalid_runs} 次失效后才执行。`}
+                            </Text>
+                          </div>
+                          <div className="link-check-runtime-plan-modal-overview-row">
+                            <Text strong>运行信息</Text>
+                            <Text type="secondary">
+                              下次执行 {formatDateTime(editingPlanData?.next_run_at)}；
+                              上次执行 {formatDateTime(editingPlanData?.last_run_at)}；
+                              最近状态 {getStatusLabel(editingPlanData?.last_status)}。
+                              {editingPlanOverview?.refreshing
+                                ? editingPlanOverview.stale
+                                  ? ' 概览正在刷新，当前先显示最近一次缓存统计。'
+                                  : ' 概览正在刷新，稍后会自动更新。'
+                                : ''}
+                              {editingPlanData?.last_error_message ? ` 最近异常：${editingPlanData.last_error_message}` : ''}
+                            </Text>
+                          </div>
                         </div>
-                        <div className="link-check-runtime-plan-modal-overview-row">
-                          <Text strong>自动清理</Text>
-                          <Text type="secondary">
-                            {cleanupModeLabelMap[planDraft.cleanup_mode]}
-                            {planDraft.cleanup_mode === 'none'
-                              ? '，只做巡检，不自动改动消息。'
-                              : `，连续 ${planDraft.cleanup_min_consecutive_invalid_runs} 次失效后才执行。`}
-                          </Text>
-                        </div>
-                        <div className="link-check-runtime-plan-modal-overview-row">
-                          <Text strong>运行信息</Text>
-                          <Text type="secondary">
-                            下次执行 {formatDateTime(editingPlanData?.next_run_at)}；
-                            上次执行 {formatDateTime(editingPlanData?.last_run_at)}；
-                            最近状态 {getStatusLabel(editingPlanData?.last_status)}。
-                          </Text>
-                        </div>
-                      </div>
-
-                      <div className="link-check-runtime-plan-modal-alerts">
-                        <Alert
-                          type={editingPlanOverview?.can_finish_within_cycle ? 'success' : 'warning'}
-                          showIcon
-                          message={editingPlanOverview?.summary || '等待系统计算计划概览'}
-                        />
-
-                        {editingPlanOverview?.refreshing ? (
-                          <Alert
-                            type="info"
-                            showIcon
-                            message={
-                              editingPlanOverview.stale
-                                ? '概览正在后台刷新，当前先展示最近一次缓存统计。'
-                                : '概览正在后台刷新，稍后会自动更新。'
-                            }
-                          />
-                        ) : null}
-
-                        {editingPlanOverview?.warnings.length ? (
-                          <Alert type="warning" showIcon message={editingPlanOverview.warnings.join('；')} />
-                        ) : null}
-
-                        {editingPlanData?.last_error_message ? (
-                          <Alert
-                            type={editingPlanData.last_status === 'failed' ? 'error' : 'info'}
-                            showIcon
-                            message={editingPlanData.last_error_message}
-                          />
-                        ) : null}
                       </div>
                     </div>
                   </div>
@@ -1968,7 +1960,7 @@ const LinkCheckManagerRuntime = () => {
                   <span className="link-check-runtime-task-meta">{getTriggerSourceLabel(currentTask.trigger_source)}</span>
                   <span className="link-check-runtime-task-meta">{getTaskModeLabel(currentTask.task_mode)}</span>
                   <span className="link-check-runtime-task-meta">{getPhaseLabel(currentTask.current_phase)}</span>
-                  <span className="link-check-runtime-task-meta">启动于 {formatDateTime(currentTask.started_at)}</span>
+                  <span className="link-check-runtime-task-meta">启动于 {formatRuntimeDateTime(currentTask.started_at)}</span>
                 </div>
               </div>
               <div className="link-check-runtime-task-metrics">
@@ -2108,7 +2100,7 @@ const LinkCheckManagerRuntime = () => {
             <div className="link-check-runtime-result-grid">
               <div className="link-check-runtime-result-card">
                 <span className="link-check-runtime-result-label">检测时间</span>
-                <span className="link-check-runtime-result-value">{formatDateTime(selectedResult.stats.check_time)}</span>
+                <span className="link-check-runtime-result-value">{formatRuntimeDateTime(selectedResult.stats.check_time)}</span>
               </div>
               <div className="link-check-runtime-result-card">
                 <span className="link-check-runtime-result-label">来源 / 模式</span>

@@ -631,7 +631,7 @@
 }
 
 .link-check-runtime-plan-modal-grid {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 12px 14px;
 }
 
@@ -648,8 +648,13 @@
   border-top: 1px solid rgba(216, 227, 238, 0.92);
 }
 
-.link-check-runtime-plan-modal-overview-list,
-.link-check-runtime-plan-modal-alerts {
+.link-check-runtime-plan-modal-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px 24px;
+}
+
+.link-check-runtime-plan-modal-overview-column {
   display: grid;
   gap: 10px;
 }
@@ -661,7 +666,7 @@
   border-bottom: 1px dashed rgba(216, 227, 238, 0.92);
 }
 
-.link-check-runtime-plan-modal-overview-row:last-child {
+.link-check-runtime-plan-modal-overview-column .link-check-runtime-plan-modal-overview-row:last-child {
   padding-bottom: 0;
   border-bottom: 0;
 }
@@ -827,7 +832,7 @@
   .link-check-runtime-manual-inline-fields,
   .link-check-runtime-field-grid--manual,
   .link-check-runtime-plan-modal .link-check-runtime-field-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .link-check-runtime-field--manual-range {
@@ -891,6 +896,10 @@
   .link-check-runtime-plan-modal-head {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .link-check-runtime-plan-modal-overview-grid {
+    grid-template-columns: 1fr;
   }
 
   .link-check-runtime-manual-actions {
