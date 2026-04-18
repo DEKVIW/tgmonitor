@@ -12,6 +12,8 @@ from app.schemas.admin_models import (
     LinkCheckHistoryBatchDeleteRequest,
     LinkCheckHistoryBatchDeleteResult,
     LinkCheckDateRange,
+    LinkCheckPlanCreate,
+    LinkCheckPlanDeleteResult,
     LinkCheckPlanResponse,
     LinkCheckPlanUpdate,
     LinkCheckPreviewRequest,
@@ -20,7 +22,14 @@ from app.schemas.admin_models import (
     LinkCheckTaskStatus,
 )
 from app.services.channel_service import fetch_channel_message_samples
-from app.services.link_check_plan_service import get_link_check_plan, update_link_check_plan
+from app.services.link_check_plan_service import (
+    create_link_check_plan,
+    delete_link_check_plan,
+    get_link_check_plan,
+    get_link_check_plans,
+    update_link_check_plan,
+    update_link_check_plan_by_id,
+)
 from app.services.link_check_selection_service import build_manual_selection_preview
 from app.services.link_check_runtime import (
     delete_task_history_entries,
@@ -145,6 +154,115 @@ async def preview_link_check_task_api(
             detail=f"预估链接检测范围失败: {exc}",
         ) from exc
 
+
+@router.get(
+    "/link-check/plans-legacy",
+    response_model=list[LinkCheckPlanResponse],
+    summary="获取自动巡检计划",
+)
+@router.get(
+    "/link-check/plans",
+    response_model=list[LinkCheckPlanResponse],
+    summary="获取自动巡检计划列表",
+)
+async def get_link_check_plans_api(
+    current_user: Dict[str, Any] = Depends(get_admin_user),
+) -> list[LinkCheckPlanResponse]:
+    del current_user
+
+    try:
+        return [LinkCheckPlanResponse(**item) for item in get_link_check_plans()]
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取自动巡检计划列表失败: {exc}",
+        ) from exc
+
+
+@router.post(
+    "/link-check/plans",
+    response_model=LinkCheckPlanResponse,
+    summary="新增自动巡检计划",
+)
+async def create_link_check_plan_api(
+    request: LinkCheckPlanCreate,
+    current_user: Dict[str, Any] = Depends(get_admin_user),
+) -> LinkCheckPlanResponse:
+    try:
+        return LinkCheckPlanResponse(
+            **create_link_check_plan(request.model_dump(), updated_by=current_user.get("username"))
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"新增自动巡检计划失败: {exc}",
+        ) from exc
+
+
+@router.put(
+    "/link-check/plans/{plan_id}",
+    response_model=LinkCheckPlanResponse,
+    summary="更新自动巡检计划",
+)
+async def update_link_check_plan_by_id_api(
+    plan_id: int,
+    request: LinkCheckPlanUpdate,
+    current_user: Dict[str, Any] = Depends(get_admin_user),
+) -> LinkCheckPlanResponse:
+    try:
+        return LinkCheckPlanResponse(
+            **update_link_check_plan_by_id(plan_id, request.model_dump(), updated_by=current_user.get("username"))
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"更新自动巡检计划失败: {exc}",
+        ) from exc
+
+
+@router.delete(
+    "/link-check/plans/{plan_id}",
+    response_model=LinkCheckPlanDeleteResult,
+    summary="删除自动巡检计划",
+)
+async def delete_link_check_plan_api(
+    plan_id: int,
+    current_user: Dict[str, Any] = Depends(get_admin_user),
+) -> LinkCheckPlanDeleteResult:
+    del current_user
+
+    try:
+        return LinkCheckPlanDeleteResult(**delete_link_check_plan(plan_id))
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"删除自动巡检计划失败: {exc}",
+        ) from exc
 
 @router.get(
     "/link-check/plan",

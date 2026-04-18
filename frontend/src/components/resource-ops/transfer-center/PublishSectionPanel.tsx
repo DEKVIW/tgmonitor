@@ -557,9 +557,10 @@ const PublishSectionPanel = ({ refreshToken }: PublishSectionProps) => {
       dataIndex: 'published_title',
       key: 'published_title',
       width: 300,
+      className: 'resource-ops-transfer-col-resource resource-ops-transfer-col-resource-wide',
       render: (_, record) => (
         <div className="resource-ops-transfer-title-cell">
-          <Tooltip title="点击复制标题">
+          <Tooltip title={record.published_title}>
             <button type="button" className="resource-ops-transfer-title-copy" onClick={() => void copyText(record.published_title, '已复制标题')}>
               {record.published_title}
             </button>

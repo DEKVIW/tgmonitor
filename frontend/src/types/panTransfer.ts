@@ -279,11 +279,17 @@ export interface PanTransferFollowTaskAutomationConfig {
   mode: string
   reuse_existing_share_if_valid: boolean
   update_publish_record: boolean
+  origin_mode_available?: boolean
+  origin_mode_reason?: string | null
   stop_reason?: string | null
   stopped_at?: string | null
   cooldown_until?: string | null
   last_auto_check_at?: string | null
   last_auto_sync_at?: string | null
+  last_auto_source_kind?: string | null
+  last_auto_sync_mode?: string | null
+  last_auto_result?: string | null
+  last_auto_batch_id?: number | null
 }
 
 export interface PanTransferFollowTaskSettingsUpdateRequest {
@@ -299,10 +305,20 @@ export interface PanTransferFollowTaskSyncSelectionEntry {
   path?: string | null
 }
 
+export interface PanTransferFollowTaskSyncSelectionGroup {
+  parent_entry_id?: string | null
+  parent_path?: string | null
+  parent_name?: string | null
+  target_relative_path?: string | null
+  selected_entries: PanTransferFollowTaskSyncSelectionEntry[]
+  selected_count: number
+}
+
 export interface PanTransferFollowTaskSyncRequest {
   source_kind?: 'current' | 'candidate' | string
   sync_mode?: 'standard' | 'incremental' | 'replace_all' | string
   selected_entries?: PanTransferFollowTaskSyncSelectionEntry[]
+  selection_groups?: PanTransferFollowTaskSyncSelectionGroup[]
   selection_parent_entry_id?: string | null
   selection_parent_path?: string | null
   selection_parent_name?: string | null
@@ -362,6 +378,7 @@ export interface PanTransferFollowTaskCandidateAssessment {
   is_same_work?: boolean | null
   is_newer?: boolean | null
   should_promote?: boolean | null
+  same_episode_replace?: boolean | null
   candidate_origin?: string | null
   confidence?: number | null
   current_episode?: number | null
@@ -470,6 +487,94 @@ export interface PanTransferFollowTaskSyncResponse {
   batch_id: number
   batch_item_id: number
   started: boolean
+}
+
+export interface PanTransferFollowTaskFileDiagnosisRequest {
+  source_kind?: 'current' | 'candidate' | string
+  near_episode_window?: number
+}
+
+export interface PanTransferFollowTaskFileDiagnosisEntry {
+  side: string
+  name: string
+  entry_id?: string | null
+  path?: string | null
+  parent_entry_id?: string | null
+  parent_path?: string | null
+  parent_name?: string | null
+  relative_parent_path?: string | null
+  updated_at?: string | null
+  size_bytes?: number | null
+  extension?: string | null
+  episode_numbers: number[]
+  season?: number | null
+  core_title?: string | null
+  parse_level: string
+  parse_reason: string
+  confidence: number
+  title_match_score: number
+  quality_tags: string[]
+  within_window: boolean
+  accepted: boolean
+  selected: boolean
+  target_relative_path?: string | null
+}
+
+export interface PanTransferFollowTaskFileDiagnosisPlanItem {
+  name: string
+  path?: string | null
+  parent_path?: string | null
+  episodes: number[]
+  season?: number | null
+  updated_at?: string | null
+  size_bytes?: number | null
+  quality_tags: string[]
+  parse_level: string
+  parse_reason: string
+  target_relative_path?: string | null
+}
+
+export interface PanTransferFollowTaskFileDiagnosisSummary {
+  source_kind: string
+  tracked_resource_title: string
+  tracked_core_title?: string | null
+  tracked_season?: number | null
+  tracked_episode?: number | null
+  anchor_episode?: number | null
+  latest_target_episode?: number | null
+  near_episode_window: number
+  source_dir_count: number
+  target_dir_count: number
+  source_file_count: number
+  target_file_count: number
+  source_video_count: number
+  target_video_count: number
+  quick_parsed_count: number
+  full_parsed_count: number
+  skipped_outside_window_count: number
+  recent_without_episode_full_parse_count: number
+  expansions_used: number
+  recommended_entry_count: number
+  recommended_episode_numbers: number[]
+  selection_group_count: number
+  source_latest_episode?: number | null
+  source_episode_numbers: number[]
+  target_episode_numbers: number[]
+  full_entry_count: number
+  full_selection_group_count: number
+  inferred_target_relative_path?: string | null
+  warnings: string[]
+  stop_reason: string
+}
+
+export interface PanTransferFollowTaskFileDiagnosisResponse {
+  summary: PanTransferFollowTaskFileDiagnosisSummary
+  recommended_selection_groups: PanTransferFollowTaskSyncSelectionGroup[]
+  recommended_plan_items: PanTransferFollowTaskFileDiagnosisPlanItem[]
+  full_selection_groups: PanTransferFollowTaskSyncSelectionGroup[]
+  full_plan_items: PanTransferFollowTaskFileDiagnosisPlanItem[]
+  source_entries: PanTransferFollowTaskFileDiagnosisEntry[]
+  target_entries: PanTransferFollowTaskFileDiagnosisEntry[]
 }
 
 export interface PanTransferReplacementLogItem {

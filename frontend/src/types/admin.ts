@@ -554,6 +554,9 @@ export interface LinkCheckTaskStatus {
   duration?: number
   logs?: string[]
   error?: string
+  plan_id?: number | null
+  plan_name?: string | null
+  plan_mode?: string | null
 }
 
 export interface LinkCheckTaskHistory {
@@ -570,6 +573,9 @@ export interface LinkCheckTaskHistory {
   trigger_source?: 'manual' | 'scheduled' | string
   task_mode?: string
   scope_label?: string
+  plan_id?: number | null
+  plan_name?: string | null
+  plan_mode?: string | null
 }
 
 export interface LinkCheckTaskResult {
@@ -588,6 +594,8 @@ export interface LinkCheckTaskResult {
     task_mode?: string
     scope_label?: string
     plan_id?: number | null
+    plan_name?: string | null
+    plan_mode?: string | null
   }
   details: Array<{
     url: string
@@ -612,7 +620,12 @@ export interface LinkCheckPlanOverview {
   summary: string
   next_run_at?: string | null
   last_run_at?: string | null
+  plan_mode?: 'backfill' | 'frontier' | string | null
+  schedule_priority: number
   cursor_message_id?: number | null
+  window_lower_message_id?: number | null
+  window_upper_message_id?: number | null
+  completed_through_message_id?: number | null
   cycle_started_at?: string | null
   cycle_completed_at?: string | null
   task_link_limit: number
@@ -624,31 +637,39 @@ export interface LinkCheckPlanOverview {
 
 export interface LinkCheckPlanUpdate {
   name?: string | null
+  plan_mode: 'backfill' | 'frontier'
   is_enabled: boolean
   schedule_hour: number
   schedule_minute: number
+  schedule_priority: number
   timezone: string
   cycle_days: number
   batch_link_target: number
   max_batches_per_run: number
   max_concurrent: number
   traversal_order: 'newest_first' | 'oldest_first'
+  overlap_message_count: number
   cleanup_mode: 'none' | 'remove_invalid_links' | 'delete_message_if_empty'
   cleanup_min_consecutive_invalid_runs: number
 }
 
+export interface LinkCheckPlanCreate extends LinkCheckPlanUpdate {}
+
 export interface LinkCheckPlanResponse {
   id: number
   name: string
+  plan_mode: 'backfill' | 'frontier'
   is_enabled: boolean
   schedule_hour: number
   schedule_minute: number
+  schedule_priority: number
   timezone: string
   cycle_days: number
   batch_link_target: number
   max_batches_per_run: number
   max_concurrent: number
   traversal_order: 'newest_first' | 'oldest_first'
+  overlap_message_count: number
   cleanup_mode: 'none' | 'remove_invalid_links' | 'delete_message_if_empty'
   cleanup_min_consecutive_invalid_runs: number
   next_run_at?: string | null
@@ -656,12 +677,20 @@ export interface LinkCheckPlanResponse {
   last_status?: string | null
   last_error_message?: string | null
   cursor_message_id?: number | null
+  window_lower_message_id?: number | null
+  window_upper_message_id?: number | null
+  completed_through_message_id?: number | null
   cycle_started_at?: string | null
   cycle_completed_at?: string | null
   created_at?: string | null
   updated_at?: string | null
   updated_by?: string | null
   overview: LinkCheckPlanOverview
+}
+
+export interface LinkCheckPlanDeleteResult {
+  success: boolean
+  deleted_plan_id: number
 }
 
 export interface LinkCleanupApplyRequest {

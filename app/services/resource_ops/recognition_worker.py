@@ -117,11 +117,13 @@ def process_next_recognition_task(session: Session, *, worker_name: str) -> bool
         link_target_id=int(task.link_target_id),
         source=str(task.source or "manual"),
     )
+    task_id = int(task.id)
+    task_link_target_id = int(task.link_target_id)
 
     try:
         result = resolve_link_target_work(
             session,
-            link_target_id=int(task.link_target_id),
+            link_target_id=task_link_target_id,
             config=config,
         )
         log_line = build_recognition_log_line(result)
@@ -143,7 +145,7 @@ def process_next_recognition_task(session: Session, *, worker_name: str) -> bool
                     "matched_count": 1 if result_status == "matched" else 0,
                     "error_count": 0,
                     "pending_count": binding_summary["pending_count"],
-                    "link_target_id": int(task.link_target_id),
+                    "link_target_id": task_link_target_id,
                     "recognized_title": recognized_title,
                     "status": result_status,
                 },
@@ -169,7 +171,7 @@ def process_next_recognition_task(session: Session, *, worker_name: str) -> bool
                 "matched_count": 0,
                 "error_count": 1,
                 "pending_count": binding_summary["pending_count"],
-                "link_target_id": int(task.link_target_id),
+                "link_target_id": task_link_target_id,
                 "recognized_title": recognized_title,
             },
             updated_by=worker_name,
@@ -185,7 +187,10 @@ def process_next_recognition_task(session: Session, *, worker_name: str) -> bool
         return True
     except Exception as exc:
         error_message = str(exc)
-        mark_recognition_task_error(session, task=task, error_message=error_message)
+        session.rollback()
+        task_for_error = session.get(type(task), task_id)
+        if task_for_error is not None:
+            mark_recognition_task_error(session, task=task_for_error, error_message=error_message)
         update_resource_ops_worker_state(
             session,
             {
@@ -197,6 +202,6 @@ def process_next_recognition_task(session: Session, *, worker_name: str) -> bool
             session,
             worker_name=worker_name,
             last_error=error_message,
-            log_line=f"[ERR] link_target:{int(task.link_target_id)} -> {error_message}",
+            log_line=f"[ERR] link_target:{task_link_target_id} -> {error_message}",
         )
         return True

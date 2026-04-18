@@ -625,15 +625,18 @@ class LinkCheckPlan(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(128), nullable=False, default="默认巡检")
+    plan_mode = Column(String(32), nullable=False, default="backfill")
     is_enabled = Column(Boolean, nullable=False, default=False, index=True)
     schedule_hour = Column(Integer, nullable=False, default=1)
     schedule_minute = Column(Integer, nullable=False, default=0)
+    schedule_priority = Column(Integer, nullable=False, default=100)
     timezone = Column(String(64), nullable=False, default="Asia/Shanghai")
     cycle_days = Column(Integer, nullable=False, default=7)
     batch_link_target = Column(Integer, nullable=False, default=900)
     max_batches_per_run = Column(Integer, nullable=False, default=3)
     max_concurrent = Column(Integer, nullable=False, default=5)
     traversal_order = Column(String(16), nullable=False, default="newest_first")
+    overlap_message_count = Column(Integer, nullable=False, default=200)
     cleanup_mode = Column(String(32), nullable=False, default="none")
     cleanup_min_consecutive_invalid_runs = Column(Integer, nullable=False, default=2)
     next_run_at = Column(DateTime, nullable=True, index=True)
@@ -641,6 +644,9 @@ class LinkCheckPlan(Base):
     last_status = Column(String(32), nullable=True)
     last_error_message = Column(Text, nullable=True)
     cursor_message_id = Column(Integer, nullable=True)
+    window_lower_message_id = Column(Integer, nullable=True)
+    window_upper_message_id = Column(Integer, nullable=True)
+    completed_through_message_id = Column(Integer, nullable=True)
     cycle_started_at = Column(DateTime, nullable=True)
     cycle_completed_at = Column(DateTime, nullable=True)
     extra_json = Column(JSONB, nullable=False, default=dict)
@@ -1103,6 +1109,11 @@ def _ensure_link_check_columns() -> None:
     except Exception:
         detail_columns = set()
 
+    try:
+        plan_columns = {column["name"] for column in inspector.get_columns("link_check_plans")}
+    except Exception:
+        plan_columns = set()
+
     with engine.begin() as connection:
         stats_pending_alters = {
             "trigger_source": "ALTER TABLE link_check_stats ADD COLUMN trigger_source VARCHAR(32) NOT NULL DEFAULT 'manual'",
@@ -1123,6 +1134,19 @@ def _ensure_link_check_columns() -> None:
                 continue
             connection.execute(text(sql))
 
+        plan_pending_alters = {
+            "plan_mode": "ALTER TABLE link_check_plans ADD COLUMN plan_mode VARCHAR(32) NOT NULL DEFAULT 'backfill'",
+            "schedule_priority": "ALTER TABLE link_check_plans ADD COLUMN schedule_priority INTEGER NOT NULL DEFAULT 100",
+            "overlap_message_count": "ALTER TABLE link_check_plans ADD COLUMN overlap_message_count INTEGER NOT NULL DEFAULT 200",
+            "window_lower_message_id": "ALTER TABLE link_check_plans ADD COLUMN window_lower_message_id INTEGER",
+            "window_upper_message_id": "ALTER TABLE link_check_plans ADD COLUMN window_upper_message_id INTEGER",
+            "completed_through_message_id": "ALTER TABLE link_check_plans ADD COLUMN completed_through_message_id INTEGER",
+        }
+        for column_name, sql in plan_pending_alters.items():
+            if column_name in plan_columns:
+                continue
+            connection.execute(text(sql))
+
 
 def _ensure_link_check_indexes() -> None:
     statements = (
@@ -1137,6 +1161,10 @@ def _ensure_link_check_indexes() -> None:
         """
         CREATE INDEX IF NOT EXISTS ix_link_check_plans_enabled_next_run
         ON link_check_plans (is_enabled, next_run_at)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_link_check_plans_enabled_next_run_priority
+        ON link_check_plans (is_enabled, next_run_at, schedule_priority, id)
         """,
     )
     with engine.begin() as connection:

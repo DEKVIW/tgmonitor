@@ -10,6 +10,8 @@ import type {
   PanTransferBatchListResponse,
   PanTransferFollowTaskCreateRequest,
   PanTransferFollowTaskDetailResponse,
+  PanTransferFollowTaskFileDiagnosisRequest,
+  PanTransferFollowTaskFileDiagnosisResponse,
   PanTransferFollowTaskListResponse,
   PanTransferFollowTaskSettingsUpdateRequest,
   PanTransferFollowTaskSyncRequest,
@@ -306,6 +308,17 @@ export const createPanTransferFollowSyncBatch = async (
 ): Promise<PanTransferFollowTaskSyncResponse> => {
   const response = await apiClient.post<PanTransferFollowTaskSyncResponse>(
     `/admin/pan-transfer/follow-tasks/${taskId}/sync`,
+    payload
+  )
+  return response.data
+}
+
+export const diagnosePanTransferFollowTaskFiles = async (
+  taskId: number,
+  payload: PanTransferFollowTaskFileDiagnosisRequest
+): Promise<PanTransferFollowTaskFileDiagnosisResponse> => {
+  const response = await apiClient.post<PanTransferFollowTaskFileDiagnosisResponse>(
+    `/admin/pan-transfer/follow-tasks/${taskId}/file-diagnosis`,
     payload
   )
   return response.data

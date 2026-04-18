@@ -18,6 +18,8 @@ from app.schemas.pan_transfer_models import (
     PanTransferFollowTaskCreateRequest,
     PanTransferFollowTaskSettingsUpdateRequest,
     PanTransferFollowTaskDetailResponse,
+    PanTransferFollowTaskFileDiagnosisRequest,
+    PanTransferFollowTaskFileDiagnosisResponse,
     PanTransferFollowTaskListResponse,
     PanTransferFollowTaskSyncRequest,
     PanTransferFollowTaskSyncResponse,
@@ -46,6 +48,7 @@ from app.services.pan_transfer import (
     create_pan_transfer_follow_task_from_batch_item,
     create_pan_transfer_follow_sync_batch,
     create_manual_pan_transfer_batch,
+    diagnose_pan_transfer_follow_task_files,
     delete_pan_transfer_account,
     delete_pan_transfer_batch,
     delete_pan_transfer_follow_task,
@@ -926,6 +929,41 @@ async def create_pan_transfer_follow_sync_batch_api(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to create follow sync batch: {exc}",
+        ) from exc
+
+
+@router.post(
+    "/follow-tasks/{task_id}/file-diagnosis",
+    response_model=PanTransferFollowTaskFileDiagnosisResponse,
+    summary="Build a smart file diagnosis plan for a follow task",
+)
+async def diagnose_pan_transfer_follow_task_files_api(
+    task_id: int,
+    payload: PanTransferFollowTaskFileDiagnosisRequest,
+    current_user: dict[str, Any] = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+) -> PanTransferFollowTaskFileDiagnosisResponse:
+    try:
+        result = await diagnose_pan_transfer_follow_task_files(
+            db,
+            task_id=task_id,
+            source_kind=payload.source_kind,
+            near_episode_window=payload.near_episode_window,
+            operator=str(current_user.get("username") or current_user.get("account") or "admin"),
+        )
+        db.commit()
+        return PanTransferFollowTaskFileDiagnosisResponse(**result)
+    except LookupError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to diagnose follow task files: {exc}",
         ) from exc
 
 

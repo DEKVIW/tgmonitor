@@ -13,7 +13,10 @@ from sqlalchemy.orm import Session
 from app.models.models import LinkCheckPlan, Message, engine, ensure_runtime_storage_tables
 from app.services.link_check_selection_service import (
     ALLOWED_TRAVERSAL_ORDERS,
+    TRAVERSAL_NEWEST_FIRST,
+    TRAVERSAL_OLDEST_FIRST,
     build_plan_batch_selection_snapshot,
+    get_latest_message_id_with_links,
     get_link_check_dataset_summary,
 )
 from app.services.link_check_runtime import (
@@ -30,10 +33,16 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_LINK_CHECK_PLAN_NAME = "默认巡检"
 ALLOWED_PLAN_CLEANUP_MODES = {"none", "remove_invalid_links", "delete_message_if_empty"}
-PLAN_WAIT_WHEN_BLOCKED_MINUTES = 30
 PLAN_OVERVIEW_CACHE_KEY = "overview_cache"
 PLAN_OVERVIEW_CACHE_TTL_SECONDS = 300
 PLAN_OVERVIEW_REFRESH_LEASE_SECONDS = 180
+DEFAULT_BACKFILL_PLAN_NAME = "补库巡检"
+DEFAULT_FRONTIER_PLAN_NAME = "追新巡检"
+PLAN_MODE_BACKFILL = "backfill"
+PLAN_MODE_FRONTIER = "frontier"
+ALLOWED_PLAN_MODES = {PLAN_MODE_BACKFILL, PLAN_MODE_FRONTIER}
+LEGACY_PLAN_MIGRATION_MARKER = "multi_plan_migrated"
+DEFAULT_FRONTIER_OVERLAP_MESSAGE_COUNT = 200
 
 _dispatch_lock = threading.RLock()
 _active_plan_threads: set[int] = set()
@@ -165,18 +174,52 @@ def _store_plan_overview_cache(
     _set_plan_overview_cache(plan, cache)
 
 
-def _build_default_plan_values() -> dict[str, Any]:
+def _default_plan_name(plan_mode: str) -> str:
+    return DEFAULT_FRONTIER_PLAN_NAME if plan_mode == PLAN_MODE_FRONTIER else DEFAULT_BACKFILL_PLAN_NAME
+
+
+def _normalize_plan_mode(value: Any) -> str:
+    normalized = str(value or PLAN_MODE_BACKFILL).strip().lower()
+    if normalized not in ALLOWED_PLAN_MODES:
+        raise ValueError("plan_mode must be backfill or frontier")
+    return normalized
+
+
+def _effective_plan_mode(plan: LinkCheckPlan) -> str:
+    raw_mode = str(getattr(plan, "plan_mode", "") or "").strip().lower()
+    if raw_mode in ALLOWED_PLAN_MODES:
+        return raw_mode
+
+    traversal_order = str(getattr(plan, "traversal_order", "") or "").strip().lower()
+    if traversal_order == TRAVERSAL_NEWEST_FIRST:
+        return PLAN_MODE_FRONTIER
+    return PLAN_MODE_BACKFILL
+
+
+def _direction_for_plan_mode(plan_mode: str) -> str:
+    normalized_mode = _normalize_plan_mode(plan_mode)
+    if normalized_mode == PLAN_MODE_FRONTIER:
+        return TRAVERSAL_NEWEST_FIRST
+    return TRAVERSAL_OLDEST_FIRST
+
+
+def _build_default_plan_values(plan_mode: str = PLAN_MODE_BACKFILL) -> dict[str, Any]:
+    normalized_mode = _normalize_plan_mode(plan_mode)
+    is_frontier = normalized_mode == PLAN_MODE_FRONTIER
     return {
-        "name": DEFAULT_LINK_CHECK_PLAN_NAME,
+        "name": _default_plan_name(normalized_mode),
+        "plan_mode": normalized_mode,
         "is_enabled": False,
-        "schedule_hour": 1,
+        "schedule_hour": 3 if is_frontier else 1,
         "schedule_minute": 0,
+        "schedule_priority": 50 if is_frontier else 100,
         "timezone": "Asia/Shanghai",
         "cycle_days": 7,
-        "batch_link_target": 900,
-        "max_batches_per_run": 3,
+        "batch_link_target": 600 if is_frontier else 900,
+        "max_batches_per_run": 2 if is_frontier else 3,
         "max_concurrent": 5,
-        "traversal_order": "newest_first",
+        "traversal_order": _direction_for_plan_mode(normalized_mode),
+        "overlap_message_count": DEFAULT_FRONTIER_OVERLAP_MESSAGE_COUNT,
         "cleanup_mode": "none",
         "cleanup_min_consecutive_invalid_runs": 2,
         "next_run_at": None,
@@ -184,6 +227,9 @@ def _build_default_plan_values() -> dict[str, Any]:
         "last_status": None,
         "last_error_message": None,
         "cursor_message_id": None,
+        "window_lower_message_id": None,
+        "window_upper_message_id": None,
+        "completed_through_message_id": None,
         "cycle_started_at": None,
         "cycle_completed_at": None,
         "extra_json": {},
@@ -208,13 +254,58 @@ def _compute_next_run_at(plan: LinkCheckPlan, *, now_utc: datetime | None = None
     return _to_utc_storage(candidate.astimezone(timezone.utc))
 
 
-def _ensure_plan(session: Session) -> LinkCheckPlan:
+def _clear_plan_window(plan: LinkCheckPlan) -> None:
+    plan.cursor_message_id = None
+    plan.window_lower_message_id = None
+    plan.window_upper_message_id = None
+    plan.cycle_started_at = None
+
+
+def _mark_legacy_plan_migrated(plan: LinkCheckPlan) -> None:
+    extra_json = _get_plan_extra_json(plan)
+    extra_json[LEGACY_PLAN_MIGRATION_MARKER] = True
+    plan.extra_json = extra_json
+
+
+def _is_legacy_plan_migrated(plan: LinkCheckPlan) -> bool:
+    extra_json = _get_plan_extra_json(plan)
+    return bool(extra_json.get(LEGACY_PLAN_MIGRATION_MARKER))
+
+
+def _maybe_migrate_legacy_single_plan(session: Session) -> None:
+    plans = session.query(LinkCheckPlan).order_by(LinkCheckPlan.id.asc()).all()
+    if len(plans) != 1:
+        return
+
+    plan = plans[0]
+    if _is_legacy_plan_migrated(plan):
+        return
+
+    inferred_mode = (
+        PLAN_MODE_FRONTIER
+        if str(plan.traversal_order or "").strip().lower() == TRAVERSAL_NEWEST_FIRST
+        else PLAN_MODE_BACKFILL
+    )
+    plan.plan_mode = inferred_mode
+    plan.schedule_priority = 50 if inferred_mode == PLAN_MODE_FRONTIER else 100
+    if not int(plan.overlap_message_count or 0):
+        plan.overlap_message_count = DEFAULT_FRONTIER_OVERLAP_MESSAGE_COUNT
+    if not str(plan.name or "").strip() or str(plan.name or "").strip() == DEFAULT_LINK_CHECK_PLAN_NAME:
+        plan.name = _default_plan_name(inferred_mode)
+    _mark_legacy_plan_migrated(plan)
+    session.add(plan)
+    session.commit()
+
+
+def _ensure_default_plan(session: Session) -> LinkCheckPlan:
     ensure_runtime_storage_tables()
+    _maybe_migrate_legacy_single_plan(session)
     plan = session.query(LinkCheckPlan).order_by(LinkCheckPlan.id.asc()).first()
     if plan is not None:
         return plan
 
     plan = LinkCheckPlan(**_build_default_plan_values())
+    _mark_legacy_plan_migrated(plan)
     session.add(plan)
     session.commit()
     session.refresh(plan)
@@ -243,19 +334,129 @@ def _coerce_bool(value: Any) -> bool:
     return bool(value)
 
 
+def _apply_plan_values(
+    plan: LinkCheckPlan,
+    values: dict[str, Any],
+    *,
+    runtime_config: dict[str, Any],
+    updated_by: str | None = None,
+    is_create: bool = False,
+) -> None:
+    max_links_limit = int(runtime_config["link_check_max_allowed_links"])
+    max_concurrent_limit = int(runtime_config["link_check_max_allowed_concurrent"])
+    previous_mode = _effective_plan_mode(plan)
+    next_mode = _normalize_plan_mode(values.get("plan_mode", previous_mode))
+
+    cleanup_mode = str(values.get("cleanup_mode") or plan.cleanup_mode or "none").strip().lower()
+    if cleanup_mode not in ALLOWED_PLAN_CLEANUP_MODES:
+        raise ValueError("cleanup_mode must be none, remove_invalid_links or delete_message_if_empty")
+
+    if is_create:
+        default_name = _default_plan_name(next_mode)
+    else:
+        default_name = str(plan.name or "").strip() or _default_plan_name(next_mode)
+
+    plan.name = str(values.get("name") or default_name).strip()[:128] or _default_plan_name(next_mode)
+    plan.plan_mode = next_mode
+    plan.is_enabled = _coerce_bool(values.get("is_enabled", plan.is_enabled))
+    plan.schedule_hour = _coerce_int(
+        values.get("schedule_hour", plan.schedule_hour),
+        minimum=0,
+        maximum=23,
+        field_name="schedule_hour",
+    )
+    plan.schedule_minute = _coerce_int(
+        values.get("schedule_minute", plan.schedule_minute),
+        minimum=0,
+        maximum=59,
+        field_name="schedule_minute",
+    )
+    plan.schedule_priority = _coerce_int(
+        values.get("schedule_priority", plan.schedule_priority),
+        minimum=1,
+        maximum=9999,
+        field_name="schedule_priority",
+    )
+    plan.timezone = str(values.get("timezone") or plan.timezone or "Asia/Shanghai").strip()[:64] or "Asia/Shanghai"
+    plan.cycle_days = _coerce_int(
+        values.get("cycle_days", plan.cycle_days),
+        minimum=1,
+        maximum=90,
+        field_name="cycle_days",
+    )
+    plan.batch_link_target = _coerce_int(
+        values.get("batch_link_target", plan.batch_link_target),
+        minimum=100,
+        maximum=max_links_limit,
+        field_name="batch_link_target",
+    )
+    plan.max_batches_per_run = _coerce_int(
+        values.get("max_batches_per_run", plan.max_batches_per_run),
+        minimum=1,
+        maximum=12,
+        field_name="max_batches_per_run",
+    )
+    plan.max_concurrent = _coerce_int(
+        values.get("max_concurrent", plan.max_concurrent),
+        minimum=1,
+        maximum=max_concurrent_limit,
+        field_name="max_concurrent",
+    )
+    plan.traversal_order = _direction_for_plan_mode(next_mode)
+    plan.overlap_message_count = _coerce_int(
+        values.get("overlap_message_count", plan.overlap_message_count or DEFAULT_FRONTIER_OVERLAP_MESSAGE_COUNT),
+        minimum=0,
+        maximum=5000,
+        field_name="overlap_message_count",
+    )
+    plan.cleanup_mode = cleanup_mode
+    plan.cleanup_min_consecutive_invalid_runs = _coerce_int(
+        values.get(
+            "cleanup_min_consecutive_invalid_runs",
+            plan.cleanup_min_consecutive_invalid_runs,
+        ),
+        minimum=1,
+        maximum=10,
+        field_name="cleanup_min_consecutive_invalid_runs",
+    )
+    plan.updated_by = updated_by
+    plan.next_run_at = _compute_next_run_at(plan) if plan.is_enabled else None
+    if not plan.is_enabled:
+        plan.last_error_message = None
+    if is_create or next_mode != previous_mode:
+        _clear_plan_window(plan)
+        plan.completed_through_message_id = None
+        plan.cycle_completed_at = None
+    _mark_plan_overview_cache_stale(plan)
+    _mark_legacy_plan_migrated(plan)
+
+
+def _load_plans(session: Session) -> list[LinkCheckPlan]:
+    ensure_runtime_storage_tables()
+    _maybe_migrate_legacy_single_plan(session)
+    plans = session.query(LinkCheckPlan).order_by(LinkCheckPlan.schedule_hour.asc(), LinkCheckPlan.schedule_minute.asc(), LinkCheckPlan.schedule_priority.asc(), LinkCheckPlan.id.asc()).all()
+    if plans:
+        return plans
+    return [_ensure_default_plan(session)]
+
+
 def _serialize_plan(plan: LinkCheckPlan, overview: dict[str, Any]) -> dict[str, Any]:
+    plan_mode = _effective_plan_mode(plan)
     return {
         "id": plan.id,
         "name": plan.name,
+        "plan_mode": plan_mode,
         "is_enabled": bool(plan.is_enabled),
         "schedule_hour": plan.schedule_hour,
         "schedule_minute": plan.schedule_minute,
+        "schedule_priority": plan.schedule_priority,
         "timezone": plan.timezone,
         "cycle_days": plan.cycle_days,
         "batch_link_target": plan.batch_link_target,
         "max_batches_per_run": plan.max_batches_per_run,
         "max_concurrent": plan.max_concurrent,
         "traversal_order": plan.traversal_order,
+        "overlap_message_count": plan.overlap_message_count,
         "cleanup_mode": plan.cleanup_mode,
         "cleanup_min_consecutive_invalid_runs": plan.cleanup_min_consecutive_invalid_runs,
         "next_run_at": _to_iso(plan.next_run_at),
@@ -263,6 +464,9 @@ def _serialize_plan(plan: LinkCheckPlan, overview: dict[str, Any]) -> dict[str, 
         "last_status": plan.last_status,
         "last_error_message": plan.last_error_message,
         "cursor_message_id": plan.cursor_message_id,
+        "window_lower_message_id": plan.window_lower_message_id,
+        "window_upper_message_id": plan.window_upper_message_id,
+        "completed_through_message_id": plan.completed_through_message_id,
         "cycle_started_at": _to_iso(plan.cycle_started_at),
         "cycle_completed_at": _to_iso(plan.cycle_completed_at),
         "created_at": _to_iso(plan.created_at),
@@ -282,6 +486,7 @@ def _compose_plan_overview(
     refreshing: bool = False,
     placeholder: bool = False,
 ) -> dict[str, Any]:
+    plan_mode = _effective_plan_mode(plan)
     dataset_summary = _normalize_dataset_summary(dataset_summary) or _build_empty_dataset_summary()
     total_links = int(dataset_summary["total_links"] or 0)
     total_messages = int(dataset_summary["total_messages_with_links"] or 0)
@@ -321,7 +526,12 @@ def _compose_plan_overview(
         "summary": summary,
         "next_run_at": _to_iso(plan.next_run_at),
         "last_run_at": _to_iso(plan.last_run_at),
+        "plan_mode": plan_mode,
+        "schedule_priority": plan.schedule_priority,
         "cursor_message_id": plan.cursor_message_id,
+        "window_lower_message_id": plan.window_lower_message_id,
+        "window_upper_message_id": plan.window_upper_message_id,
+        "completed_through_message_id": plan.completed_through_message_id,
         "cycle_started_at": _to_iso(plan.cycle_started_at),
         "cycle_completed_at": _to_iso(plan.cycle_completed_at),
         "task_link_limit": int(runtime_config["link_check_max_allowed_links"]),
@@ -446,58 +656,77 @@ def _load_plan_overview(plan: LinkCheckPlan, *, refresh_if_needed: bool) -> dict
     )
 
 
+def get_link_check_plans() -> list[dict[str, Any]]:
+    ensure_runtime_storage_tables()
+    with Session(engine) as session:
+        plans = _load_plans(session)
+        return [_serialize_plan(plan, _load_plan_overview(plan, refresh_if_needed=True)) for plan in plans]
+
+
+def create_link_check_plan(values: dict[str, Any], *, updated_by: str | None = None) -> dict[str, Any]:
+    ensure_runtime_storage_tables()
+    runtime_config = get_link_check_runtime_config()
+    with Session(engine) as session:
+        requested_mode = _normalize_plan_mode(values.get("plan_mode", PLAN_MODE_BACKFILL))
+        plan = LinkCheckPlan(**_build_default_plan_values(requested_mode))
+        _apply_plan_values(plan, values, runtime_config=runtime_config, updated_by=updated_by, is_create=True)
+        session.add(plan)
+        session.commit()
+        session.refresh(plan)
+        overview = _load_plan_overview(plan, refresh_if_needed=True)
+        return _serialize_plan(plan, overview)
+
+
+def update_link_check_plan_by_id(
+    plan_id: int,
+    values: dict[str, Any],
+    *,
+    updated_by: str | None = None,
+) -> dict[str, Any]:
+    ensure_runtime_storage_tables()
+    runtime_config = get_link_check_runtime_config()
+    with Session(engine) as session:
+        plan = session.get(LinkCheckPlan, int(plan_id))
+        if plan is None:
+            raise LookupError(f"link check plan {plan_id} was not found")
+        _apply_plan_values(plan, values, runtime_config=runtime_config, updated_by=updated_by)
+        session.add(plan)
+        session.commit()
+        session.refresh(plan)
+        overview = _load_plan_overview(plan, refresh_if_needed=True)
+        return _serialize_plan(plan, overview)
+
+
+def delete_link_check_plan(plan_id: int) -> dict[str, Any]:
+    ensure_runtime_storage_tables()
+    with Session(engine) as session:
+        plan = session.get(LinkCheckPlan, int(plan_id))
+        if plan is None:
+            raise LookupError(f"link check plan {plan_id} was not found")
+
+        with _dispatch_lock:
+            if int(plan.id) in _active_plan_threads:
+                raise ValueError("cannot delete a running plan")
+
+        session.delete(plan)
+        session.commit()
+        return {"success": True, "deleted_plan_id": int(plan_id)}
+
+
 def get_link_check_plan() -> dict[str, Any]:
     ensure_runtime_storage_tables()
     with Session(engine) as session:
-        plan = _ensure_plan(session)
+        plan = _ensure_default_plan(session)
         overview = _load_plan_overview(plan, refresh_if_needed=True)
         return _serialize_plan(plan, overview)
 
 
 def update_link_check_plan(values: dict[str, Any], *, updated_by: str | None = None) -> dict[str, Any]:
     ensure_runtime_storage_tables()
-    runtime_config = get_link_check_runtime_config()
-    max_links_limit = int(runtime_config["link_check_max_allowed_links"])
-    max_concurrent_limit = int(runtime_config["link_check_max_allowed_concurrent"])
-
     with Session(engine) as session:
-        plan = _ensure_plan(session)
-        traversal_order = str(values.get("traversal_order") or plan.traversal_order).strip().lower()
-        if traversal_order not in ALLOWED_TRAVERSAL_ORDERS:
-            raise ValueError("traversal_order must be newest_first or oldest_first")
-
-        cleanup_mode = str(values.get("cleanup_mode") or plan.cleanup_mode).strip().lower()
-        if cleanup_mode not in ALLOWED_PLAN_CLEANUP_MODES:
-            raise ValueError("cleanup_mode must be none, remove_invalid_links or delete_message_if_empty")
-
-        plan.name = str(values.get("name") or plan.name or DEFAULT_LINK_CHECK_PLAN_NAME).strip()[:128] or DEFAULT_LINK_CHECK_PLAN_NAME
-        plan.is_enabled = _coerce_bool(values.get("is_enabled", plan.is_enabled))
-        plan.schedule_hour = _coerce_int(values.get("schedule_hour", plan.schedule_hour), minimum=0, maximum=23, field_name="schedule_hour")
-        plan.schedule_minute = _coerce_int(values.get("schedule_minute", plan.schedule_minute), minimum=0, maximum=59, field_name="schedule_minute")
-        plan.timezone = str(values.get("timezone") or plan.timezone or "Asia/Shanghai").strip()[:64] or "Asia/Shanghai"
-        plan.cycle_days = _coerce_int(values.get("cycle_days", plan.cycle_days), minimum=1, maximum=90, field_name="cycle_days")
-        plan.batch_link_target = _coerce_int(values.get("batch_link_target", plan.batch_link_target), minimum=100, maximum=max_links_limit, field_name="batch_link_target")
-        plan.max_batches_per_run = _coerce_int(values.get("max_batches_per_run", plan.max_batches_per_run), minimum=1, maximum=12, field_name="max_batches_per_run")
-        plan.max_concurrent = _coerce_int(values.get("max_concurrent", plan.max_concurrent), minimum=1, maximum=max_concurrent_limit, field_name="max_concurrent")
-        plan.traversal_order = traversal_order
-        plan.cleanup_mode = cleanup_mode
-        plan.cleanup_min_consecutive_invalid_runs = _coerce_int(
-            values.get("cleanup_min_consecutive_invalid_runs", plan.cleanup_min_consecutive_invalid_runs),
-            minimum=1,
-            maximum=10,
-            field_name="cleanup_min_consecutive_invalid_runs",
-        )
-        plan.updated_by = updated_by
-        plan.next_run_at = _compute_next_run_at(plan) if plan.is_enabled else None
-        if not plan.is_enabled:
-            plan.last_error_message = None
-        _mark_plan_overview_cache_stale(plan)
-
-        session.add(plan)
-        session.commit()
-        session.refresh(plan)
-        overview = _load_plan_overview(plan, refresh_if_needed=True)
-        return _serialize_plan(plan, overview)
+        plan = _ensure_default_plan(session)
+        plan_id = int(plan.id)
+    return update_link_check_plan_by_id(plan_id, values, updated_by=updated_by)
 
 
 def mark_link_check_plan_overview_stale(
@@ -507,16 +736,25 @@ def mark_link_check_plan_overview_stale(
 ) -> bool:
     ensure_runtime_storage_tables()
     with Session(engine) as session:
-        plan = session.get(LinkCheckPlan, plan_id) if plan_id is not None else _ensure_plan(session)
-        if plan is None:
+        if plan_id is None:
+            plans = _load_plans(session)
+        else:
+            plan = session.get(LinkCheckPlan, int(plan_id))
+            plans = [plan] if plan is not None else []
+
+        if not plans:
             return False
-        _mark_plan_overview_cache_stale(plan)
-        session.add(plan)
+
+        target_plan_ids: list[int] = []
+        for plan in plans:
+            _mark_plan_overview_cache_stale(plan)
+            session.add(plan)
+            target_plan_ids.append(int(plan.id))
         session.commit()
-        target_plan_id = int(plan.id)
 
     if trigger_refresh:
-        _schedule_plan_overview_refresh(target_plan_id)
+        for target_plan_id in target_plan_ids:
+            _schedule_plan_overview_refresh(target_plan_id)
     return True
 
 
@@ -531,12 +769,101 @@ def _wait_for_task_completion(task_id: str, *, timeout_seconds: int = 6 * 3600) 
     return last_status
 
 
+def _prepare_backfill_preview(
+    session: Session,
+    plan: LinkCheckPlan,
+    *,
+    task_link_limit: int,
+) -> dict[str, Any]:
+    if plan.cycle_started_at is None or plan.window_upper_message_id is None:
+        plan.cycle_started_at = _utc_now()
+        plan.cycle_completed_at = None
+        plan.window_lower_message_id = None
+        plan.window_upper_message_id = get_latest_message_id_with_links(session)
+        plan.cursor_message_id = None
+
+    return build_plan_batch_selection_snapshot(
+        session,
+        batch_link_target=min(int(plan.batch_link_target or 0), task_link_limit),
+        direction=TRAVERSAL_OLDEST_FIRST,
+        task_link_limit=task_link_limit,
+        cursor_message_id=plan.cursor_message_id,
+        max_message_id=plan.window_upper_message_id,
+    )
+
+
+def _prepare_frontier_preview(
+    session: Session,
+    plan: LinkCheckPlan,
+    *,
+    task_link_limit: int,
+) -> dict[str, Any]:
+    if plan.cycle_started_at is None or plan.window_upper_message_id is None:
+        latest_message_id = get_latest_message_id_with_links(session)
+        lower_message_id: int | None = None
+        if latest_message_id is not None and plan.completed_through_message_id is not None:
+            overlap = max(0, int(plan.overlap_message_count or 0))
+            lower_candidate = int(plan.completed_through_message_id) - overlap
+            if lower_candidate > 0:
+                lower_message_id = lower_candidate
+
+        plan.cycle_started_at = _utc_now()
+        plan.cycle_completed_at = None
+        plan.window_lower_message_id = lower_message_id
+        plan.window_upper_message_id = latest_message_id
+        plan.cursor_message_id = None
+
+    return build_plan_batch_selection_snapshot(
+        session,
+        batch_link_target=min(int(plan.batch_link_target or 0), task_link_limit),
+        direction=TRAVERSAL_NEWEST_FIRST,
+        task_link_limit=task_link_limit,
+        cursor_message_id=plan.cursor_message_id,
+        min_message_id=plan.window_lower_message_id,
+        max_message_id=plan.window_upper_message_id,
+    )
+
+
+def _prepare_plan_preview(
+    session: Session,
+    plan: LinkCheckPlan,
+    *,
+    task_link_limit: int,
+) -> tuple[str, dict[str, Any]]:
+    plan_mode = _effective_plan_mode(plan)
+    if plan_mode == PLAN_MODE_FRONTIER:
+        return plan_mode, _prepare_frontier_preview(session, plan, task_link_limit=task_link_limit)
+    return plan_mode, _prepare_backfill_preview(session, plan, task_link_limit=task_link_limit)
+
+
+def _update_plan_after_completed_batch(
+    plan: LinkCheckPlan,
+    *,
+    preview: dict[str, Any],
+    plan_mode: str,
+) -> None:
+    if preview.get("has_more_messages") and preview.get("next_cursor_message_id") is not None:
+        plan.cursor_message_id = int(preview["next_cursor_message_id"])
+        if plan_mode == PLAN_MODE_BACKFILL:
+            plan.completed_through_message_id = plan.cursor_message_id
+        return
+
+    if plan.window_upper_message_id is not None:
+        plan.completed_through_message_id = int(plan.window_upper_message_id)
+    plan.cycle_completed_at = _utc_now()
+    _clear_plan_window(plan)
+
+
 def _run_plan_thread(plan_id: int) -> None:
     try:
         _execute_link_check_plan(plan_id)
     finally:
         with _dispatch_lock:
             _active_plan_threads.discard(plan_id)
+        try:
+            claim_due_link_check_plan_runs(limit=1)
+        except Exception:
+            logger.exception("Failed to chain the next due link check plan")
 
 
 def dispatch_link_check_plan(plan_id: int) -> bool:
@@ -557,40 +884,48 @@ def dispatch_link_check_plan(plan_id: int) -> bool:
 
 def claim_due_link_check_plan_runs(*, limit: int = 1) -> int:
     ensure_runtime_storage_tables()
+    del limit
+
+    with _dispatch_lock:
+        if _active_plan_threads:
+            return 0
+
+    if get_active_task_snapshot() is not None:
+        return 0
+
     now_utc = _utc_now()
-    due_plan_ids: list[int] = []
+    due_plan_id: int | None = None
 
     with Session(engine) as session:
-        due_plans = (
+        due_plan = (
             session.query(LinkCheckPlan)
             .filter(
                 LinkCheckPlan.is_enabled.is_(True),
                 LinkCheckPlan.next_run_at.isnot(None),
                 LinkCheckPlan.next_run_at <= now_utc,
             )
-            .order_by(LinkCheckPlan.next_run_at.asc(), LinkCheckPlan.id.asc())
+            .order_by(
+                LinkCheckPlan.next_run_at.asc(),
+                LinkCheckPlan.schedule_priority.asc(),
+                LinkCheckPlan.id.asc(),
+            )
             .with_for_update(skip_locked=True)
-            .limit(max(1, limit))
-            .all()
+            .first()
         )
 
-        for plan in due_plans:
-            if get_active_task_snapshot() is not None:
-                plan.last_status = "waiting"
-                plan.last_error_message = "已有链接检测任务在运行，计划已顺延"
-                plan.next_run_at = now_utc + timedelta(minutes=PLAN_WAIT_WHEN_BLOCKED_MINUTES)
-                continue
+        if due_plan is None:
+            return 0
 
-            plan.last_status = "pending"
-            plan.last_error_message = None
-            plan.next_run_at = _compute_next_run_at(plan, now_utc=now_utc)
-            due_plan_ids.append(plan.id)
-
+        due_plan.last_status = "pending"
+        due_plan.last_error_message = None
+        due_plan.next_run_at = _compute_next_run_at(due_plan, now_utc=now_utc)
+        due_plan_id = int(due_plan.id)
+        session.add(due_plan)
         session.commit()
 
-    for plan_id in due_plan_ids:
-        dispatch_link_check_plan(plan_id)
-    return len(due_plan_ids)
+    if due_plan_id is None:
+        return 0
+    return 1 if dispatch_link_check_plan(due_plan_id) else 0
 
 
 def _execute_link_check_plan(plan_id: int) -> None:
@@ -605,6 +940,10 @@ def _execute_link_check_plan(plan_id: int) -> None:
         max_batches_per_run = int(plan.max_batches_per_run or 1)
 
     for _ in range(max(1, max_batches_per_run)):
+        plan_mode = PLAN_MODE_BACKFILL
+        cleanup_mode = "none"
+        cleanup_min_consecutive_invalid_runs = 1
+
         with Session(engine) as session:
             plan = session.get(LinkCheckPlan, plan_id)
             if plan is None or not plan.is_enabled:
@@ -612,47 +951,47 @@ def _execute_link_check_plan(plan_id: int) -> None:
 
             if get_active_task_snapshot() is not None:
                 plan.last_status = "waiting"
-                plan.last_error_message = "已有链接检测任务在运行，已终止本轮批次"
+                plan.last_error_message = "Another link check task is still running"
                 plan.last_run_at = _utc_now()
+                session.add(plan)
                 session.commit()
                 return
 
-            if plan.cycle_started_at is None:
-                plan.cycle_started_at = _utc_now()
-                plan.cycle_completed_at = None
-                session.commit()
-
-            preview = build_plan_batch_selection_snapshot(
-                session,
-                batch_link_target=min(plan.batch_link_target, task_link_limit),
-                direction=plan.traversal_order,
-                task_link_limit=task_link_limit,
-                cursor_message_id=plan.cursor_message_id,
-            )
+            plan_mode, preview = _prepare_plan_preview(session, plan, task_link_limit=task_link_limit)
 
             if preview["estimated_links"] <= 0:
-                plan.cursor_message_id = None
-                plan.cycle_started_at = None
+                if plan.window_upper_message_id is not None:
+                    plan.completed_through_message_id = int(plan.window_upper_message_id)
+                _clear_plan_window(plan)
                 plan.cycle_completed_at = _utc_now()
                 plan.last_status = "idle"
                 plan.last_error_message = None
                 plan.last_run_at = _utc_now()
+                session.add(plan)
                 session.commit()
                 return
 
+            effective_concurrent = min(int(plan.max_concurrent or 1), max_concurrent_limit)
+            cleanup_mode = str(plan.cleanup_mode or "none")
+            cleanup_min_consecutive_invalid_runs = int(plan.cleanup_min_consecutive_invalid_runs or 1)
+
             task_id, _, created = start_or_reuse_task(
                 preview["scope_label"],
-                min(plan.max_concurrent, max_concurrent_limit),
+                effective_concurrent,
                 task_metadata={
                     "scope_label": preview["scope_label"],
                     "trigger_source": "scheduled",
                     "task_mode": "scheduled_batch",
+                    "plan_id": plan.id,
+                    "plan_name": plan.name,
+                    "plan_mode": plan_mode,
                 },
             )
             if not created:
                 plan.last_status = "waiting"
-                plan.last_error_message = "自动巡检与其他检测任务冲突，本轮已跳过"
+                plan.last_error_message = "Scheduled plan skipped because another task already claimed the worker"
                 plan.last_run_at = _utc_now()
+                session.add(plan)
                 session.commit()
                 return
 
@@ -663,8 +1002,12 @@ def _execute_link_check_plan(plan_id: int) -> None:
                 "task_mode": "scheduled_batch",
                 "trigger_source": "scheduled",
                 "plan_id": plan.id,
+                "plan_name": plan.name,
+                "plan_mode": plan_mode,
             }
-            dispatch_task(task_id, payload, min(plan.max_concurrent, max_concurrent_limit))
+            dispatch_task(task_id, payload, effective_concurrent)
+            session.add(plan)
+            session.commit()
 
         final_status = _wait_for_task_completion(task_id)
 
@@ -678,31 +1021,30 @@ def _execute_link_check_plan(plan_id: int) -> None:
             plan.last_error_message = final_status.get("error")
 
             if final_status.get("status") == "completed":
-                if preview["has_more_messages"] and preview.get("next_cursor_message_id") is not None:
-                    plan.cursor_message_id = int(preview["next_cursor_message_id"])
-                else:
-                    plan.cursor_message_id = None
-                    plan.cycle_started_at = None
-                    plan.cycle_completed_at = _utc_now()
+                _update_plan_after_completed_batch(plan, preview=preview, plan_mode=plan_mode)
+                session.add(plan)
                 session.commit()
             else:
+                session.add(plan)
                 session.commit()
                 return
 
-        if plan.cleanup_mode != "none" and final_status.get("check_time"):
+        if cleanup_mode != "none" and final_status.get("check_time"):
             try:
                 with Session(engine) as cleanup_session:
                     cleanup_result = apply_link_check_cleanup(
                         cleanup_session,
                         str(final_status["check_time"]),
-                        mode=plan.cleanup_mode,
+                        mode=cleanup_mode,
                         dry_run=False,
-                        min_consecutive_invalid_runs=plan.cleanup_min_consecutive_invalid_runs,
+                        min_consecutive_invalid_runs=cleanup_min_consecutive_invalid_runs,
                     )
                 if cleanup_result.get("updated_messages") or cleanup_result.get("deleted_messages"):
-                    mark_link_check_plan_overview_stale(plan.id)
+                    mark_link_check_plan_overview_stale()
             except Exception:
                 logger.exception("Automatic link cleanup failed for plan %s", plan_id)
 
-        if not preview["has_more_messages"]:
+        if not preview.get("has_more_messages"):
             return
+
+    return

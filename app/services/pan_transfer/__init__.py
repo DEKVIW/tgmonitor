@@ -6,6 +6,7 @@ from .accounts import (
     update_pan_transfer_account,
 )
 from .directory_preview import preview_pan_transfer_link_directory
+from .file_diagnosis import diagnose_pan_transfer_follow_task_files
 from .batches import (
     cancel_pan_transfer_batch,
     clear_pan_transfer_batch_logs,
@@ -79,6 +80,7 @@ __all__ = [
     "publish_manual_pan_transfer_message",
     "publish_pan_transfer_batch_item_message",
     "create_pan_transfer_follow_sync_batch",
+    "diagnose_pan_transfer_follow_task_files",
     "queue_pan_transfer_follow_task_check",
     "refresh_pan_transfer_publish_record_share",
     "republish_pan_transfer_publish_record",

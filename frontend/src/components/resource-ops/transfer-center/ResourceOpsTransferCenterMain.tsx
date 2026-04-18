@@ -67,6 +67,17 @@ import {
 } from './shared'
 import '../ResourceOpsTransferCenter.css'
 
+const TRANSFER_CENTER_TAB_STORAGE_KEY = 'resource-ops-transfer-center-active-tab'
+const TRANSFER_CENTER_TAB_KEYS = new Set(['accounts', 'batches', 'follow', 'publish'])
+
+const getInitialTransferCenterTab = () => {
+  if (typeof window === 'undefined') {
+    return 'accounts'
+  }
+  const saved = window.sessionStorage.getItem(TRANSFER_CENTER_TAB_STORAGE_KEY)
+  return saved && TRANSFER_CENTER_TAB_KEYS.has(saved) ? saved : 'accounts'
+}
+
 const renderBatchCreateLabel = (label: string, tip: string) => (
   <span className="resource-ops-transfer-create-label">
     <span>{label}</span>
@@ -77,7 +88,7 @@ const renderBatchCreateLabel = (label: string, tip: string) => (
 )
 
 const ResourceOpsTransferCenterMain = () => {
-  const [activeTab, setActiveTab] = useState('accounts')
+  const [activeTab, setActiveTab] = useState(getInitialTransferCenterTab)
   const isPageVisible = usePageVisibility()
   const [accounts, setAccounts] = useState<PanTransferAccountItem[]>([])
   const [accountsLoading, setAccountsLoading] = useState(false)
@@ -186,6 +197,13 @@ const ResourceOpsTransferCenterMain = () => {
   useEffect(() => {
     void Promise.all([loadAccounts(), loadBatches(1, batchPagination.pageSize)])
   }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !TRANSFER_CENTER_TAB_KEYS.has(activeTab)) {
+      return
+    }
+    window.sessionStorage.setItem(TRANSFER_CENTER_TAB_STORAGE_KEY, activeTab)
+  }, [activeTab])
 
   useEffect(() => {
     const shouldPollBatchList = activeTab === 'batches' && batches.some((item) => item.status === 'running')

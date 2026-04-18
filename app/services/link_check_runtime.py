@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from sqlalchemy.orm import Session
 
 from app.core.monitor_parser import normalize_url
-from app.models.models import LinkCheckDetails, LinkCheckStats, Message, engine
+from app.models.models import LinkCheckDetails, LinkCheckPlan, LinkCheckStats, Message, engine
 from app.services.system_config_service import get_link_check_runtime_config
 
 logger = logging.getLogger(__name__)
@@ -228,6 +228,9 @@ def _build_task_status(
         "scope_label": str(metadata.get("scope_label") or period_desc),
         "trigger_source": str(metadata.get("trigger_source") or "manual"),
         "task_mode": str(metadata.get("task_mode") or "time_range"),
+        "plan_id": metadata.get("plan_id"),
+        "plan_name": metadata.get("plan_name"),
+        "plan_mode": metadata.get("plan_mode"),
         "max_concurrent": max_concurrent,
         "total_messages": 0,
         "total_links": 0,
@@ -1092,6 +1095,15 @@ def get_task_history(limit: int = 20) -> List[Dict[str, Any]]:
             .limit(limit)
             .all()
         )
+        plan_ids = {int(stat.plan_id) for stat in stats if stat.plan_id is not None}
+        plans_by_id = (
+            {
+                int(plan.id): plan
+                for plan in session.query(LinkCheckPlan).filter(LinkCheckPlan.id.in_(plan_ids)).all()
+            }
+            if plan_ids
+            else {}
+        )
         return [
             {
                 "id": stat.id,
@@ -1107,6 +1119,9 @@ def get_task_history(limit: int = 20) -> List[Dict[str, Any]]:
                 "trigger_source": stat.trigger_source,
                 "task_mode": stat.task_mode,
                 "scope_label": stat.scope_label,
+                "plan_id": stat.plan_id,
+                "plan_name": plans_by_id.get(int(stat.plan_id)).name if stat.plan_id is not None and int(stat.plan_id) in plans_by_id else None,
+                "plan_mode": plans_by_id.get(int(stat.plan_id)).plan_mode if stat.plan_id is not None and int(stat.plan_id) in plans_by_id else None,
             }
             for stat in stats
         ]
@@ -1130,6 +1145,8 @@ def get_task_result(check_time_str: str) -> Dict[str, Any]:
         stats = session.query(LinkCheckStats).filter(LinkCheckStats.check_time == check_time).first()
         if stats is None:
             return {"error": "检测记录不存在"}
+
+        plan = session.get(LinkCheckPlan, stats.plan_id) if stats.plan_id is not None else None
 
         details = (
             session.query(LinkCheckDetails)
@@ -1155,6 +1172,8 @@ def get_task_result(check_time_str: str) -> Dict[str, Any]:
             "task_mode": stats.task_mode,
             "scope_label": stats.scope_label,
             "plan_id": stats.plan_id,
+            "plan_name": plan.name if plan is not None else None,
+            "plan_mode": plan.plan_mode if plan is not None else None,
         },
         "details": [
             {

@@ -33,11 +33,9 @@ from .follow_tasks import (
     _apply_follow_task_state_without_candidate,
     _clear_follow_task_candidate_fields,
     _ensure_follow_task_identity_snapshot,
-    _get_follow_task_source_origin,
     _get_follow_task,
     _get_latest_link_target_message_snapshot,
     _get_task_automation_config,
-    _is_follow_task_using_origin_source,
     _normalize_source_message_snapshot,
     _normalize_optional_int,
     _parse_datetime,
@@ -468,35 +466,24 @@ def _apply_follow_sync_success_automation(
     *,
     task: PanTransferSyncTask,
     source_kind: str,
+    sync_mode: str,
     trigger_mode: str,
     synced_at,
 ) -> dict[str, Any]:
-    origin = _get_follow_task_source_origin(session, task=task)
     current_automation = _get_task_automation_config(task)
-    if not _is_follow_task_using_origin_source(task, origin=origin):
-        return _set_follow_task_automation_state(
-            task,
-            enabled=False,
-            stop_reason="source_switched",
-            stopped_at=synced_at,
-            cooldown_until=None,
-        )
-    if source_kind != "current":
+    if trigger_mode == "automation":
         return _set_follow_task_automation_state(
             task,
             enabled=bool(current_automation.get("enabled")),
             cooldown_until=None,
-        )
-    if bool(current_automation.get("enabled")) or trigger_mode == "automation":
-        return _set_follow_task_automation_state(
-            task,
-            enabled=bool(current_automation.get("enabled")),
-            cooldown_until=None,
-            last_auto_sync_at=synced_at if trigger_mode == "automation" else None,
+            last_auto_sync_at=synced_at,
+            last_auto_source_kind=source_kind,
+            last_auto_sync_mode=sync_mode,
+            last_auto_result="success",
         )
     return _set_follow_task_automation_state(
         task,
-        enabled=False,
+        enabled=bool(current_automation.get("enabled")),
         cooldown_until=None,
     )
 
@@ -575,6 +562,7 @@ def handle_follow_sync_item_success(
         session,
         task=task,
         source_kind=source_kind,
+        sync_mode=sync_mode,
         trigger_mode=trigger_mode,
         synced_at=synced_at,
     )
@@ -662,15 +650,30 @@ def handle_follow_sync_item_failure(
         return
 
     task.task_state = PAN_TRANSFER_SYNC_STATE_ERROR
-    task.last_change_type = PAN_TRANSFER_SYNC_STATE_CANDIDATE_FOUND if _normalize_text(context.get("source_kind"), max_length=32) == "candidate" else "sync_failed"
+    source_kind = _normalize_text(context.get("source_kind"), max_length=32) or "current"
+    sync_mode = _normalize_text(context.get("sync_mode"), max_length=32) or "standard"
+    trigger_mode = _normalize_text(context.get("trigger_mode"), max_length=32).lower() or "manual"
+    task.last_change_type = PAN_TRANSFER_SYNC_STATE_CANDIDATE_FOUND if source_kind == "candidate" else "sync_failed"
     task.last_error_message = _normalize_text(error_message, max_length=2000) or task.last_error_message
     task.updated_by = _normalize_text(worker_name, max_length=128) or task.updated_by
     extra_json = dict(task.extra_json or {})
     last_sync = dict(extra_json.get("last_sync") or {})
-    last_sync["failed_at"] = utcnow().isoformat() + "Z"
+    failed_at = utcnow()
+    last_sync["failed_at"] = failed_at.isoformat() + "Z"
     last_sync["error_message"] = _normalize_text(error_message, max_length=2000) or None
     extra_json["last_sync"] = last_sync
     task.extra_json = extra_json
+    if trigger_mode == "automation":
+        _set_follow_task_automation_state(
+            task,
+            enabled=bool(_get_task_automation_config(task).get("enabled")),
+            cooldown_until=None,
+            last_auto_sync_at=failed_at,
+            last_auto_source_kind=source_kind,
+            last_auto_sync_mode=sync_mode,
+            last_auto_result="failed",
+            last_auto_batch_id=int(item.batch_id),
+        )
     _schedule_follow_task_next_check(task)
     session.add(task)
     session.flush()
@@ -684,7 +687,8 @@ def handle_follow_sync_item_failure(
         payload={
             "batch_id": int(item.batch_id),
             "batch_item_id": int(item.id),
-            "source_kind": _normalize_text(context.get("source_kind"), max_length=32) or "current",
-            "sync_mode": _normalize_text(context.get("sync_mode"), max_length=32) or "standard",
+            "source_kind": source_kind,
+            "sync_mode": sync_mode,
+            "trigger_mode": trigger_mode,
         },
     )

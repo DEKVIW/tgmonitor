@@ -36,6 +36,8 @@ import {
   ChannelDiagnosisResult,
   MonitorTestResult,
   LinkCheckDateRange,
+  LinkCheckPlanCreate,
+  LinkCheckPlanDeleteResult,
   LinkCheckPlanResponse,
   LinkCheckPlanUpdate,
   LinkCheckPreviewRequest,
@@ -164,6 +166,29 @@ export const previewLinkCheckTask = async (
 
 export const getLinkCheckDateRange = async (): Promise<LinkCheckDateRange> => {
   const response = await apiClient.get<LinkCheckDateRange>('/admin/link-check/date-range')
+  return response.data
+}
+
+export const getLinkCheckPlans = async (): Promise<LinkCheckPlanResponse[]> => {
+  const response = await apiClient.get<LinkCheckPlanResponse[]>('/admin/link-check/plans')
+  return response.data
+}
+
+export const createLinkCheckPlan = async (data: LinkCheckPlanCreate): Promise<LinkCheckPlanResponse> => {
+  const response = await apiClient.post<LinkCheckPlanResponse>('/admin/link-check/plans', data)
+  return response.data
+}
+
+export const updateLinkCheckPlanById = async (
+  planId: number,
+  data: LinkCheckPlanUpdate
+): Promise<LinkCheckPlanResponse> => {
+  const response = await apiClient.put<LinkCheckPlanResponse>(`/admin/link-check/plans/${planId}`, data)
+  return response.data
+}
+
+export const deleteLinkCheckPlan = async (planId: number): Promise<LinkCheckPlanDeleteResult> => {
+  const response = await apiClient.delete<LinkCheckPlanDeleteResult>(`/admin/link-check/plans/${planId}`)
   return response.data
 }
 

@@ -6,6 +6,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any, Iterable
 
 from sqlalchemy import func, or_
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session, aliased
 
 from app.models.models import (
@@ -308,28 +309,40 @@ def _serialize_identity_payload(identity: ParsedResourceIdentity | None) -> dict
 
 
 def _ensure_work_aliases(session: Session, *, work_id: int, aliases: Iterable[str], source: str) -> None:
-    normalized_pairs = {
-        (_normalize_text(alias, max_length=255), _normalize_alias(alias))
-        for alias in aliases
-        if _normalize_text(alias, max_length=255) and _normalize_alias(alias)
-    }
-    if not normalized_pairs:
+    normalized_alias_map: dict[str, str] = {}
+    for alias in aliases:
+        alias_text = _normalize_text(alias, max_length=255)
+        normalized_alias = _normalize_alias(alias_text)
+        if not alias_text or not normalized_alias:
+            continue
+        normalized_alias_map.setdefault(normalized_alias, alias_text)
+
+    if not normalized_alias_map:
         return
+
     existing = {
         row.normalized_alias
         for row in session.query(ResourceWorkAlias).filter(ResourceWorkAlias.work_id == int(work_id)).all()
     }
-    for alias_text, normalized_alias in normalized_pairs:
-        if normalized_alias in existing:
-            continue
-        session.add(
-            ResourceWorkAlias(
-                work_id=int(work_id),
-                alias=alias_text,
-                normalized_alias=normalized_alias,
-                source=_normalize_text(source, max_length=32) or "ai",
-            )
-        )
+    rows_to_insert = [
+        {
+            "work_id": int(work_id),
+            "alias": alias_text,
+            "normalized_alias": normalized_alias,
+            "source": _normalize_text(source, max_length=32) or "ai",
+            "created_at": _utcnow(),
+        }
+        for normalized_alias, alias_text in normalized_alias_map.items()
+        if normalized_alias not in existing
+    ]
+    if not rows_to_insert:
+        return
+
+    session.execute(
+        pg_insert(ResourceWorkAlias)
+        .values(rows_to_insert)
+        .on_conflict_do_nothing(index_elements=["work_id", "normalized_alias"])
+    )
 
 
 def _upsert_recognized_work(session: Session, *, candidate: dict[str, Any]) -> ResourceWork:
@@ -767,7 +780,7 @@ def _legacy_resolve_link_target_work(
             binding=binding,
             candidate=candidate,
             work=work,
-            ai_payload=ai_payload,
+            recognized_payload=ai_payload,
         )
         info = get_work_binding_lookup(session, link_target_ids=[candidate.link_target_id]).get(candidate.link_target_id)
         return {
@@ -777,6 +790,8 @@ def _legacy_resolve_link_target_work(
             "work": info,
         }
     except Exception as exc:
+        session.rollback()
+        binding = _ensure_binding(session, link_target_id=candidate.link_target_id)
         error_reason = f"AI 识别异常：{exc}"
         if had_matched_binding:
             _apply_preserved_binding_error(
@@ -886,6 +901,8 @@ def resolve_link_target_work(
             "work": info,
         }
     except Exception as exc:
+        session.rollback()
+        binding = _ensure_binding(session, link_target_id=candidate.link_target_id)
         error_reason = _normalize_text(exc, max_length=255) or type(exc).__name__
         error_payload = {
             "parsed_identity": rule_identity.to_dict(),

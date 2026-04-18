@@ -600,8 +600,8 @@ class PanTransferFollowTaskCreateRequest(PanTransferBaseModel):
 
 class PanTransferFollowTaskCandidatePolicy(PanTransferBaseModel):
     lookback_days: int = Field(default=3, ge=1, le=90)
-    max_recall_candidates: int = Field(default=12, ge=1, le=30)
-    max_judge_candidates: int = Field(default=6, ge=1, le=12)
+    max_recall_candidates: int = Field(default=6, ge=1, le=30)
+    max_judge_candidates: int = Field(default=3, ge=1, le=12)
 
     @model_validator(mode="after")
     def validate_candidate_policy(self) -> "PanTransferFollowTaskCandidatePolicy":
@@ -612,14 +612,20 @@ class PanTransferFollowTaskCandidatePolicy(PanTransferBaseModel):
 
 class PanTransferFollowTaskAutomationConfig(PanTransferBaseModel):
     enabled: bool = False
-    mode: str = Field(default="stable_origin_incremental", max_length=64)
+    mode: str = Field(default="auto_incremental", max_length=64)
     reuse_existing_share_if_valid: bool = True
     update_publish_record: bool = True
+    origin_mode_available: bool = True
+    origin_mode_reason: str | None = Field(default=None, max_length=64)
     stop_reason: str | None = Field(default=None, max_length=64)
     stopped_at: datetime | None = None
     cooldown_until: datetime | None = None
     last_auto_check_at: datetime | None = None
     last_auto_sync_at: datetime | None = None
+    last_auto_source_kind: str | None = Field(default=None, max_length=32)
+    last_auto_sync_mode: str | None = Field(default=None, max_length=32)
+    last_auto_result: str | None = Field(default=None, max_length=64)
+    last_auto_batch_id: int | None = None
 
 
 class PanTransferFollowTaskSettingsUpdateRequest(PanTransferBaseModel):
@@ -650,10 +656,50 @@ class PanTransferFollowTaskSyncSelectionEntry(PanTransferBaseModel):
         return _normalize_text(value, field_name=info.field_name, allow_empty=True) or None
 
 
+class PanTransferFollowTaskSyncSelectionGroup(PanTransferBaseModel):
+    parent_entry_id: str | None = Field(default=None, max_length=255)
+    parent_path: str | None = Field(default=None, max_length=1024)
+    parent_name: str | None = Field(default=None, max_length=255)
+    target_relative_path: str | None = Field(default=None, max_length=1024)
+    selected_entries: list[PanTransferFollowTaskSyncSelectionEntry] = Field(default_factory=list)
+    selected_count: int = Field(default=0, ge=0)
+
+    @field_validator("parent_entry_id", "parent_path", "parent_name", "target_relative_path")
+    @classmethod
+    def validate_selection_group_text(cls, value: str | None, info) -> str | None:
+        if value is None:
+            return None
+        return _normalize_text(value, field_name=info.field_name, allow_empty=True) or None
+
+    @field_validator("selected_entries")
+    @classmethod
+    def validate_group_selected_entries(
+        cls,
+        value: list[PanTransferFollowTaskSyncSelectionEntry],
+    ) -> list[PanTransferFollowTaskSyncSelectionEntry]:
+        normalized: list[PanTransferFollowTaskSyncSelectionEntry] = []
+        seen: set[tuple[str, str, str]] = set()
+        for entry in value:
+            entry_id = str(entry.entry_id or "").strip()
+            path = str(entry.path or "").strip()
+            dedupe_key = (entry_id, path, f"{entry.name}:{int(entry.is_dir)}")
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            normalized.append(entry)
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_selection_group_payload(self) -> "PanTransferFollowTaskSyncSelectionGroup":
+        self.selected_count = len(self.selected_entries)
+        return self
+
+
 class PanTransferFollowTaskSyncRequest(PanTransferBaseModel):
     source_kind: str = Field(default="current", min_length=1, max_length=32)
     sync_mode: str = Field(default="standard", min_length=1, max_length=32)
     selected_entries: list[PanTransferFollowTaskSyncSelectionEntry] = Field(default_factory=list)
+    selection_groups: list[PanTransferFollowTaskSyncSelectionGroup] = Field(default_factory=list)
     selection_parent_entry_id: str | None = Field(default=None, max_length=255)
     selection_parent_path: str | None = Field(default=None, max_length=1024)
     selection_parent_name: str | None = Field(default=None, max_length=255)
@@ -700,13 +746,15 @@ class PanTransferFollowTaskSyncRequest(PanTransferBaseModel):
 
     @model_validator(mode="after")
     def validate_follow_sync_payload(self) -> "PanTransferFollowTaskSyncRequest":
+        if self.selection_groups:
+            self.selected_entries = []
         if self.sync_mode == "standard":
-            if self.selected_entries:
-                raise ValueError("selected_entries are only supported for incremental or replace_all mode")
+            if self.selected_entries or self.selection_groups:
+                raise ValueError("selected entries are only supported for incremental or replace_all mode")
             if self.confirm_full_replace:
                 raise ValueError("confirm_full_replace is only supported for replace_all mode")
             return self
-        if not self.selected_entries:
+        if not self.selected_entries and not self.selection_groups:
             raise ValueError("selected_entries cannot be empty for manual follow sync")
         if self.sync_mode == "replace_all" and not self.confirm_full_replace:
             raise ValueError("confirm_full_replace is required for replace_all mode")
@@ -877,6 +925,102 @@ class PanTransferFollowTaskSyncResponse(PanTransferBaseModel):
     batch_id: int
     batch_item_id: int
     started: bool = True
+
+
+class PanTransferFollowTaskFileDiagnosisRequest(PanTransferBaseModel):
+    source_kind: str = Field(default="candidate", min_length=1, max_length=32)
+    near_episode_window: int = Field(default=5, ge=1, le=30)
+
+    @field_validator("source_kind")
+    @classmethod
+    def validate_file_diagnosis_source_kind(cls, value: str) -> str:
+        normalized = _normalize_text(value, field_name="source_kind").lower()
+        if normalized not in {"current", "candidate"}:
+            raise ValueError("invalid source_kind")
+        return normalized
+
+
+class PanTransferFollowTaskFileDiagnosisEntry(PanTransferBaseModel):
+    side: str
+    name: str
+    entry_id: str | None = None
+    path: str | None = None
+    parent_entry_id: str | None = None
+    parent_path: str | None = None
+    parent_name: str | None = None
+    relative_parent_path: str | None = None
+    updated_at: datetime | None = None
+    size_bytes: int | None = None
+    extension: str | None = None
+    episode_numbers: list[int] = Field(default_factory=list)
+    season: int | None = None
+    core_title: str | None = None
+    parse_level: str
+    parse_reason: str
+    confidence: float = 0.0
+    title_match_score: float = 0.0
+    quality_tags: list[str] = Field(default_factory=list)
+    within_window: bool = False
+    accepted: bool = False
+    selected: bool = False
+    target_relative_path: str | None = None
+
+
+class PanTransferFollowTaskFileDiagnosisPlanItem(PanTransferBaseModel):
+    name: str
+    path: str | None = None
+    parent_path: str | None = None
+    episodes: list[int] = Field(default_factory=list)
+    season: int | None = None
+    updated_at: datetime | None = None
+    size_bytes: int | None = None
+    quality_tags: list[str] = Field(default_factory=list)
+    parse_level: str
+    parse_reason: str
+    target_relative_path: str | None = None
+
+
+class PanTransferFollowTaskFileDiagnosisSummary(PanTransferBaseModel):
+    source_kind: str
+    tracked_resource_title: str
+    tracked_core_title: str | None = None
+    tracked_season: int | None = None
+    tracked_episode: int | None = None
+    anchor_episode: int | None = None
+    latest_target_episode: int | None = None
+    near_episode_window: int = 5
+    source_dir_count: int = 0
+    target_dir_count: int = 0
+    source_file_count: int = 0
+    target_file_count: int = 0
+    source_video_count: int = 0
+    target_video_count: int = 0
+    quick_parsed_count: int = 0
+    full_parsed_count: int = 0
+    skipped_outside_window_count: int = 0
+    recent_without_episode_full_parse_count: int = 0
+    expansions_used: int = 0
+    recommended_entry_count: int = 0
+    recommended_episode_numbers: list[int] = Field(default_factory=list)
+    selection_group_count: int = 0
+    source_latest_episode: int | None = None
+    source_episode_numbers: list[int] = Field(default_factory=list)
+    target_episode_numbers: list[int] = Field(default_factory=list)
+    full_entry_count: int = 0
+    full_selection_group_count: int = 0
+    inferred_target_relative_path: str | None = None
+    warnings: list[str] = Field(default_factory=list)
+    stop_reason: str = ""
+
+
+class PanTransferFollowTaskFileDiagnosisResponse(PanTransferBaseModel):
+    summary: PanTransferFollowTaskFileDiagnosisSummary
+    recommended_selection_groups: list[PanTransferFollowTaskSyncSelectionGroup] = Field(default_factory=list)
+    recommended_plan_items: list[PanTransferFollowTaskFileDiagnosisPlanItem] = Field(default_factory=list)
+    full_selection_groups: list[PanTransferFollowTaskSyncSelectionGroup] = Field(default_factory=list)
+    full_plan_items: list[PanTransferFollowTaskFileDiagnosisPlanItem] = Field(default_factory=list)
+    source_entries: list[PanTransferFollowTaskFileDiagnosisEntry] = Field(default_factory=list)
+    target_entries: list[PanTransferFollowTaskFileDiagnosisEntry] = Field(default_factory=list)
 
 
 class PanTransferReplacementLogItem(PanTransferBaseModel):

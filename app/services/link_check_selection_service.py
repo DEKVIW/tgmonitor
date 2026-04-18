@@ -69,10 +69,16 @@ def _message_query(
     *,
     direction: str,
     cursor_message_id: int | None = None,
+    min_message_id: int | None = None,
+    max_message_id: int | None = None,
     start_time: datetime | None = None,
     end_time: datetime | None = None,
 ):
     query = session.query(Message).filter(Message.links.isnot(None))
+    if min_message_id is not None:
+        query = query.filter(Message.id > int(min_message_id))
+    if max_message_id is not None:
+        query = query.filter(Message.id <= int(max_message_id))
     if start_time is not None:
         query = query.filter(Message.timestamp >= start_time)
     if end_time is not None:
@@ -181,6 +187,13 @@ def get_link_check_dataset_summary(session: Session) -> dict[str, Any]:
     }
 
 
+def get_latest_message_id_with_links(session: Session) -> int | None:
+    latest_message = session.query(Message.id).filter(Message.links.isnot(None)).order_by(Message.id.desc()).first()
+    if latest_message is None:
+        return None
+    return int(latest_message[0])
+
+
 def preview_time_range_selection(
     session: Session,
     *,
@@ -273,6 +286,8 @@ def preview_smart_count_selection(
     direction: str,
     task_link_limit: int,
     cursor_message_id: int | None = None,
+    min_message_id: int | None = None,
+    max_message_id: int | None = None,
 ) -> dict[str, Any]:
     normalized_direction = _normalize_traversal_order(direction)
     requested_target_link_count = int(target_link_count or 0)
@@ -307,6 +322,8 @@ def preview_smart_count_selection(
             session,
             direction=normalized_direction,
             cursor_message_id=query_cursor,
+            min_message_id=min_message_id,
+            max_message_id=max_message_id,
         ).limit(MESSAGE_PAGE_SIZE).all()
         if not page:
             break
@@ -345,6 +362,8 @@ def preview_smart_count_selection(
                 session,
                 direction=normalized_direction,
                 cursor_message_id=last_selected_message_id,
+                min_message_id=min_message_id,
+                max_message_id=max_message_id,
             )
             .limit(1)
             .first()
@@ -453,6 +472,8 @@ def build_plan_batch_selection_snapshot(
     direction: str,
     task_link_limit: int,
     cursor_message_id: int | None = None,
+    min_message_id: int | None = None,
+    max_message_id: int | None = None,
 ) -> dict[str, Any]:
     return preview_smart_count_selection(
         session,
@@ -460,4 +481,6 @@ def build_plan_batch_selection_snapshot(
         direction=direction,
         task_link_limit=task_link_limit,
         cursor_message_id=cursor_message_id,
+        min_message_id=min_message_id,
+        max_message_id=max_message_id,
     )
