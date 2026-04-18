@@ -12,7 +12,7 @@ import {
   SearchOutlined,
   SyncOutlined,
 } from '@ant-design/icons'
-import { Alert, Button, Card, Checkbox, Collapse, Descriptions, Drawer, Dropdown, Empty, InputNumber, Modal, Segmented, Space, Table, Tag, Tooltip, Typography, message } from 'antd'
+import { Alert, Button, Card, Checkbox, Collapse, Descriptions, Drawer, Dropdown, Empty, InputNumber, Modal, Segmented, Space, Table, Tabs, Tag, Tooltip, Typography, message } from 'antd'
 import type { MenuProps } from 'antd'
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table'
 
@@ -44,6 +44,7 @@ import { formatServerDateTime } from '@/utils/dateTime'
 import AppLogTerminal from '@/components/common/AppLogTerminal'
 
 import { getErrorMessage } from './shared'
+import FollowTaskFileDiagnosisModal from './FollowTaskFileDiagnosisModal'
 
 const { Title, Paragraph, Link } = Typography
 
@@ -55,6 +56,7 @@ type FollowTasksSectionProps = {
 type FollowStatusFilter = 'all' | 'active' | 'paused'
 type FollowSyncSourceKind = 'current' | 'candidate'
 type FollowSyncMode = 'incremental' | 'replace_all'
+type FollowAutomationMode = 'stable_origin_incremental' | 'auto_incremental' | 'auto_replace_all'
 type DirectoryTrailItem = {
   key: string
   label: string
@@ -112,24 +114,51 @@ const DIRECTORY_ROOT_LABELS: Record<FollowSyncSourceKind, string> = {
 
 const DEFAULT_FOLLOW_CHECK_INTERVAL_MINUTES = 180
 const DEFAULT_FOLLOW_LOOKBACK_DAYS = 3
-const DEFAULT_FOLLOW_MAX_RECALL_CANDIDATES = 12
-const DEFAULT_FOLLOW_MAX_JUDGE_CANDIDATES = 6
+const DEFAULT_FOLLOW_MAX_RECALL_CANDIDATES = 6
+const DEFAULT_FOLLOW_MAX_JUDGE_CANDIDATES = 3
 const DEFAULT_FOLLOW_AUTOMATION_CONFIG: PanTransferFollowTaskAutomationConfig = {
   enabled: false,
-  mode: 'stable_origin_incremental',
+  mode: 'auto_incremental',
   reuse_existing_share_if_valid: true,
   update_publish_record: true,
+  origin_mode_available: true,
+  origin_mode_reason: null,
   stop_reason: null,
   stopped_at: null,
   cooldown_until: null,
   last_auto_check_at: null,
   last_auto_sync_at: null,
+  last_auto_source_kind: null,
+  last_auto_sync_mode: null,
+  last_auto_result: null,
+  last_auto_batch_id: null,
 }
+
+const FOLLOW_AUTOMATION_RESULT_LABELS: Record<string, string> = {
+  queued: '已排队',
+  success: '已完成',
+  failed: '失败',
+  no_plan: '暂无计划',
+  no_source: '暂无来源',
+}
+
+FOLLOW_AUTOMATION_RESULT_LABELS.stopped = '已停用'
 
 const FOLLOW_AUTOMATION_STOP_REASON_LABELS: Record<string, string> = {
   source_invalid: '初始原链已失效，已放开巡检改走候选路线',
   source_switched: '当前来源已不是最初原链，稳定原链自动模式已停止',
   structure_conflict: '原链目录结构与现有资源目录不兼容，需要人工处理',
+}
+
+FOLLOW_AUTOMATION_STOP_REASON_LABELS.source_invalid = '初始原链已失效，原链直差增量不可用'
+FOLLOW_AUTOMATION_STOP_REASON_LABELS.source_switched = '当前来源已不是最初原链，原链直差增量不可用'
+FOLLOW_AUTOMATION_STOP_REASON_LABELS.structure_conflict = '原链直差检测发现资源目录需要人工确认'
+
+const FOLLOW_DIAGNOSIS_STOP_REASON_LABELS: Record<string, string> = {
+  contiguous_window_hit: '已形成连续补集计划',
+  gap_before_next_episode: '下一集前存在断档',
+  no_source_video: '来源未识别到可用视频文件',
+  no_accepted_episode: '来源视频未命中可信剧集',
 }
 
 const LINK_ROOT_LABELS: Record<FollowLinkChip['key'], string> = {
@@ -147,6 +176,7 @@ const FOLLOW_STAGE_LABELS: Record<string, string> = {
   automation: '自动规则',
   queue: '排队',
   check: '巡检',
+  diagnosis: '诊断',
   source: '原链',
   share: '分享',
   identity: '识别',
@@ -175,6 +205,86 @@ const formatFollowSyncMode = (value: unknown) => {
   if (normalized === 'replace_all') return '全量替换'
   if (normalized === 'incremental') return '增量追加'
   return '安全同步'
+}
+
+const FOLLOW_AUTOMATION_MODE_META: Record<
+  FollowAutomationMode,
+  {
+    label: string
+    description: string
+    sourceStrategy: string
+    syncStrategy: string
+    riskLabel: string
+    riskTone: 'default' | 'processing' | 'warning'
+  }
+> = {
+  stable_origin_incremental: {
+    label: '原链直差增量',
+    description: '只对最初绑定的原链做直差比对，只补缺失内容，不切换候选来源。',
+    sourceStrategy: '仅最初原链',
+    syncStrategy: '连续缺失补齐',
+    riskLabel: '最低',
+    riskTone: 'default',
+  },
+  auto_incremental: {
+    label: '智能增量',
+    description: '优先使用候选原链，没有候选时回退到当前原链，只自动补齐连续缺失内容。',
+    sourceStrategy: '优先候选，回退当前',
+    syncStrategy: '连续缺失补齐',
+    riskLabel: '平衡',
+    riskTone: 'processing',
+  },
+  auto_replace_all: {
+    label: '智能全量替换',
+    description: '优先使用候选原链，没有候选时回退到当前原链，自动生成全量替换批次。',
+    sourceStrategy: '优先候选，回退当前',
+    syncStrategy: '全量替换',
+    riskLabel: '较高',
+    riskTone: 'warning',
+  },
+}
+
+const FOLLOW_AUTOMATION_RESULT_LABELS_V2: Record<string, string> = {
+  ...FOLLOW_AUTOMATION_RESULT_LABELS,
+  stopped: '已停用',
+}
+
+const FOLLOW_AUTO_RULE_KEYS = ['auto_origin_incremental', 'auto_incremental', 'auto_replace_all'] as const
+type FollowAutoRuleKey = (typeof FOLLOW_AUTO_RULE_KEYS)[number]
+
+const normalizeFollowAutomationMode = (value: unknown): FollowAutomationMode => {
+  const normalized = String(value || '').trim().toLowerCase()
+  if (normalized === 'stable_origin_incremental' || normalized === 'auto_origin_incremental') {
+    return 'stable_origin_incremental'
+  }
+  if (normalized === 'auto_replace_all') return 'auto_replace_all'
+  return 'auto_incremental'
+}
+
+const isFollowAutoRuleKey = (value: unknown): value is FollowAutoRuleKey =>
+  FOLLOW_AUTO_RULE_KEYS.includes(String(value || '').trim().toLowerCase() as FollowAutoRuleKey)
+
+const getFollowAutomationModeMeta = (value: unknown) =>
+  FOLLOW_AUTOMATION_MODE_META[normalizeFollowAutomationMode(value)] || FOLLOW_AUTOMATION_MODE_META.auto_incremental
+
+const getFollowAutomationModeText = (value: unknown) =>
+  getFollowAutomationModeMeta(value).label
+
+const getFollowAutomationModeDescription = (value: unknown) =>
+  getFollowAutomationModeMeta(value).description
+
+const getFollowAutomationResultText = (value: unknown) => {
+  const normalized = String(value || '').trim().toLowerCase()
+  return FOLLOW_AUTOMATION_RESULT_LABELS_V2[normalized] || (normalized || '未记录')
+}
+
+const isFollowOriginModeAvailable = (automation: PanTransferFollowTaskAutomationConfig) =>
+  normalizeFollowAutomationMode(automation.mode) !== 'stable_origin_incremental' || automation.origin_mode_available !== false
+
+const getFollowOriginModeReason = (automation: PanTransferFollowTaskAutomationConfig) => {
+  if (normalizeFollowAutomationMode(automation.mode) !== 'stable_origin_incremental') return null
+  const normalized = String(automation.origin_mode_reason || automation.stop_reason || '').trim().toLowerCase()
+  return normalized || null
 }
 
 const getFollowIdentitySourceLabel = (value: unknown) => {
@@ -259,6 +369,96 @@ const buildFollowLogSummary = (log: PanTransferFollowTaskLogItem) => {
     return identitySummary
       ? `已更新作品识别快照 -> ${prependFollowSourceLabel(identitySourceLabel, identitySummary)}`
       : prependFollowSourceLabel(identitySourceLabel, '已更新作品识别快照')
+  }
+  if (messageText === 'Built follow task file diagnosis plan') {
+    const recommendedEpisodeNumbers = Array.isArray(payload.recommended_episode_numbers)
+      ? payload.recommended_episode_numbers
+          .map((value) => Number(value))
+          .filter((value) => Number.isFinite(value) && value > 0)
+      : []
+    const details = [
+      formatFollowSourceKind(payload.source_kind),
+      Number(payload.anchor_episode || 0) > 0 ? `锚点 ${Number(payload.anchor_episode)}` : '',
+      Number(payload.latest_target_episode || 0) > 0 ? `目录最新 ${Number(payload.latest_target_episode)}` : '',
+      recommendedEpisodeNumbers.length > 0 ? `推荐补齐 ${recommendedEpisodeNumbers.join(', ')}` : '',
+      Number(payload.selection_group_count || 0) > 0 ? `同步分组 ${Number(payload.selection_group_count)}` : '',
+      !recommendedEpisodeNumbers.length && String(payload.stop_reason || '').trim()
+        ? `停止原因 ${
+            FOLLOW_DIAGNOSIS_STOP_REASON_LABELS[String(payload.stop_reason).trim()] ||
+            String(payload.stop_reason).trim()
+          }`
+        : '',
+    ].filter(Boolean)
+    return details.length > 0 ? `已生成智能诊断计划 -> ${details.join(' · ')}` : '已生成智能诊断计划'
+  }
+  if (messageText === 'Automatic follow sync skipped because no eligible source is available') {
+    return `自动同步跳过 -> ${getFollowAutomationModeText(payload.mode)} · 暂无可用来源`
+  }
+  if (messageText === 'Automatic incremental evaluation found no actionable plan') {
+    const details = [
+      getFollowAutomationModeText(payload.mode),
+      formatFollowSourceKind(payload.source_kind),
+      Array.isArray(payload.recommended_episode_numbers) && payload.recommended_episode_numbers.length > 0
+        ? `推荐剧集 ${payload.recommended_episode_numbers.join(', ')}`
+        : '',
+      String(payload.stop_reason || '').trim()
+        ? `停止原因 ${
+            FOLLOW_DIAGNOSIS_STOP_REASON_LABELS[String(payload.stop_reason).trim()] || String(payload.stop_reason).trim()
+          }`
+        : '',
+    ].filter(Boolean)
+    return details.length > 0 ? `自动增量未触发 -> ${details.join(' · ')}` : '自动增量未触发'
+  }
+  if (messageText === 'Automatic incremental follow-sync batch was queued') {
+    const details = [
+      batchId > 0 ? `批次 #${batchId}` : '',
+      formatFollowSourceKind(payload.source_kind),
+      Array.isArray(payload.recommended_episode_numbers) && payload.recommended_episode_numbers.length > 0
+        ? `补齐 ${payload.recommended_episode_numbers.join(', ')}`
+        : '',
+    ].filter(Boolean)
+    return details.length > 0 ? `自动增量已排队 -> ${details.join(' · ')}` : '自动增量已排队'
+  }
+  if (messageText === 'Automatic full-replace evaluation found no actionable difference') {
+    const sourceEpisodes = Array.isArray(payload.source_episode_numbers) ? payload.source_episode_numbers.join(', ') : ''
+    const targetEpisodes = Array.isArray(payload.target_episode_numbers) ? payload.target_episode_numbers.join(', ') : ''
+    const details = [
+      getFollowAutomationModeText(payload.mode),
+      formatFollowSourceKind(payload.source_kind),
+      sourceEpisodes ? `来源 ${sourceEpisodes}` : '',
+      targetEpisodes ? `目录 ${targetEpisodes}` : '',
+    ].filter(Boolean)
+    return details.length > 0 ? `自动全量替换未触发 -> ${details.join(' · ')}` : '自动全量替换未触发'
+  }
+  if (messageText === 'Automatic full-replace follow-sync batch was queued') {
+    const sourceEpisodes = Array.isArray(payload.source_episode_numbers) ? payload.source_episode_numbers.join(', ') : ''
+    const targetEpisodes = Array.isArray(payload.target_episode_numbers) ? payload.target_episode_numbers.join(', ') : ''
+    const details = [
+      batchId > 0 ? `批次 #${batchId}` : '',
+      formatFollowSourceKind(payload.source_kind),
+      sourceEpisodes ? `来源 ${sourceEpisodes}` : '',
+      targetEpisodes ? `目录 ${targetEpisodes}` : '',
+    ].filter(Boolean)
+    return details.length > 0 ? `自动全量替换已排队 -> ${details.join(' · ')}` : '自动全量替换已排队'
+  }
+  if (messageText === 'Stable-origin auto incremental sync batch was queued') {
+    const details = [
+      batchId > 0 ? `批次 #${batchId}` : '',
+      selectedCount > 0 ? `已补齐 ${selectedCount} 项` : '',
+    ].filter(Boolean)
+    return details.length > 0 ? `原链直差增量已排队 -> ${details.join(' 路 ')}` : '原链直差增量命中新内容，已创建自动增量同步批次'
+  }
+  if (messageText === 'Stable-origin auto incremental check found no new content') {
+    return '原链直差增量检查完成，最初原链暂无新增内容'
+  }
+  if (messageText === 'Stable-origin auto incremental mode was disabled because the original source is no longer valid') {
+    return '原链直差增量已停用：最初原链失效，已恢复候选巡检'
+  }
+  if (messageText === 'Stable-origin auto incremental mode was disabled because the current source changed') {
+    return '原链直差增量已停用：当前来源已不是最初原链'
+  }
+  if (messageText === 'Stable-origin auto incremental mode stopped because the resource directory structure needs manual review') {
+    return '原链直差增量已停用：资源目录结构需要人工复核'
   }
   if (messageText === 'Stable-origin auto incremental sync batch was queued') {
     const details = [
@@ -380,6 +580,9 @@ const getFollowLogTone = (log: PanTransferFollowTaskLogItem) => {
   if (
     level === 'warning' ||
     messageText === 'Detected a recent candidate source link for this tracked resource' ||
+    messageText === 'Automatic follow sync skipped because no eligible source is available' ||
+    messageText === 'Automatic incremental evaluation found no actionable plan' ||
+    messageText === 'Automatic full-replace evaluation found no actionable difference' ||
     messageText === 'Stable-origin auto incremental mode was disabled because the original source is no longer valid' ||
     messageText === 'Stable-origin auto incremental mode was disabled because the current source changed' ||
     messageText === 'Stable-origin auto incremental mode stopped because the resource directory structure needs manual review' ||
@@ -396,6 +599,8 @@ const getFollowLogTone = (log: PanTransferFollowTaskLogItem) => {
     messageText.startsWith('Source link validation finished with status: valid') ||
     messageText.startsWith('Current share validation finished with status: valid') ||
     messageText === 'Built follow task identity snapshot' ||
+    messageText === 'Automatic incremental follow-sync batch was queued' ||
+    messageText === 'Automatic full-replace follow-sync batch was queued' ||
     messageText === 'Stable-origin auto incremental sync batch was queued' ||
     messageText === 'Stable-origin auto incremental check found no new content' ||
     messageText === 'Replaced same-episode source links with the current valid share' ||
@@ -408,6 +613,9 @@ const getFollowLogTone = (log: PanTransferFollowTaskLogItem) => {
     messageText === 'Follow task check completed'
   ) {
     return 'success' as const
+  }
+  if (messageText === 'Built follow task file diagnosis plan') {
+    return Number(log.payload?.recommended_entry_count || 0) > 0 ? ('success' as const) : ('default' as const)
   }
   return 'default' as const
 }
@@ -423,29 +631,49 @@ const clearFollowLogMarker = (markers: Record<number, number>, taskId: number) =
 
 const getFollowAutomation = (
   task: Pick<PanTransferFollowTaskItem, 'automation'> | { automation?: Partial<PanTransferFollowTaskAutomationConfig> | null }
-): PanTransferFollowTaskAutomationConfig => ({
-  ...DEFAULT_FOLLOW_AUTOMATION_CONFIG,
-  ...(task.automation || {}),
-})
+): PanTransferFollowTaskAutomationConfig => {
+  const merged = {
+    ...DEFAULT_FOLLOW_AUTOMATION_CONFIG,
+    ...(task.automation || {}),
+  }
+  return {
+    ...merged,
+    mode: normalizeFollowAutomationMode(merged.mode),
+  }
+}
+
+const areAutomationConfigsEqual = (
+  left: PanTransferFollowTaskAutomationConfig,
+  right: PanTransferFollowTaskAutomationConfig
+) =>
+  left.enabled === right.enabled &&
+  normalizeFollowAutomationMode(left.mode) === normalizeFollowAutomationMode(right.mode) &&
+  Boolean(left.reuse_existing_share_if_valid) === Boolean(right.reuse_existing_share_if_valid) &&
+  Boolean(left.update_publish_record) === Boolean(right.update_publish_record)
 
 const getAutomationSummary = (task: Pick<PanTransferFollowTaskItem, 'automation'>) => {
   const automation = getFollowAutomation(task)
   if (automation.enabled) {
     const details = [
+      `模式 ${getFollowAutomationModeText(automation.mode)}`,
+      automation.last_auto_source_kind ? `最近来源 ${formatFollowSourceKind(automation.last_auto_source_kind)}` : '',
+      automation.last_auto_sync_mode ? `最近动作 ${formatFollowSyncMode(automation.last_auto_sync_mode)}` : '',
+      automation.last_auto_result ? `最近结果 ${getFollowAutomationResultText(automation.last_auto_result)}` : '',
+      automation.last_auto_batch_id ? `最近批次 #${automation.last_auto_batch_id}` : '',
       automation.last_auto_sync_at ? `最近自动同步 ${formatDateTime(automation.last_auto_sync_at)}` : '',
       automation.last_auto_check_at ? `最近自动巡检 ${formatDateTime(automation.last_auto_check_at)}` : '',
     ].filter(Boolean)
     return details.length > 0
-      ? `规则1已启用，只对最初原链做自动增量；${details.join(' · ')}`
-      : '规则1已启用，只对最初原链做自动增量，命中新内容后会自动转存并统一回填。'
+      ? `自动同步已启用：${details.join(' · ')}`
+      : '自动同步已启用，系统会在巡检完成后自动诊断并创建同步批次。'
   }
   if (automation.stop_reason) {
     const reasonLabel =
       FOLLOW_AUTOMATION_STOP_REASON_LABELS[String(automation.stop_reason).toLowerCase()] || String(automation.stop_reason)
     const stoppedAt = automation.stopped_at ? ` · 停止于 ${formatDateTime(automation.stopped_at)}` : ''
-    return `规则1当前停用：${reasonLabel}${stoppedAt}`
+    return `自动同步已停止：${reasonLabel}${stoppedAt}`
   }
-  return '规则1当前关闭，系统只会巡检和挑选候选，不会自动增量转存。'
+  return '自动同步当前关闭，系统只保留巡检、候选判定和人工同步入口。'
 }
 
 const getLinkChipMeta = (value?: string | null) => {
@@ -537,6 +765,9 @@ const buildFollowSettingsDraft = (task: PanTransferFollowTaskItem): FollowTaskSe
 const getFollowCandidateAssessmentSummary = (record: PanTransferFollowTaskItem) => {
   const assessment = record.candidate_assessment
   const judgeLabel = getFollowJudgeSourceLabel(assessment.judge_source)
+  if (assessment.same_episode_replace) {
+    return `${judgeLabel}判定为同作品同集数更新，当前更适合只替换来源链接，不提升为新的追更来源`
+  }
   if (assessment.should_promote) {
     return assessment.candidate_origin === 'stored_candidate'
       ? '已存候选复核仍有效，可继续作为追更来源'
@@ -576,7 +807,10 @@ const getFollowRuleAlertType = (record: PanTransferFollowTaskItem): 'info' | 'wa
 
 const getRuleExecutionHelp = (record: PanTransferFollowTaskItem) => {
   const executionMode = String(record.rule_assessment?.execution_mode || '').toLowerCase()
-  if (record.rule_assessment?.rule_key === 'auto_origin_incremental') {
+  if (isFollowAutoRuleKey(record.rule_assessment?.rule_key)) {
+    return `当前更适合先检查一次，系统会按「${record.rule_assessment?.rule_label || '自动同步'}」完成来源选择和同步决策。`
+  }
+  if (isFollowAutoRuleKey(record.rule_assessment?.rule_key)) {
     return '当前更适合先巡检一次，由系统自动校验最初原链并决定是否补充缺失内容。'
   }
   if (executionMode === 'manual_modal') {
@@ -699,6 +933,16 @@ const formatSize = (value?: number | null) => {
   return `${size.toFixed(index === 0 ? 0 : 2)} ${units[index]}`
 }
 
+const buildSyncSelectionEntries = (
+  entries: PanTransferLinkDirectoryEntry[]
+): PanTransferFollowTaskSyncSelectionEntry[] =>
+  entries.map((entry) => ({
+    name: entry.name,
+    is_dir: entry.is_dir,
+    entry_id: entry.entry_id || undefined,
+    path: entry.path || undefined,
+  }))
+
 const FollowTasksSectionV2 = ({ refreshToken, isActive = true }: FollowTasksSectionProps) => {
   const isPageVisible = usePageVisibility()
   const [tasks, setTasks] = useState<PanTransferFollowTaskItem[]>([])
@@ -730,6 +974,7 @@ const FollowTasksSectionV2 = ({ refreshToken, isActive = true }: FollowTasksSect
   const [directoryTrail, setDirectoryTrail] = useState<DirectoryTrailItem[]>([])
   const [clearedLogMarkerByTaskId, setClearedLogMarkerByTaskId] = useState<Record<number, number>>({})
   const [clearingDetailLogsTaskId, setClearingDetailLogsTaskId] = useState<number | null>(null)
+  const [fileDiagnosisOpen, setFileDiagnosisOpen] = useState(false)
 
   const loadTasks = async (
     page = pagination.page,
@@ -898,6 +1143,7 @@ const FollowTasksSectionV2 = ({ refreshToken, isActive = true }: FollowTasksSect
   useEffect(() => {
     if (!detailOpen) {
       setManualSyncOpen(false)
+      setFileDiagnosisOpen(false)
       resetManualSyncState()
       setSettingsDraft(null)
     }
@@ -1016,6 +1262,67 @@ const FollowTasksSectionV2 = ({ refreshToken, isActive = true }: FollowTasksSect
     await openManualSyncModal(task, task.last_candidate_url ? 'candidate' : 'current', 'incremental')
   }
 
+  const runQuickReplaceAll = async (
+    task: PanTransferFollowTaskItem,
+    preferredSourceKind: FollowSyncSourceKind = task.last_candidate_url ? 'candidate' : 'current'
+  ) => {
+    const sourceKind =
+      preferredSourceKind === 'candidate' && task.last_candidate_url ? 'candidate' : 'current'
+    const sourceUrl = resolveSourceUrl(task, sourceKind)
+    if (!sourceUrl) {
+      message.error(sourceKind === 'candidate' ? '当前没有可用的候选原链' : '当前原链为空')
+      return
+    }
+
+    Modal.confirm({
+      title: '确认创建一键全量替换吗？',
+      okText: '确认创建',
+      cancelText: '取消',
+      okButtonProps: { danger: true },
+      content: (
+        <div className="resource-ops-follow-sync-meta">
+          <span>系统会按分享目录当前根层内容创建一次全量替换批次。</span>
+          <small>{`来源：${formatFollowSourceKind(sourceKind)} · 目标目录：${task.fixed_save_path || '-'}`}</small>
+          <small>如果你只想替换部分目录或文件，请改用“手动点选替换”。</small>
+        </div>
+      ),
+      onOk: async () => {
+        try {
+          const preview = await previewPanTransferLinkDirectory({ url: sourceUrl })
+          if (preview.truncated) {
+            message.warning('当前分享目录条目过多，无法安全执行一键全量替换，请改用手动点选替换。')
+            return
+          }
+
+          const selectedEntries = buildSyncSelectionEntries(preview.items)
+          if (selectedEntries.length <= 0) {
+            message.warning('当前分享目录为空，无法创建全量替换批次。')
+            return
+          }
+
+          const response = await createPanTransferFollowSyncBatch(task.id, {
+            source_kind: sourceKind,
+            sync_mode: 'replace_all',
+            selected_entries: selectedEntries,
+            selection_parent_entry_id: preview.current_entry_id || null,
+            selection_parent_path: preview.current_path || null,
+            selection_parent_name: preview.current_name || DIRECTORY_ROOT_LABELS[sourceKind],
+            confirm_full_replace: true,
+            reuse_existing_share_if_valid: true,
+            update_publish_record: true,
+          })
+          message.success(`已创建全量替换同步批次 #${response.batch_id}`)
+          if (detailData?.task.id === task.id) {
+            await loadTaskDetail(task.id, { open: false })
+          }
+          await loadTasks(pagination.page, pagination.pageSize, statusFilter)
+        } catch (error) {
+          message.error(getErrorMessage(error, '创建一键全量替换批次失败'))
+        }
+      },
+    })
+  }
+
   const runRecommendedAction = async (task: PanTransferFollowTaskItem) => {
     const executionMode = String(task.rule_assessment?.execution_mode || '').toLowerCase()
     if (executionMode === 'manual_modal') {
@@ -1097,13 +1404,7 @@ const FollowTasksSectionV2 = ({ refreshToken, isActive = true }: FollowTasksSect
   })
 
   const manualSelectionEntries = useMemo<PanTransferFollowTaskSyncSelectionEntry[]>(
-    () =>
-      manualSelectedEntries.map((entry) => ({
-        name: entry.name,
-        is_dir: entry.is_dir,
-        entry_id: entry.entry_id || undefined,
-        path: entry.path || undefined,
-      })),
+    () => buildSyncSelectionEntries(manualSelectedEntries),
     [manualSelectedEntries]
   )
 
@@ -1152,17 +1453,11 @@ const FollowTasksSectionV2 = ({ refreshToken, isActive = true }: FollowTasksSect
       title: '资源',
       key: 'task_name',
       width: 220,
+      className: 'resource-ops-transfer-col-resource',
       render: (_, record) => {
         const mainTitle = getFollowTaskTitle(record)
         return (
-          <Tooltip
-            title={
-              <div>
-                <div>{mainTitle}</div>
-                <div>点击复制标题</div>
-              </div>
-            }
-          >
+          <Tooltip title={mainTitle}>
             <div className="resource-ops-transfer-title-cell">
               <button
                 type="button"
@@ -1187,6 +1482,7 @@ const FollowTasksSectionV2 = ({ refreshToken, isActive = true }: FollowTasksSect
       title: '资源目录',
       key: 'target',
       width: 180,
+      className: 'resource-ops-transfer-col-directory',
       render: (_, record) => (
         <div className="resource-ops-transfer-validation resource-ops-transfer-validation--publish-meta resource-ops-transfer-target-cell">
           <small>{record.target_account_name || '未指定账号'}</small>
@@ -1299,8 +1595,8 @@ const FollowTasksSectionV2 = ({ refreshToken, isActive = true }: FollowTasksSect
           executionMode === 'manual_modal'
             ? `执行推荐：${record.rule_assessment.rule_label}`
             : executionMode === 'recheck_only'
-              ? record.rule_assessment.rule_key === 'auto_origin_incremental'
-                ? '执行推荐：按规则1立即巡检'
+              ? isFollowAutoRuleKey(record.rule_assessment.rule_key)
+                ? `执行推荐：按${record.rule_assessment.rule_label}立即巡检`
                 : '执行推荐：先重新检查'
               : executionMode === 'wait_candidate'
                 ? '当前先等待候选原链'
@@ -1363,17 +1659,97 @@ const FollowTasksSectionV2 = ({ refreshToken, isActive = true }: FollowTasksSect
   )
   const hasCandidate = Boolean(detailTask?.last_candidate_link_target_id && detailTask?.last_candidate_url)
   const detailAutomation = detailTask ? getFollowAutomation(detailTask) : DEFAULT_FOLLOW_AUTOMATION_CONFIG
+  const activeAutomationMode = activeSettingsDraft ? normalizeFollowAutomationMode(activeSettingsDraft.automation.mode) : 'auto_incremental'
+  const activeOriginModeAvailable = activeSettingsDraft ? isFollowOriginModeAvailable(activeSettingsDraft.automation) : true
+  const activeOriginModeReason = activeSettingsDraft ? getFollowOriginModeReason(activeSettingsDraft.automation) : null
+  const activeOriginModeReasonLabel =
+    activeOriginModeReason ? FOLLOW_AUTOMATION_STOP_REASON_LABELS[activeOriginModeReason] || activeOriginModeReason : ''
+  const activeAutomationMeta = getFollowAutomationModeMeta(activeAutomationMode)
+  const activeAutomationAvailable = activeAutomationMode !== 'stable_origin_incremental' || activeOriginModeAvailable
+  const activeAutomationStatusLabel = !activeSettingsDraft?.automation.enabled
+    ? '自动关闭'
+    : activeAutomationAvailable
+      ? '当前可自动执行'
+      : '需切换模式'
+  const activeAutomationStatusColor = !activeSettingsDraft?.automation.enabled
+    ? 'default'
+    : activeAutomationAvailable
+      ? 'success'
+      : 'warning'
+  const detailRuleTone = detailTask ? getFollowRuleTone(detailTask) : FOLLOW_RULE_TONE.info
+  const preferredManualSourceKind: FollowSyncSourceKind = hasCandidate ? 'candidate' : 'current'
+  const detailRecommendedSourceLabel = formatFollowSourceKind(
+    detailTask?.rule_assessment.recommended_source_kind || preferredManualSourceKind
+  )
+  const detailRecommendedSyncLabel = formatFollowSyncMode(
+    detailTask?.rule_assessment.recommended_sync_mode || 'incremental'
+  )
+  const manualIncrementalRecommended =
+    detailTask?.rule_assessment.rule_key === 'candidate_manual_incremental' ||
+    detailTask?.rule_assessment.rule_key === 'manual_incremental_current' ||
+    String(detailTask?.rule_assessment.recommended_sync_mode || '').toLowerCase() === 'incremental'
+  const manualReplaceRecommended =
+    String(detailTask?.rule_assessment.recommended_sync_mode || '').toLowerCase() === 'replace_all'
+  const updateAutomationDraft = (
+    updater: (automation: PanTransferFollowTaskAutomationConfig) => PanTransferFollowTaskAutomationConfig
+  ) => {
+    if (!detailTask) return
+    setSettingsDraft((current) => {
+      const base = current && current.taskId === detailTask.id ? current : buildFollowSettingsDraft(detailTask)
+      return {
+        ...base,
+        automation: getFollowAutomation({ automation: updater(getFollowAutomation(base)) }),
+      }
+    })
+  }
+  const setAutomationDraftMode = (mode: FollowAutomationMode) =>
+    updateAutomationDraft((automation) => ({
+      ...automation,
+      mode,
+    }))
+  const automationModeOptions = [
+    {
+      title: '智能增量',
+      value: 'auto_incremental' as FollowAutomationMode,
+      disabled: false,
+      badgeText: '推荐',
+      badgeColor: 'processing' as const,
+    },
+    {
+      title: '智能全量替换',
+      value: 'auto_replace_all' as FollowAutomationMode,
+      disabled: false,
+      badgeText: '全量',
+      badgeColor: 'warning' as const,
+    },
+    {
+      title: '原链直差增量',
+      value: 'stable_origin_incremental' as FollowAutomationMode,
+      disabled: !activeOriginModeAvailable && activeAutomationMode !== 'stable_origin_incremental',
+      badgeText: activeOriginModeAvailable || activeAutomationMode === 'stable_origin_incremental' ? '原链限定' : '不可用',
+      badgeColor:
+        activeOriginModeAvailable || activeAutomationMode === 'stable_origin_incremental' ? ('default' as const) : ('error' as const),
+    },
+  ].map((option) => ({
+    ...option,
+    label: (
+      <span className="resource-ops-follow-automation-tab-label">
+        <span>{option.title}</span>
+        <Tag color={option.badgeColor}>{option.badgeText}</Tag>
+      </span>
+    ),
+  }))
   const automationDraftChanged = Boolean(
     detailTask &&
       activeSettingsDraft &&
-      activeSettingsDraft.automation.enabled !== detailAutomation.enabled
+      !areAutomationConfigsEqual(activeSettingsDraft.automation, detailAutomation)
   )
   const automationDraftSummary =
     detailTask && activeSettingsDraft
       ? automationDraftChanged
         ? activeSettingsDraft.automation.enabled
-          ? '保存后规则1会重新启用，并在下一轮巡检时按最初原链自动增量。'
-          : '保存后规则1会关闭，后续只保留巡检与候选判定，不再自动增量。'
+          ? `保存后会启用${getFollowAutomationModeText(activeSettingsDraft.automation.mode)}，并在下一轮巡检后自动创建同步批次。`
+          : '保存后将关闭自动同步，后续只保留巡检、候选判定和人工同步。'
         : getAutomationSummary(detailTask)
       : ''
   const detailLinkItems = detailTask ? buildFollowLinkItems(detailTask) : []
@@ -1563,6 +1939,9 @@ const FollowTasksSectionV2 = ({ refreshToken, isActive = true }: FollowTasksSect
               <Button loading={detailLoading} onClick={() => void loadTaskDetail(detailTask.id, { open: false })}>
                 刷新详情
               </Button>
+              <Button onClick={() => setFileDiagnosisOpen(true)}>
+                查看补集诊断
+              </Button>
               {detailTask.status === 'active' ? (
                 <Button
                   loading={queueingTaskId === detailTask.id}
@@ -1720,7 +2099,7 @@ const FollowTasksSectionV2 = ({ refreshToken, isActive = true }: FollowTasksSect
                     </div>
 
                     <div className="resource-ops-follow-settings-field">
-                      <label>最多 AI 判定：</label>
+                      <label>最多判定：</label>
                       <InputNumber
                         min={1}
                         max={Math.max(1, activeSettingsDraft.candidate_policy.max_recall_candidates)}
@@ -1749,39 +2128,100 @@ const FollowTasksSectionV2 = ({ refreshToken, isActive = true }: FollowTasksSect
                   <div className="resource-ops-follow-automation-panel">
                     <div className="resource-ops-follow-automation-head">
                       <div className="resource-ops-follow-sync-meta">
-                        <span>规则1：稳定原链自动增量</span>
-                        <small>只对最初绑定的原链生效。巡检时会先校验原链，再自动补充资源目录里缺失的内容；一旦原链失效或来源切换，自动规则会立即停用。</small>
+                        <span>自动同步</span>
+                        <small>{`当前已选择 ${activeAutomationMeta.label}`}</small>
                       </div>
                       <Checkbox
                         checked={activeSettingsDraft.automation.enabled}
+                        onChange={(event) => updateAutomationDraft((automation) => ({ ...automation, enabled: event.target.checked }))}
+                      >
+                        启用自动同步
+                      </Checkbox>
+                    </div>
+                    <small className="resource-ops-follow-automation-intro">
+                      规则优先，按所选模式自动生成同步批次。原链直差增量只对最初绑定原链生效；来源切换只表示不再满足该模式条件，不代表目录结构一定变化。
+                    </small>
+                    <div className="resource-ops-follow-automation-facts">
+                      <div className="resource-ops-follow-automation-fact">
+                        <span>来源策略</span>
+                        <strong>{activeAutomationMeta.sourceStrategy}</strong>
+                      </div>
+                      <div className="resource-ops-follow-automation-fact">
+                        <span>同步动作</span>
+                        <strong>{activeAutomationMeta.syncStrategy}</strong>
+                      </div>
+                      <div className="resource-ops-follow-automation-fact">
+                        <span>风险级别</span>
+                        <strong>{activeAutomationMeta.riskLabel}</strong>
+                      </div>
+                    </div>
+                    <Tabs
+                      size="small"
+                      className="resource-ops-follow-automation-tabs"
+                      activeKey={activeAutomationMode}
+                      items={automationModeOptions.map((option) => ({
+                        key: option.value,
+                        label: option.label,
+                        disabled: option.disabled,
+                        children: (
+                          <div className="resource-ops-follow-automation-mode-panel">
+                            <div className="resource-ops-follow-sync-meta">
+                              <span>{getFollowAutomationModeText(option.value)}</span>
+                              <small>{getFollowAutomationModeDescription(option.value)}</small>
+                            </div>
+                            {option.value === 'stable_origin_incremental' && !activeOriginModeAvailable ? (
+                              <Alert
+                                type="warning"
+                                showIcon={false}
+                                message="原链直差增量当前不可用"
+                                description={
+                                  activeOriginModeReasonLabel || '当前来源已不满足原链直差自动执行条件，可改用智能模式或转为人工同步。'
+                                }
+                                action={
+                                  <Button size="small" onClick={() => setAutomationDraftMode('auto_incremental')}>
+                                    切换为智能增量
+                                  </Button>
+                                }
+                              />
+                            ) : null}
+                          </div>
+                        ),
+                      }))}
+                      onChange={(value) => setAutomationDraftMode(value as FollowAutomationMode)}
+                    />
+                    <div className="resource-ops-follow-chip-row">
+                      <Checkbox
+                        checked={activeSettingsDraft.automation.reuse_existing_share_if_valid}
                         onChange={(event) =>
-                          setSettingsDraft((current) =>
-                            current && current.taskId === detailTask.id
-                              ? {
-                                  ...current,
-                                  automation: {
-                                    ...current.automation,
-                                    enabled: event.target.checked,
-                                  },
-                                }
-                              : {
-                                  ...buildFollowSettingsDraft(detailTask),
-                                  automation: {
-                                    ...getFollowAutomation(detailTask),
-                                    enabled: event.target.checked,
-                                  },
-                                }
-                          )
+                          updateAutomationDraft((automation) => ({
+                            ...automation,
+                            reuse_existing_share_if_valid: event.target.checked,
+                          }))
                         }
                       >
-                        启用自动规则
+                        优先复用有效分享
+                      </Checkbox>
+                      <Checkbox
+                        checked={activeSettingsDraft.automation.update_publish_record}
+                        onChange={(event) =>
+                          updateAutomationDraft((automation) => ({
+                            ...automation,
+                            update_publish_record: event.target.checked,
+                          }))
+                        }
+                      >
+                        自动回填前台
                       </Checkbox>
                     </div>
                     <div className="resource-ops-follow-chip-row">
                       <Tag color={activeSettingsDraft.automation.enabled ? 'processing' : 'default'}>
-                        {activeSettingsDraft.automation.enabled ? '自动增量已启用' : '自动增量已关闭'}
+                        {activeSettingsDraft.automation.enabled ? '自动同步已启用' : '自动同步已关闭'}
                       </Tag>
-                      <Tag color={activeSettingsDraft.automation.update_publish_record ? 'success' : 'default'}>统一回填前台</Tag>
+                      <Tag color={activeAutomationStatusColor}>{activeAutomationStatusLabel}</Tag>
+                      <Tag color={activeSettingsDraft.automation.update_publish_record ? 'success' : 'default'}>自动回填前台</Tag>
+                      <Tag color={normalizeFollowAutomationMode(activeSettingsDraft.automation.mode) === 'auto_replace_all' ? 'warning' : 'processing'}>
+                        {getFollowAutomationModeText(activeSettingsDraft.automation.mode)}
+                      </Tag>
                       <Tag color={activeSettingsDraft.automation.reuse_existing_share_if_valid ? 'success' : 'default'}>优先复用有效分享</Tag>
                     </div>
                     <small className="resource-ops-follow-automation-summary">{automationDraftSummary}</small>
@@ -1965,9 +2405,9 @@ const FollowTasksSectionV2 = ({ refreshToken, isActive = true }: FollowTasksSect
                   </div>
                 }
                 action={
-                  detailTask.rule_assessment.rule_key === 'auto_origin_incremental' ? (
+                  isFollowAutoRuleKey(detailTask.rule_assessment.rule_key) ? (
                     <Button size="small" disabled={detailTask.status !== 'active'} loading={queueingTaskId === detailTask.id} onClick={() => void queueTaskCheck(detailTask.id)}>
-                      立即按规则1巡检
+                      {`立即按${detailTask.rule_assessment.rule_label}巡检`}
                     </Button>
                   ) : String(detailTask.rule_assessment.execution_mode || '').toLowerCase() === 'recheck_only' ? (
                     <Button size="small" disabled={detailTask.status !== 'active'} onClick={() => void queueTaskCheck(detailTask.id)}>
@@ -1986,25 +2426,51 @@ const FollowTasksSectionV2 = ({ refreshToken, isActive = true }: FollowTasksSect
               />
             </Card>
 
-            <Card size="small" title="规则处理" className="resource-ops-follow-sync-card">
-              <div className="resource-ops-follow-rule-grid">
-                <div className={`resource-ops-follow-rule-card${detailTask.rule_assessment.rule_key === 'auto_origin_incremental' ? ' is-recommended' : ''}`}>
-                  <div className="resource-ops-follow-rule-card-head">
-                    <span>规则1：稳定原链自动增量</span>
-                    <Tag color={detailAutomation.enabled ? 'processing' : 'default'}>{detailAutomation.enabled ? '已启用' : '未启用'}</Tag>
+            {/*
+            <Card size="small" title="手动同步" className="resource-ops-follow-sync-card">
+              <div className="resource-ops-follow-manual-stack">
+                <div className="resource-ops-follow-manual-suggestion">
+                  <div className="resource-ops-follow-manual-suggestion-main">
+                    <div className="resource-ops-follow-rule-card-head">
+                    <span>当前建议</span>
+                    <Space size={8} wrap>
+                      <Tag color={detailRuleTone.color}>{detailTask.rule_assessment.rule_label}</Tag>
+                      <Tag>{detailRecommendedSourceLabel}</Tag>
+                      <Tag>{detailRecommendedSyncLabel}</Tag>
+                    </Space>
+                    </div>
+                    <small>{detailTask.rule_assessment.summary}</small>
+                    <small>{getRuleExecutionHelp(detailTask)}</small>
                   </div>
-                  <small>适合最初绑定的原链长期稳定更新。系统会先巡检，再自动把缺失内容补进现有资源目录，并统一回填最新分享与前台绑定。</small>
-                  <Button
-                    type={detailTask.rule_assessment.rule_key === 'auto_origin_incremental' ? 'primary' : 'default'}
-                    loading={queueingTaskId === detailTask.id}
-                    disabled={!detailAutomation.enabled || detailTask.status !== 'active'}
-                    onClick={() => void queueTaskCheck(detailTask.id)}
-                  >
-                    {detailAutomation.enabled ? '立即按规则1巡检' : '先在上方启用规则1'}
-                  </Button>
+                  <div className="resource-ops-follow-automation-facts resource-ops-follow-automation-facts--compact">
+                    <div className="resource-ops-follow-automation-fact">
+                      <span>推荐来源</span>
+                      <strong>{detailRecommendedSourceLabel}</strong>
+                    </div>
+                    <div className="resource-ops-follow-automation-fact">
+                      <span>推荐动作</span>
+                      <strong>{detailRecommendedSyncLabel}</strong>
+                    </div>
+                    <div className="resource-ops-follow-automation-fact">
+                      <span>候选状态</span>
+                      <strong>{hasCandidate ? '已命中候选' : '当前仅有原链'}</strong>
+                    </div>
+                  </div>
+                  {legacy-alert-disabled
+                  {false ? (
+                    <Alert
+                      type="warning"
+                      showIcon={false}
+                      className="resource-ops-follow-automation-alert"
+                      message="当前模式需先切换"
+                      description={detailOriginModeReasonLabel || '请切换到智能模式或改走人工同步。'}
+                    />
+                  ) : null}
+                  legacy-alert-disabled}
                 </div>
 
-                <div
+                <div className="resource-ops-follow-rule-grid resource-ops-follow-rule-grid--manual">
+                  <div
                   className={`resource-ops-follow-rule-card${
                     detailTask.rule_assessment.rule_key === 'candidate_manual_incremental' ||
                     detailTask.rule_assessment.rule_key === 'manual_incremental_current'
@@ -2013,32 +2479,120 @@ const FollowTasksSectionV2 = ({ refreshToken, isActive = true }: FollowTasksSect
                   }`}
                 >
                   <div className="resource-ops-follow-rule-card-head">
-                    <span>规则2：人工增量同步</span>
-                    <Tag color={hasCandidate ? 'warning' : 'default'}>{hasCandidate ? '优先候选' : '当前原链'}</Tag>
+                    <span>手动增量同步</span>
+                    <Space size={8} wrap>
+                      <Tag color={hasCandidate ? 'warning' : 'default'}>{formatFollowSourceKind(preferredManualSourceKind)}</Tag>
+                      <Tag color="processing">补集优先</Tag>
+                    </Space>
                   </div>
-                  <small>人工挑选目录或文件后增量写入现有资源目录。适合候选出现后的稳妥接管，也适合自动规则关闭时手动补内容。</small>
-                  <Button
-                    type={
-                      detailTask.rule_assessment.rule_key === 'candidate_manual_incremental' ||
-                      detailTask.rule_assessment.rule_key === 'manual_incremental_current'
-                        ? 'primary'
-                        : 'default'
-                    }
-                    onClick={() => void runRuleAction(detailTask, 'manual_incremental')}
-                  >
-                    {hasCandidate ? '用候选做人工增量' : '用当前原链做人工增量'}
-                  </Button>
+                  <small>先看系统诊断出的缺失集数，再按推荐结果做增量补齐；如果你想自己挑目录或文件，也可以直接手动点选同步。</small>
+                  <div className="resource-ops-follow-rule-card-actions">
+                    <Button
+                      type={manualIncrementalRecommended ? 'primary' : 'default'}
+                      onClick={() => setFileDiagnosisOpen(true)}
+                    >
+                      查看补集诊断
+                    </Button>
+                    <Button onClick={() => void runRuleAction(detailTask, 'manual_incremental')}>
+                      手动点选同步
+                    </Button>
+                  </div>
                 </div>
 
-                <div className="resource-ops-follow-rule-card is-danger">
+                <div className={`resource-ops-follow-rule-card is-danger${manualReplaceRecommended ? ' is-recommended' : ''}`}>
                   <div className="resource-ops-follow-rule-card-head">
-                    <span>规则3：人工全量替换</span>
-                    <Tag color="error">高风险</Tag>
+                    <span>手动全量替换</span>
+                    <Space size={8} wrap>
+                      <Tag color="error">高风险</Tag>
+                      <Tag color={hasCandidate ? 'warning' : 'default'}>{formatFollowSourceKind(preferredManualSourceKind)}</Tag>
+                    </Space>
                   </div>
-                  <small>先清空当前资源目录，再导入你人工确认后的完整内容。只在目录结构完全变动或需要彻底换版时使用。</small>
-                  <Button danger onClick={() => void runRuleAction(detailTask, 'replace_all')}>
-                    进入高风险处理
-                  </Button>
+                  <small>适合整份分享目录已经准备完整、要直接整包替换的时候。系统会先清空当前资源目录，再按整份分享目录创建替换批次。</small>
+                  <div className="resource-ops-follow-rule-card-actions">
+                    <Button danger type="primary" onClick={() => void runQuickReplaceAll(detailTask, preferredManualSourceKind)}>
+                      一键全量替换
+                    </Button>
+                    <Button danger ghost onClick={() => void runRuleAction(detailTask, 'replace_all')}>
+                      手动点选替换
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            </Card>
+            */}
+
+            <Card size="small" title="手动同步" className="resource-ops-follow-sync-card">
+              <div className="resource-ops-follow-manual-stack">
+                <div className="resource-ops-follow-manual-suggestion">
+                  <div className="resource-ops-follow-manual-suggestion-main">
+                    <div className="resource-ops-follow-rule-card-head">
+                      <span>当前建议</span>
+                      <Space size={8} wrap>
+                        <Tag color={detailRuleTone.color}>{detailTask.rule_assessment.rule_label}</Tag>
+                        <Tag>{detailRecommendedSourceLabel}</Tag>
+                        <Tag>{detailRecommendedSyncLabel}</Tag>
+                      </Space>
+                    </div>
+                    <small>{detailTask.rule_assessment.summary}</small>
+                    <small>{getRuleExecutionHelp(detailTask)}</small>
+                  </div>
+                  <div className="resource-ops-follow-automation-facts resource-ops-follow-automation-facts--compact">
+                    <div className="resource-ops-follow-automation-fact">
+                      <span>推荐来源</span>
+                      <strong>{detailRecommendedSourceLabel}</strong>
+                    </div>
+                    <div className="resource-ops-follow-automation-fact">
+                      <span>推荐动作</span>
+                      <strong>{detailRecommendedSyncLabel}</strong>
+                    </div>
+                    <div className="resource-ops-follow-automation-fact">
+                      <span>候选状态</span>
+                      <strong>{hasCandidate ? '已命中候选' : '当前仅有原链'}</strong>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="resource-ops-follow-rule-grid resource-ops-follow-rule-grid--manual">
+                  <div className={`resource-ops-follow-rule-card${manualIncrementalRecommended ? ' is-recommended' : ''}`}>
+                    <div className="resource-ops-follow-rule-card-head">
+                      <span>手动增量同步</span>
+                      <Space size={8} wrap>
+                        <Tag color={hasCandidate ? 'warning' : 'default'}>{formatFollowSourceKind(preferredManualSourceKind)}</Tag>
+                        <Tag color="processing">补集优先</Tag>
+                      </Space>
+                    </div>
+                    <small>先看系统诊断出的缺失集数，再按推荐结果做增量补齐；如果你想自己挑目录或文件，也可以直接手动点选同步。</small>
+                    <div className="resource-ops-follow-rule-card-actions">
+                      <Button
+                        type={manualIncrementalRecommended ? 'primary' : 'default'}
+                        onClick={() => setFileDiagnosisOpen(true)}
+                      >
+                        查看补集诊断
+                      </Button>
+                      <Button onClick={() => void runRuleAction(detailTask, 'manual_incremental')}>
+                        手动点选同步
+                      </Button>
+                    </div>
+                  </div>
+
+                  <div className={`resource-ops-follow-rule-card is-danger${manualReplaceRecommended ? ' is-recommended' : ''}`}>
+                    <div className="resource-ops-follow-rule-card-head">
+                      <span>手动全量替换</span>
+                      <Space size={8} wrap>
+                        <Tag color="error">高风险</Tag>
+                        <Tag color={hasCandidate ? 'warning' : 'default'}>{formatFollowSourceKind(preferredManualSourceKind)}</Tag>
+                      </Space>
+                    </div>
+                    <small>适合整份分享目录已经准备完整、要直接整包替换的时候。系统会先清空当前资源目录，再按整份分享目录创建替换批次。</small>
+                    <div className="resource-ops-follow-rule-card-actions">
+                      <Button danger type="primary" onClick={() => void runQuickReplaceAll(detailTask, preferredManualSourceKind)}>
+                        一键全量替换
+                      </Button>
+                      <Button danger ghost onClick={() => void runRuleAction(detailTask, 'replace_all')}>
+                        手动点选替换
+                      </Button>
+                    </div>
+                  </div>
                 </div>
               </div>
             </Card>
@@ -2100,6 +2654,19 @@ const FollowTasksSectionV2 = ({ refreshToken, isActive = true }: FollowTasksSect
           <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无追更任务详情" />
         )}
       </Drawer>
+
+      <FollowTaskFileDiagnosisModal
+        open={fileDiagnosisOpen}
+        task={detailTask}
+        hasCandidate={hasCandidate}
+        onClose={() => setFileDiagnosisOpen(false)}
+        onTaskChanged={async () => {
+          if (detailTask) {
+            await loadTaskDetail(detailTask.id, { open: false, silent: true })
+          }
+          await loadTasks(pagination.page, pagination.pageSize, statusFilter, { silent: true })
+        }}
+      />
 
       <Modal
         open={manualSyncOpen}

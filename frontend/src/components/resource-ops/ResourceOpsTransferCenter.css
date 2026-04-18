@@ -172,6 +172,9 @@
 }
 
 .resource-ops-transfer-title-copy {
+  display: block;
+  width: 100%;
+  max-width: 100%;
   padding: 0;
   border: 0;
   background: transparent;
@@ -184,6 +187,43 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.resource-ops-transfer-col-resource {
+  width: 240px;
+  max-width: 240px;
+}
+
+.resource-ops-transfer-col-resource.resource-ops-transfer-col-resource-wide {
+  width: 280px;
+  max-width: 280px;
+}
+
+.resource-ops-transfer-col-resource .resource-ops-transfer-title-cell,
+.resource-ops-transfer-col-resource .resource-ops-transfer-title-button,
+.resource-ops-transfer-col-resource .resource-ops-transfer-title-copy,
+.resource-ops-transfer-col-resource .resource-ops-transfer-title-main {
+  width: 100%;
+  max-width: 100%;
+}
+
+.resource-ops-transfer-col-resource .resource-ops-transfer-title-cell {
+  overflow: hidden;
+}
+
+.resource-ops-transfer-col-directory {
+  width: 180px;
+  max-width: 180px;
+}
+
+.resource-ops-transfer-col-directory .resource-ops-transfer-target-cell,
+.resource-ops-transfer-col-directory .resource-ops-transfer-target-cell small {
+  width: 100%;
+  max-width: 100%;
+}
+
+.resource-ops-transfer-col-directory .resource-ops-transfer-target-cell {
+  overflow: hidden;
 }
 
 .resource-ops-transfer-link-stack {
@@ -937,6 +977,10 @@
   width: 100%;
 }
 
+.resource-ops-follow-settings-field--narrow {
+  grid-template-columns: auto minmax(120px, 1fr);
+}
+
 .resource-ops-follow-automation-panel {
   display: flex;
   flex-direction: column;
@@ -945,6 +989,75 @@
   border: 1px solid rgba(15, 23, 42, 0.08);
   border-radius: 14px;
   background: linear-gradient(180deg, rgba(248, 251, 255, 0.96) 0%, rgba(255, 255, 255, 0.98) 100%);
+}
+
+.resource-ops-follow-automation-tabs .ant-tabs-nav {
+  margin-bottom: 8px;
+}
+
+.resource-ops-follow-automation-tabs .ant-tabs-tab {
+  padding-inline: 12px;
+}
+
+.resource-ops-follow-automation-tab-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.resource-ops-follow-automation-tab-label .ant-tag {
+  margin-inline-end: 0;
+  border-radius: 999px;
+  padding-inline: 8px;
+  line-height: 20px;
+}
+
+.resource-ops-follow-automation-mode-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.resource-ops-follow-automation-mode-panel .ant-alert {
+  margin-bottom: 0;
+  border-radius: 12px;
+}
+
+.resource-ops-follow-automation-facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.resource-ops-follow-automation-facts--compact {
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+}
+
+.resource-ops-follow-automation-fact {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.resource-ops-follow-automation-fact span {
+  color: rgba(15, 23, 42, 0.56);
+  font-size: 12px;
+}
+
+.resource-ops-follow-automation-fact strong {
+  color: rgba(15, 23, 42, 0.9);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.resource-ops-follow-automation-alert {
+  border-radius: 12px;
 }
 
 .resource-ops-follow-automation-head {
@@ -958,6 +1071,15 @@
   flex: 0 0 auto;
   color: rgba(15, 23, 42, 0.82);
   font-weight: 500;
+}
+
+.resource-ops-follow-automation-head .resource-ops-follow-sync-meta small {
+  color: rgba(15, 23, 42, 0.6);
+}
+
+.resource-ops-follow-automation-intro {
+  color: rgba(15, 23, 42, 0.64);
+  line-height: 1.6;
 }
 
 .resource-ops-follow-automation-summary {
@@ -980,6 +1102,10 @@
   border-radius: 999px;
   padding-inline: 10px;
   line-height: 24px;
+}
+
+.resource-ops-follow-chip-row .ant-checkbox-wrapper {
+  margin-inline-end: 0;
 }
 
 .resource-ops-follow-advanced-collapse {
@@ -1041,6 +1167,10 @@
   gap: 12px;
 }
 
+.resource-ops-follow-rule-grid--manual {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .resource-ops-follow-rule-card {
   display: flex;
   flex-direction: column;
@@ -1085,6 +1215,46 @@
   align-self: flex-start;
 }
 
+.resource-ops-follow-manual-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.resource-ops-follow-manual-suggestion {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 14px;
+  background: #fafcff;
+}
+
+.resource-ops-follow-manual-suggestion-main {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.resource-ops-follow-manual-suggestion-main small {
+  color: rgba(15, 23, 42, 0.62);
+  line-height: 1.6;
+}
+
+.resource-ops-follow-rule-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.resource-ops-follow-rule-card-actions .ant-btn {
+  align-self: auto;
+}
+
 .resource-ops-follow-sync-manual-modal {
   gap: 14px;
 }
@@ -1094,6 +1264,138 @@
   grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.85fr);
   gap: 14px;
   align-items: start;
+}
+
+.resource-ops-follow-diagnosis-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.resource-ops-follow-diagnosis-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(180px, 0.45fr) minmax(240px, 0.9fr);
+  gap: 12px;
+  align-items: stretch;
+}
+
+.resource-ops-follow-diagnosis-target {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 14px;
+  background: #fafcff;
+}
+
+.resource-ops-follow-diagnosis-target strong {
+  min-width: 0;
+  color: rgba(15, 23, 42, 0.9);
+  font-size: 14px;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.resource-ops-follow-diagnosis-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.resource-ops-follow-diagnosis-keyfacts {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.resource-ops-follow-diagnosis-fact {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 14px;
+  background: #fafcff;
+}
+
+.resource-ops-follow-diagnosis-fact span {
+  color: rgba(15, 23, 42, 0.58);
+  font-size: 12px;
+}
+
+.resource-ops-follow-diagnosis-fact strong {
+  color: rgba(15, 23, 42, 0.9);
+  font-size: 16px;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.resource-ops-follow-diagnosis-fact small {
+  color: rgba(15, 23, 42, 0.62);
+  line-height: 1.6;
+  word-break: break-word;
+}
+
+.resource-ops-follow-diagnosis-alerts {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.resource-ops-follow-diagnosis-technical {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.resource-ops-follow-diagnosis-technical small {
+  color: rgba(15, 23, 42, 0.68);
+  line-height: 1.6;
+}
+
+.resource-ops-follow-file-name {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.resource-ops-follow-file-name span,
+.resource-ops-follow-file-name small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resource-ops-follow-file-name span {
+  color: rgba(15, 23, 42, 0.9);
+  font-weight: 500;
+}
+
+.resource-ops-follow-file-name small {
+  color: rgba(15, 23, 42, 0.56);
+}
+
+.resource-ops-follow-file-parse {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.resource-ops-follow-file-parse .ant-tag {
+  width: fit-content;
+  margin-inline-end: 0;
+}
+
+.resource-ops-follow-file-parse small {
+  color: rgba(15, 23, 42, 0.56);
+  line-height: 1.5;
+  word-break: break-word;
 }
 
 @media (max-width: 900px) {
@@ -1111,6 +1413,10 @@
 
   .resource-ops-follow-automation-head {
     flex-direction: column;
+  }
+
+  .resource-ops-follow-automation-facts {
+    grid-template-columns: 1fr;
   }
 
   .resource-ops-transfer-card-head {
@@ -1149,6 +1455,17 @@
 
   .resource-ops-follow-sync-manual-grid {
     grid-template-columns: 1fr;
+  }
+
+  .resource-ops-follow-rule-grid--manual,
+  .resource-ops-follow-diagnosis-toolbar,
+  .resource-ops-follow-diagnosis-summary-grid,
+  .resource-ops-follow-diagnosis-keyfacts {
+    grid-template-columns: 1fr;
+  }
+
+  .resource-ops-follow-manual-suggestion {
+    flex-direction: column;
   }
 }
 
