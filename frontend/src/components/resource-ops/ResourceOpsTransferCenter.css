@@ -450,6 +450,29 @@
   width: 100%;
 }
 
+.resource-ops-transfer-target-copy {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.resource-ops-transfer-target-name {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  color: rgba(15, 23, 42, 0.92);
+}
+
 .resource-ops-transfer-validation--rule-compact {
   gap: 0;
 }

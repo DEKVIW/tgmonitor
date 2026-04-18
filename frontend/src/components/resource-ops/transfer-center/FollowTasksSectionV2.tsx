@@ -708,6 +708,49 @@ const copyText = async (value: string, successText: string) => {
   }
 }
 
+const getResourceDirectoryName = (value?: string | null) => {
+  const normalized = String(value || '')
+    .trim()
+    .replace(/[\\/]+$/g, '')
+  if (!normalized) return ''
+  const segments = normalized.split(/[\\/]/).filter(Boolean)
+  return segments[segments.length - 1] || normalized
+}
+
+const renderCopyableResourceDirectory = (
+  fixedSavePath?: string | null,
+  options?: { accountName?: string | null; placeholder?: string }
+) => {
+  const fullPath = String(fixedSavePath || '').trim()
+  const directoryName = getResourceDirectoryName(fullPath)
+  const placeholder = options?.placeholder || '未记录固定目录'
+  const tooltipTitle = directoryName
+    ? [`点击复制目录名：${directoryName}`, fullPath && fullPath !== directoryName ? `完整路径：${fullPath}` : '']
+        .filter(Boolean)
+        .join('\n')
+    : fullPath || placeholder
+
+  return (
+    <div className="resource-ops-transfer-validation resource-ops-transfer-validation--publish-meta resource-ops-transfer-target-cell">
+      {options?.accountName ? <small>{options.accountName}</small> : null}
+      {directoryName ? (
+        <Tooltip title={tooltipTitle}>
+          <button
+            type="button"
+            className="resource-ops-transfer-target-copy"
+            onClick={() => void copyText(directoryName, '已复制资源目录名')}
+          >
+            <span className="resource-ops-transfer-target-name">{directoryName}</span>
+          </button>
+        </Tooltip>
+      ) : (
+        <small title={fullPath || undefined}>{fullPath || placeholder}</small>
+      )}
+      {fullPath && directoryName && fullPath !== directoryName ? <small title={fullPath}>{fullPath}</small> : null}
+    </div>
+  )
+}
+
 const getFollowScheduleLine = (record: PanTransferFollowTaskItem) => {
   if (record.task_state === 'checking') {
     return '当前正在执行检查'
@@ -1642,6 +1685,15 @@ const FollowTasksSectionV2 = ({ refreshToken, isActive = true }: FollowTasksSect
     },
   ]
 
+  const resourceDirectoryColumn = columns[2]
+  columns[2] = {
+    ...(resourceDirectoryColumn || {}),
+    render: (_, record) =>
+      renderCopyableResourceDirectory(record.fixed_save_path, {
+        accountName: record.target_account_name || '未指定账号',
+      }),
+  }
+
   const detailTask = detailData?.task ?? null
   const activeSettingsDraft =
     detailTask && settingsDraft?.taskId === detailTask.id ? settingsDraft : detailTask ? buildFollowSettingsDraft(detailTask) : null
@@ -1977,7 +2029,7 @@ const FollowTasksSectionV2 = ({ refreshToken, isActive = true }: FollowTasksSect
                 },
                 { key: 'topic', label: '资源主题', children: getFollowTaskTitle(detailTask) },
                 { key: 'account', label: '目标账号', children: detailTask.target_account_name || '-' },
-                { key: 'path', label: '固定资源目录', children: detailTask.fixed_save_path || '-' },
+                { key: 'path', label: '固定资源目录', children: renderCopyableResourceDirectory(detailTask.fixed_save_path) },
                 {
                   key: 'publish',
                   label: '绑定前台记录',
@@ -2728,7 +2780,7 @@ const FollowTasksSectionV2 = ({ refreshToken, isActive = true }: FollowTasksSect
 
                 <div className="resource-ops-follow-sync-meta">
                   <span>目标资源目录</span>
-                  <small title={detailTask.fixed_save_path}>{detailTask.fixed_save_path || '-'}</small>
+                  {renderCopyableResourceDirectory(detailTask.fixed_save_path)}
                 </div>
 
                 <div className="resource-ops-follow-sync-meta">

@@ -368,21 +368,29 @@ def _serialize_footer_builder_config(values: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def ensure_runtime_configuration_seeded() -> None:
+def _seed_runtime_configuration(session: Session) -> None:
+    _ensure_singleton_row(
+        session,
+        SystemSettings,
+        SYSTEM_SETTINGS_SINGLETON_ID,
+        build_default_system_settings_values(),
+    )
+    _ensure_singleton_row(
+        session,
+        BackupSettings,
+        BACKUP_SETTINGS_SINGLETON_ID,
+        build_default_backup_settings_values(),
+    )
+
+
+def ensure_runtime_configuration_seeded(session: Session | None = None) -> None:
     ensure_runtime_storage_tables()
-    with Session(engine) as session:
-        _ensure_singleton_row(
-            session,
-            SystemSettings,
-            SYSTEM_SETTINGS_SINGLETON_ID,
-            build_default_system_settings_values(),
-        )
-        _ensure_singleton_row(
-            session,
-            BackupSettings,
-            BACKUP_SETTINGS_SINGLETON_ID,
-            build_default_backup_settings_values(),
-        )
+    if session is not None:
+        _seed_runtime_configuration(session)
+        return
+
+    with Session(engine) as owned_session:
+        _seed_runtime_configuration(owned_session)
 
 
 def get_system_config_values() -> dict[str, Any]:

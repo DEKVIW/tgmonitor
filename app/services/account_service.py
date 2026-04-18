@@ -204,7 +204,7 @@ def _ensure_system_settings_record(session: Session) -> SystemSettings:
 
 
 def _read_runtime_settings(session: Session) -> tuple[SystemSettings, dict[str, Any]]:
-    ensure_runtime_configuration_seeded()
+    ensure_runtime_configuration_seeded(session=session)
     record = _ensure_system_settings_record(session)
     extra_json = record.extra_json if isinstance(record.extra_json, dict) else {}
     return record, _normalize_runtime_settings(extra_json.get(ACCOUNT_RUNTIME_EXTRA_KEY))
@@ -227,10 +227,14 @@ def _write_runtime_settings(
     return _normalize_runtime_settings((record.extra_json or {}).get(ACCOUNT_RUNTIME_EXTRA_KEY))
 
 
-def get_user_runtime_settings() -> dict[str, Any]:
+def get_user_runtime_settings(*, session: Session | None = None) -> dict[str, Any]:
     ensure_runtime_storage_tables()
-    with Session(engine) as session:
+    if session is not None:
         _, settings_value = _read_runtime_settings(session)
+        return settings_value
+
+    with Session(engine) as owned_session:
+        _, settings_value = _read_runtime_settings(owned_session)
         return settings_value
 
 
@@ -1071,18 +1075,44 @@ def get_account_by_login_name(login_name: str) -> tuple[UserAccount | None, Auth
         return account, identity
 
 
-def load_account_for_session(account_id: int) -> dict[str, Any] | None:
+def _load_account_for_session(
+    session: Session,
+    account_id: int,
+    *,
+    runtime_settings: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    account = session.get(UserAccount, account_id)
+    if account is None:
+        return None
+
+    resolved_runtime_settings = runtime_settings or get_user_runtime_settings(session=session)
+    local_identity = _find_local_identity(session, account.id)
+    session_counts = get_active_session_count_map(session, [account.id], runtime_settings=resolved_runtime_settings)
+    return serialize_account(
+        account,
+        runtime_settings=resolved_runtime_settings,
+        active_session_count=session_counts.get(account.id, 0),
+        local_identity=local_identity,
+    )
+
+
+def load_account_for_session(
+    account_id: int,
+    *,
+    session: Session | None = None,
+    runtime_settings: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
     ensure_runtime_storage_tables()
-    with Session(engine) as session:
-        account = session.get(UserAccount, account_id)
-        if account is None:
-            return None
-        runtime_settings = get_user_runtime_settings()
-        local_identity = _find_local_identity(session, account.id)
-        session_counts = get_active_session_count_map(session, [account.id], runtime_settings=runtime_settings)
-        return serialize_account(
-            account,
+    if session is not None:
+        return _load_account_for_session(
+            session,
+            account_id,
             runtime_settings=runtime_settings,
-            active_session_count=session_counts.get(account.id, 0),
-            local_identity=local_identity,
+        )
+
+    with Session(engine) as owned_session:
+        return _load_account_for_session(
+            owned_session,
+            account_id,
+            runtime_settings=runtime_settings,
         )

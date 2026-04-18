@@ -44,6 +44,7 @@ type ExecutionTimelineLog = PanTransferBatchItem['execution_logs'][number] & {
 }
 
 type TerminalFilter = 'all' | 'error'
+type BatchBulkAction = 'start' | 'cancel' | 'retry' | 'delete'
 
 const formatExecutionLogTime = (value?: string | null) =>
   value ? formatServerDateTime(value, 'HH:mm:ss', 'Asia/Shanghai') : '--:--:--'
@@ -199,7 +200,9 @@ type BatchSectionProps = {
   detailOpen: boolean
   detailLoading: boolean
   detailData: PanTransferBatchDetailResponse | null
+  selectedBatchKeys: Key[]
   selectedItemKeys: Key[]
+  batchBulkAction: BatchBulkAction | null
   bulkPublishing: boolean
   bulkCreatingFollow: boolean
   onRefresh: () => void
@@ -210,11 +213,16 @@ type BatchSectionProps = {
   onRetry: (batchId: number, itemIds?: number[]) => void
   onDelete: (batchId: number) => void
   onCloseDetail: () => void
+  onSelectBatchKeys: (keys: Key[]) => void
   onRefreshDetail: (batchId: number) => void
   onSelectItemKeys: (keys: Key[]) => void
   onClearLogs: (batchId: number) => void
   onPublish: (item: PanTransferBatchItem) => void
   onCreateFollow: (item: PanTransferBatchItem) => void
+  onBulkStart: () => void
+  onBulkCancel: () => void
+  onBulkRetry: () => void
+  onBulkDelete: () => void
   onBulkPublish: () => void
   onBulkCreateFollow: () => void
 }
@@ -233,7 +241,9 @@ const BatchSection = ({
   detailOpen,
   detailLoading,
   detailData,
+  selectedBatchKeys,
   selectedItemKeys,
+  batchBulkAction,
   bulkPublishing,
   bulkCreatingFollow,
   onRefresh,
@@ -244,11 +254,16 @@ const BatchSection = ({
   onRetry,
   onDelete,
   onCloseDetail,
+  onSelectBatchKeys,
   onRefreshDetail,
   onSelectItemKeys,
   onClearLogs,
   onPublish,
   onCreateFollow,
+  onBulkStart,
+  onBulkCancel,
+  onBulkRetry,
+  onBulkDelete,
   onBulkPublish,
   onBulkCreateFollow,
 }: BatchSectionProps) => {
@@ -319,6 +334,29 @@ const BatchSection = ({
       .filter((item) => selectedSet.has(item.id) && item.transfer_status === 'failed')
       .map((item) => item.id)
   }, [detailData, selectedItemKeys])
+
+  const selectedBatchRows = useMemo(() => {
+    if (selectedBatchKeys.length <= 0) return []
+    const selectedSet = new Set(selectedBatchKeys.map((item) => Number(item)))
+    return batches.filter((item) => selectedSet.has(item.id))
+  }, [batches, selectedBatchKeys])
+
+  const selectedBatchStartableCount = useMemo(
+    () => selectedBatchRows.filter((item) => item.status === 'draft').length,
+    [selectedBatchRows]
+  )
+  const selectedBatchCancelableCount = useMemo(
+    () => selectedBatchRows.filter((item) => item.can_cancel).length,
+    [selectedBatchRows]
+  )
+  const selectedBatchRetryableCount = useMemo(
+    () => selectedBatchRows.filter((item) => item.can_retry).length,
+    [selectedBatchRows]
+  )
+  const selectedBatchDeletableCount = useMemo(
+    () => selectedBatchRows.filter((item) => item.can_delete).length,
+    [selectedBatchRows]
+  )
 
   const batchColumns: ColumnsType<PanTransferBatchSummaryItem> = [
     {
@@ -570,11 +608,47 @@ const BatchSection = ({
           </Button>
         </div>
 
+        <div className="resource-ops-transfer-toolbar">
+          <Text type="secondary">
+            {selectedBatchRows.length > 0
+              ? `已选 ${selectedBatchRows.length} 个批次 · 可启动 ${selectedBatchStartableCount} · 可停止 ${selectedBatchCancelableCount} · 可重试 ${selectedBatchRetryableCount} · 可删除 ${selectedBatchDeletableCount}`
+              : '支持多选批次后统一启动、停止、重试或删除。'}
+          </Text>
+          <Space wrap>
+            <Button disabled={selectedBatchStartableCount <= 0} loading={batchBulkAction === 'start'} onClick={onBulkStart}>
+              批量启动
+            </Button>
+            <Button disabled={selectedBatchCancelableCount <= 0} loading={batchBulkAction === 'cancel'} onClick={onBulkCancel}>
+              批量停止
+            </Button>
+            <Button disabled={selectedBatchRetryableCount <= 0} loading={batchBulkAction === 'retry'} onClick={onBulkRetry}>
+              批量重试
+            </Button>
+            <Popconfirm
+              title={`确认删除已选批次中的 ${selectedBatchDeletableCount} 个可删除批次吗？`}
+              description="只会删除允许删除的批次，其余批次会自动跳过。"
+              disabled={selectedBatchDeletableCount <= 0}
+              onConfirm={onBulkDelete}
+            >
+              <Button danger disabled={selectedBatchDeletableCount <= 0} loading={batchBulkAction === 'delete'}>
+                批量删除
+              </Button>
+            </Popconfirm>
+            <Button disabled={selectedBatchKeys.length <= 0} onClick={() => onSelectBatchKeys([])}>
+              清空选择
+            </Button>
+          </Space>
+        </div>
+
         <Table
           rowKey="id"
           loading={batchLoading}
           dataSource={batches}
           columns={batchColumns}
+          rowSelection={{
+            selectedRowKeys: selectedBatchKeys,
+            onChange: (keys) => onSelectBatchKeys(keys),
+          }}
           onChange={onTableChange}
           pagination={{
             current: batchPagination.page,

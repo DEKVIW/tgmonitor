@@ -313,7 +313,12 @@ def create_provider_login_session(
         }
 
 
-def resolve_current_user_from_token(token: str, *, touch: bool = True) -> dict[str, Any] | None:
+def _resolve_current_user_from_token(
+    session: Session,
+    token: str,
+    *,
+    touch: bool = True,
+) -> dict[str, Any] | None:
     payload = verify_token(token)
     if payload is None:
         return None
@@ -324,30 +329,49 @@ def resolve_current_user_from_token(token: str, *, touch: bool = True) -> dict[s
 
     ensure_runtime_storage_tables()
     current_time = _utcnow()
-    with Session(engine) as session:
-        db_session = session.query(AuthSession).filter(AuthSession.session_id == session_id).first()
-        if db_session is None or db_session.revoked_at is not None or db_session.expires_at <= current_time:
-            return None
-        account = session.get(UserAccount, int(account_id))
-        if account is None or get_effective_status(account, now=current_time) != "active":
-            db_session.revoked_at = current_time
-            db_session.revoke_reason = "account_unavailable"
-            session.add(db_session)
-            session.commit()
-            return None
-        if touch and (current_time - db_session.last_seen_at) >= timedelta(seconds=45):
-            db_session.last_seen_at = current_time
-            account.last_seen_at = current_time
-            session.add(db_session)
-            session.add(account)
-            session.commit()
+    db_session = session.query(AuthSession).filter(AuthSession.session_id == session_id).first()
+    if db_session is None or db_session.revoked_at is not None or db_session.expires_at <= current_time:
+        return None
 
-    user = load_account_for_session(int(account_id))
+    account = session.get(UserAccount, int(account_id))
+    if account is None or get_effective_status(account, now=current_time) != "active":
+        db_session.revoked_at = current_time
+        db_session.revoke_reason = "account_unavailable"
+        session.add(db_session)
+        session.commit()
+        return None
+
+    runtime_settings = get_user_runtime_settings(session=session)
+    if touch and (current_time - db_session.last_seen_at) >= timedelta(seconds=45):
+        db_session.last_seen_at = current_time
+        account.last_seen_at = current_time
+        session.add(db_session)
+        session.add(account)
+        session.commit()
+
+    user = load_account_for_session(
+        int(account_id),
+        session=session,
+        runtime_settings=runtime_settings,
+    )
     if user is None:
         return None
     user["session_id"] = session_id
     user["account_id"] = int(account_id)
     return user
+
+
+def resolve_current_user_from_token(
+    token: str,
+    *,
+    touch: bool = True,
+    session: Session | None = None,
+) -> dict[str, Any] | None:
+    if session is not None:
+        return _resolve_current_user_from_token(session, token, touch=touch)
+
+    with Session(engine) as owned_session:
+        return _resolve_current_user_from_token(owned_session, token, touch=touch)
 
 
 def revoke_session(session_id: str, *, reason: str = "logout") -> bool:

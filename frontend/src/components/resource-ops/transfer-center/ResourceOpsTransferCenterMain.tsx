@@ -87,6 +87,8 @@ const renderBatchCreateLabel = (label: string, tip: string) => (
   </span>
 )
 
+type BatchBulkAction = 'start' | 'cancel' | 'retry' | 'delete'
+
 const ResourceOpsTransferCenterMain = () => {
   const [activeTab, setActiveTab] = useState(getInitialTransferCenterTab)
   const isPageVisible = usePageVisibility()
@@ -121,6 +123,7 @@ const ResourceOpsTransferCenterMain = () => {
   const [detailOpen, setDetailOpen] = useState(false)
   const [detailLoading, setDetailLoading] = useState(false)
   const [detailData, setDetailData] = useState<PanTransferBatchDetailResponse | null>(null)
+  const [selectedBatchKeys, setSelectedBatchKeys] = useState<Key[]>([])
   const [selectedDetailItemKeys, setSelectedDetailItemKeys] = useState<Key[]>([])
   const [publishModalOpen, setPublishModalOpen] = useState(false)
   const [publishingItem, setPublishingItem] = useState<PanTransferBatchItem | null>(null)
@@ -128,6 +131,7 @@ const ResourceOpsTransferCenterMain = () => {
   const [bulkPublishing, setBulkPublishing] = useState(false)
   const [creatingFollowItemId, setCreatingFollowItemId] = useState<number | null>(null)
   const [bulkCreatingFollow, setBulkCreatingFollow] = useState(false)
+  const [batchBulkAction, setBatchBulkAction] = useState<BatchBulkAction | null>(null)
   const [followRefreshToken, setFollowRefreshToken] = useState(0)
   const [publishRefreshToken, setPublishRefreshToken] = useState(0)
 
@@ -157,6 +161,10 @@ const ResourceOpsTransferCenterMain = () => {
     try {
       const response = await listPanTransferBatches(page, pageSize)
       setBatches(response.items)
+      setSelectedBatchKeys((current) => {
+        const availableIds = new Set(response.items.map((item) => item.id))
+        return current.filter((item) => availableIds.has(Number(item)))
+      })
       setBatchPagination({ page: response.page, pageSize: response.page_size, total: response.total })
     } catch (error) {
       message.error(getErrorMessage(error, '加载转存批次失败'))
@@ -634,6 +642,193 @@ const ResourceOpsTransferCenterMain = () => {
     }
   }
 
+  const getSelectedBatchRows = () => {
+    const selectedSet = new Set(selectedBatchKeys.map((item) => Number(item)))
+    return batches.filter((item) => selectedSet.has(item.id))
+  }
+
+  const handleBulkStartBatches = async () => {
+    const selectedRows = getSelectedBatchRows()
+    if (selectedRows.length <= 0) {
+      message.warning('请先选择要启动的批次')
+      return
+    }
+
+    const eligibleRows = selectedRows.filter((item) => item.status === 'draft')
+    if (eligibleRows.length <= 0) {
+      message.warning('所选批次里没有可启动的草稿批次')
+      return
+    }
+
+    setBatchBulkAction('start')
+    let successCount = 0
+    let failureCount = 0
+    const skippedCount = selectedRows.length - eligibleRows.length
+
+    try {
+      for (const batch of eligibleRows) {
+        try {
+          const response = await startPanTransferBatch(batch.id)
+          if (detailData?.batch.id === batch.id) {
+            applyBatchDetail(response)
+            setDetailOpen(true)
+          }
+          successCount += 1
+        } catch {
+          failureCount += 1
+        }
+      }
+
+      await loadBatches(batchPagination.page, batchPagination.pageSize)
+      if (failureCount > 0 || skippedCount > 0) {
+        message.warning(`批量启动完成，成功 ${successCount} 个，失败 ${failureCount} 个，跳过 ${skippedCount} 个`)
+      } else {
+        message.success(`已批量启动 ${successCount} 个批次`)
+      }
+    } finally {
+      setBatchBulkAction(null)
+    }
+  }
+
+  const handleBulkCancelBatches = async () => {
+    const selectedRows = getSelectedBatchRows()
+    if (selectedRows.length <= 0) {
+      message.warning('请先选择要停止的批次')
+      return
+    }
+
+    const eligibleRows = selectedRows.filter((item) => item.can_cancel)
+    if (eligibleRows.length <= 0) {
+      message.warning('所选批次里没有可停止的运行中批次')
+      return
+    }
+
+    setBatchBulkAction('cancel')
+    let successCount = 0
+    let failureCount = 0
+    const skippedCount = selectedRows.length - eligibleRows.length
+
+    try {
+      for (const batch of eligibleRows) {
+        try {
+          const response = await cancelPanTransferBatch(batch.id)
+          if (detailData?.batch.id === batch.id) {
+            applyBatchDetail(response)
+            setDetailOpen(true)
+          }
+          successCount += 1
+        } catch {
+          failureCount += 1
+        }
+      }
+
+      await loadBatches(batchPagination.page, batchPagination.pageSize)
+      if (failureCount > 0 || skippedCount > 0) {
+        message.warning(`批量停止完成，成功 ${successCount} 个，失败 ${failureCount} 个，跳过 ${skippedCount} 个`)
+      } else {
+        message.success(`已批量停止 ${successCount} 个批次`)
+      }
+    } finally {
+      setBatchBulkAction(null)
+    }
+  }
+
+  const handleBulkRetryBatches = async () => {
+    const selectedRows = getSelectedBatchRows()
+    if (selectedRows.length <= 0) {
+      message.warning('请先选择要重试的批次')
+      return
+    }
+
+    const eligibleRows = selectedRows.filter((item) => item.can_retry)
+    if (eligibleRows.length <= 0) {
+      message.warning('所选批次里没有可重试的批次')
+      return
+    }
+
+    setBatchBulkAction('retry')
+    let successCount = 0
+    let failureCount = 0
+    const skippedCount = selectedRows.length - eligibleRows.length
+
+    try {
+      for (const batch of eligibleRows) {
+        try {
+          const response = await retryPanTransferBatch(batch.id, {})
+          if (detailData?.batch.id === batch.id) {
+            applyBatchDetail(response)
+            setDetailOpen(true)
+          }
+          successCount += 1
+        } catch {
+          failureCount += 1
+        }
+      }
+
+      await loadBatches(batchPagination.page, batchPagination.pageSize)
+      if (failureCount > 0 || skippedCount > 0) {
+        message.warning(`批量重试完成，成功 ${successCount} 个，失败 ${failureCount} 个，跳过 ${skippedCount} 个`)
+      } else {
+        message.success(`已批量提交 ${successCount} 个批次的失败项重试`)
+      }
+    } finally {
+      setBatchBulkAction(null)
+    }
+  }
+
+  const handleBulkDeleteBatches = async () => {
+    const selectedRows = getSelectedBatchRows()
+    if (selectedRows.length <= 0) {
+      message.warning('请先选择要删除的批次')
+      return
+    }
+
+    const eligibleRows = selectedRows.filter((item) => item.can_delete)
+    if (eligibleRows.length <= 0) {
+      message.warning('所选批次里没有可删除的批次')
+      return
+    }
+
+    setBatchBulkAction('delete')
+    let successCount = 0
+    let failureCount = 0
+    const skippedCount = selectedRows.length - eligibleRows.length
+    const deletedBatchIds = new Set<number>()
+
+    try {
+      for (const batch of eligibleRows) {
+        try {
+          await deletePanTransferBatch(batch.id)
+          deletedBatchIds.add(batch.id)
+          successCount += 1
+        } catch {
+          failureCount += 1
+        }
+      }
+
+      if (detailData?.batch.id && deletedBatchIds.has(detailData.batch.id)) {
+        setDetailOpen(false)
+        setDetailData(null)
+        setSelectedDetailItemKeys([])
+      }
+      setSelectedBatchKeys((current) => current.filter((item) => !deletedBatchIds.has(Number(item))))
+
+      const nextPage =
+        batchPagination.page > 1 && successCount > 0 && successCount === batches.length
+          ? batchPagination.page - 1
+          : batchPagination.page
+      await loadBatches(nextPage, batchPagination.pageSize)
+
+      if (failureCount > 0 || skippedCount > 0) {
+        message.warning(`批量删除完成，成功 ${successCount} 个，失败 ${failureCount} 个，跳过 ${skippedCount} 个`)
+      } else {
+        message.success(`已批量删除 ${successCount} 个批次`)
+      }
+    } finally {
+      setBatchBulkAction(null)
+    }
+  }
+
   return (
     <div className="resource-ops-transfer-stack">
       <Tabs
@@ -727,7 +922,9 @@ const ResourceOpsTransferCenterMain = () => {
                   detailOpen={detailOpen}
                   detailLoading={detailLoading}
                   detailData={detailData}
+                  selectedBatchKeys={selectedBatchKeys}
                   selectedItemKeys={selectedDetailItemKeys}
+                  batchBulkAction={batchBulkAction}
                   bulkPublishing={bulkPublishing}
                   bulkCreatingFollow={bulkCreatingFollow}
                   onRefresh={() => void loadBatches()}
@@ -774,11 +971,16 @@ const ResourceOpsTransferCenterMain = () => {
                     setDetailOpen(false)
                     setSelectedDetailItemKeys([])
                   }}
+                  onSelectBatchKeys={setSelectedBatchKeys}
                   onRefreshDetail={(batchId) => void loadBatchDetail(batchId, { open: false })}
                   onSelectItemKeys={setSelectedDetailItemKeys}
                   onClearLogs={(batchId) => void runBatchClearLogs(batchId)}
                   onPublish={(item) => openPublishModal(item)}
                   onCreateFollow={(item) => void handleCreateFollowTask(item)}
+                  onBulkStart={() => void handleBulkStartBatches()}
+                  onBulkCancel={() => void handleBulkCancelBatches()}
+                  onBulkRetry={() => void handleBulkRetryBatches()}
+                  onBulkDelete={() => void handleBulkDeleteBatches()}
                   onBulkPublish={() => void handleBulkPublishSelected()}
                   onBulkCreateFollow={() => void handleBulkCreateFollowSelected()}
                 />

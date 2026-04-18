@@ -22,8 +22,9 @@ def get_db():
 
 def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db),
 ) -> dict:
-    current_user = resolve_current_user_from_token(credentials.credentials, touch=True)
+    current_user = resolve_current_user_from_token(credentials.credentials, touch=True, session=db)
     if current_user is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -35,10 +36,11 @@ def get_current_user(
 
 def get_optional_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(HTTPBearer(auto_error=False)),
+    db: Session = Depends(get_db),
 ) -> Optional[dict]:
     if credentials is None:
         return None
-    return resolve_current_user_from_token(credentials.credentials, touch=True)
+    return resolve_current_user_from_token(credentials.credentials, touch=True, session=db)
 
 
 def get_admin_user(

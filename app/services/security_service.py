@@ -224,7 +224,7 @@ def _ensure_system_settings_record(session: Session) -> SystemSettings:
 
 
 def _read_storage_values(session: Session) -> tuple[SystemSettings, dict[str, Any]]:
-    ensure_runtime_configuration_seeded()
+    ensure_runtime_configuration_seeded(session=session)
     record = _ensure_system_settings_record(session)
     extra_json = record.extra_json if isinstance(record.extra_json, dict) else {}
     return record, _normalize_storage_values(extra_json.get(SECURITY_EXTRA_KEY))
