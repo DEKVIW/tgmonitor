@@ -1223,9 +1223,8 @@
 
 .resource-ops-follow-manual-suggestion {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 14px;
+  flex-direction: column;
+  gap: 8px;
   padding: 14px;
   border: 1px solid rgba(15, 23, 42, 0.08);
   border-radius: 14px;
@@ -1234,7 +1233,6 @@
 
 .resource-ops-follow-manual-suggestion-main {
   display: flex;
-  flex: 1 1 auto;
   flex-direction: column;
   gap: 6px;
   min-width: 0;
@@ -1243,6 +1241,28 @@
 .resource-ops-follow-manual-suggestion-main small {
   color: rgba(15, 23, 42, 0.62);
   line-height: 1.6;
+}
+
+.resource-ops-follow-manual-suggestion-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.resource-ops-follow-manual-suggestion-title > span {
+  font-size: 16px;
+  font-weight: 600;
+  color: rgba(15, 23, 42, 0.94);
+}
+
+.resource-ops-follow-manual-suggestion-title .ant-space {
+  gap: 8px !important;
+}
+
+.resource-ops-follow-manual-suggestion-title .ant-tag {
+  margin-inline-end: 0;
 }
 
 .resource-ops-follow-rule-card-actions {
@@ -1464,9 +1484,6 @@
     grid-template-columns: 1fr;
   }
 
-  .resource-ops-follow-manual-suggestion {
-    flex-direction: column;
-  }
 }
 
 @media (max-width: 640px) {

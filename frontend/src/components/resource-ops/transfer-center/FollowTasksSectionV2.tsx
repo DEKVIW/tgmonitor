@@ -2525,7 +2525,7 @@ const FollowTasksSectionV2 = ({ refreshToken, isActive = true }: FollowTasksSect
               <div className="resource-ops-follow-manual-stack">
                 <div className="resource-ops-follow-manual-suggestion">
                   <div className="resource-ops-follow-manual-suggestion-main">
-                    <div className="resource-ops-follow-rule-card-head">
+                    <div className="resource-ops-follow-manual-suggestion-title">
                       <span>当前建议</span>
                       <Space size={8} wrap>
                         <Tag color={detailRuleTone.color}>{detailTask.rule_assessment.rule_label}</Tag>
@@ -2535,20 +2535,7 @@ const FollowTasksSectionV2 = ({ refreshToken, isActive = true }: FollowTasksSect
                     </div>
                     <small>{detailTask.rule_assessment.summary}</small>
                     <small>{getRuleExecutionHelp(detailTask)}</small>
-                  </div>
-                  <div className="resource-ops-follow-automation-facts resource-ops-follow-automation-facts--compact">
-                    <div className="resource-ops-follow-automation-fact">
-                      <span>推荐来源</span>
-                      <strong>{detailRecommendedSourceLabel}</strong>
-                    </div>
-                    <div className="resource-ops-follow-automation-fact">
-                      <span>推荐动作</span>
-                      <strong>{detailRecommendedSyncLabel}</strong>
-                    </div>
-                    <div className="resource-ops-follow-automation-fact">
-                      <span>候选状态</span>
-                      <strong>{hasCandidate ? '已命中候选' : '当前仅有原链'}</strong>
-                    </div>
+                    <small>{`候选状态：${hasCandidate ? '已命中候选' : '当前仅有原链'}`}</small>
                   </div>
                 </div>
 
