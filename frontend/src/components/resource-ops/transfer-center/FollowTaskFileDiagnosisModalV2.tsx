@@ -72,7 +72,7 @@ const FollowTaskFileDiagnosisModalV2 = ({
     setSourceKind(hasCandidate ? 'candidate' : 'current')
     setNearEpisodeWindow(5)
     setDiagnosis(null)
-  }, [open, task, hasCandidate])
+  }, [open, task?.id, hasCandidate])
 
   const runDiagnosis = async (nextSourceKind = sourceKind, nextWindow = nearEpisodeWindow) => {
     if (!task) return
