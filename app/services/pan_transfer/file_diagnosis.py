@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.models.models import PanTransferAccount, PanTransferSyncTask, ensure_runtime_storage_tables
 from app.services.resource_identity import normalize_match_key, parse_resource_identity
 
+from .constants import PLATFORM_BAIDU, PLATFORM_QUARK, normalize_transfer_platform
 from .follow_tasks import (
     _append_follow_task_log,
     _build_follow_identity_fallback,
@@ -388,6 +389,86 @@ def _infer_target_relative_path(target_entries: list[_FileEntry], *, anchor_epis
         return None
     best_path, best_score = max(scores.items(), key=lambda item: item[1])
     return best_path or None if best_score > 0 else None
+
+
+async def infer_follow_task_target_relative_path(
+    session: Session,
+    *,
+    task_id: int,
+) -> dict[str, Any]:
+    ensure_runtime_storage_tables()
+    task = _get_follow_task(session, task_id=task_id)
+
+    account = session.get(PanTransferAccount, int(task.target_account_id or 0))
+    if account is None:
+        raise LookupError("target account not found")
+    credential_value = decrypt_account_credential(account)
+    if not credential_value:
+        raise ValueError("target account credential is empty")
+
+    snapshot = _collect_tracked_snapshot(task)
+    tracked_episode = _normalize_optional_int(snapshot.get("latest_episode"))
+    tracked_season = _normalize_optional_int(snapshot.get("season"))
+    tracked_keys = _build_tracked_keys(snapshot)
+
+    stats = _DiagnosisStats()
+    platform = normalize_transfer_platform(_normalize_text(task.platform, max_length=64))
+    if platform == PLATFORM_QUARK:
+        target_entries, stats.target_dir_count = await _scan_quark_target_entries(
+            credential_value=credential_value,
+            fixed_save_path=task.fixed_save_path,
+            max_scan_dirs=_DEFAULT_MAX_SCAN_DIRS,
+            max_scan_files=_DEFAULT_MAX_SCAN_FILES,
+        )
+    elif platform == PLATFORM_BAIDU:
+        target_entries, stats.target_dir_count = await _scan_baidu_target_entries(
+            credential_value=credential_value,
+            fixed_save_path=task.fixed_save_path,
+            max_scan_dirs=_DEFAULT_MAX_SCAN_DIRS,
+            max_scan_files=_DEFAULT_MAX_SCAN_FILES,
+        )
+    else:
+        raise ValueError(f"unsupported follow diagnosis platform: {task.platform}")
+
+    stats.target_file_count = len(target_entries)
+    target_video_entries = _prepare_quick_entries(target_entries, stats=stats)
+    stats.target_video_count = len(target_video_entries)
+
+    latest_target_episode = max(
+        [max(entry.quick_episode_numbers) for entry in target_video_entries if entry.quick_episode_numbers],
+        default=None,
+    )
+    anchor_episode = max([value for value in [tracked_episode, latest_target_episode] if value is not None], default=None)
+
+    target_full_parse_candidates = _select_full_parse_candidates(
+        target_video_entries,
+        tracked_episode=anchor_episode,
+        near_episode_window=max(2, _DEFAULT_NEAR_EPISODE_WINDOW // 2),
+        stats=stats,
+    )
+    for entry in target_full_parse_candidates:
+        _full_parse_entry(entry, tracked_keys=tracked_keys, tracked_season=tracked_season)
+        stats.full_parsed_count += 1
+
+    for entry in target_video_entries:
+        if entry.parse_level != "full":
+            if tracked_season is not None and entry.quick_season is not None and entry.quick_season != tracked_season:
+                entry.accepted = False
+            elif entry.quick_episode_numbers:
+                entry.accepted = True
+                entry.parse_reason = "target_quick_episode"
+
+    inferred_target_relative_path = _infer_target_relative_path(target_video_entries, anchor_episode=anchor_episode)
+    return {
+        "preferred_target_relative_path": inferred_target_relative_path,
+        "tracked_episode": tracked_episode,
+        "latest_target_episode": latest_target_episode,
+        "target_dir_count": stats.target_dir_count,
+        "target_file_count": stats.target_file_count,
+        "target_video_count": stats.target_video_count,
+        "quick_parsed_count": stats.quick_parsed_count,
+        "full_parsed_count": stats.full_parsed_count,
+    }
 
 
 def _build_sync_selection_groups(entries: list[_FileEntry], *, target_relative_path: str | None) -> list[dict[str, Any]]:
@@ -1046,8 +1127,8 @@ async def diagnose_pan_transfer_follow_task_files(
         raise ValueError("source url is empty")
 
     stats = _DiagnosisStats()
-    platform = _normalize_text(task.platform, max_length=64).lower()
-    if platform == "quark":
+    platform = normalize_transfer_platform(_normalize_text(task.platform, max_length=64))
+    if platform == PLATFORM_QUARK:
         source_entries, stats.source_dir_count = await _scan_quark_source_entries(
             credential_value=credential_value,
             source_url=source_url,
@@ -1060,7 +1141,7 @@ async def diagnose_pan_transfer_follow_task_files(
             max_scan_dirs=_DEFAULT_MAX_SCAN_DIRS,
             max_scan_files=_DEFAULT_MAX_SCAN_FILES,
         )
-    elif platform == "baidu":
+    elif platform == PLATFORM_BAIDU:
         source_entries, stats.source_dir_count = await _scan_baidu_source_entries(
             credential_value=credential_value,
             source_url=source_url,

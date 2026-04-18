@@ -155,6 +155,131 @@ def _normalize_source_selection(payload: dict[str, Any] | None, *, sync_mode: st
     }
 
 
+def _split_relative_path(value: Any) -> list[str]:
+    return [part for part in str(value or "").replace("\\", "/").split("/") if part.strip()]
+
+
+def _build_common_target_relative_path(values: list[str]) -> str | None:
+    normalized_paths: list[list[str]] = []
+    for value in values:
+        parts = _split_relative_path(value)
+        if parts:
+            normalized_paths.append(parts)
+    if not normalized_paths:
+        return None
+    common_parts: list[str] = []
+    for grouped_parts in zip(*normalized_paths):
+        if len(set(grouped_parts)) != 1:
+            break
+        common_parts.append(grouped_parts[0])
+    return "/".join(common_parts) or None
+
+
+def _derive_preferred_target_relative_path_from_selection(source_selection: dict[str, Any] | None) -> str | None:
+    groups = list((source_selection or {}).get("selection_groups") or [])
+    target_paths = [
+        normalized
+        for normalized in [_normalize_target_relative_path(group.get("target_relative_path")) for group in groups]
+        if normalized
+    ]
+    if not target_paths:
+        return None
+    common_path = _build_common_target_relative_path(target_paths)
+    if common_path:
+        return common_path
+    unique_paths = sorted(set(target_paths))
+    return unique_paths[0] if len(unique_paths) == 1 else None
+
+
+def _augment_source_selection_target_relative_path(
+    source_selection: dict[str, Any] | None,
+    *,
+    preferred_target_relative_path: str | None,
+) -> dict[str, Any] | None:
+    if source_selection is None:
+        return None
+    normalized_preferred_path = _normalize_target_relative_path(preferred_target_relative_path)
+    if not normalized_preferred_path:
+        return source_selection
+
+    groups = list(source_selection.get("selection_groups") or [])
+    normalized_groups: list[dict[str, Any]] = []
+    for group in groups:
+        if not isinstance(group, dict):
+            continue
+        normalized_group = dict(group)
+        existing_path = _normalize_target_relative_path(normalized_group.get("target_relative_path"))
+        if existing_path:
+            normalized_group["target_relative_path"] = existing_path
+        else:
+            normalized_group["target_relative_path"] = normalized_preferred_path
+        normalized_groups.append(normalized_group)
+    return {
+        "selection_groups": normalized_groups,
+        "selected_count": int(source_selection.get("selected_count") or sum(int(group.get("selected_count") or 0) for group in normalized_groups)),
+    }
+
+
+def _remember_follow_task_target_path(
+    task: PanTransferSyncTask,
+    *,
+    preferred_target_relative_path: str | None,
+    source: str,
+) -> None:
+    normalized_path = _normalize_target_relative_path(preferred_target_relative_path)
+    if not normalized_path:
+        return
+    extra_json = dict(task.extra_json or {})
+    extra_json["target_path_memory"] = {
+        "preferred_target_relative_path": normalized_path,
+        "source": _normalize_text(source, max_length=64) or "unknown",
+        "updated_at": utcnow().isoformat() + "Z",
+    }
+    task.extra_json = extra_json
+
+
+async def resolve_follow_task_preferred_target_relative_path(
+    session: Session,
+    *,
+    task: PanTransferSyncTask,
+    sync_mode: str,
+    source_selection: dict[str, Any] | None,
+    allow_scan: bool = True,
+) -> tuple[str | None, str]:
+    if sync_mode != "incremental":
+        return None, "not_applicable"
+
+    selection_path = _derive_preferred_target_relative_path_from_selection(source_selection)
+    if selection_path:
+        return selection_path, "selection"
+
+    extra_json = dict(task.extra_json or {})
+    target_path_memory = dict(extra_json.get("target_path_memory") or {})
+    remembered_path = _normalize_target_relative_path(target_path_memory.get("preferred_target_relative_path"))
+    if remembered_path:
+        return remembered_path, "memory"
+
+    last_sync = dict(extra_json.get("last_sync") or {})
+    last_sync_path = _normalize_target_relative_path(last_sync.get("preferred_target_relative_path"))
+    if last_sync_path:
+        return last_sync_path, "last_sync"
+
+    last_file_diagnosis = dict(extra_json.get("last_file_diagnosis") or {})
+    diagnosis_path = _normalize_target_relative_path(last_file_diagnosis.get("inferred_target_relative_path"))
+    if diagnosis_path:
+        return diagnosis_path, "diagnosis"
+
+    if allow_scan:
+        from .file_diagnosis import infer_follow_task_target_relative_path
+
+        scan_result = await infer_follow_task_target_relative_path(session, task_id=int(task.id))
+        scanned_path = _normalize_target_relative_path(scan_result.get("preferred_target_relative_path"))
+        if scanned_path:
+            return scanned_path, "target_scan"
+
+    return None, "resource_dir_root"
+
+
 def _resolve_follow_sync_paths(task: PanTransferSyncTask) -> tuple[dict[str, Any], dict[str, Any]]:
     extra_json = dict(task.extra_json or {})
     path_strategy = dict(extra_json.get("path_strategy") or {})
@@ -262,7 +387,7 @@ def _resolve_follow_sync_source(
     return source_target, _normalize_text(source_target.original_url), source_snapshot
 
 
-def create_pan_transfer_follow_sync_batch(
+async def create_pan_transfer_follow_sync_batch(
     session: Session,
     *,
     task_id: int,
@@ -293,8 +418,31 @@ def create_pan_transfer_follow_sync_batch(
 
     path_strategy, resolved_paths = _resolve_follow_sync_paths(task)
     source_selection = _normalize_source_selection(payload, sync_mode=sync_mode)
+    preferred_target_relative_path: str | None = None
+    target_relative_path_source = "not_applicable"
+    if sync_mode == "incremental":
+        preferred_target_relative_path, target_relative_path_source = await resolve_follow_task_preferred_target_relative_path(
+            session,
+            task=task,
+            sync_mode=sync_mode,
+            source_selection=source_selection,
+        )
+        source_selection = _augment_source_selection_target_relative_path(
+            source_selection,
+            preferred_target_relative_path=preferred_target_relative_path,
+        )
     selection_groups = list((source_selection or {}).get("selection_groups") or [])
     selection_parent_path = selection_groups[0].get("parent_path") if len(selection_groups) == 1 else None
+    selection_target_relative_paths = sorted(
+        {
+            normalized_path
+            for normalized_path in [
+                _normalize_target_relative_path(group.get("target_relative_path"))
+                for group in selection_groups
+            ]
+            if normalized_path
+        }
+    )
     confirm_full_replace = bool((payload or {}).get("confirm_full_replace"))
     if sync_mode == "replace_all" and not confirm_full_replace:
         raise ValueError("confirm_full_replace is required for replace_all mode")
@@ -323,6 +471,9 @@ def create_pan_transfer_follow_sync_batch(
             "confirm_full_replace": confirm_full_replace,
             "source_selection": source_selection,
             "selection_group_count": len(selection_groups),
+            "preferred_target_relative_path": preferred_target_relative_path,
+            "target_relative_path_source": target_relative_path_source,
+            "selection_target_relative_paths": selection_target_relative_paths,
             "path_strategy": path_strategy,
             "resolved_paths": resolved_paths,
         },
@@ -382,6 +533,9 @@ def create_pan_transfer_follow_sync_batch(
                 "publish_record_id": int(publish_record.id) if publish_record is not None else None,
                 "update_publish_record": update_publish_record,
                 "selection_group_count": len(selection_groups),
+                "preferred_target_relative_path": preferred_target_relative_path,
+                "target_relative_path_source": target_relative_path_source,
+                "selection_target_relative_paths": selection_target_relative_paths,
             },
             "source_selection": source_selection,
         },
@@ -401,6 +555,9 @@ def create_pan_transfer_follow_sync_batch(
         "trigger_mode": trigger_mode,
         "selected_count": int((source_selection or {}).get("selected_count") or 0),
         "selection_group_count": len(selection_groups),
+        "preferred_target_relative_path": preferred_target_relative_path,
+        "target_relative_path_source": target_relative_path_source,
+        "selection_target_relative_paths": selection_target_relative_paths,
     }
     extra_json["last_sync"] = last_sync
     task.extra_json = extra_json
@@ -430,6 +587,9 @@ def create_pan_transfer_follow_sync_batch(
             "selected_count": int((source_selection or {}).get("selected_count") or 0),
             "selection_group_count": len(selection_groups),
             "selection_parent_path": selection_parent_path,
+            "preferred_target_relative_path": preferred_target_relative_path,
+            "target_relative_path_source": target_relative_path_source,
+            "selection_target_relative_paths": selection_target_relative_paths,
         },
     )
     session.flush()
@@ -508,6 +668,16 @@ def handle_follow_sync_item_success(
     source_kind = _normalize_text(context.get("source_kind"), max_length=32) or "current"
     sync_mode = _normalize_text(context.get("sync_mode"), max_length=32) or "standard"
     trigger_mode = _normalize_text(context.get("trigger_mode"), max_length=32).lower() or "manual"
+    preferred_target_relative_path = _normalize_target_relative_path(context.get("preferred_target_relative_path"))
+    target_relative_path_source = _normalize_text(context.get("target_relative_path_source"), max_length=64) or "unknown"
+    selection_target_relative_paths = [
+        normalized_path
+        for normalized_path in [
+            _normalize_target_relative_path(value)
+            for value in list(context.get("selection_target_relative_paths") or [])
+        ]
+        if normalized_path
+    ]
     synced_at = utcnow()
 
     source_link_target_id = _normalize_optional_int(context.get("source_link_target_id"))
@@ -539,17 +709,27 @@ def handle_follow_sync_item_success(
     extra_json = dict(task.extra_json or {})
     if source_message_snapshot:
         extra_json["source_message_snapshot"] = source_message_snapshot
+    previous_last_sync = dict(extra_json.get("last_sync") or {})
     extra_json["last_sync"] = {
         "batch_id": int(item.batch_id),
         "batch_item_id": int(item.id),
         "source_kind": source_kind,
         "sync_mode": sync_mode,
-        "started_at": _normalize_text(dict(extra_json.get("last_sync") or {}).get("started_at")) or None,
+        "started_at": _normalize_text(previous_last_sync.get("started_at")) or None,
         "finished_at": synced_at.isoformat() + "Z",
         "share_url": _normalize_text(item.new_share_url) or None,
         "trigger_mode": trigger_mode,
+        "preferred_target_relative_path": preferred_target_relative_path,
+        "target_relative_path_source": target_relative_path_source,
+        "selection_target_relative_paths": selection_target_relative_paths,
     }
     task.extra_json = extra_json
+    if sync_mode == "incremental" and preferred_target_relative_path:
+        _remember_follow_task_target_path(
+            task,
+            preferred_target_relative_path=preferred_target_relative_path,
+            source=target_relative_path_source,
+        )
     session.add(task)
     session.flush()
 
@@ -593,6 +773,9 @@ def handle_follow_sync_item_success(
             "trigger_mode": trigger_mode,
             "new_share_url": _normalize_text(item.new_share_url) or None,
             "new_link_target_id": int(item.new_link_target_id) if item.new_link_target_id is not None else None,
+            "preferred_target_relative_path": preferred_target_relative_path,
+            "target_relative_path_source": target_relative_path_source,
+            "selection_target_relative_paths": selection_target_relative_paths,
             "automation": automation,
         },
     )
@@ -653,6 +836,16 @@ def handle_follow_sync_item_failure(
     source_kind = _normalize_text(context.get("source_kind"), max_length=32) or "current"
     sync_mode = _normalize_text(context.get("sync_mode"), max_length=32) or "standard"
     trigger_mode = _normalize_text(context.get("trigger_mode"), max_length=32).lower() or "manual"
+    preferred_target_relative_path = _normalize_target_relative_path(context.get("preferred_target_relative_path"))
+    target_relative_path_source = _normalize_text(context.get("target_relative_path_source"), max_length=64) or "unknown"
+    selection_target_relative_paths = [
+        normalized_path
+        for normalized_path in [
+            _normalize_target_relative_path(value)
+            for value in list(context.get("selection_target_relative_paths") or [])
+        ]
+        if normalized_path
+    ]
     task.last_change_type = PAN_TRANSFER_SYNC_STATE_CANDIDATE_FOUND if source_kind == "candidate" else "sync_failed"
     task.last_error_message = _normalize_text(error_message, max_length=2000) or task.last_error_message
     task.updated_by = _normalize_text(worker_name, max_length=128) or task.updated_by
@@ -690,5 +883,8 @@ def handle_follow_sync_item_failure(
             "source_kind": source_kind,
             "sync_mode": sync_mode,
             "trigger_mode": trigger_mode,
+            "preferred_target_relative_path": preferred_target_relative_path,
+            "target_relative_path_source": target_relative_path_source,
+            "selection_target_relative_paths": selection_target_relative_paths,
         },
     )

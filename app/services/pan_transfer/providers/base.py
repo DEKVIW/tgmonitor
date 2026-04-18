@@ -74,6 +74,7 @@ class PanTransferProvider:
         staging_root: str,
         staging_folder_name: str,
         staging_folder_id: str | None = None,
+        preferred_target_relative_path: str | None = None,
     ) -> PanTransferIncrementalPlanResult:
         raise NotImplementedError
 

@@ -551,6 +551,7 @@ class BaiduPanTransferProvider(PanTransferProvider):
         staging_root: str,
         staging_folder_name: str,
         staging_folder_id: str | None = None,
+        preferred_target_relative_path: str | None = None,
     ) -> PanTransferIncrementalPlanResult:
         del account_name, staging_folder_id
 
@@ -673,13 +674,43 @@ class BaiduPanTransferProvider(PanTransferProvider):
             if errno not in {0, -8}:
                 raise PanTransferProviderError(f"Baidu failed to prepare staging directory: errno {errno}")
 
+            normalized_preferred_target_relative_path = _normalize_target_relative_path(preferred_target_relative_path)
+            applied_target_relative_path: str | None = None
+            target_plan_path = target_path
+            if normalized_preferred_target_relative_path:
+                resolved_target_path = target_path
+                for segment in [part for part in normalized_preferred_target_relative_path.split("/") if part]:
+                    rows = await client.list_dir(resolved_target_path, bdstoken=bdstoken)
+                    if isinstance(rows, int):
+                        raise PanTransferProviderError(
+                            f"Baidu failed to inspect target directory {resolved_target_path}: errno {rows}"
+                        )
+                    matched = next(
+                        (
+                            row
+                            for row in rows
+                            if str(row.get("server_filename") or "").strip() == segment
+                            and int(row.get("isdir") or 0) == 1
+                        ),
+                        None,
+                    )
+                    if matched is None:
+                        resolved_target_path = ""
+                        break
+                    resolved_target_path = str(matched.get("path") or "").strip() or (
+                        f"{resolved_target_path.rstrip('/')}/{segment}"
+                    )
+                if resolved_target_path:
+                    target_plan_path = resolved_target_path
+                    applied_target_relative_path = normalized_preferred_target_relative_path
+
             selection_groups, selected_count, conflicts = await collect_incremental_groups(
                 client,
                 share_key=share_access_key,
                 requires_prefix_strip=requires_prefix_strip,
                 share_dir_path=None,
-                target_dir_path=target_path,
-                target_relative_path=None,
+                target_dir_path=target_plan_path,
+                target_relative_path=applied_target_relative_path,
                 bdstoken=bdstoken,
             )
             return PanTransferIncrementalPlanResult(
@@ -692,6 +723,8 @@ class BaiduPanTransferProvider(PanTransferProvider):
                     "selected_count": selected_count,
                     "conflict_count": len(conflicts),
                     "conflicts": conflicts[:20],
+                    "preferred_target_relative_path_requested": normalized_preferred_target_relative_path,
+                    "preferred_target_relative_path_applied": applied_target_relative_path,
                 },
             )
 

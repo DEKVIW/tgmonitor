@@ -612,6 +612,7 @@ class QuarkPanTransferProvider(PanTransferProvider):
         staging_root: str,
         staging_folder_name: str,
         staging_folder_id: str | None = None,
+        preferred_target_relative_path: str | None = None,
     ) -> PanTransferIncrementalPlanResult:
         del account_name
 
@@ -709,14 +710,38 @@ class QuarkPanTransferProvider(PanTransferProvider):
             pwd_id = _extract_pwd_id(original_url)
             passcode = _extract_passcode(original_url, fallback=original_passcode)
             stoken = await client.get_stoken(pwd_id=pwd_id, passcode=passcode)
+            normalized_preferred_target_relative_path = _normalize_target_relative_path(preferred_target_relative_path)
+            applied_target_relative_path: str | None = None
+            target_parent_id = folder_id
+            if normalized_preferred_target_relative_path:
+                resolved_parent_id = folder_id
+                for segment in [part for part in normalized_preferred_target_relative_path.split("/") if part]:
+                    rows = await client.list_dir_all(parent_id=resolved_parent_id)
+                    matched = next(
+                        (
+                            row
+                            for row in rows
+                            if str(row.get("file_name") or "").strip() == segment and bool(row.get("dir"))
+                        ),
+                        None,
+                    )
+                    if matched is None:
+                        resolved_parent_id = ""
+                        break
+                    resolved_parent_id = str(matched.get("fid") or "").strip()
+                    if not resolved_parent_id:
+                        break
+                if resolved_parent_id:
+                    target_parent_id = resolved_parent_id
+                    applied_target_relative_path = normalized_preferred_target_relative_path
             selection_groups, selected_count, conflicts = await collect_incremental_groups(
                 client,
                 pwd_id=pwd_id,
                 stoken=stoken,
                 share_parent_id="0",
                 share_parent_path=None,
-                target_parent_id=folder_id,
-                target_relative_path=None,
+                target_parent_id=target_parent_id,
+                target_relative_path=applied_target_relative_path,
             )
             return PanTransferIncrementalPlanResult(
                 selection_groups=selection_groups,
@@ -727,6 +752,8 @@ class QuarkPanTransferProvider(PanTransferProvider):
                     "selected_count": selected_count,
                     "conflict_count": len(conflicts),
                     "conflicts": conflicts[:20],
+                    "preferred_target_relative_path_requested": normalized_preferred_target_relative_path,
+                    "preferred_target_relative_path_applied": applied_target_relative_path,
                 },
             )
 

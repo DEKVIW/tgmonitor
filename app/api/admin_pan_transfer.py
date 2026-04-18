@@ -910,7 +910,7 @@ async def create_pan_transfer_follow_sync_batch_api(
     db: Session = Depends(get_db),
 ) -> PanTransferFollowTaskSyncResponse:
     try:
-        result = create_pan_transfer_follow_sync_batch(
+        result = await create_pan_transfer_follow_sync_batch(
             db,
             task_id=task_id,
             payload=payload.model_dump(),

@@ -2742,9 +2742,19 @@ async def _handle_follow_task_origin_automation(
 
     credential_value = decrypt_account_credential(account)
     provider = get_pan_transfer_provider(str(task.platform or ""))
-    from .follow_sync import _resolve_follow_sync_paths, create_pan_transfer_follow_sync_batch
+    from .follow_sync import (
+        _resolve_follow_sync_paths,
+        create_pan_transfer_follow_sync_batch,
+        resolve_follow_task_preferred_target_relative_path,
+    )
 
     _, resolved_paths = _resolve_follow_sync_paths(task)
+    preferred_target_relative_path, target_relative_path_source = await resolve_follow_task_preferred_target_relative_path(
+        session,
+        task=task,
+        sync_mode="incremental",
+        source_selection=None,
+    )
     plan = await provider.build_incremental_source_plan(
         credential_value=credential_value,
         account_name=str(account.account_name or ""),
@@ -2753,6 +2763,7 @@ async def _handle_follow_task_origin_automation(
         staging_root=str(resolved_paths.get("staging_root") or ""),
         staging_folder_name=str(resolved_paths.get("staging_folder_name") or ""),
         staging_folder_id=None,
+        preferred_target_relative_path=preferred_target_relative_path,
     )
 
     conflict_count = int((plan.payload or {}).get("conflict_count") or 0)
@@ -2782,6 +2793,7 @@ async def _handle_follow_task_origin_automation(
             payload={
                 **dict(plan.payload or {}),
                 "mode": PAN_TRANSFER_FOLLOW_AUTOMATION_MODE_STABLE_ORIGIN_INCREMENTAL,
+                "target_relative_path_source": target_relative_path_source,
             },
         )
         return True
@@ -2809,6 +2821,7 @@ async def _handle_follow_task_origin_automation(
             payload={
                 **dict(plan.payload or {}),
                 "mode": PAN_TRANSFER_FOLLOW_AUTOMATION_MODE_STABLE_ORIGIN_INCREMENTAL,
+                "target_relative_path_source": target_relative_path_source,
             },
         )
         return True
@@ -2816,7 +2829,7 @@ async def _handle_follow_task_origin_automation(
     _clear_follow_task_candidate_fields(task)
     session.add(task)
     session.flush()
-    result = create_pan_transfer_follow_sync_batch(
+    result = await create_pan_transfer_follow_sync_batch(
         session,
         task_id=int(task.id),
         payload={
@@ -2851,6 +2864,7 @@ async def _handle_follow_task_origin_automation(
             "mode": PAN_TRANSFER_FOLLOW_AUTOMATION_MODE_STABLE_ORIGIN_INCREMENTAL,
             "batch_id": int(result.get("batch_id") or 0),
             "batch_item_id": int(result.get("batch_item_id") or 0),
+            "target_relative_path_source": target_relative_path_source,
         },
     )
     return True
@@ -2970,7 +2984,7 @@ async def _handle_follow_task_automation(
             )
             return
 
-        result = create_pan_transfer_follow_sync_batch(
+        result = await create_pan_transfer_follow_sync_batch(
             session,
             task_id=int(task.id),
             payload={
@@ -3045,7 +3059,7 @@ async def _handle_follow_task_automation(
         )
         return
 
-    result = create_pan_transfer_follow_sync_batch(
+    result = await create_pan_transfer_follow_sync_batch(
         session,
         task_id=int(task.id),
         payload={
