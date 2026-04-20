@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Alert, Button, Input, InputNumber, Modal, Segmented, Select, Space, Tag, Tooltip } from 'antd'
+import { Alert, Button, Input, InputNumber, Modal, Popover, Segmented, Select, Space, Tag, Tooltip } from 'antd'
 import { ClearOutlined, CloseCircleFilled, FilterOutlined, SearchOutlined } from '@ant-design/icons'
 import { useMessageStore } from '@/store/messageStore'
 import { useAuthStore } from '@/store/authStore'
 import TurnstileWidget from '@/components/security/TurnstileWidget'
 import { verifySearchTurnstile } from '@/api/security'
 import { trackEvent } from '@/utils/analytics'
+import { useMediaQuery } from '@/hooks/useMediaQuery'
 import { NETDISK_TYPES, TIME_RANGES } from '@/utils/constants'
 import { getTagStats } from '@/api/messages'
 import { MessageFilters as MessageFiltersState, MessageSortMode, TagStatsResponse } from '@/types/message'
@@ -67,6 +68,8 @@ const MessageFilters = ({
   const [draft, setDraft] = useState<MessageFiltersState>(() => sanitizeHiddenFilters(filters))
   const [draftRefreshInterval, setDraftRefreshInterval] = useState(refreshInterval)
   const [searchChallengeVersion, setSearchChallengeVersion] = useState(0)
+  const [compactToolsOpen, setCompactToolsOpen] = useState(false)
+  const isNarrowMobile = useMediaQuery('(max-width: 576px)')
 
   const allowedTimeRangeSet = useMemo(
     () => (allowedTimeRanges ? new Set(allowedTimeRanges) : null),
@@ -96,6 +99,11 @@ const MessageFilters = ({
     Boolean(filters.selected_tags?.length) ||
     Boolean(filters.selected_netdisks?.length) ||
     normalizeRefreshInterval(refreshInterval) !== DEFAULT_REFRESH_INTERVAL
+  const defaultTimeRangeValue = fallbackTimeRange || '最近24小时'
+  const hasToolbarResetState =
+    (filters.sort_mode || 'newest') !== 'newest' ||
+    (filters.time_range || defaultTimeRangeValue) !== defaultTimeRangeValue ||
+    hasAdvancedSelections
 
   const buildFilterEventData = (
     nextFilters: MessageFiltersState,
@@ -290,6 +298,12 @@ const MessageFilters = ({
     trackEvent('filters_reset', { audience, source: 'toolbar' })
   }
 
+  useEffect(() => {
+    if (!isNarrowMobile && compactToolsOpen) {
+      setCompactToolsOpen(false)
+    }
+  }, [compactToolsOpen, isNarrowMobile])
+
   const handleSearchChallengeClose = () => {
     setChallengeOpen(false)
     setChallengeError('')
@@ -323,57 +337,129 @@ const MessageFilters = ({
     }
   }
 
-  return (
-    <div className={toolbarClassName}>
-      <div className="filters-search-shell">
-        <SearchOutlined className="filters-search-shell__lead" />
-        <Input
-          className="filters-search-input"
-          bordered={false}
-          placeholder="搜索"
-          value={searchValue}
-          onPressEnter={() => handleSearch(searchValue)}
-          onChange={(event) => setSearchValue(event.target.value)}
-          disabled={disabled}
-        />
-        {searchValue || filters.search_query ? (
-          <Tooltip title="清空搜索">
-            <Button
-              type="text"
-              className="toolbar-icon-button filters-search-clear-button"
-              icon={<CloseCircleFilled />}
-              onClick={handleClearSearch}
-              disabled={disabled}
-            />
-          </Tooltip>
-        ) : null}
+  const compactToolsContent = (
+    <div className="filters-mobile-popover">
+      <div className="filters-mobile-popover__section">
+        <div className="filters-mobile-popover__label">排序</div>
         <Segmented
-          className="filters-sort-toggle"
+          className="filters-mobile-popover__sort"
           options={SORT_MODE_OPTIONS}
           value={filters.sort_mode || 'newest'}
           onChange={(value) => handleSortModeChange(value as MessageSortMode)}
           disabled={disabled}
           size="small"
         />
-        <div className="filters-search-actions">
-          <Tooltip title="高级筛选">
-            <Button
-              type="text"
-              className={`toolbar-icon-button ${hasAdvancedSelections ? 'toolbar-icon-button--active' : ''}`}
-              icon={<FilterOutlined />}
-              onClick={handleAdvancedOpen}
-              disabled={disabled}
-            />
-          </Tooltip>
-          <Tooltip title="重置筛选">
-            <Button
-              type="text"
-              className="toolbar-icon-button"
-              icon={<ClearOutlined />}
-              onClick={handleToolbarReset}
-              disabled={disabled}
-            />
-          </Tooltip>
+      </div>
+      <div className="filters-mobile-popover__actions">
+        <Button
+          block
+          icon={<FilterOutlined />}
+          onClick={() => {
+            setCompactToolsOpen(false)
+            handleAdvancedOpen()
+          }}
+          disabled={disabled}
+        >
+          高级筛选
+        </Button>
+        {hasToolbarResetState ? (
+          <Button
+            block
+            icon={<ClearOutlined />}
+            onClick={() => {
+              setCompactToolsOpen(false)
+              handleToolbarReset()
+            }}
+            disabled={disabled}
+          >
+            重置筛选
+          </Button>
+        ) : null}
+      </div>
+    </div>
+  )
+
+  return (
+    <div className={toolbarClassName}>
+      <div className="filters-search-shell">
+        <div className="filters-search-main">
+          <SearchOutlined className="filters-search-shell__lead" />
+          <Input
+            className="filters-search-input"
+            bordered={false}
+            placeholder="搜索"
+            value={searchValue}
+            onPressEnter={() => handleSearch(searchValue)}
+            onChange={(event) => setSearchValue(event.target.value)}
+            disabled={disabled}
+          />
+          {searchValue || filters.search_query ? (
+            <Tooltip title="清空搜索">
+              <Button
+                type="text"
+                className="toolbar-icon-button filters-search-clear-button"
+                icon={<CloseCircleFilled />}
+                onClick={handleClearSearch}
+                disabled={disabled}
+              />
+            </Tooltip>
+          ) : null}
+        </div>
+
+        <div className="filters-search-tools">
+          {isNarrowMobile ? (
+            <Popover
+              trigger="click"
+              placement="bottomRight"
+              overlayClassName="filters-mobile-popover-overlay"
+              open={compactToolsOpen}
+              onOpenChange={(open) => setCompactToolsOpen(open)}
+              content={compactToolsContent}
+            >
+              <Button
+                type="text"
+                className={`filters-mobile-tools-button ${hasToolbarResetState ? 'filters-mobile-tools-button--active' : ''}`}
+                icon={<FilterOutlined />}
+                disabled={disabled}
+              >
+                筛选
+              </Button>
+            </Popover>
+          ) : (
+            <>
+              <Segmented
+                className="filters-sort-toggle"
+                options={SORT_MODE_OPTIONS}
+                value={filters.sort_mode || 'newest'}
+                onChange={(value) => handleSortModeChange(value as MessageSortMode)}
+                disabled={disabled}
+                size="small"
+              />
+
+              <div className="filters-search-actions">
+                <Tooltip title="高级筛选">
+                  <Button
+                    type="text"
+                    className={`toolbar-icon-button ${hasAdvancedSelections ? 'toolbar-icon-button--active' : ''}`}
+                    icon={<FilterOutlined />}
+                    onClick={handleAdvancedOpen}
+                    disabled={disabled}
+                  />
+                </Tooltip>
+                {hasToolbarResetState ? (
+                  <Tooltip title="重置筛选">
+                    <Button
+                      type="text"
+                      className="toolbar-icon-button"
+                      icon={<ClearOutlined />}
+                      onClick={handleToolbarReset}
+                      disabled={disabled}
+                    />
+                  </Tooltip>
+                ) : null}
+              </div>
+            </>
+          )}
         </div>
       </div>
 
