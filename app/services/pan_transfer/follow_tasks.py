@@ -2749,12 +2749,14 @@ async def _handle_follow_task_origin_automation(
     )
 
     _, resolved_paths = _resolve_follow_sync_paths(task)
+    _commit_before_external_call(session)
     preferred_target_relative_path, target_relative_path_source = await resolve_follow_task_preferred_target_relative_path(
         session,
         task=task,
         sync_mode="incremental",
         source_selection=None,
     )
+    _commit_before_external_call(session)
     plan = await provider.build_incremental_source_plan(
         credential_value=credential_value,
         account_name=str(account.account_name or ""),
@@ -2829,6 +2831,7 @@ async def _handle_follow_task_origin_automation(
     _clear_follow_task_candidate_fields(task)
     session.add(task)
     session.flush()
+    _commit_before_external_call(session)
     result = await create_pan_transfer_follow_sync_batch(
         session,
         task_id=int(task.id),
@@ -2891,6 +2894,11 @@ def _collect_follow_automation_episode_set(values: Any) -> set[int]:
     return collected
 
 
+def _commit_before_external_call(session: Session) -> None:
+    if session.in_transaction():
+        session.commit()
+
+
 async def _handle_follow_task_automation(
     session: Session,
     *,
@@ -2941,6 +2949,7 @@ async def _handle_follow_task_automation(
     from .file_diagnosis import diagnose_pan_transfer_follow_task_files
     from .follow_sync import create_pan_transfer_follow_sync_batch
 
+    _commit_before_external_call(session)
     diagnosis = await diagnose_pan_transfer_follow_task_files(
         session,
         task_id=int(task.id),
@@ -2984,6 +2993,7 @@ async def _handle_follow_task_automation(
             )
             return
 
+        _commit_before_external_call(session)
         result = await create_pan_transfer_follow_sync_batch(
             session,
             task_id=int(task.id),
@@ -3059,6 +3069,7 @@ async def _handle_follow_task_automation(
         )
         return
 
+    _commit_before_external_call(session)
     result = await create_pan_transfer_follow_sync_batch(
         session,
         task_id=int(task.id),
@@ -3118,6 +3129,7 @@ async def _process_pan_transfer_follow_task_async(
         },
     )
 
+    _commit_before_external_call(session)
     source_status = await _safe_validate_url(task.source_url)
     task.source_link_status = _normalize_text(source_status.get("status"), max_length=32).lower() or "unknown"
     session.add(task)
@@ -3131,6 +3143,7 @@ async def _process_pan_transfer_follow_task_async(
         payload=dict(source_status),
     )
 
+    _commit_before_external_call(session)
     share_status = await _safe_validate_url(task.current_share_url)
     task.current_share_status = _normalize_text(share_status.get("status"), max_length=32).lower() or "unknown"
     session.add(task)
@@ -3170,6 +3183,7 @@ async def _process_pan_transfer_follow_task_async(
             "title": str(task.last_candidate_title or "") or None,
             "latest_message_time": task.last_candidate_message_time,
         }
+        _commit_before_external_call(session)
         existing_candidate_status = await _safe_validate_url(task.last_candidate_url)
         normalized_existing_candidate_status = _normalize_text(
             existing_candidate_status.get("status"), max_length=32
@@ -3240,6 +3254,7 @@ async def _process_pan_transfer_follow_task_async(
     if candidate is None and same_episode_assessment is not None:
         selected_assessment = dict(same_episode_assessment)
     if candidate is not None:
+        _commit_before_external_call(session)
         candidate_status = await _safe_validate_url(str(candidate.get("url") or ""))
         normalized_candidate_status = _normalize_text(candidate_status.get("status"), max_length=32).lower() or "unknown"
         if selected_assessment is None:
@@ -3290,6 +3305,7 @@ async def _process_pan_transfer_follow_task_async(
                 "candidate_recall": candidate_recall,
             },
         )
+        _commit_before_external_call(session)
         await _handle_follow_task_automation(session, task=task, worker_name=worker_name)
         return
 
@@ -3312,10 +3328,12 @@ async def _process_pan_transfer_follow_task_async(
                     "candidate_recall": candidate_recall,
                 },
             )
+        _commit_before_external_call(session)
         await _handle_follow_task_automation(session, task=task, worker_name=worker_name)
         return
 
     if same_episode_candidate is not None and _is_healthy_link_status(task.current_share_status) and _normalize_text(task.current_share_url):
+        _commit_before_external_call(session)
         same_episode_status = await _safe_validate_url(str(same_episode_candidate.get("url") or ""))
         normalized_same_episode_status = _normalize_text(same_episode_status.get("status"), max_length=32).lower() or "unknown"
         same_episode_assessment_payload = dict(selected_assessment or {})
@@ -3514,6 +3532,7 @@ async def _process_pan_transfer_follow_task_async(
                 "candidate_recall": candidate_recall,
             },
         )
+    _commit_before_external_call(session)
     await _handle_follow_task_automation(session, task=task, worker_name=worker_name)
 
 
@@ -3549,6 +3568,8 @@ def process_next_pan_transfer_follow_task(session: Session, *, worker_name: str)
     session.add(task)
     session.flush()
 
+    previous_expire_on_commit = session.expire_on_commit
+    session.expire_on_commit = False
     try:
         asyncio.run(_process_pan_transfer_follow_task_async(session, task=task, worker_name=worker_name))
         task.locked_by = None
@@ -3593,3 +3614,5 @@ def process_next_pan_transfer_follow_task(session: Session, *, worker_name: str)
             },
         )
         return True
+    finally:
+        session.expire_on_commit = previous_expire_on_commit

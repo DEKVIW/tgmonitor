@@ -75,6 +75,7 @@ def main() -> None:
                     continue
 
                 logger.info("resource worker started")
+                lock_session.commit()
                 while not _stop_event.is_set():
                     processed_recognition = False
                     processed_transfer = False
@@ -149,6 +150,7 @@ def main() -> None:
                             )
                             session.commit()
                         _release_worker_lock(lock_session)
+                        lock_session.commit()
                 except Exception:
                     logger.exception("failed to release resource worker lock cleanly")
                 lock_session.close()

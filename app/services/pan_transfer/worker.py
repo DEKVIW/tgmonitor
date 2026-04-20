@@ -91,6 +91,13 @@ def _describe_exception(exc: Exception) -> str:
         if cause_message:
             return f"{type(exc).__name__}: {cause_message}"
     return type(exc).__name__
+
+
+def _commit_before_external_call(session: Session) -> None:
+    if session.in_transaction():
+        session.commit()
+
+
 def _get_staging_snapshot(item: PanTransferBatchItem) -> dict[str, Any] | None:
     snapshot = dict(item.extra_json or {}).get("staging_snapshot")
     if not isinstance(snapshot, dict):
@@ -324,6 +331,7 @@ async def _process_pan_transfer_item_async(
                 },
             )
             try:
+                _commit_before_external_call(session)
                 transfer_result = await provider.transfer_to_staging(
                     credential_value=credential_value,
                     account_name=str(account.account_name or ""),
@@ -483,6 +491,7 @@ async def _process_pan_transfer_item_async(
                 },
             )
             try:
+                _commit_before_external_call(session)
                 reuse_validation_result = await validate_share_url(requested_existing_share_url)
             except Exception as exc:
                 append_pan_transfer_execution_log(
@@ -571,6 +580,7 @@ async def _process_pan_transfer_item_async(
                 },
             )
             try:
+                _commit_before_external_call(session)
                 share_result = await provider.share_staging_target(
                     credential_value=credential_value,
                     account_name=str(account.account_name or ""),
@@ -667,6 +677,7 @@ async def _process_pan_transfer_item_async(
         payload={"new_share_url": str(item.new_share_url or "")},
     )
     try:
+        _commit_before_external_call(session)
         validation_result = await validate_share_url(str(item.new_share_url or ""))
     except Exception as exc:
         error_detail = _describe_exception(exc)
@@ -756,6 +767,8 @@ def process_next_pan_transfer_item(session: Session, *, worker_name: str) -> boo
     if item is None:
         return False
 
+    previous_expire_on_commit = session.expire_on_commit
+    session.expire_on_commit = False
     try:
         asyncio.run(_process_pan_transfer_item_async(session, item=item, worker_name=worker_name))
         mark_pan_transfer_item_success(session, item=item)
@@ -841,3 +854,5 @@ def process_next_pan_transfer_item(session: Session, *, worker_name: str) -> boo
                 payload=_extract_error_payload(follow_exc),
             )
         return True
+    finally:
+        session.expire_on_commit = previous_expire_on_commit

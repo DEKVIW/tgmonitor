@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
 from app.api.dependencies_runtime_v2 import get_db, get_optional_current_user
+from app.models.models import MessageLinkRef
 from app.schemas.message import MessageListResponse, MessageResponse, TagStatsResponse
 from app.services.message_query_service import (
     get_filtered_messages,
@@ -16,8 +17,6 @@ from app.services.message_query_service import (
 )
 from app.services.resource_ops import (
     build_tracked_link_payloads,
-    ensure_message_link_refs,
-    ensure_message_link_refs_for_messages,
 )
 from app.services.security_service import SEARCH_CLEARANCE_HEADER, ensure_search_challenge_clearance
 from app.services.system_config_service import is_public_dashboard_enabled
@@ -76,6 +75,31 @@ def _build_message_response(
     )
 
 
+def _load_tracked_links_for_message_ids(
+    db: Session,
+    *,
+    message_ids: list[int],
+) -> Dict[int, List[Dict[str, Any]]]:
+    normalized_message_ids = sorted({int(message_id) for message_id in message_ids if int(message_id) > 0})
+    if not normalized_message_ids:
+        return {}
+
+    refs = (
+        db.query(MessageLinkRef)
+        .filter(MessageLinkRef.message_id.in_(normalized_message_ids))
+        .order_by(MessageLinkRef.message_id.asc(), MessageLinkRef.link_index.asc())
+        .all()
+    )
+    refs_by_message: Dict[int, List[MessageLinkRef]] = {}
+    for ref in refs:
+        refs_by_message.setdefault(int(ref.message_id), []).append(ref)
+
+    return {
+        message_id: build_tracked_link_payloads(message_refs)
+        for message_id, message_refs in refs_by_message.items()
+    }
+
+
 @router.get("", response_model=MessageListResponse, summary="获取消息列表")
 async def get_messages(
     request: Request,
@@ -122,18 +146,10 @@ async def get_messages(
             page_size=page_size,
         )
 
-        tracked_by_message: Dict[int, List[Dict[str, Any]]] = {}
-        try:
-            refs_by_message, changed = ensure_message_link_refs_for_messages(db, messages)
-            if changed:
-                db.commit()
-            tracked_by_message = {
-                int(message_id): build_tracked_link_payloads(refs)
-                for message_id, refs in refs_by_message.items()
-            }
-        except Exception:
-            db.rollback()
-            logger.exception("Failed to build tracked links for message list")
+        tracked_by_message = _load_tracked_links_for_message_ids(
+            db,
+            message_ids=[int(message.id) for message in messages if getattr(message, "id", None) is not None],
+        )
 
         return MessageListResponse(
             messages=[
@@ -175,15 +191,10 @@ async def get_message(
             detail=f"消息 {message_id} 不存在",
         )
 
-    tracked_links: Optional[List[Dict[str, Any]]] = None
-    try:
-        refs, changed = ensure_message_link_refs(db, message)
-        if changed:
-            db.commit()
-        tracked_links = build_tracked_link_payloads(refs)
-    except Exception:
-        db.rollback()
-        logger.exception("Failed to build tracked links for message %s", message_id)
+    tracked_links = _load_tracked_links_for_message_ids(
+        db,
+        message_ids=[int(message.id)],
+    ).get(int(message.id))
 
     return _build_message_response(message, tracked_links)
 
