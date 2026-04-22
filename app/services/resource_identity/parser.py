@@ -79,19 +79,28 @@ TRAILING_NOISE_PATTERNS = (
     re.compile(r"\bEP?\s*\d+\b", re.IGNORECASE),
     re.compile(r"第\s*[零一二三四五六七八九十百两\d]+\s*季"),
     re.compile(r"年番\s*\d*", re.IGNORECASE),
+    re.compile(r"(?:更新(?:至|到)?|更)\s*0*\d{1,4}\s*/\s*\d{1,4}\s*集?"),
     re.compile(r"(?:更新(?:至)?|更至?|第)\s*0*\d{1,4}\s*集?"),
     re.compile(r"(?:全集|全季|完结|超前完结|全\d{1,4}集|全\d{1,4}期)", re.IGNORECASE),
     re.compile(r"(?:附第?[一二三四五六七八九十\d]+季|附第一部|附第1部)", re.IGNORECASE),
-    re.compile(r"\b(?:4K|8K|1080P|2160P|HDR|DV|HQ|WEB-?|AMZN|ATVP|HMAX|HIFI|FLAC|HEVC|H\.265|60FPS|120FPS|杜比|内封|字幕|高码|臻彩)\b", re.IGNORECASE),
+    re.compile(r"\b(?:4K|8K|1080P|2160P|HDR|DV|HQ|WEB-?|AMZN|ATVP|HMAX|HIFI|FLAC|HEVC|H\.265|60FPS|120FPS|MAX|杜比|内封|字幕|高码|臻彩)\b", re.IGNORECASE),
+    re.compile(r"(?:经典日漫|日漫|国日|国英|日语|英语|韩语|中字|中英|简繁|简中|繁中|多国字幕)$", re.IGNORECASE),
     re.compile(r"(?:剧情|爱情|悬疑|犯罪|古装|战争|历史|真人秀|综艺|动画|国漫|国创|奇幻|冒险)$"),
     re.compile(r"[，,、].*$"),
 )
 ALIAS_SPLIT_PATTERN = re.compile(r"\s*(?:/|／|｜|\||&|＆|\+)\s*")
-ENGLISH_ALIAS_SPLIT_PATTERN = re.compile(r"\s+(?=[A-Za-z][A-Za-z0-9 .:'-]{3,})")
+ENGLISH_ALIAS_TAIL_PATTERN = re.compile(r"([A-Za-z][A-Za-z0-9 .:'-]{2,})$")
+ENGLISH_ALIAS_META_PATTERN = re.compile(
+    r"\b(?:Season\s*\d+|S\d{1,2}(?:E\d{1,4})?|EP?\s*\d+|WEB-?|HDR(?:10\+?)?|DV|4K|8K|1080P|2160P|60FPS|120FPS|MAX|HIFI|FLAC|HEVC|H\.265|AMZN|ATVP|HMAX)\b.*$",
+    re.IGNORECASE,
+)
+TRAILING_PERSON_LIST_PATTERN = re.compile(
+    r"^(.*?)(?:[\s·•.．,:：;；-]\s*)([\u4e00-\u9fff]{2,4}(?:\s*[/／｜|、]\s*[\u4e00-\u9fff]{2,4}){1,})\s*$"
+)
 CJK_PATTERN = re.compile(r"[\u4e00-\u9fff]")
 ASCII_PATTERN = re.compile(r"[A-Za-z]")
 META_KEYWORD_PATTERN = re.compile(
-    r"(?:更新|更至?|全集|完结|4K|8K|HDR|DV|WEB-?|AMZN|ATVP|HMAX|杜比|内封|字幕|高码|臻彩|剧情|爱情|悬疑|犯罪|国漫|动画|综艺)",
+    r"(?:更新|更至?|全集|完结|4K|8K|HDR|DV|WEB-?|AMZN|ATVP|HMAX|MAX|杜比|内封|字幕|高码|臻彩|剧情|爱情|悬疑|犯罪|国漫|动画|综艺|多国字幕)",
     re.IGNORECASE,
 )
 
@@ -295,10 +304,22 @@ def _trim_repeated_tail(text: str) -> str:
     return candidate
 
 
+def _strip_trailing_person_list(text: str) -> str:
+    candidate = normalize_text(text, max_length=255)
+    if not candidate:
+        return ""
+    matched = TRAILING_PERSON_LIST_PATTERN.match(candidate)
+    if matched is None:
+        return candidate
+    prefix = normalize_text(matched.group(1), max_length=255)
+    return prefix or candidate
+
+
 def _clean_title_candidate(text: str) -> str:
     candidate = _strip_title_prefixes(text)
     if not candidate:
         return ""
+    candidate = _strip_trailing_person_list(candidate)
     previous = None
     while candidate and candidate != previous:
         previous = candidate
@@ -315,15 +336,35 @@ def _clean_title_candidate(text: str) -> str:
     return normalize_text(candidate, max_length=255)
 
 
+def _extract_english_alias_candidates(base_title: str) -> list[str]:
+    normalized = normalize_text(base_title, max_length=255)
+    if not normalized or not CJK_PATTERN.search(normalized) or not ASCII_PATTERN.search(normalized):
+        return []
+    english_start = re.search(r"(?:^|\s)([A-Za-z][A-Za-z0-9 .:'-]{2,})", normalized)
+    if english_start is None:
+        return []
+    english_tail = normalize_text(english_start.group(1), max_length=255)
+    english_tail = ENGLISH_ALIAS_META_PATTERN.sub("", english_tail).strip(" -_|/,.;:[](){}")
+    if not english_tail or not ASCII_PATTERN.search(english_tail):
+        return []
+    if len(english_tail.split()) == 1 and len(english_tail) <= 4:
+        return []
+    matched_tail = ENGLISH_ALIAS_TAIL_PATTERN.search(english_tail)
+    if matched_tail is None:
+        return []
+    candidate = normalize_text(matched_tail.group(1), max_length=255)
+    return [candidate] if candidate else []
+
+
 def _split_alias_candidates(base_title: str) -> list[str]:
-    parts = [base_title]
-    parts.extend(ALIAS_SPLIT_PATTERN.split(base_title))
+    normalized = _strip_trailing_person_list(base_title)
+    parts = [normalized]
+    parts.extend(ALIAS_SPLIT_PATTERN.split(normalized))
 
-    if CJK_PATTERN.search(base_title) and " " in base_title:
-        parts.append(base_title.split(" ", 1)[0])
+    if CJK_PATTERN.search(normalized) and " " in normalized:
+        parts.append(normalized.split(" ", 1)[0])
 
-    if CJK_PATTERN.search(base_title) and ASCII_PATTERN.search(base_title):
-        parts.extend(ENGLISH_ALIAS_SPLIT_PATTERN.split(base_title))
+    parts.extend(_extract_english_alias_candidates(normalized))
 
     return [normalize_text(part, max_length=255) for part in parts if normalize_text(part, max_length=255)]
 

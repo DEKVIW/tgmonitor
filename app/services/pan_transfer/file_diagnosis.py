@@ -66,7 +66,8 @@ _QUALITY_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 )
 _SEASON_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"(?<![A-Za-z0-9])S(?:EASON\s*)?0*([1-9][0-9]?)(?=E|\b)", re.IGNORECASE),
-    re.compile(r"第\s*([0-9]{1,2})\s*季"),
+    re.compile(r"第\s*([零一二三四五六七八九十百两\d]{1,4})\s*季"),
+    re.compile(r"年番\s*([0-9]{1,2})", re.IGNORECASE),
 )
 _EPISODE_RANGE_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"(?<![A-Za-z0-9])S\d{1,2}\s*E0*(\d{1,4})\s*[-~至]\s*E?\s*0*(\d{1,4})(?!\d)", re.IGNORECASE),
@@ -76,6 +77,7 @@ _EPISODE_RANGE_PATTERNS: tuple[re.Pattern[str], ...] = (
 _EPISODE_SINGLE_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"(?<![A-Za-z0-9])S\d{1,2}E0*(\d{1,4})(?!\d)", re.IGNORECASE),
     re.compile(r"(?<![A-Za-z0-9])EP?\s*0*(\d{1,4})(?!\d)", re.IGNORECASE),
+    re.compile(r"(?:更至|更新至|更新到|更新|更)\s*0*(\d{1,4})\s*/\s*\d{1,4}\s*[集话話]?"),
     re.compile(r"(?:更至|更新至|更新到|更)\s*0*(\d{1,4})\s*[集话話]"),
     re.compile(r"第\s*0*(\d{1,4})\s*[集话話]"),
 )
@@ -176,6 +178,35 @@ def _split_name_and_extension(name: str) -> tuple[str, str | None]:
     return stem or str(name or "").strip(), normalized_extension
 
 
+def _chinese_number_to_int(value: str | None) -> int | None:
+    text = _normalize_text(value, max_length=32)
+    if not text:
+        return None
+    if text.isdigit():
+        return int(text)
+    digits = {"零": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+    units = {"十": 10, "百": 100}
+    total = 0
+    current = 0
+    has_value = False
+    for char in text:
+        if char in digits:
+            current = digits[char]
+            has_value = True
+            continue
+        unit = units.get(char)
+        if unit is None:
+            return None
+        if current == 0:
+            current = 1
+        total += current * unit
+        current = 0
+        has_value = True
+    if not has_value:
+        return None
+    return total + current
+
+
 def _is_video_name(name: str) -> bool:
     _, extension = _split_name_and_extension(name)
     if extension in _VIDEO_EXTENSIONS:
@@ -205,10 +236,7 @@ def _extract_season_quick(text: str) -> int | None:
         matched = pattern.search(normalized)
         if matched is None:
             continue
-        try:
-            value = int(matched.group(1))
-        except (TypeError, ValueError):
-            continue
+        value = _chinese_number_to_int(matched.group(1))
         if value > 0:
             return value
     return None
@@ -434,11 +462,14 @@ async def infer_follow_task_target_relative_path(
     target_video_entries = _prepare_quick_entries(target_entries, stats=stats)
     stats.target_video_count = len(target_video_entries)
 
-    latest_target_episode = max(
-        [max(entry.quick_episode_numbers) for entry in target_video_entries if entry.quick_episode_numbers],
-        default=None,
+    latest_target_episode = _collect_latest_target_episode(
+        target_video_entries,
+        tracked_season=tracked_season,
     )
-    anchor_episode = max([value for value in [tracked_episode, latest_target_episode] if value is not None], default=None)
+    anchor_episode = _resolve_anchor_episode(
+        tracked_episode=tracked_episode,
+        latest_target_episode=latest_target_episode,
+    )
 
     target_full_parse_candidates = _select_full_parse_candidates(
         target_video_entries,
@@ -450,15 +481,27 @@ async def infer_follow_task_target_relative_path(
         _full_parse_entry(entry, tracked_keys=tracked_keys, tracked_season=tracked_season)
         stats.full_parsed_count += 1
 
-    for entry in target_video_entries:
-        if entry.parse_level != "full":
-            if tracked_season is not None and entry.quick_season is not None and entry.quick_season != tracked_season:
-                entry.accepted = False
-            elif entry.quick_episode_numbers:
-                entry.accepted = True
-                entry.parse_reason = "target_quick_episode"
+    _apply_target_quick_acceptance(target_video_entries, tracked_season=tracked_season)
+    latest_target_episode = _collect_latest_target_episode(
+        target_video_entries,
+        tracked_season=tracked_season,
+        accepted_only=True,
+    ) or latest_target_episode
+    anchor_episode = _resolve_anchor_episode(
+        tracked_episode=tracked_episode,
+        latest_target_episode=latest_target_episode,
+    )
 
-    inferred_target_relative_path = _infer_target_relative_path(target_video_entries, anchor_episode=anchor_episode)
+    relevant_target_entries = _select_target_anchor_entries(
+        target_video_entries,
+        tracked_season=tracked_season,
+        accepted_only=True,
+    ) or _select_target_anchor_entries(
+        target_video_entries,
+        tracked_season=tracked_season,
+        accepted_only=False,
+    )
+    inferred_target_relative_path = _infer_target_relative_path(relevant_target_entries, anchor_episode=anchor_episode)
     return {
         "preferred_target_relative_path": inferred_target_relative_path,
         "tracked_episode": tracked_episode,
@@ -889,9 +932,10 @@ def _prepare_quick_entries(entries: list[_FileEntry], *, stats: _DiagnosisStats)
     for entry in entries:
         if not _is_video_name(entry.name):
             continue
+        quick_parse_title = _build_parse_title(entry)
         entry.is_video = True
-        entry.quick_episode_numbers = _extract_episode_numbers_quick(entry.name)
-        entry.quick_season = _extract_season_quick(entry.name)
+        entry.quick_episode_numbers = _extract_episode_numbers_quick(quick_parse_title)
+        entry.quick_season = _extract_season_quick(quick_parse_title)
         entry.quality_tags = _extract_quality_tags(entry.name)
         if entry.quick_episode_numbers:
             entry.accepted = True
@@ -925,6 +969,71 @@ def _build_tracked_keys(snapshot: dict[str, Any]) -> set[str]:
         _normalize_text(snapshot.get("resource_title"), max_length=255),
     ]
     return {normalize_match_key(item) for item in values if normalize_match_key(item)}
+
+
+def _entry_episode_numbers(entry: _FileEntry) -> list[int]:
+    return [int(value) for value in (entry.episode_numbers or entry.quick_episode_numbers) if int(value) > 0]
+
+
+def _entry_season_value(entry: _FileEntry) -> int | None:
+    return _normalize_optional_int(entry.season or entry.quick_season)
+
+
+def _filter_entries_by_tracked_season(entries: list[_FileEntry], *, tracked_season: int | None) -> list[_FileEntry]:
+    if tracked_season is None:
+        return list(entries)
+    exact_entries = [entry for entry in entries if _entry_season_value(entry) == tracked_season]
+    if exact_entries:
+        return exact_entries
+    seasonless_entries = [entry for entry in entries if _entry_season_value(entry) is None]
+    return seasonless_entries or list(entries)
+
+
+def _select_target_anchor_entries(
+    entries: list[_FileEntry],
+    *,
+    tracked_season: int | None,
+    accepted_only: bool = False,
+) -> list[_FileEntry]:
+    filtered = [
+        entry
+        for entry in entries
+        if (not accepted_only or entry.accepted) and _entry_episode_numbers(entry)
+    ]
+    if not filtered:
+        return []
+    return _filter_entries_by_tracked_season(filtered, tracked_season=tracked_season)
+
+
+def _collect_latest_target_episode(
+    entries: list[_FileEntry],
+    *,
+    tracked_season: int | None,
+    accepted_only: bool = False,
+) -> int | None:
+    relevant_entries = _select_target_anchor_entries(
+        entries,
+        tracked_season=tracked_season,
+        accepted_only=accepted_only,
+    )
+    return max((max(_entry_episode_numbers(entry)) for entry in relevant_entries), default=None)
+
+
+def _resolve_anchor_episode(*, tracked_episode: int | None, latest_target_episode: int | None) -> int | None:
+    return max([value for value in [tracked_episode, latest_target_episode] if value is not None], default=None)
+
+
+def _apply_target_quick_acceptance(entries: list[_FileEntry], *, tracked_season: int | None) -> None:
+    for entry in entries:
+        if entry.parse_level == "full":
+            continue
+        entry.accepted = False
+        if tracked_season is not None and entry.quick_season is not None and entry.quick_season != tracked_season:
+            entry.parse_reason = "season_mismatch"
+            continue
+        if entry.quick_episode_numbers:
+            entry.accepted = True
+            entry.parse_reason = "target_quick_episode"
 
 
 def _select_full_parse_candidates(
@@ -1164,11 +1273,14 @@ async def diagnose_pan_transfer_follow_task_files(
     stats.source_video_count = len(source_video_entries)
     stats.target_video_count = len(target_video_entries)
 
-    latest_target_episode = max(
-        [max(entry.quick_episode_numbers) for entry in target_video_entries if entry.quick_episode_numbers],
-        default=None,
+    latest_target_episode = _collect_latest_target_episode(
+        target_video_entries,
+        tracked_season=tracked_season,
     )
-    anchor_episode = max([value for value in [tracked_episode, latest_target_episode] if value is not None], default=None)
+    anchor_episode = _resolve_anchor_episode(
+        tracked_episode=tracked_episode,
+        latest_target_episode=latest_target_episode,
+    )
 
     source_full_parse_candidates = _select_full_parse_candidates(
         source_video_entries,
@@ -1186,15 +1298,27 @@ async def diagnose_pan_transfer_follow_task_files(
         _full_parse_entry(entry, tracked_keys=tracked_keys, tracked_season=tracked_season)
         stats.full_parsed_count += 1
 
-    for entry in target_video_entries:
-        if entry.parse_level != "full":
-            if tracked_season is not None and entry.quick_season is not None and entry.quick_season != tracked_season:
-                entry.accepted = False
-            elif entry.quick_episode_numbers:
-                entry.accepted = True
-                entry.parse_reason = "target_quick_episode"
+    _apply_target_quick_acceptance(target_video_entries, tracked_season=tracked_season)
+    latest_target_episode = _collect_latest_target_episode(
+        target_video_entries,
+        tracked_season=tracked_season,
+        accepted_only=True,
+    ) or latest_target_episode
+    anchor_episode = _resolve_anchor_episode(
+        tracked_episode=tracked_episode,
+        latest_target_episode=latest_target_episode,
+    )
 
-    inferred_target_relative_path = _infer_target_relative_path(target_video_entries, anchor_episode=anchor_episode)
+    relevant_target_entries = _select_target_anchor_entries(
+        target_video_entries,
+        tracked_season=tracked_season,
+        accepted_only=True,
+    ) or _select_target_anchor_entries(
+        target_video_entries,
+        tracked_season=tracked_season,
+        accepted_only=False,
+    )
+    inferred_target_relative_path = _infer_target_relative_path(relevant_target_entries, anchor_episode=anchor_episode)
     recommended_entries, recommended_episode_numbers, stop_reason = _build_recommended_entries(
         source_video_entries,
         anchor_episode=anchor_episode,
