@@ -563,6 +563,7 @@ export interface PanTransferFollowTaskFileDiagnosisSummary {
   full_entry_count: number
   full_selection_group_count: number
   inferred_target_relative_path?: string | null
+  target_scope_relative_path?: string | null
   warnings: string[]
   stop_reason: string
 }

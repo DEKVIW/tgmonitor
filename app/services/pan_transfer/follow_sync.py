@@ -30,6 +30,7 @@ from .follow_tasks import (
     PAN_TRANSFER_SYNC_STATE_IDLE,
     PAN_TRANSFER_SYNC_STATE_SYNC_QUEUED,
     _append_follow_task_log,
+    _build_follow_current_share_identity_snapshot,
     _apply_follow_task_state_without_candidate,
     _clear_follow_task_candidate_fields,
     _ensure_follow_task_identity_snapshot,
@@ -709,6 +710,18 @@ def handle_follow_sync_item_success(
     extra_json = dict(task.extra_json or {})
     if source_message_snapshot:
         extra_json["source_message_snapshot"] = source_message_snapshot
+    current_share_identity = _build_follow_current_share_identity_snapshot(
+        share_url=_normalize_text(task.current_share_url) or _normalize_text(item.new_share_url),
+        source_title=dict(source_message_snapshot or {}).get("title"),
+        source_kind=source_kind,
+        sync_mode=sync_mode,
+        source_link_target_id=source_link_target_id,
+        synced_at=synced_at,
+    )
+    if current_share_identity:
+        extra_json["current_share_identity"] = current_share_identity
+    else:
+        extra_json.pop("current_share_identity", None)
     previous_last_sync = dict(extra_json.get("last_sync") or {})
     extra_json["last_sync"] = {
         "batch_id": int(item.batch_id),

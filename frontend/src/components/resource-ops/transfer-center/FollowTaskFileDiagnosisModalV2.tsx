@@ -281,6 +281,7 @@ const FollowTaskFileDiagnosisModalV2 = ({
           [
             summary.latest_target_episode != null ? `资源目录最新 ${formatEpisodeValue(summary.latest_target_episode)}` : null,
             summary.anchor_episode != null ? `锚点 ${formatEpisodeValue(summary.anchor_episode)}` : null,
+            summary.target_scope_relative_path ? `诊断范围 ${summary.target_scope_relative_path}` : null,
           ]
             .filter(Boolean)
             .join(' · ') || '资源目录里还没识别到稳定进度',

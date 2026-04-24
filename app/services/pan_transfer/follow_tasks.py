@@ -333,6 +333,102 @@ def _normalize_source_message_snapshot(value: Mapping[str, Any] | None) -> dict[
     return {key: value for key, value in snapshot.items() if value not in (None, [], "")}
 
 
+def _normalize_follow_current_share_identity(value: Mapping[str, Any] | None) -> dict[str, Any]:
+    raw = dict(value or {})
+    normalized = {
+        "share_url": _normalize_text(raw.get("share_url")) or None,
+        "resource_title": _normalize_text(raw.get("resource_title"), max_length=255) or None,
+        "core_title": _normalize_text(raw.get("core_title"), max_length=255) or None,
+        "season": _normalize_optional_int(raw.get("season")),
+        "episode": _normalize_optional_int(raw.get("episode")),
+        "issue_no": _normalize_text(raw.get("issue_no"), max_length=32) or None,
+        "source_kind": _normalize_text(raw.get("source_kind"), max_length=32) or None,
+        "sync_mode": _normalize_text(raw.get("sync_mode"), max_length=32) or None,
+        "source_link_target_id": _normalize_optional_int(raw.get("source_link_target_id")),
+        "synced_at": _serialize_json_value(_parse_datetime(raw.get("synced_at")) or raw.get("synced_at")),
+    }
+    return {key: value for key, value in normalized.items() if value not in (None, [], "", {})}
+
+
+def _build_follow_current_share_identity_snapshot(
+    *,
+    share_url: Any,
+    source_title: Any,
+    source_kind: Any = None,
+    sync_mode: Any = None,
+    source_link_target_id: Any = None,
+    synced_at: datetime | None = None,
+) -> dict[str, Any]:
+    normalized_share_url = _normalize_text(share_url)
+    normalized_title = _normalize_text(source_title, max_length=255)
+    identity = parse_resource_identity(normalized_title) if normalized_title else None
+    return _normalize_follow_current_share_identity(
+        {
+            "share_url": normalized_share_url,
+            "resource_title": normalized_title,
+            "core_title": _normalize_text(getattr(identity, "core_title", None), max_length=255) or normalized_title or None,
+            "season": getattr(identity, "season", None),
+            "episode": getattr(identity, "episode", None),
+            "issue_no": _normalize_text(getattr(identity, "issue_no", None), max_length=32) or None,
+            "source_kind": source_kind,
+            "sync_mode": sync_mode,
+            "source_link_target_id": source_link_target_id,
+            "synced_at": synced_at,
+        }
+    )
+
+
+def _get_follow_task_current_share_identity(task: PanTransferSyncTask) -> dict[str, Any]:
+    extra_json = dict(task.extra_json or {})
+    return _normalize_follow_current_share_identity(extra_json.get("current_share_identity"))
+
+
+def _current_share_matches_same_episode_assessment(
+    task: PanTransferSyncTask,
+    *,
+    assessment: Mapping[str, Any] | None,
+) -> bool:
+    if not _is_healthy_link_status(task.current_share_status) or not _normalize_text(task.current_share_url):
+        return False
+    current_share_identity = _get_follow_task_current_share_identity(task)
+    if not current_share_identity:
+        return False
+
+    identity_share_url = _normalize_text(current_share_identity.get("share_url"))
+    current_share_url = _normalize_text(task.current_share_url)
+    if identity_share_url and current_share_url and identity_share_url != current_share_url:
+        return False
+
+    normalized_assessment = dict(assessment or {})
+    tracked_identity = dict(normalized_assessment.get("tracked_identity") or {})
+    candidate_identity = dict(normalized_assessment.get("candidate_identity") or {})
+    expected_season = _normalize_optional_int(tracked_identity.get("season"))
+    candidate_season = _normalize_optional_int(candidate_identity.get("season"))
+    identity_season = _normalize_optional_int(current_share_identity.get("season"))
+    if expected_season is None:
+        expected_season = candidate_season
+    elif candidate_season is not None and candidate_season != expected_season:
+        return False
+    if expected_season is not None and identity_season != expected_season:
+        return False
+
+    current_issue = _normalize_text(normalized_assessment.get("current_issue_no"), max_length=32)
+    candidate_issue = _normalize_text(normalized_assessment.get("candidate_issue_no"), max_length=32)
+    identity_issue = _normalize_text(current_share_identity.get("issue_no"), max_length=32)
+    if current_issue and candidate_issue and current_issue == candidate_issue and identity_issue == candidate_issue:
+        return True
+
+    current_episode = _normalize_optional_int(normalized_assessment.get("current_episode"))
+    candidate_episode = _normalize_optional_int(normalized_assessment.get("candidate_episode"))
+    identity_episode = _normalize_optional_int(current_share_identity.get("episode"))
+    return (
+        current_episode is not None
+        and candidate_episode is not None
+        and current_episode == candidate_episode
+        and identity_episode == candidate_episode
+    )
+
+
 def _normalize_follow_source_origin(value: Mapping[str, Any] | None) -> dict[str, Any]:
     raw = dict(value or {})
     normalized = {
@@ -2345,6 +2441,49 @@ def _clear_follow_task_candidate_fields(task: PanTransferSyncTask) -> None:
     _set_task_extra_section(task, "candidate_recall", None)
 
 
+def _store_follow_task_candidate(
+    session: Session,
+    *,
+    task: PanTransferSyncTask,
+    candidate: Mapping[str, Any],
+    assessment: Mapping[str, Any] | None,
+    candidate_recall: Mapping[str, Any] | None,
+    message: str,
+    extra_payload: Mapping[str, Any] | None = None,
+) -> None:
+    normalized_candidate = dict(candidate or {})
+    normalized_assessment = dict(assessment or {}) if assessment else None
+    normalized_recall = dict(candidate_recall or {})
+    normalized_recall["selected_link_target_id"] = _normalize_optional_int(normalized_candidate.get("link_target_id"))
+
+    _set_task_extra_section(task, "candidate_recall", normalized_recall)
+    _set_task_extra_section(task, "candidate_assessment", normalized_assessment)
+    task.task_state = PAN_TRANSFER_SYNC_STATE_CANDIDATE_FOUND
+    task.last_change_type = "candidate_found"
+    task.last_candidate_link_target_id = int(normalized_candidate["link_target_id"])
+    task.last_candidate_url = str(normalized_candidate["url"])
+    task.last_candidate_title = str(normalized_candidate["title"])
+    task.last_candidate_message_time = normalized_candidate.get("latest_message_time")
+    session.add(task)
+    session.flush()
+
+    payload = {
+        **normalized_candidate,
+        "candidate_recall": normalized_recall,
+    }
+    if normalized_assessment is not None:
+        payload["candidate_assessment"] = normalized_assessment
+    if extra_payload:
+        payload.update(dict(extra_payload))
+    _append_follow_task_log(
+        session,
+        task=task,
+        stage="candidate",
+        message=message,
+        payload=payload,
+    )
+
+
 def _apply_follow_task_state_without_candidate(task: PanTransferSyncTask) -> None:
     if _normalize_text(task.source_link_status, max_length=32).lower() == "invalid":
         task.task_state = PAN_TRANSFER_SYNC_STATE_SOURCE_INVALID
@@ -3283,27 +3422,13 @@ async def _process_pan_transfer_follow_task_async(
             )
 
     if selected_candidate is not None:
-        candidate_recall["selected_link_target_id"] = _normalize_optional_int(selected_candidate.get("link_target_id"))
-        _set_task_extra_section(task, "candidate_recall", candidate_recall)
-        _set_task_extra_section(task, "candidate_assessment", selected_assessment)
-        task.task_state = PAN_TRANSFER_SYNC_STATE_CANDIDATE_FOUND
-        task.last_change_type = "candidate_found"
-        task.last_candidate_link_target_id = int(selected_candidate["link_target_id"])
-        task.last_candidate_url = str(selected_candidate["url"])
-        task.last_candidate_title = str(selected_candidate["title"])
-        task.last_candidate_message_time = selected_candidate.get("latest_message_time")
-        session.add(task)
-        session.flush()
-        _append_follow_task_log(
+        _store_follow_task_candidate(
             session,
             task=task,
-            stage="candidate",
+            candidate=selected_candidate,
+            assessment=selected_assessment,
+            candidate_recall=candidate_recall,
             message="Detected a recent candidate source link for this tracked resource",
-            payload={
-                **dict(selected_candidate),
-                "candidate_assessment": selected_assessment,
-                "candidate_recall": candidate_recall,
-            },
         )
         _commit_before_external_call(session)
         await _handle_follow_task_automation(session, task=task, worker_name=worker_name)
@@ -3339,7 +3464,28 @@ async def _process_pan_transfer_follow_task_async(
         same_episode_assessment_payload = dict(selected_assessment or {})
         same_episode_assessment_payload["validation_status"] = normalized_same_episode_status
         same_episode_assessment_payload["validation_detail_message"] = same_episode_status.get("detail_message")
+        current_share_matches_same_episode = _current_share_matches_same_episode_assessment(
+            task,
+            assessment=same_episode_assessment_payload,
+        )
         if _is_healthy_link_status(normalized_same_episode_status):
+            if not current_share_matches_same_episode:
+                _store_follow_task_candidate(
+                    session,
+                    task=task,
+                    candidate=same_episode_candidate,
+                    assessment=same_episode_assessment_payload,
+                    candidate_recall=candidate_recall,
+                    message="Detected a same-episode candidate source because the current share could not be confirmed for reuse",
+                    extra_payload={
+                        "current_share_url": _normalize_text(task.current_share_url) or None,
+                        "current_share_identity": _get_follow_task_current_share_identity(task),
+                        "current_share_match_confirmed": False,
+                    },
+                )
+                _commit_before_external_call(session)
+                await _handle_follow_task_automation(session, task=task, worker_name=worker_name)
+                return
             try:
                 replacement_result = replace_link_target_references_with_url(
                     session,

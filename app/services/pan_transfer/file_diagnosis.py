@@ -45,6 +45,15 @@ _VIDEO_EXTENSIONS = {
     ".webm",
     ".wmv",
 }
+_DISGUISED_VIDEO_EXTENSIONS = {
+    ".doc",
+    ".docx",
+}
+_DISGUISED_VIDEO_MAX_EPISODE_DISTANCE = 3
+_DISGUISED_EPISODE_STEM_PATTERN = re.compile(
+    r"^(?:\d{1,4}|E\d{1,4}|EP\d{1,4}|S\d{1,2}E\d{1,4}|第\d{1,4}[集话]?)$",
+    re.IGNORECASE,
+)
 
 _RESOLUTION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("8K", re.compile(r"\b(?:8K|4320P)\b", re.IGNORECASE)),
@@ -178,6 +187,14 @@ def _split_name_and_extension(name: str) -> tuple[str, str | None]:
     return stem or str(name or "").strip(), normalized_extension
 
 
+def _normalize_relative_path_hint(value: Any) -> str | None:
+    normalized_text = _normalize_text(value, max_length=512)
+    if not normalized_text:
+        return None
+    parts = _normalize_path_parts(normalized_text)
+    return "/".join(parts) or None
+
+
 def _chinese_number_to_int(value: str | None) -> int | None:
     text = _normalize_text(value, max_length=32)
     if not text:
@@ -296,6 +313,51 @@ def _build_parse_title(entry: _FileEntry) -> str:
         parts = [part for part in entry.relative_parent_path.split("/") if part]
         parent_context.extend(parts[-2:])
     return " / ".join([*parent_context, stem]) if parent_context else stem
+
+
+def _extract_first_season_hint(*values: Any) -> int | None:
+    for raw_value in values:
+        season = _extract_season_quick(str(raw_value or ""))
+        if season is not None:
+            return int(season)
+    return None
+
+
+def _is_likely_disguised_video_entry(
+    entry: _FileEntry,
+    *,
+    tracked_keys: set[str],
+    tracked_episode: int | None,
+    tracked_season: int | None,
+) -> bool:
+    stem, extension = _split_name_and_extension(entry.name)
+    normalized_stem = re.sub(r"\s+", "", _normalize_text(stem, max_length=64) or "")
+    if extension not in _DISGUISED_VIDEO_EXTENSIONS:
+        return False
+    if tracked_episode is None or not tracked_keys:
+        return False
+    if not (entry.parent_name or entry.relative_parent_path):
+        return False
+    if not normalized_stem or _DISGUISED_EPISODE_STEM_PATTERN.fullmatch(normalized_stem) is None:
+        return False
+    if _score_title_match(entry, tracked_keys=tracked_keys) <= 0:
+        return False
+
+    quick_parse_title = _build_parse_title(entry)
+    normalized_parse_title = _normalize_text(quick_parse_title, max_length=255)
+    if not normalized_parse_title or _NO_EPISODE_HINT_PATTERN.search(normalized_parse_title):
+        return False
+
+    episode_numbers = _extract_episode_numbers_quick(quick_parse_title)
+    if not episode_numbers:
+        return False
+    if not any(abs(int(value) - tracked_episode) <= _DISGUISED_VIDEO_MAX_EPISODE_DISTANCE for value in episode_numbers):
+        return False
+
+    quick_season = _extract_season_quick(quick_parse_title)
+    if tracked_season is not None and quick_season is not None and quick_season != tracked_season:
+        return False
+    return True
 
 
 def _score_title_match(entry: _FileEntry, *, tracked_keys: set[str]) -> float:
@@ -459,7 +521,21 @@ async def infer_follow_task_target_relative_path(
         raise ValueError(f"unsupported follow diagnosis platform: {task.platform}")
 
     stats.target_file_count = len(target_entries)
-    target_video_entries = _prepare_quick_entries(target_entries, stats=stats)
+    target_video_entries = _prepare_quick_entries(
+        target_entries,
+        stats=stats,
+        tracked_keys=tracked_keys,
+        tracked_episode=tracked_episode,
+        tracked_season=tracked_season,
+    )
+    if tracked_season is None:
+        inferred_tracked_season = _infer_tracked_season_from_entries(
+            target_video_entries,
+            tracked_episode=tracked_episode,
+        )
+        if inferred_tracked_season is not None:
+            tracked_season = int(inferred_tracked_season)
+            snapshot = {**snapshot, "season": tracked_season}
     stats.target_video_count = len(target_video_entries)
 
     latest_target_episode = _collect_latest_target_episode(
@@ -927,16 +1003,36 @@ async def _scan_baidu_target_entries(
     return results, visited_dir_count
 
 
-def _prepare_quick_entries(entries: list[_FileEntry], *, stats: _DiagnosisStats) -> list[_FileEntry]:
+def _prepare_quick_entries(
+    entries: list[_FileEntry],
+    *,
+    stats: _DiagnosisStats,
+    tracked_keys: set[str] | None = None,
+    tracked_episode: int | None = None,
+    tracked_season: int | None = None,
+) -> list[_FileEntry]:
+    normalized_tracked_keys = {str(key) for key in set(tracked_keys or set()) if str(key)}
     videos: list[_FileEntry] = []
     for entry in entries:
-        if not _is_video_name(entry.name):
+        is_disguised_video = False
+        if _is_video_name(entry.name):
+            pass
+        elif _is_likely_disguised_video_entry(
+            entry,
+            tracked_keys=normalized_tracked_keys,
+            tracked_episode=tracked_episode,
+            tracked_season=tracked_season,
+        ):
+            is_disguised_video = True
+        else:
             continue
         quick_parse_title = _build_parse_title(entry)
         entry.is_video = True
         entry.quick_episode_numbers = _extract_episode_numbers_quick(quick_parse_title)
         entry.quick_season = _extract_season_quick(quick_parse_title)
         entry.quality_tags = _extract_quality_tags(entry.name)
+        if is_disguised_video:
+            entry.parse_reason = "disguised_extension"
         if entry.quick_episode_numbers:
             entry.accepted = True
         stats.quick_parsed_count += 1
@@ -954,12 +1050,72 @@ def _prepare_quick_entries(entries: list[_FileEntry], *, stats: _DiagnosisStats)
     return videos
 
 
-def _collect_tracked_snapshot(task: PanTransferSyncTask) -> dict[str, Any]:
+def _collect_tracked_snapshot(task: PanTransferSyncTask, *, source_kind: str | None = None) -> dict[str, Any]:
     extra_json = dict(task.extra_json or {})
     existing_snapshot = dict(extra_json.get("identity_snapshot") or {})
-    if existing_snapshot.get("core_title"):
-        return existing_snapshot
-    return _build_follow_identity_fallback(task)
+    snapshot = existing_snapshot if existing_snapshot.get("core_title") else _build_follow_identity_fallback(task)
+    if _normalize_optional_int(snapshot.get("season")) is not None:
+        return snapshot
+
+    normalized_source_kind = _normalize_text(source_kind, max_length=32).lower() or None
+    target_path_memory = dict(extra_json.get("target_path_memory") or {})
+    last_sync = dict(extra_json.get("last_sync") or {})
+    last_file_diagnosis = dict(extra_json.get("last_file_diagnosis") or {})
+    current_share_identity = dict(extra_json.get("current_share_identity") or {})
+    source_message_snapshot = dict(extra_json.get("source_message_snapshot") or {})
+    candidate_title_hint = (
+        _normalize_text(getattr(task, "last_candidate_title", None), max_length=255)
+        if normalized_source_kind == "candidate"
+        or _normalize_text(getattr(task, "task_state", None), max_length=64).lower() == "candidate_found"
+        else None
+    )
+    if normalized_source_kind == "candidate":
+        season_hint = _extract_first_season_hint(
+            candidate_title_hint,
+            target_path_memory.get("preferred_target_relative_path"),
+            last_sync.get("preferred_target_relative_path"),
+            current_share_identity.get("resource_title"),
+            source_message_snapshot.get("title"),
+            task.fixed_save_path,
+            last_file_diagnosis.get("inferred_target_relative_path"),
+        )
+    else:
+        season_hint = _extract_first_season_hint(
+            target_path_memory.get("preferred_target_relative_path"),
+            last_sync.get("preferred_target_relative_path"),
+            last_file_diagnosis.get("inferred_target_relative_path"),
+            current_share_identity.get("resource_title"),
+            source_message_snapshot.get("title"),
+            task.fixed_save_path,
+            candidate_title_hint,
+        )
+    if season_hint is None:
+        return snapshot
+    next_snapshot = dict(snapshot)
+    next_snapshot["season"] = int(season_hint)
+    return next_snapshot
+
+
+def _resolve_diagnosis_target_scope_relative_path(
+    task: PanTransferSyncTask,
+    *,
+    tracked_season: int | None,
+) -> str | None:
+    extra_json = dict(task.extra_json or {})
+    target_path_memory = dict(extra_json.get("target_path_memory") or {})
+    last_sync = dict(extra_json.get("last_sync") or {})
+    for raw_value in (
+        target_path_memory.get("preferred_target_relative_path"),
+        last_sync.get("preferred_target_relative_path"),
+    ):
+        normalized_path = _normalize_relative_path_hint(raw_value)
+        if not normalized_path:
+            continue
+        season_hint = _extract_first_season_hint(normalized_path)
+        if tracked_season is not None and season_hint is not None and season_hint != tracked_season:
+            continue
+        return normalized_path
+    return None
 
 
 def _build_tracked_keys(snapshot: dict[str, Any]) -> set[str]:
@@ -979,6 +1135,62 @@ def _entry_season_value(entry: _FileEntry) -> int | None:
     return _normalize_optional_int(entry.season or entry.quick_season)
 
 
+def _infer_tracked_season_from_entries(
+    entries: list[_FileEntry],
+    *,
+    tracked_episode: int | None,
+) -> int | None:
+    if tracked_episode is None:
+        return None
+
+    grouped: dict[int, dict[str, Any]] = {}
+    for entry in entries:
+        season_value = _entry_season_value(entry)
+        episode_numbers = _entry_episode_numbers(entry)
+        if season_value is None or not episode_numbers:
+            continue
+        current = grouped.setdefault(
+            int(season_value),
+            {
+                "exact_hits": 0,
+                "cover_hits": 0,
+                "best_distance": None,
+                "latest_episode": 0,
+                "entry_count": 0,
+                "latest_updated_at": datetime.min,
+            },
+        )
+        current["entry_count"] += 1
+        current["latest_episode"] = max(int(current["latest_episode"]), max(episode_numbers))
+        current["latest_updated_at"] = max(current["latest_updated_at"], entry.updated_at or datetime.min)
+        if tracked_episode in episode_numbers:
+            current["exact_hits"] += 1
+        if min(episode_numbers) <= tracked_episode <= max(episode_numbers):
+            current["cover_hits"] += 1
+        entry_distance = min(abs(int(value) - tracked_episode) for value in episode_numbers)
+        best_distance = current.get("best_distance")
+        current["best_distance"] = entry_distance if best_distance is None else min(int(best_distance), entry_distance)
+
+    if not grouped:
+        return None
+
+    selected_season, selected_stats = max(
+        grouped.items(),
+        key=lambda item: (
+            int(item[1]["exact_hits"]),
+            int(item[1]["cover_hits"]),
+            -int(item[1]["best_distance"] if item[1]["best_distance"] is not None else 9999),
+            -abs(int(item[1]["latest_episode"]) - tracked_episode),
+            int(item[1]["entry_count"]),
+            item[1]["latest_updated_at"],
+            int(item[0]),
+        ),
+    )
+    if int(selected_stats["best_distance"] if selected_stats["best_distance"] is not None else 9999) > max(8, _DEFAULT_NEAR_EPISODE_WINDOW + 2):
+        return None
+    return int(selected_season)
+
+
 def _filter_entries_by_tracked_season(entries: list[_FileEntry], *, tracked_season: int | None) -> list[_FileEntry]:
     if tracked_season is None:
         return list(entries)
@@ -989,10 +1201,29 @@ def _filter_entries_by_tracked_season(entries: list[_FileEntry], *, tracked_seas
     return seasonless_entries or list(entries)
 
 
+def _filter_entries_by_target_scope(
+    entries: list[_FileEntry],
+    *,
+    target_scope_relative_path: str | None,
+) -> list[_FileEntry]:
+    normalized_scope = _normalize_relative_path_hint(target_scope_relative_path)
+    if not normalized_scope:
+        return list(entries)
+    prefix = f"{normalized_scope}/"
+    scoped_entries = [
+        entry
+        for entry in entries
+        if (_normalize_relative_path_hint(entry.relative_parent_path) or "") in {normalized_scope}
+        or (_normalize_relative_path_hint(entry.relative_parent_path) or "").startswith(prefix)
+    ]
+    return scoped_entries or list(entries)
+
+
 def _select_target_anchor_entries(
     entries: list[_FileEntry],
     *,
     tracked_season: int | None,
+    target_scope_relative_path: str | None = None,
     accepted_only: bool = False,
 ) -> list[_FileEntry]:
     filtered = [
@@ -1002,18 +1233,24 @@ def _select_target_anchor_entries(
     ]
     if not filtered:
         return []
-    return _filter_entries_by_tracked_season(filtered, tracked_season=tracked_season)
+    scoped_entries = _filter_entries_by_target_scope(
+        filtered,
+        target_scope_relative_path=target_scope_relative_path,
+    )
+    return _filter_entries_by_tracked_season(scoped_entries, tracked_season=tracked_season)
 
 
 def _collect_latest_target_episode(
     entries: list[_FileEntry],
     *,
     tracked_season: int | None,
+    target_scope_relative_path: str | None = None,
     accepted_only: bool = False,
 ) -> int | None:
     relevant_entries = _select_target_anchor_entries(
         entries,
         tracked_season=tracked_season,
+        target_scope_relative_path=target_scope_relative_path,
         accepted_only=accepted_only,
     )
     return max((max(_entry_episode_numbers(entry)) for entry in relevant_entries), default=None)
@@ -1159,6 +1396,7 @@ def _build_diagnosis_summary(
     recommended_entries: list[_FileEntry],
     recommended_episode_numbers: list[int],
     inferred_target_relative_path: str | None,
+    target_scope_relative_path: str | None,
     selection_groups: list[dict[str, Any]],
     full_entries: list[_FileEntry],
     full_episode_numbers: list[int],
@@ -1198,6 +1436,7 @@ def _build_diagnosis_summary(
         "full_entry_count": len(full_entries),
         "full_selection_group_count": len(full_selection_groups),
         "inferred_target_relative_path": inferred_target_relative_path,
+        "target_scope_relative_path": target_scope_relative_path,
         "warnings": list(stats.warnings),
         "stop_reason": stats.stop_reason,
     }
@@ -1227,7 +1466,7 @@ async def diagnose_pan_transfer_follow_task_files(
     if not credential_value:
         raise ValueError("target account credential is empty")
 
-    snapshot = _collect_tracked_snapshot(task)
+    snapshot = _collect_tracked_snapshot(task, source_kind=normalized_source_kind)
     tracked_episode = _normalize_optional_int(snapshot.get("latest_episode"))
     tracked_season = _normalize_optional_int(snapshot.get("season"))
     tracked_keys = _build_tracked_keys(snapshot)
@@ -1268,14 +1507,42 @@ async def diagnose_pan_transfer_follow_task_files(
 
     stats.source_file_count = len(source_entries)
     stats.target_file_count = len(target_entries)
-    source_video_entries = _prepare_quick_entries(source_entries, stats=stats)
-    target_video_entries = _prepare_quick_entries(target_entries, stats=stats)
+    source_video_entries = _prepare_quick_entries(
+        source_entries,
+        stats=stats,
+        tracked_keys=tracked_keys,
+        tracked_episode=tracked_episode,
+        tracked_season=tracked_season,
+    )
+    target_video_entries = _prepare_quick_entries(
+        target_entries,
+        stats=stats,
+        tracked_keys=tracked_keys,
+        tracked_episode=tracked_episode,
+        tracked_season=tracked_season,
+    )
+    if tracked_season is None:
+        inferred_tracked_season = _infer_tracked_season_from_entries(
+            source_video_entries,
+            tracked_episode=tracked_episode,
+        ) or _infer_tracked_season_from_entries(
+            target_video_entries,
+            tracked_episode=tracked_episode,
+        )
+        if inferred_tracked_season is not None:
+            tracked_season = int(inferred_tracked_season)
+            snapshot = {**snapshot, "season": tracked_season}
     stats.source_video_count = len(source_video_entries)
     stats.target_video_count = len(target_video_entries)
+    target_scope_relative_path = _resolve_diagnosis_target_scope_relative_path(
+        task,
+        tracked_season=tracked_season,
+    )
 
     latest_target_episode = _collect_latest_target_episode(
         target_video_entries,
         tracked_season=tracked_season,
+        target_scope_relative_path=target_scope_relative_path,
     )
     anchor_episode = _resolve_anchor_episode(
         tracked_episode=tracked_episode,
@@ -1302,6 +1569,7 @@ async def diagnose_pan_transfer_follow_task_files(
     latest_target_episode = _collect_latest_target_episode(
         target_video_entries,
         tracked_season=tracked_season,
+        target_scope_relative_path=target_scope_relative_path,
         accepted_only=True,
     ) or latest_target_episode
     anchor_episode = _resolve_anchor_episode(
@@ -1312,10 +1580,12 @@ async def diagnose_pan_transfer_follow_task_files(
     relevant_target_entries = _select_target_anchor_entries(
         target_video_entries,
         tracked_season=tracked_season,
+        target_scope_relative_path=target_scope_relative_path,
         accepted_only=True,
     ) or _select_target_anchor_entries(
         target_video_entries,
         tracked_season=tracked_season,
+        target_scope_relative_path=target_scope_relative_path,
         accepted_only=False,
     )
     inferred_target_relative_path = _infer_target_relative_path(relevant_target_entries, anchor_episode=anchor_episode)
@@ -1353,6 +1623,7 @@ async def diagnose_pan_transfer_follow_task_files(
         recommended_entries=recommended_entries,
         recommended_episode_numbers=recommended_episode_numbers,
         inferred_target_relative_path=inferred_target_relative_path,
+        target_scope_relative_path=target_scope_relative_path,
         selection_groups=selection_groups,
         full_entries=full_entries,
         full_episode_numbers=full_episode_numbers,
@@ -1378,8 +1649,10 @@ async def diagnose_pan_transfer_follow_task_files(
         payload={
             "source_kind": normalized_source_kind,
             "tracked_episode": tracked_episode,
+            "tracked_season": tracked_season,
             "anchor_episode": anchor_episode,
             "latest_target_episode": latest_target_episode,
+            "target_scope_relative_path": target_scope_relative_path,
             "recommended_episode_numbers": recommended_episode_numbers,
             "recommended_entry_count": len(recommended_entries),
             "selection_group_count": len(selection_groups),

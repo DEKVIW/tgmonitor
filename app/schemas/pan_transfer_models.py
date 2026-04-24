@@ -1009,6 +1009,7 @@ class PanTransferFollowTaskFileDiagnosisSummary(PanTransferBaseModel):
     full_entry_count: int = 0
     full_selection_group_count: int = 0
     inferred_target_relative_path: str | None = None
+    target_scope_relative_path: str | None = None
     warnings: list[str] = Field(default_factory=list)
     stop_reason: str = ""
 

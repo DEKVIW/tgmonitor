@@ -376,10 +376,14 @@ const buildFollowLogSummary = (log: PanTransferFollowTaskLogItem) => {
           .map((value) => Number(value))
           .filter((value) => Number.isFinite(value) && value > 0)
       : []
+    const trackedSeason = Number(payload.tracked_season || 0)
+    const targetScopeRelativePath = String(payload.target_scope_relative_path || '').trim()
     const details = [
       formatFollowSourceKind(payload.source_kind),
+      trackedSeason > 0 ? `第 ${trackedSeason} 季` : '',
       Number(payload.anchor_episode || 0) > 0 ? `锚点 ${Number(payload.anchor_episode)}` : '',
       Number(payload.latest_target_episode || 0) > 0 ? `目录最新 ${Number(payload.latest_target_episode)}` : '',
+      targetScopeRelativePath ? `诊断范围 ${targetScopeRelativePath}` : '',
       recommendedEpisodeNumbers.length > 0 ? `推荐补齐 ${recommendedEpisodeNumbers.join(', ')}` : '',
       Number(payload.selection_group_count || 0) > 0 ? `同步分组 ${Number(payload.selection_group_count)}` : '',
       !recommendedEpisodeNumbers.length && String(payload.stop_reason || '').trim()
