@@ -3464,28 +3464,7 @@ async def _process_pan_transfer_follow_task_async(
         same_episode_assessment_payload = dict(selected_assessment or {})
         same_episode_assessment_payload["validation_status"] = normalized_same_episode_status
         same_episode_assessment_payload["validation_detail_message"] = same_episode_status.get("detail_message")
-        current_share_matches_same_episode = _current_share_matches_same_episode_assessment(
-            task,
-            assessment=same_episode_assessment_payload,
-        )
         if _is_healthy_link_status(normalized_same_episode_status):
-            if not current_share_matches_same_episode:
-                _store_follow_task_candidate(
-                    session,
-                    task=task,
-                    candidate=same_episode_candidate,
-                    assessment=same_episode_assessment_payload,
-                    candidate_recall=candidate_recall,
-                    message="Detected a same-episode candidate source because the current share could not be confirmed for reuse",
-                    extra_payload={
-                        "current_share_url": _normalize_text(task.current_share_url) or None,
-                        "current_share_identity": _get_follow_task_current_share_identity(task),
-                        "current_share_match_confirmed": False,
-                    },
-                )
-                _commit_before_external_call(session)
-                await _handle_follow_task_automation(session, task=task, worker_name=worker_name)
-                return
             try:
                 replacement_result = replace_link_target_references_with_url(
                     session,

@@ -13,6 +13,7 @@ from app.models.models import (
     PanTransferSyncTask,
     ensure_runtime_storage_tables,
 )
+from app.services.resource_identity import compare_follow_candidate, parse_resource_identity
 
 from .common import normalize_relative_path, utcnow
 from .constants import (
@@ -38,6 +39,7 @@ from .follow_tasks import (
     _get_latest_link_target_message_snapshot,
     _get_task_automation_config,
     _normalize_source_message_snapshot,
+    _normalize_optional_bool,
     _normalize_optional_int,
     _parse_datetime,
     _refresh_follow_task_source_message_snapshot,
@@ -72,6 +74,167 @@ def _normalize_target_relative_path(value: Any) -> str | None:
     if not parts:
         return None
     return "/".join(parts)
+
+
+def _build_follow_sync_source_metadata_promotion(
+    task: PanTransferSyncTask,
+    *,
+    source_kind: str,
+    sync_mode: str,
+    source_message_snapshot: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if source_kind != "candidate":
+        return {
+            "promote": True,
+            "reason": "non_candidate_source",
+        }
+    if sync_mode != "incremental":
+        return {
+            "promote": True,
+            "reason": "candidate_non_incremental",
+        }
+    if not (_normalize_optional_int(task.source_link_target_id) or _normalize_text(task.source_url)):
+        return {
+            "promote": True,
+            "reason": "missing_current_source",
+        }
+
+    extra_json = dict(task.extra_json or {})
+    candidate_assessment = dict(extra_json.get("candidate_assessment") or {})
+    candidate_title = (
+        _normalize_text(dict(source_message_snapshot or {}).get("title"), max_length=255)
+        or _normalize_text(task.last_candidate_title, max_length=255)
+        or None
+    )
+    if candidate_assessment:
+        same_work = _normalize_optional_bool(candidate_assessment.get("is_same_work"))
+        is_newer = _normalize_optional_bool(candidate_assessment.get("is_newer"))
+        if same_work is True and is_newer is True:
+            return {
+                "promote": True,
+                "reason": _normalize_text(candidate_assessment.get("reason"), max_length=64) or "candidate_assessment_newer",
+                "assessment_source": "candidate_assessment",
+                "current_episode": _normalize_optional_int(candidate_assessment.get("current_episode")),
+                "candidate_episode": _normalize_optional_int(candidate_assessment.get("candidate_episode")),
+                "current_issue_no": _normalize_text(candidate_assessment.get("current_issue_no"), max_length=32) or None,
+                "candidate_issue_no": _normalize_text(candidate_assessment.get("candidate_issue_no"), max_length=32) or None,
+                "candidate_title": candidate_title,
+            }
+        if same_work is True and (bool(candidate_assessment.get("same_episode_replace")) or is_newer is False):
+            return {
+                "promote": False,
+                "reason": _normalize_text(candidate_assessment.get("reason"), max_length=64) or "candidate_assessment_not_newer",
+                "assessment_source": "candidate_assessment",
+                "current_episode": _normalize_optional_int(candidate_assessment.get("current_episode")),
+                "candidate_episode": _normalize_optional_int(candidate_assessment.get("candidate_episode")),
+                "current_issue_no": _normalize_text(candidate_assessment.get("current_issue_no"), max_length=32) or None,
+                "candidate_issue_no": _normalize_text(candidate_assessment.get("candidate_issue_no"), max_length=32) or None,
+                "candidate_title": candidate_title,
+            }
+
+    identity_snapshot = dict(extra_json.get("identity_snapshot") or {})
+    current_source_snapshot = dict(extra_json.get("source_message_snapshot") or {})
+    tracked_title = (
+        _normalize_text(identity_snapshot.get("resource_title"), max_length=255)
+        or _normalize_text(current_source_snapshot.get("title"), max_length=255)
+        or _normalize_text(task.work_title, max_length=255)
+        or _normalize_text(task.topic_title, max_length=255)
+        or None
+    )
+    if tracked_title and candidate_title:
+        tracked_identity = parse_resource_identity(
+            tracked_title,
+            alternate_titles=list(identity_snapshot.get("reference_titles") or [])[:4],
+        )
+        candidate_identity = parse_resource_identity(
+            candidate_title,
+            alternate_titles=[tracked_title],
+        )
+        decision = compare_follow_candidate(
+            tracked_identity,
+            candidate_identity,
+            tracked_message_time=_parse_datetime(current_source_snapshot.get("message_time")),
+            candidate_message_time=(
+                _parse_datetime(dict(source_message_snapshot or {}).get("message_time")) or task.last_candidate_message_time
+            ),
+        )
+        if bool(decision.is_same_work) and bool(decision.is_newer):
+            return {
+                "promote": True,
+                "reason": _normalize_text(decision.reason, max_length=64) or "identity_compare_newer",
+                "assessment_source": "identity_compare",
+                "current_episode": _normalize_optional_int(decision.current_episode),
+                "candidate_episode": _normalize_optional_int(decision.candidate_episode),
+                "current_issue_no": _normalize_text(decision.current_issue_no, max_length=32) or None,
+                "candidate_issue_no": _normalize_text(decision.candidate_issue_no, max_length=32) or None,
+                "tracked_title": tracked_title,
+                "candidate_title": candidate_title,
+            }
+        if bool(decision.is_same_work):
+            return {
+                "promote": False,
+                "reason": _normalize_text(decision.reason, max_length=64) or "identity_compare_not_newer",
+                "assessment_source": "identity_compare",
+                "current_episode": _normalize_optional_int(decision.current_episode),
+                "candidate_episode": _normalize_optional_int(decision.candidate_episode),
+                "current_issue_no": _normalize_text(decision.current_issue_no, max_length=32) or None,
+                "candidate_issue_no": _normalize_text(decision.candidate_issue_no, max_length=32) or None,
+                "tracked_title": tracked_title,
+                "candidate_title": candidate_title,
+            }
+
+    return {
+        "promote": False,
+        "reason": "candidate_incremental_promotion_unconfirmed",
+        "assessment_source": "fallback",
+        "candidate_title": candidate_title,
+    }
+
+
+def _build_follow_sync_transfer_materialization(
+    item: PanTransferBatchItem,
+) -> dict[str, Any]:
+    extra_json = dict(item.extra_json or {})
+    transfer_payload = dict(extra_json.get("transfer_payload") or {})
+    detected_from = None
+    detected_count = None
+    for key in ("selected_entry_count", "saved_item_count", "source_fs_id_count"):
+        count = _normalize_optional_int(transfer_payload.get(key))
+        if count is None:
+            continue
+        detected_from = key
+        detected_count = count
+        break
+    return {
+        "materialized": bool(detected_count and detected_count > 0),
+        "detected_from": detected_from,
+        "detected_count": detected_count,
+        "reused_existing_share": bool(dict(extra_json.get("share_reuse") or {}).get("reused")),
+        "has_transfer_payload": bool(transfer_payload),
+    }
+
+
+def _resolve_follow_sync_source_metadata_promotion(
+    *,
+    source_kind: str,
+    sync_mode: str,
+    raw_promotion: Any,
+    item: PanTransferBatchItem,
+) -> dict[str, Any]:
+    resolved = dict(raw_promotion or {}) if isinstance(raw_promotion, dict) else {}
+    resolved["promote"] = bool(resolved.get("promote"))
+    resolved["reason"] = _normalize_text(resolved.get("reason"), max_length=64) or None
+    transfer_materialization = _build_follow_sync_transfer_materialization(item)
+    resolved["requires_material_transfer"] = bool(source_kind == "candidate" and sync_mode == "incremental")
+    resolved["transfer_materialization"] = transfer_materialization
+    if (
+        resolved["promote"]
+        and resolved["requires_material_transfer"]
+        and not bool(transfer_materialization.get("materialized"))
+    ):
+        resolved["promote"] = False
+        resolved["reason"] = "candidate_incremental_no_material_transfer"
+    return resolved
 
 
 def _normalize_selection_group_payload(raw_value: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -416,6 +579,12 @@ async def create_pan_transfer_follow_sync_batch(
     )
     if not source_url:
         raise ValueError("source_url cannot be empty")
+    source_metadata_promotion = _build_follow_sync_source_metadata_promotion(
+        task,
+        source_kind=source_kind,
+        sync_mode=sync_mode,
+        source_message_snapshot=source_message_snapshot,
+    )
 
     path_strategy, resolved_paths = _resolve_follow_sync_paths(task)
     source_selection = _normalize_source_selection(payload, sync_mode=sync_mode)
@@ -477,6 +646,7 @@ async def create_pan_transfer_follow_sync_batch(
             "selection_target_relative_paths": selection_target_relative_paths,
             "path_strategy": path_strategy,
             "resolved_paths": resolved_paths,
+            "source_metadata_promotion": source_metadata_promotion,
         },
         result_json={},
         started_at=utcnow(),
@@ -537,6 +707,7 @@ async def create_pan_transfer_follow_sync_batch(
                 "preferred_target_relative_path": preferred_target_relative_path,
                 "target_relative_path_source": target_relative_path_source,
                 "selection_target_relative_paths": selection_target_relative_paths,
+                "source_metadata_promotion": source_metadata_promotion,
             },
             "source_selection": source_selection,
         },
@@ -591,6 +762,7 @@ async def create_pan_transfer_follow_sync_batch(
             "preferred_target_relative_path": preferred_target_relative_path,
             "target_relative_path_source": target_relative_path_source,
             "selection_target_relative_paths": selection_target_relative_paths,
+            "source_metadata_promotion": source_metadata_promotion,
         },
     )
     session.flush()
@@ -680,18 +852,29 @@ def handle_follow_sync_item_success(
         if normalized_path
     ]
     synced_at = utcnow()
+    source_metadata_promotion = _resolve_follow_sync_source_metadata_promotion(
+        source_kind=source_kind,
+        sync_mode=sync_mode,
+        raw_promotion=context.get("source_metadata_promotion"),
+        item=item,
+    )
+    promote_source_metadata = bool(source_metadata_promotion.get("promote"))
 
+    previous_extra_json = dict(task.extra_json or {})
+    previous_source_message_snapshot = _normalize_source_message_snapshot(previous_extra_json.get("source_message_snapshot"))
+    previous_current_share_identity = dict(previous_extra_json.get("current_share_identity") or {})
     source_link_target_id = _normalize_optional_int(context.get("source_link_target_id"))
     source_target = session.get(LinkTarget, int(source_link_target_id)) if source_link_target_id is not None else None
-    if source_link_target_id is not None:
+    if promote_source_metadata and source_link_target_id is not None:
         task.source_link_target_id = int(source_link_target_id)
     source_url = _normalize_text(context.get("source_url")) or _normalize_text(getattr(source_target, "original_url", None)) or None
-    if source_url:
+    if promote_source_metadata and source_url:
         task.source_url = source_url
     source_share_key = _normalize_text(getattr(source_target, "share_key", None), max_length=255) or None
-    task.source_share_key = source_share_key or task.source_share_key
+    if promote_source_metadata and source_share_key:
+        task.source_share_key = source_share_key
 
-    source_message_snapshot = _build_follow_sync_success_source_snapshot(
+    synced_source_message_snapshot = _build_follow_sync_success_source_snapshot(
         session,
         source_link_target_id=source_link_target_id,
         fallback_snapshot=dict(dict(item.extra_json or {}).get("source_message_snapshot") or {}),
@@ -703,19 +886,38 @@ def handle_follow_sync_item_success(
     task.current_share_link_target_id = int(item.new_link_target_id) if item.new_link_target_id is not None else task.current_share_link_target_id
     task.current_share_status = _normalize_text(item.validation_status, max_length=32).lower() or task.current_share_status
     task.task_state = PAN_TRANSFER_SYNC_STATE_IDLE
-    task.last_change_type = "candidate_applied" if source_kind == "candidate" else "sync_completed"
+    task.last_change_type = "candidate_applied" if source_kind == "candidate" and promote_source_metadata else "sync_completed"
     task.last_error_message = None
     task.updated_by = _normalize_text(worker_name, max_length=128) or task.updated_by
 
-    extra_json = dict(task.extra_json or {})
-    if source_message_snapshot:
-        extra_json["source_message_snapshot"] = source_message_snapshot
+    extra_json = previous_extra_json
+    effective_source_message_snapshot = (
+        synced_source_message_snapshot if promote_source_metadata else previous_source_message_snapshot
+    )
+    if promote_source_metadata and synced_source_message_snapshot:
+        extra_json["source_message_snapshot"] = synced_source_message_snapshot
     current_share_identity = _build_follow_current_share_identity_snapshot(
         share_url=_normalize_text(task.current_share_url) or _normalize_text(item.new_share_url),
-        source_title=dict(source_message_snapshot or {}).get("title"),
-        source_kind=source_kind,
-        sync_mode=sync_mode,
-        source_link_target_id=source_link_target_id,
+        source_title=(
+            _normalize_text(dict(effective_source_message_snapshot or {}).get("title"), max_length=255)
+            or _normalize_text(previous_current_share_identity.get("resource_title"), max_length=255)
+            or None
+        ),
+        source_kind=(
+            source_kind
+            if promote_source_metadata
+            else (_normalize_text(previous_current_share_identity.get("source_kind"), max_length=32) or "current")
+        ),
+        sync_mode=(
+            sync_mode
+            if promote_source_metadata
+            else (_normalize_text(previous_current_share_identity.get("sync_mode"), max_length=32) or sync_mode)
+        ),
+        source_link_target_id=(
+            source_link_target_id
+            if promote_source_metadata
+            else _normalize_optional_int(task.source_link_target_id)
+        ),
         synced_at=synced_at,
     )
     if current_share_identity:
@@ -735,6 +937,8 @@ def handle_follow_sync_item_success(
         "preferred_target_relative_path": preferred_target_relative_path,
         "target_relative_path_source": target_relative_path_source,
         "selection_target_relative_paths": selection_target_relative_paths,
+        "source_metadata_promoted": promote_source_metadata,
+        "source_metadata_promotion": source_metadata_promotion,
     }
     task.extra_json = extra_json
     if sync_mode == "incremental" and preferred_target_relative_path:
@@ -749,7 +953,7 @@ def handle_follow_sync_item_success(
     _refresh_follow_task_source_message_snapshot(
         session,
         task=task,
-        fallback_snapshot=source_message_snapshot,
+        fallback_snapshot=effective_source_message_snapshot,
     )
     automation = _apply_follow_sync_success_automation(
         session,
@@ -789,6 +993,8 @@ def handle_follow_sync_item_success(
             "preferred_target_relative_path": preferred_target_relative_path,
             "target_relative_path_source": target_relative_path_source,
             "selection_target_relative_paths": selection_target_relative_paths,
+            "source_metadata_promoted": promote_source_metadata,
+            "source_metadata_promotion": source_metadata_promotion,
             "automation": automation,
         },
     )
