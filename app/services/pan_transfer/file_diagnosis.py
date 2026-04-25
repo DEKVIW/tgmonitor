@@ -16,6 +16,7 @@ from .follow_tasks import (
     _append_follow_task_log,
     _build_follow_identity_fallback,
     _get_follow_task,
+    _normalize_optional_bool,
     _normalize_optional_int,
     _normalize_text,
     _parse_datetime,
@@ -1072,6 +1073,7 @@ def _collect_tracked_snapshot(task: PanTransferSyncTask, *, source_kind: str | N
     if normalized_source_kind == "candidate":
         season_hint = _extract_first_season_hint(
             candidate_title_hint,
+            current_share_identity.get("actual_share_target_relative_path"),
             target_path_memory.get("preferred_target_relative_path"),
             last_sync.get("preferred_target_relative_path"),
             current_share_identity.get("resource_title"),
@@ -1081,6 +1083,7 @@ def _collect_tracked_snapshot(task: PanTransferSyncTask, *, source_kind: str | N
         )
     else:
         season_hint = _extract_first_season_hint(
+            current_share_identity.get("actual_share_target_relative_path"),
             target_path_memory.get("preferred_target_relative_path"),
             last_sync.get("preferred_target_relative_path"),
             last_file_diagnosis.get("inferred_target_relative_path"),
@@ -1102,8 +1105,16 @@ def _resolve_diagnosis_target_scope_relative_path(
     tracked_season: int | None,
 ) -> str | None:
     extra_json = dict(task.extra_json or {})
+    current_share_identity = dict(extra_json.get("current_share_identity") or {})
     target_path_memory = dict(extra_json.get("target_path_memory") or {})
     last_sync = dict(extra_json.get("last_sync") or {})
+    current_share_target_relative_path = _normalize_relative_path_hint(
+        current_share_identity.get("actual_share_target_relative_path")
+    )
+    if current_share_target_relative_path:
+        return current_share_target_relative_path
+    if _normalize_optional_bool(current_share_identity.get("actual_share_target_is_root")) is True:
+        return None
     for raw_value in (
         target_path_memory.get("preferred_target_relative_path"),
         last_sync.get("preferred_target_relative_path"),
@@ -1216,7 +1227,7 @@ def _filter_entries_by_target_scope(
         if (_normalize_relative_path_hint(entry.relative_parent_path) or "") in {normalized_scope}
         or (_normalize_relative_path_hint(entry.relative_parent_path) or "").startswith(prefix)
     ]
-    return scoped_entries or list(entries)
+    return scoped_entries
 
 
 def _select_target_anchor_entries(

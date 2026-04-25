@@ -143,6 +143,26 @@ def _match_quark_row(rows: list[dict[str, Any]], *, name: str, is_dir: bool) -> 
     )
 
 
+def _filter_existing_quark_rows(
+    rows: list[dict[str, Any]],
+    *,
+    target_rows: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    filtered_rows: list[dict[str, Any]] = []
+    skipped_names: list[str] = []
+    for row in rows:
+        normalized_row = dict(row or {})
+        name = str(normalized_row.get("file_name") or "").strip()
+        if not name:
+            continue
+        is_dir = bool(normalized_row.get("dir"))
+        if _match_quark_row(target_rows, name=name, is_dir=is_dir) is not None:
+            skipped_names.append(name)
+            continue
+        filtered_rows.append(normalized_row)
+    return filtered_rows, skipped_names
+
+
 def _select_quark_share_items(
     rows: list[dict[str, Any]],
     *,
@@ -839,6 +859,7 @@ class QuarkPanTransferProvider(PanTransferProvider):
             total_selected_count = 0
             save_task_ids: list[str] = []
             applied_groups: list[dict[str, Any]] = []
+            skipped_existing_entries: list[str] = []
             for selection_group in selection_groups:
                 selection_parent_id = str(selection_group.get("parent_entry_id") or "").strip() or "0"
                 share_items = await client.get_share_detail(pwd_id=pwd_id, stoken=stoken, parent_id=selection_parent_id)
@@ -847,6 +868,17 @@ class QuarkPanTransferProvider(PanTransferProvider):
                 selected_share_items = _select_quark_share_items(share_items, selection_group=selection_group)
                 if not selected_share_items:
                     continue
+                target_relative_path = _normalize_target_relative_path(selection_group.get("target_relative_path"))
+                target_parent_id = await ensure_target_parent_id(target_relative_path)
+                if normalized_selection is not None and not clear_existing_contents:
+                    target_rows = await client.list_dir_all(parent_id=target_parent_id)
+                    selected_share_items, skipped_names = _filter_existing_quark_rows(
+                        selected_share_items,
+                        target_rows=target_rows,
+                    )
+                    skipped_existing_entries.extend(skipped_names)
+                    if not selected_share_items:
+                        continue
                 fid_list = [str(item.get("fid") or "") for item in selected_share_items if str(item.get("fid") or "").strip()]
                 fid_token_list = [
                     str(item.get("share_fid_token") or "")
@@ -855,8 +887,6 @@ class QuarkPanTransferProvider(PanTransferProvider):
                 ]
                 if not fid_list or len(fid_list) != len(fid_token_list):
                     raise PanTransferProviderError("Quark share detail is missing required transfer identifiers", retryable=False)
-                target_relative_path = _normalize_target_relative_path(selection_group.get("target_relative_path"))
-                target_parent_id = await ensure_target_parent_id(target_relative_path)
                 save_task_id = await client.get_share_save_task_id(
                     pwd_id=pwd_id,
                     stoken=stoken,
@@ -876,7 +906,7 @@ class QuarkPanTransferProvider(PanTransferProvider):
                         "selected_count": len(fid_list),
                     }
                 )
-            if total_selected_count <= 0:
+            if total_selected_count <= 0 and normalized_selection is None:
                 raise PanTransferProviderError("Quark share has no transferable content", retryable=False)
             return PanTransferTransferResult(
                 staging_root=parent_path,
@@ -894,6 +924,8 @@ class QuarkPanTransferProvider(PanTransferProvider):
                     "selection_group_count": len(applied_groups),
                     "selection_groups": applied_groups,
                     "selected_entry_count": total_selected_count,
+                    "skipped_existing_entry_count": len(skipped_existing_entries),
+                    "skipped_existing_entries": skipped_existing_entries[:50],
                     "clear_existing_contents": bool(clear_existing_contents),
                 },
             )
@@ -936,6 +968,8 @@ class QuarkPanTransferProvider(PanTransferProvider):
             share_target_id = folder_id
             share_target_name = str(title_hint or staging_folder_name)
             share_target_fallback_reason = None
+            share_target_relative_path: str | None = None
+            share_target_is_dir = True
             if str(share_target_mode or "").strip().lower() == "content_root":
                 rows = await client.list_dir_all(parent_id=folder_id)
                 content_root, fallback_reason = client._resolve_content_root(rows)
@@ -943,6 +977,8 @@ class QuarkPanTransferProvider(PanTransferProvider):
                     share_target_id = str(content_root.get("fid") or "").strip() or folder_id
                     share_target_name = str(content_root.get("file_name") or staging_folder_name).strip() or staging_folder_name
                     resolved_share_target_mode = "content_root"
+                    share_target_is_dir = bool(content_root.get("dir"))
+                    share_target_relative_path = share_target_name if share_target_is_dir else None
                 else:
                     share_target_fallback_reason = fallback_reason or "unique content root was not found"
 
@@ -974,6 +1010,9 @@ class QuarkPanTransferProvider(PanTransferProvider):
                     "share_target_mode_resolved": resolved_share_target_mode,
                     "share_target_id": share_target_id,
                     "share_target_name": share_target_name,
+                    "share_target_relative_path": share_target_relative_path,
+                    "share_target_is_root": resolved_share_target_mode == "resource_dir",
+                    "share_target_is_dir": share_target_is_dir,
                     "share_target_fallback_reason": share_target_fallback_reason,
                 },
             )

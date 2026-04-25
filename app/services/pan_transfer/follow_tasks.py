@@ -345,6 +345,12 @@ def _normalize_follow_current_share_identity(value: Mapping[str, Any] | None) ->
         "source_kind": _normalize_text(raw.get("source_kind"), max_length=32) or None,
         "sync_mode": _normalize_text(raw.get("sync_mode"), max_length=32) or None,
         "source_link_target_id": _normalize_optional_int(raw.get("source_link_target_id")),
+        "actual_share_target_mode": _normalize_text(raw.get("actual_share_target_mode"), max_length=32) or None,
+        "actual_share_target_relative_path": normalize_relative_path(
+            _normalize_text(raw.get("actual_share_target_relative_path"), max_length=512)
+        )
+        or None,
+        "actual_share_target_is_root": _normalize_optional_bool(raw.get("actual_share_target_is_root")),
         "synced_at": _serialize_json_value(_parse_datetime(raw.get("synced_at")) or raw.get("synced_at")),
     }
     return {key: value for key, value in normalized.items() if value not in (None, [], "", {})}
@@ -357,6 +363,9 @@ def _build_follow_current_share_identity_snapshot(
     source_kind: Any = None,
     sync_mode: Any = None,
     source_link_target_id: Any = None,
+    actual_share_target_mode: Any = None,
+    actual_share_target_relative_path: Any = None,
+    actual_share_target_is_root: Any = None,
     synced_at: datetime | None = None,
 ) -> dict[str, Any]:
     normalized_share_url = _normalize_text(share_url)
@@ -373,6 +382,9 @@ def _build_follow_current_share_identity_snapshot(
             "source_kind": source_kind,
             "sync_mode": sync_mode,
             "source_link_target_id": source_link_target_id,
+            "actual_share_target_mode": actual_share_target_mode,
+            "actual_share_target_relative_path": actual_share_target_relative_path,
+            "actual_share_target_is_root": actual_share_target_is_root,
             "synced_at": synced_at,
         }
     )
@@ -2906,6 +2918,7 @@ async def _handle_follow_task_origin_automation(
         staging_folder_id=None,
         preferred_target_relative_path=preferred_target_relative_path,
     )
+    selection_summary = _summarize_follow_selection_groups(list(plan.selection_groups or []))
 
     conflict_count = int((plan.payload or {}).get("conflict_count") or 0)
     if conflict_count > 0:
@@ -2930,11 +2943,13 @@ async def _handle_follow_task_origin_automation(
             task=task,
             stage="automation",
             level="warning",
-            message="Stable-origin auto incremental mode stopped because the resource directory structure needs manual review",
+            message=f"Stable-origin auto incremental mode stopped -> {conflict_count} structure conflicts need manual review",
             payload={
                 **dict(plan.payload or {}),
+                **selection_summary,
                 "mode": PAN_TRANSFER_FOLLOW_AUTOMATION_MODE_STABLE_ORIGIN_INCREMENTAL,
                 "target_relative_path_source": target_relative_path_source,
+                "resolved_path": resolved_paths.get("resolved_path"),
             },
         )
         return True
@@ -2958,11 +2973,13 @@ async def _handle_follow_task_origin_automation(
             session,
             task=task,
             stage="automation",
-            message="Stable-origin auto incremental check found no new content",
+            message="Stable-origin auto incremental check found no new content in the tracked target scope",
             payload={
                 **dict(plan.payload or {}),
+                **selection_summary,
                 "mode": PAN_TRANSFER_FOLLOW_AUTOMATION_MODE_STABLE_ORIGIN_INCREMENTAL,
                 "target_relative_path_source": target_relative_path_source,
+                "resolved_path": resolved_paths.get("resolved_path"),
             },
         )
         return True
@@ -3000,13 +3017,15 @@ async def _handle_follow_task_origin_automation(
         session,
         task=task,
         stage="automation",
-        message="Stable-origin auto incremental sync batch was queued",
+        message=f"Stable-origin auto incremental sync batch was queued -> {int(plan.selected_count or 0)} selected entries",
         payload={
             **dict(plan.payload or {}),
+            **selection_summary,
             "mode": PAN_TRANSFER_FOLLOW_AUTOMATION_MODE_STABLE_ORIGIN_INCREMENTAL,
             "batch_id": int(result.get("batch_id") or 0),
             "batch_item_id": int(result.get("batch_item_id") or 0),
             "target_relative_path_source": target_relative_path_source,
+            "resolved_path": resolved_paths.get("resolved_path"),
         },
     )
     return True
@@ -3031,6 +3050,38 @@ def _collect_follow_automation_episode_set(values: Any) -> set[int]:
             if normalized is not None:
                 collected.add(int(normalized))
     return collected
+
+
+def _summarize_follow_selection_groups(groups: list[dict[str, Any]] | None) -> dict[str, Any]:
+    normalized_groups = [dict(group or {}) for group in list(groups or []) if isinstance(group, dict)]
+    target_relative_paths = sorted(
+        {
+            normalized_path
+            for normalized_path in [
+                _normalize_text(group.get("target_relative_path"), max_length=255)
+                for group in normalized_groups
+            ]
+            if normalized_path
+        }
+    )
+    selected_entry_preview: list[str] = []
+    for group in normalized_groups:
+        for entry in list(group.get("selected_entries") or []):
+            if not isinstance(entry, dict):
+                continue
+            name = _normalize_text(entry.get("name"), max_length=255)
+            if not name:
+                continue
+            selected_entry_preview.append(name)
+            if len(selected_entry_preview) >= 10:
+                break
+        if len(selected_entry_preview) >= 10:
+            break
+    return {
+        "selection_group_count": len(normalized_groups),
+        "selection_target_relative_paths": target_relative_paths,
+        "selected_entry_preview": selected_entry_preview,
+    }
 
 
 def _commit_before_external_call(session: Session) -> None:

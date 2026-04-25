@@ -402,6 +402,48 @@ def _remember_follow_task_target_path(
     task.extra_json = extra_json
 
 
+def _extract_follow_sync_actual_share_target_snapshot(item: PanTransferBatchItem) -> dict[str, Any]:
+    extra_json = dict(item.extra_json or {})
+    share_snapshot = dict(extra_json.get("share_snapshot") or {})
+    merged_payload: dict[str, Any] = {}
+    for payload in (
+        dict(share_snapshot.get("payload") or {}),
+        dict(extra_json.get("provider_payload") or {}),
+        dict(extra_json.get("share_payload") or {}),
+    ):
+        if not payload:
+            continue
+        merged_payload.update(payload)
+
+    actual_share_target_mode = _normalize_text(merged_payload.get("share_target_mode_resolved"), max_length=32) or None
+    actual_share_target_relative_path = _normalize_target_relative_path(
+        merged_payload.get("share_target_relative_path")
+    )
+    actual_share_target_is_root = _normalize_optional_bool(merged_payload.get("share_target_is_root"))
+    actual_share_target_is_dir = _normalize_optional_bool(merged_payload.get("share_target_is_dir"))
+    if (
+        not actual_share_target_relative_path
+        and actual_share_target_is_dir is True
+        and actual_share_target_mode == "content_root"
+    ):
+        actual_share_target_relative_path = _normalize_target_relative_path(merged_payload.get("share_target_name"))
+    if actual_share_target_relative_path:
+        actual_share_target_is_root = False
+    elif actual_share_target_is_root is None and actual_share_target_mode == "resource_dir":
+        actual_share_target_is_root = True
+    if (
+        actual_share_target_mode is None
+        and actual_share_target_relative_path is None
+        and actual_share_target_is_root is None
+    ):
+        return {}
+    return {
+        "actual_share_target_mode": actual_share_target_mode,
+        "actual_share_target_relative_path": actual_share_target_relative_path,
+        "actual_share_target_is_root": actual_share_target_is_root,
+    }
+
+
 async def resolve_follow_task_preferred_target_relative_path(
     session: Session,
     *,
@@ -418,12 +460,27 @@ async def resolve_follow_task_preferred_target_relative_path(
         return selection_path, "selection"
 
     extra_json = dict(task.extra_json or {})
+    current_share_identity = dict(extra_json.get("current_share_identity") or {})
+    current_share_actual_path = _normalize_target_relative_path(
+        current_share_identity.get("actual_share_target_relative_path")
+    )
+    if current_share_actual_path:
+        return current_share_actual_path, "current_share_actual"
+    if _normalize_optional_bool(current_share_identity.get("actual_share_target_is_root")) is True:
+        return None, "current_share_actual_root"
+
+    last_sync = dict(extra_json.get("last_sync") or {})
+    last_sync_actual_path = _normalize_target_relative_path(last_sync.get("actual_share_target_relative_path"))
+    if last_sync_actual_path:
+        return last_sync_actual_path, "last_sync_actual"
+    if _normalize_optional_bool(last_sync.get("actual_share_target_is_root")) is True:
+        return None, "last_sync_actual_root"
+
     target_path_memory = dict(extra_json.get("target_path_memory") or {})
     remembered_path = _normalize_target_relative_path(target_path_memory.get("preferred_target_relative_path"))
     if remembered_path:
         return remembered_path, "memory"
 
-    last_sync = dict(extra_json.get("last_sync") or {})
     last_sync_path = _normalize_target_relative_path(last_sync.get("preferred_target_relative_path"))
     if last_sync_path:
         return last_sync_path, "last_sync"
@@ -879,6 +936,24 @@ def handle_follow_sync_item_success(
         source_link_target_id=source_link_target_id,
         fallback_snapshot=dict(dict(item.extra_json or {}).get("source_message_snapshot") or {}),
     )
+    actual_share_target_snapshot = _extract_follow_sync_actual_share_target_snapshot(item)
+    effective_actual_share_target_snapshot = (
+        actual_share_target_snapshot
+        if actual_share_target_snapshot
+        else {
+            "actual_share_target_mode": _normalize_text(
+                previous_current_share_identity.get("actual_share_target_mode"),
+                max_length=32,
+            )
+            or None,
+            "actual_share_target_relative_path": _normalize_target_relative_path(
+                previous_current_share_identity.get("actual_share_target_relative_path")
+            ),
+            "actual_share_target_is_root": _normalize_optional_bool(
+                previous_current_share_identity.get("actual_share_target_is_root")
+            ),
+        }
+    )
     _clear_follow_task_candidate_fields(task)
 
     if _normalize_text(item.new_share_url):
@@ -918,6 +993,9 @@ def handle_follow_sync_item_success(
             if promote_source_metadata
             else _normalize_optional_int(task.source_link_target_id)
         ),
+        actual_share_target_mode=effective_actual_share_target_snapshot.get("actual_share_target_mode"),
+        actual_share_target_relative_path=effective_actual_share_target_snapshot.get("actual_share_target_relative_path"),
+        actual_share_target_is_root=effective_actual_share_target_snapshot.get("actual_share_target_is_root"),
         synced_at=synced_at,
     )
     if current_share_identity:
@@ -937,6 +1015,9 @@ def handle_follow_sync_item_success(
         "preferred_target_relative_path": preferred_target_relative_path,
         "target_relative_path_source": target_relative_path_source,
         "selection_target_relative_paths": selection_target_relative_paths,
+        "actual_share_target_mode": effective_actual_share_target_snapshot.get("actual_share_target_mode"),
+        "actual_share_target_relative_path": effective_actual_share_target_snapshot.get("actual_share_target_relative_path"),
+        "actual_share_target_is_root": effective_actual_share_target_snapshot.get("actual_share_target_is_root"),
         "source_metadata_promoted": promote_source_metadata,
         "source_metadata_promotion": source_metadata_promotion,
     }
@@ -993,6 +1074,9 @@ def handle_follow_sync_item_success(
             "preferred_target_relative_path": preferred_target_relative_path,
             "target_relative_path_source": target_relative_path_source,
             "selection_target_relative_paths": selection_target_relative_paths,
+            "actual_share_target_mode": effective_actual_share_target_snapshot.get("actual_share_target_mode"),
+            "actual_share_target_relative_path": effective_actual_share_target_snapshot.get("actual_share_target_relative_path"),
+            "actual_share_target_is_root": effective_actual_share_target_snapshot.get("actual_share_target_is_root"),
             "source_metadata_promoted": promote_source_metadata,
             "source_metadata_promotion": source_metadata_promotion,
             "automation": automation,

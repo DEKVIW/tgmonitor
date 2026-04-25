@@ -194,6 +194,26 @@ def _match_baidu_row(rows: list[dict[str, Any]], *, name: str, is_dir: bool) -> 
     )
 
 
+def _filter_existing_baidu_rows(
+    rows: list[dict[str, Any]],
+    *,
+    target_rows: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    filtered_rows: list[dict[str, Any]] = []
+    skipped_names: list[str] = []
+    for row in rows:
+        normalized_row = dict(row or {})
+        name = str(normalized_row.get("server_filename") or "").strip()
+        if not name:
+            continue
+        is_dir = int(normalized_row.get("isdir") or 0) == 1
+        if _match_baidu_row(target_rows, name=name, is_dir=is_dir) is not None:
+            skipped_names.append(name)
+            continue
+        filtered_rows.append(normalized_row)
+    return filtered_rows, skipped_names
+
+
 def _select_baidu_share_items(
     rows: list[dict[str, Any]],
     *,
@@ -356,59 +376,77 @@ class _BaiduClient:
         dir_path: str | None,
     ) -> list[dict[str, Any]]:
         short_url = _build_share_list_short_url(share_key, requires_prefix_strip=requires_prefix_strip)
-        payload = await self._request_json(
-            "GET",
-            "https://pan.baidu.com/share/list",
-            params={
-                "web": "1",
-                "app_id": "250528",
-                "desc": "1",
-                "showempty": "0",
-                "page": "1",
-                "num": "200",
-                "order": "time",
-                "shorturl": short_url,
-                "root": "0" if dir_path else "1",
-                "dir": dir_path or "",
-                "view_mode": "1",
-                "channel": "chunlei",
-                "clienttype": "0",
-            },
-        )
-        errno = int(payload.get("errno") or 0)
-        if errno != 0:
-            raise PanTransferProviderError(
-                f"Baidu share directory read failed: errno {errno}",
-                retryable=False,
-                payload=payload,
+        page = 1
+        page_size = 200
+        rows: list[dict[str, Any]] = []
+        while True:
+            payload = await self._request_json(
+                "GET",
+                "https://pan.baidu.com/share/list",
+                params={
+                    "web": "1",
+                    "app_id": "250528",
+                    "desc": "1",
+                    "showempty": "0",
+                    "page": str(page),
+                    "num": str(page_size),
+                    "order": "time",
+                    "shorturl": short_url,
+                    "root": "0" if dir_path else "1",
+                    "dir": dir_path or "",
+                    "view_mode": "1",
+                    "channel": "chunlei",
+                    "clienttype": "0",
+                },
             )
-        rows = payload.get("list")
-        if isinstance(rows, list):
-            return [dict(row or {}) for row in rows]
-        return []
+            errno = int(payload.get("errno") or 0)
+            if errno != 0:
+                raise PanTransferProviderError(
+                    f"Baidu share directory read failed: errno {errno}",
+                    retryable=False,
+                    payload=payload,
+                )
+            batch = payload.get("list")
+            current_rows = [dict(row or {}) for row in batch] if isinstance(batch, list) else []
+            if not current_rows:
+                break
+            rows.extend(current_rows)
+            if len(current_rows) < page_size:
+                break
+            page += 1
+        return rows
 
     async def list_dir(self, path: str, *, bdstoken: str) -> list[dict[str, Any]] | int:
-        payload = await self._request_json(
-            "GET",
-            "https://pan.baidu.com/api/list",
-            params={
-                "order": "time",
-                "desc": "1",
-                "showempty": "0",
-                "web": "1",
-                "page": "1",
-                "num": "1000",
-                "dir": path,
-                "bdstoken": bdstoken,
-            },
-        )
-        errno = int(payload.get("errno") or 0)
-        if errno != 0:
-            return errno
-        rows = payload.get("list")
-        if isinstance(rows, list):
-            return [dict(row or {}) for row in rows]
-        return []
+        page = 1
+        page_size = 1000
+        rows: list[dict[str, Any]] = []
+        while True:
+            payload = await self._request_json(
+                "GET",
+                "https://pan.baidu.com/api/list",
+                params={
+                    "order": "time",
+                    "desc": "1",
+                    "showempty": "0",
+                    "web": "1",
+                    "page": str(page),
+                    "num": str(page_size),
+                    "dir": path,
+                    "bdstoken": bdstoken,
+                },
+            )
+            errno = int(payload.get("errno") or 0)
+            if errno != 0:
+                return errno
+            batch = payload.get("list")
+            current_rows = [dict(row or {}) for row in batch] if isinstance(batch, list) else []
+            if not current_rows:
+                break
+            rows.extend(current_rows)
+            if len(current_rows) < page_size:
+                break
+            page += 1
+        return rows
 
     async def create_dir(self, path: str, *, bdstoken: str) -> int:
         payload = await self._request_json(
@@ -833,6 +871,7 @@ class BaiduPanTransferProvider(PanTransferProvider):
 
             total_selected_count = 0
             applied_groups: list[dict[str, Any]] = []
+            skipped_existing_entries: list[str] = []
             for selection_group in selection_groups:
                 selection_parent_path = str(selection_group.get("parent_path") or "").strip() or None
                 share_rows = await client.list_share_dir(
@@ -843,6 +882,24 @@ class BaiduPanTransferProvider(PanTransferProvider):
                 selected_rows = _select_baidu_share_items(share_rows, selection_group=selection_group)
                 if not selected_rows:
                     continue
+                target_relative_path = _normalize_target_relative_path(selection_group.get("target_relative_path"))
+                group_target_path = target_path
+                if target_relative_path:
+                    group_target_path = f"{target_path.rstrip('/')}/{target_relative_path}"
+                    await ensure_path_exists(group_target_path)
+                if normalized_selection is not None and not clear_existing_contents:
+                    existing_target_rows = await client.list_dir(group_target_path, bdstoken=bdstoken)
+                    if isinstance(existing_target_rows, int):
+                        raise PanTransferProviderError(
+                            f"Baidu failed to inspect target directory {group_target_path}: errno {existing_target_rows}"
+                        )
+                    selected_rows, skipped_names = _filter_existing_baidu_rows(
+                        selected_rows,
+                        target_rows=existing_target_rows,
+                    )
+                    skipped_existing_entries.extend(skipped_names)
+                    if not selected_rows:
+                        continue
                 group_fs_ids = [
                     str(row.get("fs_id") or "").strip()
                     for row in selected_rows
@@ -850,11 +907,6 @@ class BaiduPanTransferProvider(PanTransferProvider):
                 ]
                 if not group_fs_ids:
                     continue
-                target_relative_path = _normalize_target_relative_path(selection_group.get("target_relative_path"))
-                group_target_path = target_path
-                if target_relative_path:
-                    group_target_path = f"{target_path.rstrip('/')}/{target_relative_path}"
-                    await ensure_path_exists(group_target_path)
                 await client.transfer_file(
                     share_id=share_id,
                     share_user_id=share_user_id,
@@ -870,7 +922,7 @@ class BaiduPanTransferProvider(PanTransferProvider):
                         "selected_count": len(group_fs_ids),
                     }
                 )
-            if total_selected_count <= 0:
+            if total_selected_count <= 0 and normalized_selection is None:
                 raise PanTransferProviderError("Baidu share has no transferable content", retryable=False)
 
             list_parent_path = parent_path or "/"
@@ -905,6 +957,8 @@ class BaiduPanTransferProvider(PanTransferProvider):
                     "selection_group_count": len(applied_groups),
                     "selection_groups": applied_groups,
                     "selected_entry_count": total_selected_count,
+                    "skipped_existing_entry_count": len(skipped_existing_entries),
+                    "skipped_existing_entries": skipped_existing_entries[:50],
                     "clear_existing_contents": bool(clear_existing_contents),
                 },
             )
@@ -953,6 +1007,8 @@ class BaiduPanTransferProvider(PanTransferProvider):
             share_target_id = folder_id
             share_target_name = str(title_hint or staging_folder_name or "").strip() or staging_folder_name
             share_target_fallback_reason = None
+            share_target_relative_path: str | None = None
+            share_target_is_dir = True
             if str(share_target_mode or "").strip().lower() == "content_root":
                 staging_path = "/" + "/".join(part for part in str(staging_root or "").split("/") if part)
                 staging_path = f"{staging_path}/{staging_folder_name}" if staging_path and staging_path != "/" else f"/{staging_folder_name}"
@@ -964,6 +1020,8 @@ class BaiduPanTransferProvider(PanTransferProvider):
                     share_target_id = str(child.get("fs_id") or "").strip() or folder_id
                     share_target_name = str(child.get("server_filename") or share_target_name).strip() or share_target_name
                     resolved_share_target_mode = "content_root"
+                    share_target_is_dir = int(child.get("isdir") or 0) == 1
+                    share_target_relative_path = share_target_name if share_target_is_dir else None
                 elif not child_rows:
                     share_target_fallback_reason = "staging directory is empty"
                 else:
@@ -988,6 +1046,9 @@ class BaiduPanTransferProvider(PanTransferProvider):
                     "share_target_mode_resolved": resolved_share_target_mode,
                     "share_target_id": share_target_id,
                     "share_target_name": share_target_name,
+                    "share_target_relative_path": share_target_relative_path,
+                    "share_target_is_root": resolved_share_target_mode == "resource_dir",
+                    "share_target_is_dir": share_target_is_dir,
                     "share_target_fallback_reason": share_target_fallback_reason,
                 },
             )
