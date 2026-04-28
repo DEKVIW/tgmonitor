@@ -242,7 +242,19 @@ class _QuarkClient:
         ) as response:
             body = await response.text()
             if response.status >= 400:
-                raise PanTransferProviderError(f"Quark request failed with HTTP {response.status}")
+                body_preview = body[:300].strip()
+                raise PanTransferProviderError(
+                    f"Quark request failed with HTTP {response.status}: {method.upper()} {url}"
+                    + (f" -> {body_preview}" if body_preview else ""),
+                    payload={
+                        "http_status": int(response.status),
+                        "method": method.upper(),
+                        "url": url,
+                        "params": dict(params or {}),
+                        "json_payload": dict(json_payload or {}),
+                        "response_body_preview": body_preview or None,
+                    },
+                )
             try:
                 return json.loads(body)
             except json.JSONDecodeError as exc:
@@ -511,6 +523,63 @@ class _QuarkClient:
             )
         return payload
 
+    async def list_trash_entries(self, *, page_size: int = 100) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        page = 1
+        while True:
+            payload = await self._request_json(
+                "GET",
+                "https://drive-pc.quark.cn/1/clouddrive/file/recycle/list",
+                params={
+                    "_page": str(page),
+                    "_size": str(page_size),
+                    "pr": "ucpro",
+                    "fr": "pc",
+                    "uc_param_str": "",
+                },
+            )
+            code = int(payload.get("code") or 0)
+            if code != 0:
+                raise PanTransferProviderError(
+                    f"Quark failed to list recycle bin entries: code {code}",
+                    payload=payload,
+                )
+            data = payload.get("data") or {}
+            batch = data.get("list") or data.get("file_list") or []
+            current_rows = [dict(row or {}) for row in batch] if isinstance(batch, list) else []
+            if not current_rows:
+                break
+            rows.extend(current_rows)
+            if len(current_rows) < page_size:
+                break
+            page += 1
+        return rows
+
+    async def purge_trash_entries(self, *, record_ids: list[str]) -> dict[str, Any]:
+        normalized_ids = [str(record_id or "").strip() for record_id in record_ids if str(record_id or "").strip()]
+        if not normalized_ids:
+            return {}
+        payload = await self._request_json(
+            "POST",
+            "https://drive-pc.quark.cn/1/clouddrive/file/recycle/remove",
+            params={
+                "pr": "ucpro",
+                "fr": "pc",
+                "uc_param_str": "",
+            },
+            json_payload={
+                "select_mode": 2,
+                "record_list": normalized_ids,
+            },
+        )
+        code = int(payload.get("code") or 0)
+        if code != 0:
+            raise PanTransferProviderError(
+                f"Quark failed to clear recycle bin: code {code}",
+                payload=payload,
+            )
+        return payload
+
     async def wait_task(self, *, task_id: str, retries: int = 50) -> dict[str, Any]:
         for retry_index in range(retries):
             payload = await self._request_json(
@@ -732,11 +801,43 @@ class QuarkPanTransferProvider(PanTransferProvider):
             stoken = await client.get_stoken(pwd_id=pwd_id, passcode=passcode)
             normalized_preferred_target_relative_path = _normalize_target_relative_path(preferred_target_relative_path)
             applied_target_relative_path: str | None = None
+            share_parent_id = "0"
+            share_parent_path: str | None = None
             target_parent_id = folder_id
             if normalized_preferred_target_relative_path:
-                resolved_parent_id = folder_id
+                resolved_share_parent_id = "0"
+                resolved_share_parent_path: str | None = None
                 for segment in [part for part in normalized_preferred_target_relative_path.split("/") if part]:
-                    rows = await client.list_dir_all(parent_id=resolved_parent_id)
+                    share_rows = await client.get_share_detail(
+                        pwd_id=pwd_id,
+                        stoken=stoken,
+                        parent_id=resolved_share_parent_id,
+                    )
+                    matched = next(
+                        (
+                            row
+                            for row in share_rows
+                            if str(row.get("file_name") or "").strip() == segment and bool(row.get("dir"))
+                        ),
+                        None,
+                    )
+                    if matched is None:
+                        resolved_share_parent_id = ""
+                        resolved_share_parent_path = None
+                        break
+                    resolved_share_parent_id = str(matched.get("fid") or "").strip()
+                    if not resolved_share_parent_id:
+                        resolved_share_parent_path = None
+                        break
+                    resolved_share_parent_path = (
+                        f"{resolved_share_parent_path.rstrip('/')}/{segment}"
+                        if resolved_share_parent_path
+                        else f"/{segment}"
+                    )
+
+                resolved_target_parent_id = folder_id
+                for segment in [part for part in normalized_preferred_target_relative_path.split("/") if part]:
+                    rows = await client.list_dir_all(parent_id=resolved_target_parent_id)
                     matched = next(
                         (
                             row
@@ -746,20 +847,25 @@ class QuarkPanTransferProvider(PanTransferProvider):
                         None,
                     )
                     if matched is None:
-                        resolved_parent_id = ""
+                        resolved_target_parent_id = ""
                         break
-                    resolved_parent_id = str(matched.get("fid") or "").strip()
-                    if not resolved_parent_id:
+                    resolved_target_parent_id = str(matched.get("fid") or "").strip()
+                    if not resolved_target_parent_id:
                         break
-                if resolved_parent_id:
-                    target_parent_id = resolved_parent_id
+
+                # Only narrow the diff scope when source and target both resolve
+                # to the same relative directory; otherwise compare from root.
+                if resolved_share_parent_id and resolved_target_parent_id:
+                    share_parent_id = resolved_share_parent_id
+                    share_parent_path = resolved_share_parent_path
+                    target_parent_id = resolved_target_parent_id
                     applied_target_relative_path = normalized_preferred_target_relative_path
             selection_groups, selected_count, conflicts = await collect_incremental_groups(
                 client,
                 pwd_id=pwd_id,
                 stoken=stoken,
-                share_parent_id="0",
-                share_parent_path=None,
+                share_parent_id=share_parent_id,
+                share_parent_path=share_parent_path,
                 target_parent_id=target_parent_id,
                 target_relative_path=applied_target_relative_path,
             )
@@ -1025,10 +1131,45 @@ class QuarkPanTransferProvider(PanTransferProvider):
         staging_root: str,
         staging_folder_name: str,
         staging_folder_id: str | None,
+        purge_after_delete: bool = False,
     ) -> PanTransferDeleteResult:
         del account_name
         async with _QuarkClient(credential_value) as client:
             validation_payload = await client.get_user_info()
+
+            async def purge_recycle_bin_if_requested() -> tuple[bool, dict[str, Any] | None]:
+                if not purge_after_delete:
+                    return False, None
+                recycle_payload: dict[str, Any] | None = None
+                trash_rows = await client.list_trash_entries()
+                if not trash_rows:
+                    return True, recycle_payload
+                record_ids = [
+                    str(
+                        row.get("record_id")
+                        or row.get("recordId")
+                        or row.get("recordid")
+                        or ""
+                    ).strip()
+                    for row in trash_rows
+                ]
+                record_ids = [record_id for record_id in record_ids if record_id]
+                if record_ids:
+                    recycle_payload = await client.purge_trash_entries(record_ids=record_ids)
+                for _ in range(12):
+                    await asyncio.sleep(0.8)
+                    remaining_trash_rows = await client.list_trash_entries()
+                    if not remaining_trash_rows:
+                        return True, recycle_payload
+                raise PanTransferProviderError(
+                    "Quark recycle bin was not cleared in time",
+                    payload={
+                        "staging_root": parent_path,
+                        "staging_folder_name": staging_folder_name,
+                        "staging_folder_id": staging_folder_id,
+                    },
+                )
+
             parent_id = "0"
             parent_path = "/"
             for segment in [part for part in str(staging_root or "").split("/") if part]:
@@ -1060,15 +1201,18 @@ class QuarkPanTransferProvider(PanTransferProvider):
             if folder is None:
                 folder = client._match_dir(rows, folder_name=staging_folder_name)
             if folder is None:
+                recycle_bin_cleared, recycle_payload = await purge_recycle_bin_if_requested()
                 return PanTransferDeleteResult(
                     deleted=False,
                     already_missing=True,
+                    recycle_bin_cleared=recycle_bin_cleared,
                     staging_root=parent_path,
                     staging_folder_name=staging_folder_name,
                     staging_folder_id=folder_id or None,
                     payload={
                         "validation": validation_payload,
                         "missing_folder_name": staging_folder_name,
+                        "recycle_payload": recycle_payload,
                     },
                 )
 
@@ -1079,14 +1223,41 @@ class QuarkPanTransferProvider(PanTransferProvider):
                 rows = await client.list_dir_all(parent_id=parent_id)
                 still_exists = any(str(row.get("fid") or "").strip() == folder_id for row in rows)
                 if not still_exists:
+                    recycle_bin_cleared = False
+                    recycle_payload: dict[str, Any] | None = None
+                    if purge_after_delete:
+                        trash_rows: list[dict[str, Any]] = []
+                        for _ in range(12):
+                            trash_rows = await client.list_trash_entries()
+                            matched_deleted_target = any(
+                                str(row.get("fid") or "").strip() == folder_id
+                                or str(row.get("file_id") or "").strip() == folder_id
+                                or str(row.get("file_name") or "").strip() == staging_folder_name
+                                for row in trash_rows
+                            )
+                            if matched_deleted_target:
+                                break
+                            await asyncio.sleep(0.8)
+                        else:
+                            raise PanTransferProviderError(
+                                "Quark deleted resource did not appear in recycle bin in time",
+                                payload={
+                                    "staging_root": parent_path,
+                                    "staging_folder_name": staging_folder_name,
+                                    "staging_folder_id": folder_id,
+                                },
+                            )
+                        recycle_bin_cleared, recycle_payload = await purge_recycle_bin_if_requested()
                     return PanTransferDeleteResult(
                         deleted=True,
                         already_missing=False,
+                        recycle_bin_cleared=recycle_bin_cleared,
                         staging_root=parent_path,
                         staging_folder_name=staging_folder_name,
                         staging_folder_id=folder_id or None,
                         payload={
                             "validation": validation_payload,
+                            "recycle_payload": recycle_payload,
                         },
                     )
 

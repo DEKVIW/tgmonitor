@@ -1075,14 +1075,26 @@ async def clear_pan_transfer_follow_task_logs_api(
 @router.delete("/follow-tasks/{task_id}", response_model=PanTransferDeleteResponse, summary="Delete a follow task")
 async def delete_pan_transfer_follow_task_api(
     task_id: int,
+    delete_transferred_resource: bool = Query(False, description="Also delete the transferred resource directory and clear the recycle bin"),
     current_user: dict[str, Any] = Depends(get_admin_user),
     db: Session = Depends(get_db),
 ) -> PanTransferDeleteResponse:
     del current_user
     try:
-        result = delete_pan_transfer_follow_task(db, task_id=task_id)
+        result = await delete_pan_transfer_follow_task(
+            db,
+            task_id=task_id,
+            delete_transferred_resource=delete_transferred_resource,
+        )
         db.commit()
-        return PanTransferDeleteResponse(id=result["id"], platform="follow_task", deleted=True)
+        return PanTransferDeleteResponse(
+            id=result["id"],
+            platform="follow_task",
+            deleted=True,
+            resource_deleted=result.get("resource_deleted"),
+            resource_already_missing=result.get("resource_already_missing"),
+            recycle_bin_cleared=result.get("recycle_bin_cleared"),
+        )
     except LookupError as exc:
         db.rollback()
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc

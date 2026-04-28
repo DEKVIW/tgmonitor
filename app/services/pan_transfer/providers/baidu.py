@@ -493,6 +493,60 @@ class _BaiduClient:
             )
         return payload
 
+    async def list_recycle_entries(self, *, bdstoken: str, page_size: int = 200) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        page = 1
+        while True:
+            payload = await self._request_json(
+                "GET",
+                "https://pan.baidu.com/api/recycle/list",
+                params={
+                    "bdstoken": bdstoken,
+                    "channel": "chunlei",
+                    "web": "1",
+                    "clienttype": "0",
+                    "app_id": "250528",
+                    "page": str(page),
+                    "num": str(page_size),
+                    "showempty": "0",
+                },
+            )
+            errno = int(payload.get("errno") or 0)
+            if errno != 0:
+                raise PanTransferProviderError(
+                    f"Baidu failed to list recycle bin entries: errno {errno}",
+                    payload=payload,
+                )
+            batch = payload.get("list")
+            current_rows = [dict(row or {}) for row in batch] if isinstance(batch, list) else []
+            if not current_rows:
+                break
+            rows.extend(current_rows)
+            if len(current_rows) < page_size:
+                break
+            page += 1
+        return rows
+
+    async def clear_recycle_bin(self, *, bdstoken: str) -> dict[str, Any]:
+        payload = await self._request_json(
+            "GET",
+            "https://pan.baidu.com/api/recycle/clear",
+            params={
+                "bdstoken": bdstoken,
+                "channel": "chunlei",
+                "web": "1",
+                "clienttype": "0",
+                "app_id": "250528",
+            },
+        )
+        errno = int(payload.get("errno") or 0)
+        if errno != 0:
+            raise PanTransferProviderError(
+                f"Baidu failed to clear recycle bin: errno {errno}",
+                payload=payload,
+            )
+        return payload
+
     async def transfer_file(
         self,
         *,
@@ -714,8 +768,34 @@ class BaiduPanTransferProvider(PanTransferProvider):
 
             normalized_preferred_target_relative_path = _normalize_target_relative_path(preferred_target_relative_path)
             applied_target_relative_path: str | None = None
+            share_plan_path: str | None = None
             target_plan_path = target_path
             if normalized_preferred_target_relative_path:
+                resolved_share_path: str | None = None
+                for segment in [part for part in normalized_preferred_target_relative_path.split("/") if part]:
+                    share_rows = await client.list_share_dir(
+                        share_key=share_access_key,
+                        requires_prefix_strip=requires_prefix_strip,
+                        dir_path=resolved_share_path,
+                    )
+                    matched = next(
+                        (
+                            row
+                            for row in share_rows
+                            if str(row.get("server_filename") or "").strip() == segment
+                            and int(row.get("isdir") or 0) == 1
+                        ),
+                        None,
+                    )
+                    if matched is None:
+                        resolved_share_path = None
+                        break
+                    resolved_share_path = str(matched.get("path") or "").strip() or (
+                        f"{resolved_share_path.rstrip('/')}/{segment}"
+                        if resolved_share_path
+                        else f"/{segment}"
+                    )
+
                 resolved_target_path = target_path
                 for segment in [part for part in normalized_preferred_target_relative_path.split("/") if part]:
                     rows = await client.list_dir(resolved_target_path, bdstoken=bdstoken)
@@ -738,7 +818,11 @@ class BaiduPanTransferProvider(PanTransferProvider):
                     resolved_target_path = str(matched.get("path") or "").strip() or (
                         f"{resolved_target_path.rstrip('/')}/{segment}"
                     )
-                if resolved_target_path:
+
+                # Only narrow the diff scope when source and target both resolve
+                # to the same relative directory; otherwise compare from root.
+                if resolved_share_path and resolved_target_path:
+                    share_plan_path = resolved_share_path
                     target_plan_path = resolved_target_path
                     applied_target_relative_path = normalized_preferred_target_relative_path
 
@@ -746,7 +830,7 @@ class BaiduPanTransferProvider(PanTransferProvider):
                 client,
                 share_key=share_access_key,
                 requires_prefix_strip=requires_prefix_strip,
-                share_dir_path=None,
+                share_dir_path=share_plan_path,
                 target_dir_path=target_plan_path,
                 target_relative_path=applied_target_relative_path,
                 bdstoken=bdstoken,
@@ -1061,10 +1145,33 @@ class BaiduPanTransferProvider(PanTransferProvider):
         staging_root: str,
         staging_folder_name: str,
         staging_folder_id: str | None,
+        purge_after_delete: bool = False,
     ) -> PanTransferDeleteResult:
         del account_name, staging_folder_id
         async with _BaiduClient(credential_value) as client:
             bdstoken, validation_payload = await client.get_bdstoken()
+
+            async def purge_recycle_bin_if_requested() -> tuple[bool, dict[str, Any] | None]:
+                if not purge_after_delete:
+                    return False, None
+                recycle_payload: dict[str, Any] | None = None
+                recycle_rows = await client.list_recycle_entries(bdstoken=bdstoken)
+                if not recycle_rows:
+                    return True, recycle_payload
+                recycle_payload = await client.clear_recycle_bin(bdstoken=bdstoken)
+                for _ in range(12):
+                    await asyncio.sleep(0.8)
+                    remaining_recycle_rows = await client.list_recycle_entries(bdstoken=bdstoken)
+                    if not remaining_recycle_rows:
+                        return True, recycle_payload
+                raise PanTransferProviderError(
+                    "Baidu recycle bin was not cleared in time",
+                    payload={
+                        "target_path": target_path,
+                        "staging_folder_name": staging_folder_name,
+                    },
+                )
+
             parent_path = "/" + "/".join(part for part in str(staging_root or "").split("/") if part)
             parent_path = parent_path if parent_path != "/" else "/"
             target_path = f"{parent_path.rstrip('/')}/{staging_folder_name}" if parent_path != "/" else f"/{staging_folder_name}"
@@ -1082,15 +1189,18 @@ class BaiduPanTransferProvider(PanTransferProvider):
                 for row in rows
             )
             if not target_exists:
+                recycle_bin_cleared, recycle_payload = await purge_recycle_bin_if_requested()
                 return PanTransferDeleteResult(
                     deleted=False,
                     already_missing=True,
+                    recycle_bin_cleared=recycle_bin_cleared,
                     staging_root=parent_path,
                     staging_folder_name=staging_folder_name,
                     staging_folder_id=None,
                     payload={
                         "validation": validation_payload,
                         "target_path": target_path,
+                        "recycle_payload": recycle_payload,
                     },
                 )
 
@@ -1104,15 +1214,40 @@ class BaiduPanTransferProvider(PanTransferProvider):
                     )
                 still_exists = any(str(row.get("path") or "").strip() == target_path for row in rows)
                 if not still_exists:
+                    recycle_bin_cleared = False
+                    recycle_payload: dict[str, Any] | None = None
+                    if purge_after_delete:
+                        recycle_rows: list[dict[str, Any]] = []
+                        for _ in range(12):
+                            recycle_rows = await client.list_recycle_entries(bdstoken=bdstoken)
+                            matched_deleted_target = any(
+                                str(row.get("path") or "").strip() == target_path
+                                or str(row.get("server_filename") or "").strip() == staging_folder_name
+                                for row in recycle_rows
+                            )
+                            if matched_deleted_target:
+                                break
+                            await asyncio.sleep(0.8)
+                        else:
+                            raise PanTransferProviderError(
+                                "Baidu deleted resource did not appear in recycle bin in time",
+                                payload={
+                                    "target_path": target_path,
+                                    "staging_folder_name": staging_folder_name,
+                                },
+                            )
+                        recycle_bin_cleared, recycle_payload = await purge_recycle_bin_if_requested()
                     return PanTransferDeleteResult(
                         deleted=True,
                         already_missing=False,
+                        recycle_bin_cleared=recycle_bin_cleared,
                         staging_root=parent_path,
                         staging_folder_name=staging_folder_name,
                         staging_folder_id=None,
                         payload={
                             "validation": validation_payload,
                             "target_path": target_path,
+                            "recycle_payload": recycle_payload,
                         },
                     )
 

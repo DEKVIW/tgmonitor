@@ -52,6 +52,7 @@ class PanTransferShareResult:
 class PanTransferDeleteResult:
     deleted: bool = False
     already_missing: bool = False
+    recycle_bin_cleared: bool = False
     staging_root: str | None = None
     staging_folder_name: str | None = None
     staging_folder_id: str | None = None
@@ -117,5 +118,6 @@ class PanTransferProvider:
         staging_root: str,
         staging_folder_name: str,
         staging_folder_id: str | None,
+        purge_after_delete: bool = False,
     ) -> PanTransferDeleteResult:
         raise NotImplementedError

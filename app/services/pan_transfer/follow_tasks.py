@@ -96,6 +96,12 @@ FOLLOW_TITLE_NOISE_PATTERNS = (
 )
 
 
+FOLLOW_GENERIC_QUERY_PATTERN = re.compile(
+    r"^(?:剧情|爱情|悬疑|犯罪|动作|科幻|喜剧|动画|动漫|国漫|真人秀|综艺|纪录片|奇幻|冒险|古装|战争|历史|惊悚|家庭|音乐|体育|武侠|仙侠|短剧|电影|电视剧|tvseries|anime|variety|movie)$",
+    re.IGNORECASE,
+)
+
+
 def _normalize_text(value: Any, *, max_length: int | None = None) -> str:
     text = "" if value is None else str(value).strip()
     if max_length is not None and len(text) > max_length:
@@ -265,6 +271,23 @@ def _clean_follow_title(value: Any) -> str:
         cleaned = pattern.sub(" ", cleaned)
     cleaned = re.sub(r"\s+", " ", cleaned).strip(" -_|/,.，。[]【】()（）")
     return _normalize_text(cleaned, max_length=255) or title
+
+
+def _is_meaningful_follow_search_query(value: Any) -> bool:
+    cleaned = _clean_follow_title(value)
+    if not cleaned or not _is_useful_follow_query(cleaned):
+        return False
+    return FOLLOW_GENERIC_QUERY_PATTERN.fullmatch(cleaned) is None
+
+
+def _build_follow_identity_search_queries(*values: Any, max_items: int = 1) -> list[str]:
+    queries: list[str] = []
+    for raw_value in values:
+        cleaned = _clean_follow_title(raw_value)
+        if not cleaned or not _is_meaningful_follow_search_query(cleaned):
+            continue
+        queries.append(cleaned)
+    return _dedupe_texts(queries, max_items=max_items, max_length=80)
 
 
 def _extract_follow_episode_hint(*texts: Any) -> int | None:
@@ -1078,7 +1101,7 @@ def _build_follow_identity_fallback(task: PanTransferSyncTask) -> dict[str, Any]
             release_year = None
         if release_year is not None:
             break
-    search_queries = _dedupe_texts([core_title, *(aliases[:4])], max_items=4, max_length=80)
+    search_queries = _build_follow_identity_search_queries(core_title, *aliases, *reference_titles)
     return {
         "resource_title": resource_title,
         "core_title": core_title or (_normalize_text(task.topic_title, max_length=255) or f"resource_{int(task.id)}"),
@@ -1170,11 +1193,7 @@ def _extract_follow_identity_with_ai(session: Session, *, task: PanTransferSyncT
         [core_title, *list(parsed.get("aliases") or []), *_collect_follow_reference_texts(task)],
         max_items=6,
     )
-    search_queries = _dedupe_texts(
-        list(parsed.get("search_queries") or []) + [core_title, *aliases],
-        max_items=4,
-        max_length=80,
-    )
+    search_queries = _build_follow_identity_search_queries(core_title, *aliases, *(list(parsed.get("search_queries") or [])))
     resource_title = _resolve_follow_task_resource_title(task)
     return {
         "resource_title": resource_title,
@@ -1749,8 +1768,9 @@ def _serialize_follow_task(row: PanTransferSyncTask) -> dict[str, Any]:
     current_share_identity = _get_follow_task_current_share_identity(row)
     source_origin = _normalize_follow_source_origin(extra_json.get("source_origin"))
     source_origin_snapshot = _normalize_source_message_snapshot(source_origin.get("source_message_snapshot"))
+    current_share_message_title = _normalize_text(current_share_identity.get("resource_title"), max_length=255) or None
     current_share_resource_title = (
-        _normalize_text(current_share_identity.get("resource_title"), max_length=255)
+        current_share_message_title
         or _normalize_text(source_origin_snapshot.get("title"), max_length=255)
         or str(row.work_title or "") or None
         or str(row.topic_title or "")
@@ -1769,6 +1789,7 @@ def _serialize_follow_task(row: PanTransferSyncTask) -> dict[str, Any]:
         "source_url": str(row.source_url or ""),
         "source_share_key": str(row.source_share_key or "") or None,
         "source_message_title": _normalize_text(source_message_snapshot.get("title"), max_length=255) or None,
+        "current_share_message_title": current_share_message_title,
         "current_share_resource_title": current_share_resource_title,
         "applied_update_state": applied_update_state,
         "topic_key": str(row.topic_key or ""),
@@ -2275,9 +2296,59 @@ def clear_pan_transfer_follow_task_candidate(
     return get_pan_transfer_follow_task_detail(session, task_id=int(task.id))
 
 
-def delete_pan_transfer_follow_task(session: Session, *, task_id: int) -> dict[str, Any]:
+async def _delete_follow_task_transferred_resource(
+    session: Session,
+    *,
+    task: PanTransferSyncTask,
+) -> dict[str, Any]:
+    target_account_id = _normalize_optional_int(task.target_account_id)
+    if target_account_id is None:
+        raise ValueError("follow task is missing target_account_id")
+    account = session.get(PanTransferAccount, int(target_account_id))
+    if account is None:
+        raise LookupError("target account not found")
+
+    credential_value = decrypt_account_credential(account)
+    account_name = _normalize_text(account.account_name, max_length=128) or str(account.account_name or "")
+    provider = get_pan_transfer_provider(str(task.platform or ""))
+
+    from .follow_sync import _resolve_follow_sync_paths
+
+    _, resolved_paths = _resolve_follow_sync_paths(task)
+    staging_root = normalize_relative_path(_normalize_text(resolved_paths.get("staging_root"), max_length=255))
+    staging_folder_name = _normalize_text(resolved_paths.get("staging_folder_name"), max_length=120)
+    staging_folder_id = _normalize_text(resolved_paths.get("staging_folder_id"), max_length=128) or None
+    if not staging_folder_name:
+        raise ValueError("follow task is missing resolved staging_folder_name")
+
+    _commit_before_external_call(session)
+    delete_result = await provider.delete_staging_target(
+        credential_value=credential_value,
+        account_name=account_name,
+        staging_root=staging_root,
+        staging_folder_name=staging_folder_name,
+        staging_folder_id=staging_folder_id,
+        purge_after_delete=True,
+    )
+    return {
+        "resource_deleted": bool(delete_result.deleted),
+        "resource_already_missing": bool(delete_result.already_missing),
+        "recycle_bin_cleared": bool(delete_result.recycle_bin_cleared),
+    }
+
+
+async def delete_pan_transfer_follow_task(
+    session: Session,
+    *,
+    task_id: int,
+    delete_transferred_resource: bool = False,
+) -> dict[str, Any]:
     ensure_runtime_storage_tables()
     task = _get_follow_task(session, task_id=task_id)
+    delete_details: dict[str, Any] = {}
+    if delete_transferred_resource:
+        delete_details = await _delete_follow_task_transferred_resource(session, task=task)
+        task = _get_follow_task(session, task_id=task_id)
     (
         session.query(PanTransferSyncTaskLog)
         .filter(PanTransferSyncTaskLog.task_id == int(task.id))
@@ -2285,7 +2356,11 @@ def delete_pan_transfer_follow_task(session: Session, *, task_id: int) -> dict[s
     )
     session.delete(task)
     session.flush()
-    return {"id": int(task_id), "deleted": True}
+    return {
+        "id": int(task_id),
+        "deleted": True,
+        **delete_details,
+    }
 
 
 def _build_task_excluded_target_ids(task: PanTransferSyncTask) -> list[int]:
@@ -2409,10 +2484,13 @@ def _list_follow_candidates_by_work(session: Session, *, task: PanTransferSyncTa
 
 
 def _build_follow_candidate_search_queries(task: PanTransferSyncTask, snapshot: dict[str, Any]) -> list[str]:
-    queries = list(snapshot.get("search_queries") or [])
-    queries.extend(snapshot.get("aliases") or [])
-    queries.extend([snapshot.get("core_title"), task.work_title, task.topic_title])
-    return _dedupe_texts([item for item in queries if _is_useful_follow_query(item)], max_items=4, max_length=80)
+    return _build_follow_identity_search_queries(
+        snapshot.get("core_title"),
+        task.work_title,
+        task.topic_title,
+        *(snapshot.get("aliases") or []),
+        *(snapshot.get("search_queries") or []),
+    )
 
 
 def _list_follow_candidates_by_identity(
@@ -2663,6 +2741,9 @@ def _build_follow_candidate_recall_snapshot(
         "queries": _build_follow_candidate_search_queries(task, snapshot),
         "recall_count": len(candidates),
         "judge_limit": int(candidate_policy["max_judge_candidates"]),
+        "evaluated_count": 0,
+        "selected_candidate_title": None,
+        "selected_result": None,
         "items": [
             {
                 "link_target_id": _normalize_optional_int(item.get("link_target_id")),
@@ -2672,10 +2753,91 @@ def _build_follow_candidate_recall_snapshot(
                 "title": _normalize_text(item.get("title"), max_length=255) or None,
                 "url": _normalize_text(item.get("url"), max_length=1000) or None,
                 "latest_message_time": _serialize_json_value(item.get("latest_message_time")),
+                "evaluated": False,
+                "decision": "not_evaluated",
+                "judge_source": None,
+                "is_same_work": None,
+                "is_newer": None,
+                "should_promote": None,
+                "same_episode_replace": None,
+                "confidence": None,
+                "reason": None,
+                "validation_status": None,
             }
             for item in candidates
         ],
     }
+
+
+def _find_follow_candidate_recall_item(
+    recall_snapshot: dict[str, Any] | None,
+    *,
+    link_target_id: Any,
+) -> dict[str, Any] | None:
+    normalized_link_target_id = _normalize_optional_int(link_target_id)
+    if normalized_link_target_id is None:
+        return None
+    for item in list((recall_snapshot or {}).get("items") or []):
+        if _normalize_optional_int(item.get("link_target_id")) == normalized_link_target_id:
+            return item
+    return None
+
+
+def _refresh_follow_candidate_recall_evaluated_count(recall_snapshot: dict[str, Any] | None) -> None:
+    if not isinstance(recall_snapshot, dict):
+        return
+    recall_snapshot["evaluated_count"] = sum(
+        1 for item in list(recall_snapshot.get("items") or []) if bool(dict(item or {}).get("evaluated"))
+    )
+
+
+def _mark_follow_candidate_recall_item(
+    recall_snapshot: dict[str, Any] | None,
+    *,
+    candidate: Mapping[str, Any] | None,
+    assessment: Mapping[str, Any] | None = None,
+    decision: str | None = None,
+    validation_status: str | None | object = _UNSET,
+) -> None:
+    recall_item = _find_follow_candidate_recall_item(
+        recall_snapshot,
+        link_target_id=(candidate or {}).get("link_target_id"),
+    )
+    if recall_item is None:
+        return
+    normalized_assessment = dict(assessment or {})
+    if assessment is not None:
+        recall_item["evaluated"] = True
+        recall_item["judge_source"] = _normalize_text(normalized_assessment.get("judge_source"), max_length=32) or None
+        recall_item["is_same_work"] = _normalize_optional_bool(normalized_assessment.get("is_same_work"))
+        recall_item["is_newer"] = _normalize_optional_bool(normalized_assessment.get("is_newer"))
+        recall_item["should_promote"] = _normalize_optional_bool(normalized_assessment.get("should_promote"))
+        recall_item["same_episode_replace"] = _normalize_optional_bool(normalized_assessment.get("same_episode_replace"))
+        recall_item["confidence"] = (
+            float(normalized_assessment.get("confidence"))
+            if normalized_assessment.get("confidence") not in (None, "")
+            else None
+        )
+        recall_item["reason"] = _normalize_text(normalized_assessment.get("reason"), max_length=255) or None
+    if decision is not None:
+        recall_item["decision"] = _normalize_text(decision, max_length=64) or None
+    if validation_status is not _UNSET:
+        recall_item["validation_status"] = _normalize_text(validation_status, max_length=32).lower() or None
+    _refresh_follow_candidate_recall_evaluated_count(recall_snapshot)
+
+
+def _set_follow_candidate_recall_selection(
+    recall_snapshot: dict[str, Any] | None,
+    *,
+    candidate: Mapping[str, Any] | None,
+    result: str | None,
+) -> None:
+    if not isinstance(recall_snapshot, dict):
+        return
+    normalized_candidate = dict(candidate or {})
+    recall_snapshot["selected_link_target_id"] = _normalize_optional_int(normalized_candidate.get("link_target_id"))
+    recall_snapshot["selected_candidate_title"] = _normalize_text(normalized_candidate.get("title"), max_length=255) or None
+    recall_snapshot["selected_result"] = _normalize_text(result, max_length=64).lower() or None
 
 
 def _pick_follow_candidate(
@@ -2793,7 +2955,11 @@ def _store_follow_task_candidate(
     normalized_candidate = dict(candidate or {})
     normalized_assessment = dict(assessment or {}) if assessment else None
     normalized_recall = dict(candidate_recall or {})
-    normalized_recall["selected_link_target_id"] = _normalize_optional_int(normalized_candidate.get("link_target_id"))
+    _set_follow_candidate_recall_selection(
+        normalized_recall,
+        candidate=normalized_candidate,
+        result=_normalize_text(normalized_recall.get("selected_result"), max_length=64) or "selected_candidate",
+    )
 
     _set_task_extra_section(task, "candidate_recall", normalized_recall)
     _set_task_extra_section(task, "candidate_assessment", normalized_assessment)
@@ -2856,7 +3022,11 @@ def _build_follow_identity_rule_snapshot(task: PanTransferSyncTask) -> tuple[dic
         "latest_episode": identity.episode,
         "latest_issue": identity.issue_no,
         "content_type": _normalize_text(identity.content_type, max_length=32) or None,
-        "search_queries": _dedupe_texts(identity.search_queries or [identity.core_title or resource_title], max_items=4, max_length=80),
+        "search_queries": _build_follow_identity_search_queries(
+            identity.core_title or resource_title,
+            *(identity.aliases or reference_titles),
+            *(identity.search_queries or []),
+        ),
         "reference_titles": reference_titles,
         "reference_message_time": reference_message_time,
         "reason": _normalize_text(identity.reason, max_length=255) or "rule_title_parse",
@@ -2879,10 +3049,13 @@ def _build_follow_identity_fallback(task: PanTransferSyncTask) -> dict[str, Any]
 
 
 def _build_follow_candidate_search_queries(task: PanTransferSyncTask, snapshot: dict[str, Any]) -> list[str]:
-    queries = list(snapshot.get("search_queries") or [])
-    if not queries:
-        queries.extend([snapshot.get("core_title"), task.work_title, task.topic_title])
-    return _dedupe_texts([item for item in queries if _is_useful_follow_query(item)], max_items=4, max_length=80)
+    return _build_follow_identity_search_queries(
+        snapshot.get("core_title"),
+        task.work_title,
+        task.topic_title,
+        *(snapshot.get("aliases") or []),
+        *(snapshot.get("search_queries") or []),
+    )
 
 
 def _ensure_follow_task_identity_snapshot(
@@ -3114,12 +3287,42 @@ def _pick_follow_candidate(
             recall_snapshot=recall_snapshot,
         )
         last_assessment = assessment
+        is_same_episode_candidate = _is_same_episode_follow_replacement_candidate(assessment)
         if assessment.get("should_promote"):
-            recall_snapshot["selected_link_target_id"] = _normalize_optional_int(candidate.get("link_target_id"))
+            _mark_follow_candidate_recall_item(
+                recall_snapshot,
+                candidate=candidate,
+                assessment=assessment,
+                decision="promoted",
+            )
+            _set_follow_candidate_recall_selection(
+                recall_snapshot,
+                candidate=candidate,
+                result="promoted",
+            )
             return candidate, assessment, recall_snapshot, same_episode_candidate, same_episode_assessment
-        if same_episode_candidate is None and _is_same_episode_follow_replacement_candidate(assessment):
-            same_episode_candidate = dict(candidate)
-            same_episode_assessment = dict(assessment)
+        if is_same_episode_candidate:
+            _mark_follow_candidate_recall_item(
+                recall_snapshot,
+                candidate=candidate,
+                assessment=assessment,
+                decision="same_episode_candidate",
+            )
+            if same_episode_candidate is None:
+                same_episode_candidate = dict(candidate)
+                same_episode_assessment = dict(assessment)
+                _set_follow_candidate_recall_selection(
+                    recall_snapshot,
+                    candidate=candidate,
+                    result="same_episode_candidate",
+                )
+            continue
+        _mark_follow_candidate_recall_item(
+            recall_snapshot,
+            candidate=candidate,
+            assessment=assessment,
+            decision="rejected",
+        )
     return None, last_assessment, recall_snapshot, same_episode_candidate, same_episode_assessment
 
 
@@ -3784,8 +3987,32 @@ async def _process_pan_transfer_follow_task_async(
         selected_assessment["validation_status"] = normalized_candidate_status
         selected_assessment["validation_detail_message"] = candidate_status.get("detail_message")
         if _is_healthy_link_status(normalized_candidate_status):
+            _mark_follow_candidate_recall_item(
+                candidate_recall,
+                candidate=candidate,
+                assessment=selected_assessment,
+                decision="selected_candidate",
+                validation_status=normalized_candidate_status,
+            )
+            _set_follow_candidate_recall_selection(
+                candidate_recall,
+                candidate=candidate,
+                result="selected_candidate",
+            )
             selected_candidate = candidate
         else:
+            _mark_follow_candidate_recall_item(
+                candidate_recall,
+                candidate=candidate,
+                assessment=selected_assessment,
+                decision="validation_rejected",
+                validation_status=normalized_candidate_status,
+            )
+            _set_follow_candidate_recall_selection(
+                candidate_recall,
+                candidate=candidate,
+                result="validation_rejected",
+            )
             candidate_discarded = True
             _append_follow_task_log(
                 session,
@@ -3818,6 +4045,18 @@ async def _process_pan_transfer_follow_task_async(
         return
 
     if healthy_existing_candidate is not None:
+        _set_follow_candidate_recall_selection(
+            candidate_recall,
+            candidate=healthy_existing_candidate,
+            result="stored_candidate",
+        )
+        _mark_follow_candidate_recall_item(
+            candidate_recall,
+            candidate=healthy_existing_candidate,
+            assessment=existing_candidate_assessment,
+            decision="stored_candidate",
+            validation_status=(existing_candidate_assessment or {}).get("validation_status"),
+        )
         _set_task_extra_section(task, "candidate_recall", candidate_recall)
         _set_task_extra_section(task, "candidate_assessment", existing_candidate_assessment)
         task.task_state = PAN_TRANSFER_SYNC_STATE_CANDIDATE_FOUND
@@ -3856,6 +4095,18 @@ async def _process_pan_transfer_follow_task_async(
                     expected_platform=str(task.platform or ""),
                 )
             except Exception as exc:
+                _mark_follow_candidate_recall_item(
+                    candidate_recall,
+                    candidate=same_episode_candidate,
+                    assessment=same_episode_assessment_payload,
+                    decision="same_episode_replace_failed",
+                    validation_status=normalized_same_episode_status,
+                )
+                _set_follow_candidate_recall_selection(
+                    candidate_recall,
+                    candidate=same_episode_candidate,
+                    result="same_episode_replace_failed",
+                )
                 _clear_follow_task_candidate_fields(task)
                 _set_task_extra_section(task, "candidate_recall", candidate_recall)
                 _set_task_extra_section(task, "candidate_assessment", same_episode_assessment_payload)
@@ -3877,11 +4128,25 @@ async def _process_pan_transfer_follow_task_async(
                 )
                 return
             else:
+                replacement_status = str(replacement_result.get("status") or "")
+                replacement_decision = "same_episode_replaced" if replacement_status == "replaced" else "same_episode_matched"
+                _mark_follow_candidate_recall_item(
+                    candidate_recall,
+                    candidate=same_episode_candidate,
+                    assessment=same_episode_assessment_payload,
+                    decision=replacement_decision,
+                    validation_status=normalized_same_episode_status,
+                )
+                _set_follow_candidate_recall_selection(
+                    candidate_recall,
+                    candidate=same_episode_candidate,
+                    result=replacement_decision,
+                )
                 _clear_follow_task_candidate_fields(task)
                 _set_task_extra_section(task, "candidate_recall", candidate_recall)
                 _set_task_extra_section(task, "candidate_assessment", same_episode_assessment_payload)
                 task.task_state = PAN_TRANSFER_SYNC_STATE_IDLE
-                task.last_change_type = "same_episode_replaced" if str(replacement_result.get("status") or "") == "replaced" else "no_change"
+                task.last_change_type = "same_episode_replaced" if replacement_status == "replaced" else "no_change"
                 session.add(task)
                 session.flush()
                 _append_follow_task_log(
@@ -3890,7 +4155,7 @@ async def _process_pan_transfer_follow_task_async(
                     stage="candidate",
                     message=(
                         "Replaced same-episode source links with the current valid share"
-                        if str(replacement_result.get("status") or "") == "replaced"
+                        if replacement_status == "replaced"
                         else "Same-episode source already matched the current valid share"
                     ),
                     payload={
@@ -3921,6 +4186,18 @@ async def _process_pan_transfer_follow_task_async(
                         "current_share_url": _normalize_text(task.current_share_url) or None,
                     },
                 )
+                _mark_follow_candidate_recall_item(
+                    candidate_recall,
+                    candidate=same_episode_candidate,
+                    assessment=same_episode_assessment_payload,
+                    decision="validation_rejected",
+                    validation_status=normalized_same_episode_status,
+                )
+                _set_follow_candidate_recall_selection(
+                    candidate_recall,
+                    candidate=same_episode_candidate,
+                    result="validation_rejected",
+                )
             else:
                 try:
                     rewrite_result = rewrite_message_link_ref_with_url(
@@ -3930,6 +4207,18 @@ async def _process_pan_transfer_follow_task_async(
                         expected_platform=str(task.platform or ""),
                     )
                 except Exception as exc:
+                    _mark_follow_candidate_recall_item(
+                        candidate_recall,
+                        candidate=same_episode_candidate,
+                        assessment=same_episode_assessment_payload,
+                        decision="same_episode_rewrite_failed",
+                        validation_status=normalized_same_episode_status,
+                    )
+                    _set_follow_candidate_recall_selection(
+                        candidate_recall,
+                        candidate=same_episode_candidate,
+                        result="same_episode_rewrite_failed",
+                    )
                     _clear_follow_task_candidate_fields(task)
                     _set_task_extra_section(task, "candidate_recall", candidate_recall)
                     _set_task_extra_section(task, "candidate_assessment", same_episode_assessment_payload)
@@ -3951,11 +4240,25 @@ async def _process_pan_transfer_follow_task_async(
                     )
                     return
                 else:
+                    rewrite_status = str(rewrite_result.get("status") or "")
+                    rewrite_decision = "same_episode_rewritten" if rewrite_status == "rewritten" else "same_episode_matched"
+                    _mark_follow_candidate_recall_item(
+                        candidate_recall,
+                        candidate=same_episode_candidate,
+                        assessment=same_episode_assessment_payload,
+                        decision=rewrite_decision,
+                        validation_status=normalized_same_episode_status,
+                    )
+                    _set_follow_candidate_recall_selection(
+                        candidate_recall,
+                        candidate=same_episode_candidate,
+                        result=rewrite_decision,
+                    )
                     _clear_follow_task_candidate_fields(task)
                     _set_task_extra_section(task, "candidate_recall", candidate_recall)
                     _set_task_extra_section(task, "candidate_assessment", same_episode_assessment_payload)
                     task.task_state = PAN_TRANSFER_SYNC_STATE_IDLE
-                    task.last_change_type = "same_episode_rewritten" if str(rewrite_result.get("status") or "") == "rewritten" else "no_change"
+                    task.last_change_type = "same_episode_rewritten" if rewrite_status == "rewritten" else "no_change"
                     session.add(task)
                     session.flush()
                     _append_follow_task_log(
@@ -3964,7 +4267,7 @@ async def _process_pan_transfer_follow_task_async(
                         stage="candidate",
                         message=(
                             "Rewrote the matched same-episode message link to the current valid share"
-                            if str(rewrite_result.get("status") or "") == "rewritten"
+                            if rewrite_status == "rewritten"
                             else "Matched same-episode message link already pointed to the current valid share"
                         ),
                         payload={
@@ -3979,6 +4282,18 @@ async def _process_pan_transfer_follow_task_async(
                     )
                     return
         else:
+            _mark_follow_candidate_recall_item(
+                candidate_recall,
+                candidate=same_episode_candidate,
+                assessment=same_episode_assessment_payload,
+                decision="validation_rejected",
+                validation_status=normalized_same_episode_status,
+            )
+            _set_follow_candidate_recall_selection(
+                candidate_recall,
+                candidate=same_episode_candidate,
+                result="validation_rejected",
+            )
             candidate_discarded = True
             _append_follow_task_log(
                 session,

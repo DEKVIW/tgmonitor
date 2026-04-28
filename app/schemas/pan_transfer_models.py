@@ -132,6 +132,9 @@ class PanTransferDeleteResponse(PanTransferBaseModel):
     id: int
     platform: str
     deleted: bool = True
+    resource_deleted: bool | None = None
+    resource_already_missing: bool | None = None
+    recycle_bin_cleared: bool | None = None
 
 
 class PanTransferManualPreviewRequest(PanTransferBaseModel):
@@ -820,13 +823,26 @@ class PanTransferFollowTaskCandidateRecallItem(PanTransferBaseModel):
     title: str | None = None
     url: str | None = None
     latest_message_time: datetime | None = None
+    evaluated: bool = False
+    decision: str | None = None
+    judge_source: str | None = None
+    is_same_work: bool | None = None
+    is_newer: bool | None = None
+    should_promote: bool | None = None
+    same_episode_replace: bool | None = None
+    confidence: float | None = None
+    reason: str | None = None
+    validation_status: str | None = None
 
 
 class PanTransferFollowTaskCandidateRecall(PanTransferBaseModel):
     queries: list[str] = Field(default_factory=list)
     recall_count: int = 0
     judge_limit: int = 0
+    evaluated_count: int = 0
     selected_link_target_id: int | None = None
+    selected_candidate_title: str | None = None
+    selected_result: str | None = None
     items: list[PanTransferFollowTaskCandidateRecallItem] = Field(default_factory=list)
 
 
@@ -877,6 +893,7 @@ class PanTransferFollowTaskItem(PanTransferBaseModel):
     source_url: str
     source_share_key: str | None = None
     source_message_title: str | None = None
+    current_share_message_title: str | None = None
     current_share_resource_title: str | None = None
     applied_update_state: PanTransferFollowTaskAppliedUpdateState = Field(default_factory=PanTransferFollowTaskAppliedUpdateState)
     topic_key: str

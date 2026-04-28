@@ -32,6 +32,8 @@ import {
 import type {
   PanTransferFollowTaskAppliedUpdateState,
   PanTransferFollowTaskAutomationConfig,
+  PanTransferFollowTaskCandidateRecall,
+  PanTransferFollowTaskCandidateRecallItem,
   PanTransferFollowTaskCandidatePolicy,
   PanTransferFollowTaskDetailResponse,
   PanTransferFollowTaskItem,
@@ -319,6 +321,79 @@ const getFollowJudgeSourceLabel = (value: unknown) => {
   return normalized || '未判定'
 }
 
+const FOLLOW_CANDIDATE_RESULT_META: Record<
+  string,
+  { label: string; color: 'default' | 'processing' | 'success' | 'warning' | 'error' }
+> = {
+  not_evaluated: { label: '未评估', color: 'default' },
+  rejected: { label: '未命中', color: 'default' },
+  promoted: { label: '通过判定', color: 'processing' },
+  selected_candidate: { label: '最终候选', color: 'success' },
+  stored_candidate: { label: '沿用已存候选', color: 'success' },
+  same_episode_candidate: { label: '同集候补', color: 'warning' },
+  same_episode_replaced: { label: '同集回填', color: 'success' },
+  same_episode_rewritten: { label: '同集消息回填', color: 'success' },
+  same_episode_matched: { label: '已与当前分享一致', color: 'default' },
+  same_episode_replace_failed: { label: '同集回填失败', color: 'error' },
+  same_episode_rewrite_failed: { label: '同集消息回填失败', color: 'error' },
+  validation_rejected: { label: '校验淘汰', color: 'error' },
+}
+
+const getFollowCandidateResultMeta = (value: unknown) => {
+  const normalized = String(value || '').trim().toLowerCase()
+  if (!normalized) return { key: '', label: '未记录', color: 'default' as const }
+  const meta = FOLLOW_CANDIDATE_RESULT_META[normalized]
+  return { key: normalized, label: meta?.label || normalized, color: meta?.color || ('default' as const) }
+}
+
+const getFollowValidationTagColor = (value: unknown): 'default' | 'success' | 'warning' | 'error' => {
+  const normalized = String(value || '').trim().toLowerCase()
+  if (normalized === 'valid') return 'success'
+  if (normalized === 'warning') return 'warning'
+  if (normalized === 'invalid' || normalized === 'error') return 'error'
+  return 'default'
+}
+
+const appendFollowSummaryDetails = (base: string, details: Array<string | null | undefined>) => {
+  const normalized = details.map((item) => String(item || '').trim()).filter(Boolean)
+  return normalized.length > 0 ? `${base} · ${normalized.join(' · ')}` : base
+}
+
+const getFollowCandidateRecallDigest = (payload: Record<string, unknown>) => {
+  const candidateRecall =
+    payload.candidate_recall && typeof payload.candidate_recall === 'object'
+      ? (payload.candidate_recall as Record<string, unknown>)
+      : {}
+  const items = Array.isArray(candidateRecall.items)
+    ? candidateRecall.items.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
+    : []
+  const recallCount = Number(candidateRecall.recall_count || items.length || 0)
+  const evaluatedCount = Number(
+    candidateRecall.evaluated_count ||
+      items.filter((item) => Boolean(item.evaluated)).length ||
+      0,
+  )
+  const judgeLimit = Number(candidateRecall.judge_limit || 0)
+  const recalledTitles = items
+    .map((item) => String(item.title || '').trim())
+    .filter(Boolean)
+    .slice(0, 3)
+  const selectedCandidateTitle = String(candidateRecall.selected_candidate_title || '').trim()
+  const selectedResult = String(candidateRecall.selected_result || '').trim()
+  const selectedResultMeta = getFollowCandidateResultMeta(selectedResult)
+  const judgedCandidateTitle = String(payload.candidate_title || '').trim()
+  return {
+    recallCount,
+    evaluatedCount,
+    judgeLimit,
+    recalledTitles,
+    selectedCandidateTitle,
+    selectedResult,
+    selectedResultLabel: selectedResult ? selectedResultMeta.label : '',
+    judgedCandidateTitle,
+  }
+}
+
 const prependFollowSourceLabel = (label: string | null, text: string) => (label ? `[${label}] ${text}` : text)
 
 const buildFollowIdentitySummary = (payload: Record<string, unknown>) => {
@@ -341,6 +416,7 @@ const buildFollowLogSummary = (log: PanTransferFollowTaskLogItem) => {
     payload.candidate_assessment && typeof payload.candidate_assessment === 'object'
       ? (payload.candidate_assessment as Record<string, unknown>)
       : {}
+  const candidateRecallDigest = getFollowCandidateRecallDigest(payload)
   const candidateTitle = String(payload.title || payload.candidate_title || '').trim()
   const candidateStatus = formatFollowLogStatus(payload.candidate_status)
   const candidateTime = payload.latest_message_time ? formatDateTime(String(payload.latest_message_time), 'YYYY-MM-DD HH:mm') : ''
@@ -352,6 +428,28 @@ const buildFollowLogSummary = (log: PanTransferFollowTaskLogItem) => {
   const identitySummary = buildFollowIdentitySummary(payload)
   const identitySourceLabel = payload.source ? getFollowIdentitySourceLabel(payload.source) : null
   const judgeSourceLabel = getFollowJudgeSourceLabel(candidateAssessment.judge_source || payload.judge_source)
+  const judgedCandidateTitle = String(candidateAssessment.candidate_title || candidateRecallDigest.judgedCandidateTitle || candidateTitle).trim()
+  const recallStatsText = [
+    candidateRecallDigest.recallCount > 0 ? `召回 ${candidateRecallDigest.recallCount} 条` : '',
+    candidateRecallDigest.evaluatedCount > 0
+      ? `评估 ${candidateRecallDigest.evaluatedCount} 条`
+      : candidateRecallDigest.judgeLimit > 0
+        ? `最多评估 ${candidateRecallDigest.judgeLimit} 条`
+        : '',
+  ]
+    .filter(Boolean)
+    .join(' · ')
+  const recalledTitlesText = candidateRecallDigest.recalledTitles.length > 0
+    ? `召回 ${candidateRecallDigest.recalledTitles.join(' / ')}`
+    : ''
+  const finalCandidateText = candidateRecallDigest.selectedCandidateTitle
+    ? `最终 ${candidateRecallDigest.selectedCandidateTitle}${
+        candidateRecallDigest.selectedResultLabel ? ` (${candidateRecallDigest.selectedResultLabel})` : ''
+      }`
+    : candidateRecallDigest.selectedResultLabel
+      ? `最终 ${candidateRecallDigest.selectedResultLabel}`
+      : ''
+  const judgedCandidateText = judgedCandidateTitle ? `判定 ${judgedCandidateTitle}` : ''
 
   if (messageText === 'Follow task created from transfer batch item') {
     return '已从转存批次创建追更任务'
@@ -499,58 +597,107 @@ const buildFollowLogSummary = (log: PanTransferFollowTaskLogItem) => {
     return '规则1已停用：目录结构需要人工确认'
   }
   if (messageText === 'Removed the stored candidate source because it no longer qualifies for promotion') {
-    return candidateTitle
+    const base = candidateTitle
       ? prependFollowSourceLabel(judgeSourceLabel, `已移除已有候选原链 -> ${candidateTitle}`)
       : prependFollowSourceLabel(judgeSourceLabel, '已移除已有候选原链')
+    return appendFollowSummaryDetails(base, [recallStatsText, recalledTitlesText])
   }
   if (messageText.startsWith('Removed the stored candidate source because link validation finished with status:')) {
     return `已移除旧候选原链 -> ${candidateStatus}`
   }
   if (messageText.startsWith('Discarded a detected candidate source because link validation finished with status:')) {
-    return candidateTitle
+    const base = candidateTitle
       ? prependFollowSourceLabel(judgeSourceLabel, `已丢弃本轮候选原链 -> ${candidateTitle} · ${candidateStatus}`)
       : prependFollowSourceLabel(judgeSourceLabel, `已丢弃本轮候选原链 -> ${candidateStatus}`)
+    return appendFollowSummaryDetails(base, [recallStatsText, finalCandidateText || judgedCandidateText, recalledTitlesText])
   }
   if (messageText === 'Detected a recent candidate source link for this tracked resource') {
-    if (candidateTitle && candidateTime) return prependFollowSourceLabel(judgeSourceLabel, `发现新候选原链 -> ${candidateTitle} · ${candidateTime}`)
-    if (candidateTitle) return prependFollowSourceLabel(judgeSourceLabel, `发现新候选原链 -> ${candidateTitle}`)
-    return prependFollowSourceLabel(judgeSourceLabel, '发现新候选原链')
+    if (candidateTitle && candidateTime) {
+      return appendFollowSummaryDetails(
+        prependFollowSourceLabel(judgeSourceLabel, `发现新候选原链 -> ${candidateTitle} · ${candidateTime}`),
+        [recallStatsText, recalledTitlesText, finalCandidateText],
+      )
+    }
+    if (candidateTitle) {
+      return appendFollowSummaryDetails(prependFollowSourceLabel(judgeSourceLabel, `发现新候选原链 -> ${candidateTitle}`), [
+        recallStatsText,
+        recalledTitlesText,
+        finalCandidateText,
+      ])
+    }
+    return appendFollowSummaryDetails(prependFollowSourceLabel(judgeSourceLabel, '发现新候选原链'), [
+      recallStatsText,
+      recalledTitlesText,
+      finalCandidateText,
+    ])
   }
   if (messageText === 'Keeping the stored candidate source because it is still valid') {
-    return candidateTitle
+    const base = candidateTitle
       ? prependFollowSourceLabel(judgeSourceLabel, `保留已有候选原链 -> ${candidateTitle}`)
       : prependFollowSourceLabel(judgeSourceLabel, '保留已有候选原链')
+    return appendFollowSummaryDetails(base, [recallStatsText, finalCandidateText, recalledTitlesText])
   }
   if (messageText === 'No new candidate found and the current source link is invalid') {
-    return '当前原链已失效，且本轮未发现新候选'
+    return appendFollowSummaryDetails('当前原链已失效，且本轮未发现新候选', [
+      recallStatsText,
+      finalCandidateText || judgedCandidateText,
+      recalledTitlesText,
+    ])
   }
   if (messageText === 'No new candidate found and the current outward share is invalid') {
-    return '当前对外分享异常，且本轮未发现新候选'
+    return appendFollowSummaryDetails('当前对外分享异常，且本轮未发现新候选', [
+      recallStatsText,
+      finalCandidateText || judgedCandidateText,
+      recalledTitlesText,
+    ])
   }
   if (messageText === 'No recent candidate source link was found for this check') {
-    return '本轮未发现新的候选原链'
+    return appendFollowSummaryDetails('本轮未发现新的候选原链', [
+      recallStatsText,
+      finalCandidateText || judgedCandidateText,
+      recalledTitlesText,
+    ])
   }
   if (messageText.startsWith('Discarded a same-episode source because link validation finished with status:')) {
-    return candidateTitle
+    const base = candidateTitle
       ? prependFollowSourceLabel(judgeSourceLabel, `已丢弃同集来源 -> ${candidateTitle} · ${candidateStatus}`)
       : prependFollowSourceLabel(judgeSourceLabel, `已丢弃同集来源 -> ${candidateStatus}`)
+    return appendFollowSummaryDetails(base, [recallStatsText, finalCandidateText || judgedCandidateText, recalledTitlesText])
   }
   if (messageText === 'Replaced same-episode source links with the current valid share') {
-    if (candidateTitle) return prependFollowSourceLabel(judgeSourceLabel, `已用当前有效分享回写同集来源 -> ${candidateTitle}`)
-    return prependFollowSourceLabel(judgeSourceLabel, '已用当前有效分享回写同集来源')
+    if (candidateTitle) {
+      return appendFollowSummaryDetails(
+        prependFollowSourceLabel(judgeSourceLabel, `已用当前有效分享回写同集来源 -> ${candidateTitle}`),
+        [recallStatsText, finalCandidateText, recalledTitlesText],
+      )
+    }
+    return appendFollowSummaryDetails(prependFollowSourceLabel(judgeSourceLabel, '已用当前有效分享回写同集来源'), [
+      recallStatsText,
+      finalCandidateText,
+      recalledTitlesText,
+    ])
   }
   if (messageText === 'Same-episode source already matched the current valid share') {
-    return '同集数来源已指向当前有效分享'
+    return appendFollowSummaryDetails('同集数来源已指向当前有效分享', [recallStatsText, finalCandidateText, recalledTitlesText])
   }
   if (messageText.startsWith('Failed to replace same-episode source links with the current share:')) {
     return `同集数来源回写失败 -> ${messageText.replace('Failed to replace same-episode source links with the current share:', '').trim() || '未知错误'}`
   }
   if (messageText === 'Rewrote the matched same-episode message link to the current valid share') {
-    if (candidateTitle) return prependFollowSourceLabel(judgeSourceLabel, `已将命中消息回写为当前有效分享 -> ${candidateTitle}`)
-    return prependFollowSourceLabel(judgeSourceLabel, '已将命中消息回写为当前有效分享')
+    if (candidateTitle) {
+      return appendFollowSummaryDetails(
+        prependFollowSourceLabel(judgeSourceLabel, `已将命中消息回写为当前有效分享 -> ${candidateTitle}`),
+        [recallStatsText, finalCandidateText, recalledTitlesText],
+      )
+    }
+    return appendFollowSummaryDetails(prependFollowSourceLabel(judgeSourceLabel, '已将命中消息回写为当前有效分享'), [
+      recallStatsText,
+      finalCandidateText,
+      recalledTitlesText,
+    ])
   }
   if (messageText === 'Matched same-episode message link already pointed to the current valid share') {
-    return '命中消息已指向当前有效分享'
+    return appendFollowSummaryDetails('命中消息已指向当前有效分享', [recallStatsText, finalCandidateText, recalledTitlesText])
   }
   if (messageText === 'Skipped same-episode message rewrite because the matched message reference was unavailable') {
     return '同集数消息未回写 -> 缺少命中消息定位'
@@ -813,8 +960,11 @@ const getFollowStatusSummary = (record: PanTransferFollowTaskItem) => {
 const getFollowTaskTitle = (record: PanTransferFollowTaskItem) =>
   record.source_message_title || record.work_title || record.topic_title || record.task_name || `追更任务 #${record.id}`
 
-const getFollowAppliedTaskTitle = (record: PanTransferFollowTaskItem) =>
-  record.current_share_resource_title || getFollowTaskTitle(record)
+const getFollowCurrentShareTitle = (record: PanTransferFollowTaskItem) =>
+  record.current_share_message_title || record.current_share_resource_title || getFollowTaskTitle(record)
+
+const getFollowDisplayResourceTitle = (record: PanTransferFollowTaskItem) =>
+  record.publish_record_title || record.current_share_message_title || record.source_message_title || getFollowCurrentShareTitle(record)
 
 const getFollowAppliedUpdateState = (
   task: Pick<PanTransferFollowTaskItem, 'applied_update_state'> | { applied_update_state?: Partial<PanTransferFollowTaskAppliedUpdateState> | null }
@@ -1341,14 +1491,36 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
     }
   }
 
-  const deleteTask = async (record: PanTransferFollowTaskItem) => {
+  const deleteTask = async (
+    record: PanTransferFollowTaskItem,
+    options?: { deleteTransferredResource?: boolean }
+  ) => {
+    const deleteTransferredResource = Boolean(options?.deleteTransferredResource)
     try {
-      await deletePanTransferFollowTask(record.id)
+      const response = await deletePanTransferFollowTask(record.id, {
+        deleteTransferredResource,
+      })
       if (detailData?.task.id === record.id) {
         setDetailOpen(false)
         setDetailData(null)
       }
-      message.success(`追更任务 #${record.id} 已删除`)
+      if (!deleteTransferredResource) {
+        message.success(`追更任务 #${record.id} 已删除`)
+      } else if (response.recycle_bin_cleared) {
+        const resourceText = response.resource_deleted
+          ? '已删除转存资源目录'
+          : response.resource_already_missing
+            ? '转存资源目录原本已不存在'
+            : '已处理转存资源目录'
+        message.success(`追更任务 #${record.id} 已删除，${resourceText}，并已清空回收站`)
+      } else {
+        const resourceText = response.resource_deleted
+          ? '转存资源目录已删除'
+          : response.resource_already_missing
+            ? '转存资源目录已不存在'
+            : '未确认转存资源目录处理结果'
+        message.warning(`追更任务 #${record.id} 已删除，${resourceText}，但未确认回收站已清空`)
+      }
       const nextPage = pagination.page > 1 && tasks.length === 1 ? pagination.page - 1 : pagination.page
       await loadTasks(nextPage, pagination.pageSize, statusFilter)
     } catch (error) {
@@ -1496,14 +1668,34 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
         return
       }
       if (key === 'delete') {
+        let deleteTransferredResource = false
         Modal.confirm({
           title: `确认删除追更任务 #${record.id} 吗？`,
-          content: '只删除追更跟踪记录和日志，不会删除已转存的数据或前台消息。',
+          content: (
+            <Space direction="vertical" size={8}>
+              <span>默认只删除追更任务记录和日志，不会删除已转存的资源目录或前台消息。</span>
+              <Checkbox
+                onChange={(event) => {
+                  deleteTransferredResource = event.target.checked
+                }}
+              >
+                同时删除转存资源目录，并清空该网盘账号回收站
+              </Checkbox>
+              <Typography.Text type="warning">
+                勾选后会彻底删除该任务对应的转存资源目录，并清空该账号当前回收站中的项目，操作不可恢复。
+              </Typography.Text>
+            </Space>
+          ),
+          okText: '删除任务',
+          cancelText: '取消',
           okButtonProps: { danger: true },
           onOk: async () => {
-            await deleteTask(record)
+            await deleteTask(record, {
+              deleteTransferredResource,
+            })
           },
         })
+        return
       }
     },
   })
@@ -1560,7 +1752,7 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
       width: 220,
       className: 'resource-ops-transfer-col-resource',
       render: (_, record) => {
-        const mainTitle = getFollowAppliedTaskTitle(record)
+        const mainTitle = getFollowDisplayResourceTitle(record)
         return (
           <Tooltip title={mainTitle}>
             <div className="resource-ops-transfer-title-cell">
@@ -1895,9 +2087,22 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
         : getAutomationSummary(detailTask)
       : ''
   const detailLinkItems = detailTask ? buildFollowLinkItems(detailTask) : []
+  const detailCandidateRecall: PanTransferFollowTaskCandidateRecall | undefined = detailTask?.candidate_recall
   const detailReferenceTitles = detailTask?.identity_snapshot.reference_titles ?? []
   const detailSearchQueries = detailTask?.identity_snapshot.search_queries ?? []
-  const detailRecallQueries = detailTask?.candidate_recall.queries ?? []
+  const detailRecallQueries = detailCandidateRecall?.queries ?? []
+  const detailRecallItems: PanTransferFollowTaskCandidateRecallItem[] = detailCandidateRecall?.items ?? []
+  const detailSelectedCandidateTitle = String(detailCandidateRecall?.selected_candidate_title || '').trim()
+  const detailSelectedResultMeta = getFollowCandidateResultMeta(detailCandidateRecall?.selected_result)
+  const detailJudgedCandidateTitle = String(detailTask?.candidate_assessment.candidate_title || '').trim()
+  const showDetailRecallPanel =
+    detailReferenceTitles.length > 0 ||
+    detailSearchQueries.length > 0 ||
+    detailRecallQueries.length > 0 ||
+    detailRecallItems.length > 0 ||
+    Boolean(detailJudgedCandidateTitle) ||
+    Boolean(detailSelectedCandidateTitle) ||
+    Boolean(detailCandidateRecall?.selected_result)
   const manualPreviewColumns: ColumnsType<PanTransferLinkDirectoryEntry> = [
     {
       title: '名称',
@@ -2117,7 +2322,7 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
                     </Space>
                   ),
                 },
-                { key: 'topic', label: '资源主题', children: getFollowAppliedTaskTitle(detailTask) },
+                { key: 'topic', label: '资源主题', children: getFollowDisplayResourceTitle(detailTask) },
                 { key: 'applied_update_state', label: '更新状态', children: formatFollowAppliedUpdateStatus(detailTask.applied_update_state) },
                 { key: 'account', label: '目标账号', children: detailTask.target_account_name || '-' },
                 { key: 'path', label: '固定资源目录', children: renderCopyableResourceDirectory(detailTask.fixed_save_path) },
@@ -2458,10 +2663,11 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
             <Card size="small" title="AI 识别身份" className="resource-ops-follow-sync-card">
               <div className="resource-ops-follow-sync-meta resource-ops-follow-identity-card">
                 <span>{detailTask.identity_snapshot.core_title || getFollowTaskTitle(detailTask)}</span>
-                <small>{`当前分享标题：${getFollowAppliedTaskTitle(detailTask)}`}</small>
+                <small>{`前台显示标题：${getFollowDisplayResourceTitle(detailTask)}`}</small>
+                <small>{`当前分享标题：${getFollowCurrentShareTitle(detailTask)}`}</small>
                 <small>{`当前更新状态：${formatFollowAppliedUpdateStatus(detailTask.applied_update_state)}`}</small>
                 {detailTask.identity_snapshot.resource_title &&
-                detailTask.identity_snapshot.resource_title !== getFollowAppliedTaskTitle(detailTask) ? (
+                detailTask.identity_snapshot.resource_title !== getFollowCurrentShareTitle(detailTask) ? (
                   <small>{`当前追踪源标题：${detailTask.identity_snapshot.resource_title}`}</small>
                 ) : null}
                 <small>
@@ -2493,7 +2699,7 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
               <div className="resource-ops-follow-sync-meta resource-ops-follow-candidate-card">
                 <span>{getFollowCandidateAssessmentSummary(detailTask)}</span>
                 <small>
-                  {`召回 ${detailTask.candidate_recall.recall_count || 0} 条 · 最多评估 ${detailTask.candidate_recall.judge_limit || 0} 条`}
+                  {`召回 ${detailTask.candidate_recall.recall_count || 0} 条 · 实评 ${detailTask.candidate_recall.evaluated_count || 0} 条 · 最多评估 ${detailTask.candidate_recall.judge_limit || 0} 条`}
                 </small>
                 <small>
                   {[
@@ -2521,6 +2727,23 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
                     .filter(Boolean)
                     .join(' · ') || '本次没有可展示的判定结论'}
                 </small>
+                {detailJudgedCandidateTitle ? (
+                  <div className="resource-ops-follow-candidate-focus">
+                    <span>本轮实际判定</span>
+                    <strong>{detailJudgedCandidateTitle}</strong>
+                  </div>
+                ) : null}
+                {(detailSelectedCandidateTitle || detailTask.candidate_recall.selected_result) ? (
+                  <div className="resource-ops-follow-candidate-focus">
+                    <span>最终候选</span>
+                    <div className="resource-ops-follow-candidate-focus-main">
+                      <strong>{detailSelectedCandidateTitle || '未选出具体候选'}</strong>
+                      {detailTask.candidate_recall.selected_result ? (
+                        <Tag color={detailSelectedResultMeta.color}>{detailSelectedResultMeta.label}</Tag>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
                 {(detailTask.candidate_assessment.current_episode || detailTask.candidate_assessment.candidate_episode) ? (
                   <small>
                     {[
@@ -2534,7 +2757,7 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
                 {detailTask.candidate_assessment.reason ? (
                   <small>{`判定说明：${detailTask.candidate_assessment.reason}`}</small>
                 ) : null}
-                {(detailReferenceTitles.length > 0 || detailSearchQueries.length > 0 || detailRecallQueries.length > 0) ? (
+                {showDetailRecallPanel ? (
                   <Collapse
                     ghost
                     className="resource-ops-follow-advanced-collapse"
@@ -2544,31 +2767,108 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
                         label: '识别与召回详情',
                         children: (
                           <div className="resource-ops-follow-sync-meta resource-ops-follow-advanced-meta">
+                            {detailJudgedCandidateTitle ? (
+                              <div className="resource-ops-follow-candidate-panel">
+                                <span>本轮实际判定候选</span>
+                                <div className="resource-ops-follow-reference-item">{detailJudgedCandidateTitle}</div>
+                              </div>
+                            ) : null}
+                            {(detailSelectedCandidateTitle || detailTask.candidate_recall.selected_result) ? (
+                              <div className="resource-ops-follow-candidate-panel">
+                                <span>最终候选</span>
+                                <div className="resource-ops-follow-reference-item resource-ops-follow-reference-item--selected">
+                                  <strong>{detailSelectedCandidateTitle || '未选出具体候选'}</strong>
+                                  {detailTask.candidate_recall.selected_result ? (
+                                    <Tag color={detailSelectedResultMeta.color}>{detailSelectedResultMeta.label}</Tag>
+                                  ) : null}
+                                </div>
+                              </div>
+                            ) : null}
                             {detailReferenceTitles.length > 0 ? (
-                              <div className="resource-ops-follow-reference-list">
-                                {detailReferenceTitles.map((title, index) => (
-                                  <div key={`${title}-${index}`} className="resource-ops-follow-reference-item">
-                                    {title}
-                                  </div>
-                                ))}
+                              <div className="resource-ops-follow-candidate-panel">
+                                <span>识别参考标题</span>
+                                <div className="resource-ops-follow-reference-list">
+                                  {detailReferenceTitles.map((title, index) => (
+                                    <div key={`${title}-${index}`} className="resource-ops-follow-reference-item">
+                                      {title}
+                                    </div>
+                                  ))}
+                                </div>
                               </div>
                             ) : null}
                             {detailSearchQueries.length > 0 ? (
-                              <div className="resource-ops-follow-chip-row">
-                                {detailSearchQueries.map((query) => (
-                                  <Tag key={query} className="resource-ops-follow-query-tag">
-                                    {query}
-                                  </Tag>
-                                ))}
+                              <div className="resource-ops-follow-candidate-panel">
+                                <span>识别阶段检索词</span>
+                                <div className="resource-ops-follow-chip-row">
+                                  {detailSearchQueries.map((query) => (
+                                    <Tag key={query} className="resource-ops-follow-query-tag">
+                                      {query}
+                                    </Tag>
+                                  ))}
+                                </div>
                               </div>
                             ) : null}
                             {detailRecallQueries.length > 0 ? (
-                              <div className="resource-ops-follow-chip-row">
-                                {detailRecallQueries.map((query) => (
-                                  <Tag key={query} className="resource-ops-follow-query-tag">
-                                    {query}
-                                  </Tag>
-                                ))}
+                              <div className="resource-ops-follow-candidate-panel">
+                                <span>本轮实际召回词</span>
+                                <div className="resource-ops-follow-chip-row">
+                                  {detailRecallQueries.map((query) => (
+                                    <Tag key={query} className="resource-ops-follow-query-tag">
+                                      {query}
+                                    </Tag>
+                                  ))}
+                                </div>
+                              </div>
+                            ) : null}
+                            {detailRecallItems.length > 0 ? (
+                              <div className="resource-ops-follow-candidate-panel">
+                                <span>召回列表</span>
+                                <div className="resource-ops-follow-recall-list">
+                                  {detailRecallItems.map((item, index) => {
+                                    const decisionMeta = getFollowCandidateResultMeta(item.decision)
+                                    const isSelected =
+                                      detailTask.candidate_recall.selected_link_target_id !== undefined &&
+                                      detailTask.candidate_recall.selected_link_target_id !== null &&
+                                      item.link_target_id === detailTask.candidate_recall.selected_link_target_id
+                                    return (
+                                      <div
+                                        key={`${item.link_target_id || item.link_ref_id || item.message_id || item.title || 'recall'}-${index}`}
+                                        className={`resource-ops-follow-recall-item${isSelected ? ' is-selected' : ''}`}
+                                      >
+                                        <div className="resource-ops-follow-recall-item-head">
+                                          <strong>{item.title || `候选 ${index + 1}`}</strong>
+                                          <Space size={[6, 6]} wrap>
+                                            {isSelected ? <Tag color="success">最终</Tag> : null}
+                                            <Tag color={decisionMeta.color}>{decisionMeta.label}</Tag>
+                                            {item.judge_source ? <Tag>{getFollowJudgeSourceLabel(item.judge_source)}</Tag> : null}
+                                            {item.validation_status ? (
+                                              <Tag color={getFollowValidationTagColor(item.validation_status)}>
+                                                {`校验 ${formatFollowLogStatus(item.validation_status)}`}
+                                              </Tag>
+                                            ) : null}
+                                          </Space>
+                                        </div>
+                                        <small>
+                                          {[
+                                            item.latest_message_time ? `消息 ${formatDateTime(item.latest_message_time)}` : null,
+                                            item.is_same_work === undefined || item.is_same_work === null
+                                              ? null
+                                              : `同作品 ${item.is_same_work ? '是' : '否'}`,
+                                            item.is_newer === undefined || item.is_newer === null
+                                              ? null
+                                              : `更晚更新 ${item.is_newer ? '是' : '否'}`,
+                                            item.confidence !== undefined && item.confidence !== null
+                                              ? `置信度 ${Number(item.confidence).toFixed(2)}`
+                                              : null,
+                                          ]
+                                            .filter(Boolean)
+                                            .join(' · ') || (item.evaluated ? '已评估' : '未进入实际判定')}
+                                        </small>
+                                        {item.reason ? <small>{`说明：${item.reason}`}</small> : null}
+                                      </div>
+                                    )
+                                  })}
+                                </div>
                               </div>
                             ) : null}
                           </div>

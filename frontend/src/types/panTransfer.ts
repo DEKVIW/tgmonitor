@@ -52,6 +52,9 @@ export interface PanTransferDeleteResponse {
   id: number
   platform: string
   deleted: boolean
+  resource_deleted?: boolean | null
+  resource_already_missing?: boolean | null
+  recycle_bin_cleared?: boolean | null
 }
 
 export interface PanTransferPreviewItem {
@@ -378,13 +381,26 @@ export interface PanTransferFollowTaskCandidateRecallItem {
   title?: string | null
   url?: string | null
   latest_message_time?: string | null
+  evaluated: boolean
+  decision?: string | null
+  judge_source?: string | null
+  is_same_work?: boolean | null
+  is_newer?: boolean | null
+  should_promote?: boolean | null
+  same_episode_replace?: boolean | null
+  confidence?: number | null
+  reason?: string | null
+  validation_status?: string | null
 }
 
 export interface PanTransferFollowTaskCandidateRecall {
   queries: string[]
   recall_count: number
   judge_limit: number
+  evaluated_count: number
   selected_link_target_id?: number | null
+  selected_candidate_title?: string | null
+  selected_result?: string | null
   items: PanTransferFollowTaskCandidateRecallItem[]
 }
 
@@ -435,6 +451,7 @@ export interface PanTransferFollowTaskItem {
   source_url: string
   source_share_key?: string | null
   source_message_title?: string | null
+  current_share_message_title?: string | null
   current_share_resource_title?: string | null
   applied_update_state: PanTransferFollowTaskAppliedUpdateState
   topic_key: string
