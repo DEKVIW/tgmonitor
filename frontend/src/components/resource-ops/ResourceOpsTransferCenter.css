@@ -1216,6 +1216,42 @@
   gap: 8px;
 }
 
+.resource-ops-follow-candidate-focus {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 12px;
+  background: #fafcff;
+}
+
+.resource-ops-follow-candidate-focus > span,
+.resource-ops-follow-candidate-panel > span {
+  color: rgba(15, 23, 42, 0.58);
+  font-size: 12px;
+}
+
+.resource-ops-follow-candidate-focus strong {
+  color: rgba(15, 23, 42, 0.92);
+  font-size: 14px;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.resource-ops-follow-candidate-focus-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.resource-ops-follow-candidate-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 .resource-ops-follow-reference-item {
   padding: 10px 12px;
   border: 1px solid rgba(15, 23, 42, 0.08);
@@ -1226,12 +1262,63 @@
   word-break: break-word;
 }
 
+.resource-ops-follow-reference-item--selected {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .resource-ops-follow-query-tag {
   margin-inline-end: 0 !important;
   border-radius: 999px;
   padding-inline: 10px;
   line-height: 26px;
   background: #fafcff;
+}
+
+.resource-ops-follow-recall-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.resource-ops-follow-recall-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 12px;
+  background: #fff;
+}
+
+.resource-ops-follow-recall-item.is-selected {
+  border-color: rgba(22, 119, 255, 0.28);
+  background: #f8fbff;
+  box-shadow: 0 0 0 1px rgba(22, 119, 255, 0.06) inset;
+}
+
+.resource-ops-follow-recall-item-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.resource-ops-follow-recall-item-head strong {
+  flex: 1 1 240px;
+  color: rgba(15, 23, 42, 0.92);
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.resource-ops-follow-recall-item small {
+  color: rgba(15, 23, 42, 0.62);
+  line-height: 1.6;
+  word-break: break-word;
 }
 
 .resource-ops-follow-rule-grid {
