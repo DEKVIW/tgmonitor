@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.dependencies_runtime_v2 import get_admin_user, get_db
-from app.schemas.resource_ops_models_v2 import (
+from app.schemas.resource_ops_models import (
     ResourceOpsCandidateDetailResponse,
     ResourceOpsCandidateItem,
     ResourceOpsCandidateListResponse,

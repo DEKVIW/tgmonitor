@@ -49,6 +49,7 @@ from .follow_tasks import (
     _normalize_text,
     _serialize_follow_task,
     _sync_follow_task_publish_binding,
+    _update_follow_task_applied_update_state_from_sync,
     bind_follow_task_publish_record,
 )
 from .publishing import sync_pan_transfer_publish_record_source_url
@@ -1022,6 +1023,13 @@ def handle_follow_sync_item_success(
         "source_metadata_promotion": source_metadata_promotion,
     }
     task.extra_json = extra_json
+    applied_update_state = _update_follow_task_applied_update_state_from_sync(
+        task,
+        current_share_identity=current_share_identity,
+        source_metadata_promotion=source_metadata_promotion,
+        synced_at=synced_at,
+        updated_by=worker_name,
+    )
     if sync_mode == "incremental" and preferred_target_relative_path:
         _remember_follow_task_target_path(
             task,
@@ -1079,6 +1087,7 @@ def handle_follow_sync_item_success(
             "actual_share_target_is_root": effective_actual_share_target_snapshot.get("actual_share_target_is_root"),
             "source_metadata_promoted": promote_source_metadata,
             "source_metadata_promotion": source_metadata_promotion,
+            "applied_update_state": applied_update_state,
             "automation": automation,
         },
     )

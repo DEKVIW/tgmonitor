@@ -8,7 +8,7 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
 from app.api.dependencies_runtime_v2 import get_db, get_optional_current_user
-from app.schemas.resource_ops_models_v2 import ResourceOpsTrackClickRequest, ResourceOpsTrackClickResponse
+from app.schemas.resource_ops_models import ResourceOpsTrackClickRequest, ResourceOpsTrackClickResponse
 from app.services.resource_ops import get_redirect_target_url, record_click_event
 
 

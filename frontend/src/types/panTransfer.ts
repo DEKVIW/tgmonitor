@@ -292,10 +292,24 @@ export interface PanTransferFollowTaskAutomationConfig {
   last_auto_batch_id?: number | null
 }
 
+export interface PanTransferFollowTaskAppliedUpdateState {
+  resource_title?: string | null
+  core_title?: string | null
+  season?: number | null
+  episode?: number | null
+  issue_no?: string | null
+  is_completed?: boolean | null
+  source?: string | null
+  locked?: boolean | null
+  updated_at?: string | null
+  updated_by?: string | null
+}
+
 export interface PanTransferFollowTaskSettingsUpdateRequest {
   check_interval_minutes?: number | null
   candidate_policy?: Partial<PanTransferFollowTaskCandidatePolicy> | null
   automation?: Partial<PanTransferFollowTaskAutomationConfig> | null
+  applied_update_state?: Partial<PanTransferFollowTaskAppliedUpdateState> | null
 }
 
 export interface PanTransferFollowTaskSyncSelectionEntry {
@@ -421,6 +435,8 @@ export interface PanTransferFollowTaskItem {
   source_url: string
   source_share_key?: string | null
   source_message_title?: string | null
+  current_share_resource_title?: string | null
+  applied_update_state: PanTransferFollowTaskAppliedUpdateState
   topic_key: string
   topic_title: string
   work_id?: number | null

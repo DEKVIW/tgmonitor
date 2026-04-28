@@ -13,6 +13,7 @@ from app.services.resource_identity import normalize_match_key, parse_resource_i
 
 from .constants import PLATFORM_BAIDU, PLATFORM_QUARK, normalize_transfer_platform
 from .follow_tasks import (
+    _apply_follow_applied_update_state_to_snapshot,
     _append_follow_task_log,
     _build_follow_identity_fallback,
     _get_follow_task,
@@ -1055,6 +1056,7 @@ def _collect_tracked_snapshot(task: PanTransferSyncTask, *, source_kind: str | N
     extra_json = dict(task.extra_json or {})
     existing_snapshot = dict(extra_json.get("identity_snapshot") or {})
     snapshot = existing_snapshot if existing_snapshot.get("core_title") else _build_follow_identity_fallback(task)
+    snapshot = _apply_follow_applied_update_state_to_snapshot(task, snapshot)
     if _normalize_optional_int(snapshot.get("season")) is not None:
         return snapshot
 

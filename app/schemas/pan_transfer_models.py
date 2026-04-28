@@ -628,10 +628,32 @@ class PanTransferFollowTaskAutomationConfig(PanTransferBaseModel):
     last_auto_batch_id: int | None = None
 
 
+class PanTransferFollowTaskAppliedUpdateState(PanTransferBaseModel):
+    resource_title: str | None = Field(default=None, max_length=255)
+    core_title: str | None = Field(default=None, max_length=255)
+    season: int | None = Field(default=None, ge=1, le=999)
+    episode: int | None = Field(default=None, ge=1, le=9999)
+    issue_no: str | None = Field(default=None, max_length=32)
+    is_completed: bool | None = None
+    source: str | None = Field(default=None, max_length=16)
+    locked: bool | None = None
+    updated_at: datetime | None = None
+    updated_by: str | None = Field(default=None, max_length=128)
+
+
+class PanTransferFollowTaskAppliedUpdateStateUpdateRequest(PanTransferBaseModel):
+    season: int | None = Field(default=None, ge=1, le=999)
+    episode: int | None = Field(default=None, ge=1, le=9999)
+    issue_no: str | None = Field(default=None, max_length=32)
+    is_completed: bool | None = None
+    locked: bool | None = None
+
+
 class PanTransferFollowTaskSettingsUpdateRequest(PanTransferBaseModel):
     check_interval_minutes: int | None = Field(default=None, ge=15, le=10080)
     candidate_policy: PanTransferFollowTaskCandidatePolicy | None = None
     automation: PanTransferFollowTaskAutomationConfig | None = None
+    applied_update_state: PanTransferFollowTaskAppliedUpdateStateUpdateRequest | None = None
 
 
 PanTransferFollowTaskCreateRequest.model_rebuild()
@@ -812,6 +834,8 @@ class PanTransferFollowTaskCandidateAssessment(PanTransferBaseModel):
     is_same_work: bool | None = None
     is_newer: bool | None = None
     should_promote: bool | None = None
+    same_episode_replace: bool | None = None
+    candidate_origin: str | None = None
     confidence: float | None = None
     current_episode: int | None = None
     candidate_episode: int | None = None
@@ -853,6 +877,8 @@ class PanTransferFollowTaskItem(PanTransferBaseModel):
     source_url: str
     source_share_key: str | None = None
     source_message_title: str | None = None
+    current_share_resource_title: str | None = None
+    applied_update_state: PanTransferFollowTaskAppliedUpdateState = Field(default_factory=PanTransferFollowTaskAppliedUpdateState)
     topic_key: str
     topic_title: str
     work_id: int | None = None

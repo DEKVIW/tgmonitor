@@ -1,6 +1,3 @@
-export { default } from './FollowTaskFileDiagnosisModalV2'
-
-/*
 import { useEffect, useMemo, useState } from 'react'
 import { Alert, Button, Card, Collapse, Empty, InputNumber, Modal, Segmented, Space, Table, Tag, Typography, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
@@ -29,10 +26,10 @@ type FollowTaskFileDiagnosisModalProps = {
 type SourceKind = 'current' | 'candidate'
 
 const STOP_REASON_LABELS: Record<string, string> = {
-  contiguous_window_hit: '已命中连续更新，可直接生成增量同步计划',
-  gap_before_next_episode: '候选里存在断档，系统先停在第一处缺口，避免误自动补集',
-  no_source_video: '源链接暂时没有扫到可识别的视频文件',
-  no_accepted_episode: '源文件有视频，但暂时没有匹配到可信的剧集结果',
+  contiguous_window_hit: '已命中连续更新，可直接生成增量补集计划',
+  gap_before_next_episode: '下一集之前存在断档，系统先停在第一处缺口',
+  no_source_video: '来源链接里还没有识别到可用视频文件',
+  no_accepted_episode: '来源文件里有视频，但暂时没有识别到可信剧集',
 }
 
 const formatDateTime = (value?: string | null) =>
@@ -50,7 +47,14 @@ const formatSize = (value?: number | null) => {
   return `${size.toFixed(index === 0 ? 0 : 2)} ${units[index]}`
 }
 
-const FollowTaskFileDiagnosisModal = ({
+const formatSourceKind = (value?: string | null) =>
+  String(value || '').trim().toLowerCase() === 'candidate' ? '候选原链' : '当前原链'
+
+const formatEpisodeValue = (value?: number | null) => (value == null ? '待识别' : `EP ${value}`)
+
+const joinEpisodeNumbers = (values?: number[]) => (values && values.length > 0 ? values.join(', ') : '暂无')
+
+const FollowTaskFileDiagnosisDialog = ({
   open,
   task,
   hasCandidate,
@@ -68,7 +72,7 @@ const FollowTaskFileDiagnosisModal = ({
     setSourceKind(hasCandidate ? 'candidate' : 'current')
     setNearEpisodeWindow(5)
     setDiagnosis(null)
-  }, [open, task, hasCandidate])
+  }, [open, task?.id, hasCandidate])
 
   const runDiagnosis = async (nextSourceKind = sourceKind, nextWindow = nearEpisodeWindow) => {
     if (!task) return
@@ -81,7 +85,7 @@ const FollowTaskFileDiagnosisModal = ({
       setDiagnosis(response)
       await onTaskChanged?.()
     } catch (error) {
-      message.error(getErrorMessage(error, '生成智能诊断失败'))
+      message.error(getErrorMessage(error, '生成补集诊断失败'))
     } finally {
       setLoading(false)
     }
@@ -139,7 +143,9 @@ const FollowTaskFileDiagnosisModal = ({
       width: 172,
       render: (_, record) => (
         <div className="resource-ops-follow-file-parse">
-          <Tag color={record.parse_level === 'full' ? 'processing' : 'default'}>{record.parse_level === 'full' ? '完整解析' : '快速解析'}</Tag>
+          <Tag color={record.parse_level === 'full' ? 'processing' : 'default'}>
+            {record.parse_level === 'full' ? '完整解析' : '快速解析'}
+          </Tag>
           <small>{record.parse_reason}</small>
         </div>
       ),
@@ -207,10 +213,10 @@ const FollowTaskFileDiagnosisModal = ({
       render: (value: number[]) => (value?.length ? value.join(', ') : '-'),
     },
     {
-      title: '目标位置',
+      title: '写入位置',
       dataIndex: 'target_relative_path',
       key: 'target_relative_path',
-      width: 170,
+      width: 180,
       render: (value?: string | null) => value || '资源目录根层',
     },
     {
@@ -256,21 +262,63 @@ const FollowTaskFileDiagnosisModal = ({
       !diagnosisConfigDirty &&
       !loading
   )
+
   const recommendationText = useMemo(() => {
     if (!summary) return ''
     if (summary.recommended_episode_numbers.length > 0) {
-      return `已推荐补齐 ${summary.recommended_episode_numbers.join(', ')}`
+      return `建议补齐 ${summary.recommended_episode_numbers.join(', ')}`
     }
-    return STOP_REASON_LABELS[summary.stop_reason] || '本次没有形成可直接执行的增量计划'
+    return STOP_REASON_LABELS[summary.stop_reason] || '本次还没有形成可直接执行的增量补集计划'
   }, [summary])
+
+  const keyFacts = useMemo(() => {
+    if (!summary || !task) return []
+    return [
+      {
+        label: '当前进度',
+        value: formatEpisodeValue(summary.tracked_episode),
+        note:
+          [
+            summary.latest_target_episode != null ? `资源目录最新 ${formatEpisodeValue(summary.latest_target_episode)}` : null,
+            summary.anchor_episode != null ? `锚点 ${formatEpisodeValue(summary.anchor_episode)}` : null,
+            summary.target_scope_relative_path ? `诊断范围 ${summary.target_scope_relative_path}` : null,
+          ]
+            .filter(Boolean)
+            .join(' · ') || '资源目录里还没识别到稳定进度',
+      },
+      {
+        label: '来源最新',
+        value: formatEpisodeValue(summary.source_latest_episode),
+        note:
+          summary.source_episode_numbers.length > 0
+            ? `识别到 ${joinEpisodeNumbers(summary.source_episode_numbers)}`
+            : '来源里还没识别到可信集数',
+      },
+      {
+        label: '待补集数',
+        value: summary.recommended_episode_numbers.length > 0 ? joinEpisodeNumbers(summary.recommended_episode_numbers) : '暂无',
+        note: recommendationText,
+      },
+      {
+        label: '写入位置',
+        value: summary.inferred_target_relative_path || '资源目录根层',
+        note: `锁定目录 ${task.fixed_save_path || '-'}`,
+      },
+      {
+        label: '诊断来源',
+        value: formatSourceKind(summary.source_kind),
+        note: `近窗 ${summary.near_episode_window} 集`,
+      },
+    ]
+  }, [recommendationText, summary, task])
 
   return (
     <Modal
       open={open}
       onCancel={onClose}
-      width={1180}
+      width={1120}
       destroyOnHidden
-      title="智能诊断与推荐补集"
+      title="补集诊断"
       footer={
         <Space>
           <Button onClick={onClose}>关闭</Button>
@@ -283,7 +331,7 @@ const FollowTaskFileDiagnosisModal = ({
             loading={creatingSync}
             onClick={() => void createRecommendedSync()}
           >
-            创建推荐增量同步
+            按推荐结果增量同步
           </Button>
         </Space>
       }
@@ -291,7 +339,7 @@ const FollowTaskFileDiagnosisModal = ({
       {task ? (
         <div className="resource-ops-follow-diagnosis-stack">
           <Paragraph className="resource-ops-transfer-copy">
-            系统会同时扫描当前资源目录和所选来源链接，优先按最新文件与当前进度附近的剧集做完整解析，再输出可直接复用的增量同步计划。
+            系统会优先围绕当前进度附近的来源文件做识别，判断来源最新进度、可直接补齐的集数，以及建议写入的位置。
           </Paragraph>
 
           <div className="resource-ops-follow-diagnosis-toolbar">
@@ -308,71 +356,68 @@ const FollowTaskFileDiagnosisModal = ({
             </div>
             <div className="resource-ops-follow-settings-field resource-ops-follow-settings-field--narrow">
               <label>近窗范围</label>
-              <InputNumber min={1} max={30} value={nearEpisodeWindow} onChange={(value) => setNearEpisodeWindow(Number(value || 5))} style={{ width: '100%' }} />
+              <InputNumber
+                min={1}
+                max={30}
+                value={nearEpisodeWindow}
+                onChange={(value) => setNearEpisodeWindow(Number(value || 5))}
+                style={{ width: '100%' }}
+              />
             </div>
             <div className="resource-ops-follow-diagnosis-target">
-              <Text type="secondary">目标资源目录</Text>
+              <Text type="secondary">锁定资源目录</Text>
               <strong>{task.fixed_save_path || '-'}</strong>
             </div>
           </div>
 
           {summary ? (
             <>
-              <div className="resource-ops-follow-diagnosis-summary-grid">
-                <Card size="small" className="resource-ops-follow-sync-card">
-                  <div className="resource-ops-follow-sync-meta">
-                    <span>{summary.tracked_core_title || summary.tracked_resource_title}</span>
-                    <small>{summary.tracked_resource_title}</small>
-                    <small>
-                      {[
-                        summary.tracked_season ? `季 ${summary.tracked_season}` : null,
-                        summary.tracked_episode ? `当前进度 ${summary.tracked_episode}` : null,
-                        summary.latest_target_episode ? `目录最新 ${summary.latest_target_episode}` : null,
-                        summary.anchor_episode ? `锚点 ${summary.anchor_episode}` : null,
-                      ]
-                        .filter(Boolean)
-                        .join(' · ') || '尚未识别到稳定进度'}
-                    </small>
+              <div className="resource-ops-follow-diagnosis-keyfacts">
+                {keyFacts.map((fact) => (
+                  <div key={fact.label} className="resource-ops-follow-diagnosis-fact">
+                    <span>{fact.label}</span>
+                    <strong>{fact.value}</strong>
+                    <small>{fact.note}</small>
                   </div>
-                </Card>
-
-                <Card size="small" className="resource-ops-follow-sync-card">
-                  <div className="resource-ops-follow-sync-meta">
-                    <span>扫描效率</span>
-                    <small>{`源 ${summary.source_dir_count} 目录 / ${summary.source_video_count} 视频 · 目标 ${summary.target_dir_count} 目录 / ${summary.target_video_count} 视频`}</small>
-                    <small>{`快速解析 ${summary.quick_parsed_count} · 完整解析 ${summary.full_parsed_count} · 超窗跳过 ${summary.skipped_outside_window_count}`}</small>
-                  </div>
-                </Card>
-
-                <Card size="small" className="resource-ops-follow-sync-card">
-                  <div className="resource-ops-follow-sync-meta">
-                    <span>推荐结果</span>
-                    <small>{recommendationText}</small>
-                    <small>{summary.inferred_target_relative_path ? `建议写入 ${summary.inferred_target_relative_path}` : '建议写入资源目录根层'}</small>
-                  </div>
-                </Card>
+                ))}
               </div>
 
-              <Alert
-                type={summary.recommended_entry_count > 0 ? 'success' : 'warning'}
-                showIcon
-                message={summary.recommended_entry_count > 0 ? '已生成可执行增量计划' : '本次没有生成可执行计划'}
-                description={recommendationText}
-              />
-              {diagnosisConfigDirty ? (
+              <div className="resource-ops-follow-diagnosis-alerts">
                 <Alert
-                  type="info"
+                  type={summary.recommended_entry_count > 0 ? 'success' : 'warning'}
                   showIcon
-                  message="诊断条件已变更"
-                  description="你已调整诊断来源或近窗范围，请先重新诊断，再创建推荐增量同步。"
+                  message={summary.recommended_entry_count > 0 ? '已生成可直接执行的补集计划' : '本次还没有形成可直接执行的补集计划'}
+                  description={recommendationText}
                 />
-              ) : null}
+                {diagnosisConfigDirty ? (
+                  <Alert
+                    type="info"
+                    showIcon
+                    message="诊断条件已变更"
+                    description="你已经调整了诊断来源或近窗范围，请先重新诊断，再按推荐结果创建增量同步。"
+                  />
+                ) : null}
+                {summary.warnings.length > 0 ? (
+                  <Alert
+                    type="warning"
+                    showIcon
+                    message="诊断提示"
+                    description={summary.warnings.join('；')}
+                  />
+                ) : null}
+              </div>
             </>
           ) : null}
 
-          <Card size="small" title="推荐补集" className="resource-ops-follow-sync-card">
+          <Card size="small" title="推荐补集文件" className="resource-ops-follow-sync-card">
             {diagnosis?.recommended_plan_items?.length ? (
-              <Table rowKey={(record) => `${record.path || record.name}-${record.episodes.join('-')}`} size="small" columns={planColumns} dataSource={diagnosis.recommended_plan_items} pagination={false} />
+              <Table
+                rowKey={(record) => `${record.path || record.name}-${record.episodes.join('-')}`}
+                size="small"
+                columns={planColumns}
+                dataSource={diagnosis.recommended_plan_items}
+                pagination={false}
+              />
             ) : (
               <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前没有形成可直接执行的推荐补集计划" />
             )}
@@ -381,6 +426,18 @@ const FollowTaskFileDiagnosisModal = ({
           <Collapse
             className="resource-ops-follow-advanced-collapse"
             items={[
+              {
+                key: 'stats',
+                label: '诊断明细',
+                children: summary ? (
+                  <div className="resource-ops-follow-diagnosis-technical">
+                    <small>{`来源目录 ${summary.source_dir_count} · 来源文件 ${summary.source_file_count} · 来源视频 ${summary.source_video_count}`}</small>
+                    <small>{`资源目录 ${summary.target_dir_count} · 资源文件 ${summary.target_file_count} · 资源视频 ${summary.target_video_count}`}</small>
+                    <small>{`快速解析 ${summary.quick_parsed_count} · 完整解析 ${summary.full_parsed_count} · 窗外跳过 ${summary.skipped_outside_window_count}`}</small>
+                    <small>{`最近补充完整解析 ${summary.recent_without_episode_full_parse_count} · 全量替换可选 ${summary.full_entry_count}`}</small>
+                  </div>
+                ) : null,
+              },
               {
                 key: 'source',
                 label: `来源文件 (${diagnosis?.source_entries.length || 0})`,
@@ -421,5 +478,4 @@ const FollowTaskFileDiagnosisModal = ({
   )
 }
 
-export default FollowTaskFileDiagnosisModal
-*/
+export default FollowTaskFileDiagnosisDialog

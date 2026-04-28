@@ -18,7 +18,7 @@ from app.models.models import (
     ResourceCandidateProfile,
     ensure_runtime_storage_tables,
 )
-from app.schemas.resource_ops_models_v2 import ResourceOpsWorkbenchUpdateRequest
+from app.schemas.resource_ops_models import ResourceOpsWorkbenchUpdateRequest
 from app.services.resource_ops.analytics import (
     DEFAULT_LOOKBACK_DAYS,
     _compute_heat_metrics,

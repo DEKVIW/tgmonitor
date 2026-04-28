@@ -12,7 +12,7 @@ import {
   SearchOutlined,
   SyncOutlined,
 } from '@ant-design/icons'
-import { Alert, Button, Card, Checkbox, Collapse, Descriptions, Drawer, Dropdown, Empty, InputNumber, Modal, Segmented, Space, Table, Tabs, Tag, Tooltip, Typography, message } from 'antd'
+import { Alert, Button, Card, Checkbox, Collapse, Descriptions, Drawer, Dropdown, Empty, Input, InputNumber, Modal, Segmented, Space, Table, Tabs, Tag, Tooltip, Typography, message } from 'antd'
 import type { MenuProps } from 'antd'
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table'
 
@@ -30,6 +30,7 @@ import {
   updatePanTransferFollowTaskSettings,
 } from '@/api/panTransfer'
 import type {
+  PanTransferFollowTaskAppliedUpdateState,
   PanTransferFollowTaskAutomationConfig,
   PanTransferFollowTaskCandidatePolicy,
   PanTransferFollowTaskDetailResponse,
@@ -44,7 +45,7 @@ import { formatServerDateTime } from '@/utils/dateTime'
 import AppLogTerminal from '@/components/common/AppLogTerminal'
 
 import { getErrorMessage } from './shared'
-import FollowTaskFileDiagnosisModal from './FollowTaskFileDiagnosisModal'
+import FollowTaskFileDiagnosisDialog from './FollowTaskFileDiagnosisDialog'
 
 const { Title, Paragraph, Link } = Typography
 
@@ -69,6 +70,7 @@ type FollowTaskSettingsDraft = {
   check_interval_minutes: number
   candidate_policy: PanTransferFollowTaskCandidatePolicy
   automation: PanTransferFollowTaskAutomationConfig
+  applied_update_state: PanTransferFollowTaskAppliedUpdateState
 }
 
 const TASK_STATUS_META: Record<string, { color: string; label: string }> = {
@@ -132,6 +134,19 @@ const DEFAULT_FOLLOW_AUTOMATION_CONFIG: PanTransferFollowTaskAutomationConfig = 
   last_auto_sync_mode: null,
   last_auto_result: null,
   last_auto_batch_id: null,
+}
+
+const DEFAULT_FOLLOW_APPLIED_UPDATE_STATE: PanTransferFollowTaskAppliedUpdateState = {
+  resource_title: null,
+  core_title: null,
+  season: null,
+  episode: null,
+  issue_no: null,
+  is_completed: null,
+  source: 'auto',
+  locked: false,
+  updated_at: null,
+  updated_by: null,
 }
 
 const FOLLOW_AUTOMATION_RESULT_LABELS: Record<string, string> = {
@@ -798,6 +813,47 @@ const getFollowStatusSummary = (record: PanTransferFollowTaskItem) => {
 const getFollowTaskTitle = (record: PanTransferFollowTaskItem) =>
   record.source_message_title || record.work_title || record.topic_title || record.task_name || `追更任务 #${record.id}`
 
+const getFollowAppliedTaskTitle = (record: PanTransferFollowTaskItem) =>
+  record.current_share_resource_title || getFollowTaskTitle(record)
+
+const getFollowAppliedUpdateState = (
+  task: Pick<PanTransferFollowTaskItem, 'applied_update_state'> | { applied_update_state?: Partial<PanTransferFollowTaskAppliedUpdateState> | null }
+): PanTransferFollowTaskAppliedUpdateState => ({
+  ...DEFAULT_FOLLOW_APPLIED_UPDATE_STATE,
+  ...(task.applied_update_state || {}),
+  locked: Boolean(task.applied_update_state?.locked),
+})
+
+const formatFollowAppliedUpdateStatus = (state: Partial<PanTransferFollowTaskAppliedUpdateState> | null | undefined) => {
+  const normalized = {
+    ...DEFAULT_FOLLOW_APPLIED_UPDATE_STATE,
+    ...(state || {}),
+  }
+  const parts: string[] = []
+  if (Number(normalized.season || 0) > 0) {
+    parts.push(`第 ${Number(normalized.season)} 季`)
+  }
+  if (Number(normalized.episode || 0) > 0) {
+    parts.push(`更新至 ${Number(normalized.episode)} 集`)
+  } else if (normalized.issue_no) {
+    parts.push(`更新至 ${normalized.issue_no}`)
+  }
+  if (normalized.is_completed) {
+    parts.push('已完结')
+  }
+  return parts.join(' · ') || '未知'
+}
+
+const getFollowAppliedUpdateModeLabel = (state: Partial<PanTransferFollowTaskAppliedUpdateState> | null | undefined) => {
+  if (state?.locked) {
+    return '手动锁定'
+  }
+  if (state?.source === 'manual') {
+    return '手动维护'
+  }
+  return '自动跟随'
+}
+
 const buildFollowSettingsDraft = (task: PanTransferFollowTaskItem): FollowTaskSettingsDraft => ({
   taskId: task.id,
   check_interval_minutes: Number(task.check_interval_minutes || DEFAULT_FOLLOW_CHECK_INTERVAL_MINUTES),
@@ -807,6 +863,7 @@ const buildFollowSettingsDraft = (task: PanTransferFollowTaskItem): FollowTaskSe
     max_judge_candidates: Number(task.candidate_policy?.max_judge_candidates || DEFAULT_FOLLOW_MAX_JUDGE_CANDIDATES),
   },
   automation: getFollowAutomation(task),
+  applied_update_state: getFollowAppliedUpdateState(task),
 })
 
 const getFollowCandidateAssessmentSummary = (record: PanTransferFollowTaskItem) => {
@@ -990,7 +1047,7 @@ const buildSyncSelectionEntries = (
     path: entry.path || undefined,
   }))
 
-const FollowTasksSectionV2 = ({ refreshToken, isActive = true }: FollowTasksSectionProps) => {
+const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectionProps) => {
   const isPageVisible = usePageVisibility()
   const [tasks, setTasks] = useState<PanTransferFollowTaskItem[]>([])
   const [loading, setLoading] = useState(false)
@@ -1243,6 +1300,7 @@ const FollowTasksSectionV2 = ({ refreshToken, isActive = true }: FollowTasksSect
         check_interval_minutes: settingsDraft.check_interval_minutes,
         candidate_policy: settingsDraft.candidate_policy,
         automation: settingsDraft.automation,
+        applied_update_state: settingsDraft.applied_update_state,
       })
       setDetailData(response)
       setSettingsDraft(buildFollowSettingsDraft(response.task))
@@ -1502,7 +1560,7 @@ const FollowTasksSectionV2 = ({ refreshToken, isActive = true }: FollowTasksSect
       width: 220,
       className: 'resource-ops-transfer-col-resource',
       render: (_, record) => {
-        const mainTitle = getFollowTaskTitle(record)
+        const mainTitle = getFollowAppliedTaskTitle(record)
         return (
           <Tooltip title={mainTitle}>
             <div className="resource-ops-transfer-title-cell">
@@ -1689,8 +1747,24 @@ const FollowTasksSectionV2 = ({ refreshToken, isActive = true }: FollowTasksSect
     },
   ]
 
-  const resourceDirectoryColumn = columns[2]
-  columns[2] = {
+  columns.splice(2, 0, {
+    title: '更新状态',
+    key: 'applied_update_state',
+    width: 180,
+    render: (_, record) => {
+      const state = getFollowAppliedUpdateState(record)
+      return (
+        <div className="resource-ops-transfer-validation resource-ops-transfer-validation--publish-meta">
+          <small>{formatFollowAppliedUpdateStatus(state)}</small>
+          <small>{getFollowAppliedUpdateModeLabel(state)}</small>
+          {state.updated_at ? <small>{`更新于 ${formatDateTime(state.updated_at)}`}</small> : null}
+        </div>
+      )
+    },
+  })
+
+  const resourceDirectoryColumn = columns[3]
+  columns[3] = {
     ...(resourceDirectoryColumn || {}),
     render: (_, record) =>
       renderCopyableResourceDirectory(record.fixed_save_path, {
@@ -1755,6 +1829,18 @@ const FollowTasksSectionV2 = ({ refreshToken, isActive = true }: FollowTasksSect
       return {
         ...base,
         automation: getFollowAutomation({ automation: updater(getFollowAutomation(base)) }),
+      }
+    })
+  }
+  const updateAppliedUpdateDraft = (
+    updater: (state: PanTransferFollowTaskAppliedUpdateState) => PanTransferFollowTaskAppliedUpdateState
+  ) => {
+    if (!detailTask) return
+    setSettingsDraft((current) => {
+      const base = current && current.taskId === detailTask.id ? current : buildFollowSettingsDraft(detailTask)
+      return {
+        ...base,
+        applied_update_state: getFollowAppliedUpdateState({ applied_update_state: updater(getFollowAppliedUpdateState(base)) }),
       }
     })
   }
@@ -2031,7 +2117,8 @@ const FollowTasksSectionV2 = ({ refreshToken, isActive = true }: FollowTasksSect
                     </Space>
                   ),
                 },
-                { key: 'topic', label: '资源主题', children: getFollowTaskTitle(detailTask) },
+                { key: 'topic', label: '资源主题', children: getFollowAppliedTaskTitle(detailTask) },
+                { key: 'applied_update_state', label: '更新状态', children: formatFollowAppliedUpdateStatus(detailTask.applied_update_state) },
                 { key: 'account', label: '目标账号', children: detailTask.target_account_name || '-' },
                 { key: 'path', label: '固定资源目录', children: renderCopyableResourceDirectory(detailTask.fixed_save_path) },
                 {
@@ -2179,6 +2266,88 @@ const FollowTasksSectionV2 = ({ refreshToken, isActive = true }: FollowTasksSect
                         }
                       />
                     </div>
+                    <div className="resource-ops-follow-settings-field resource-ops-follow-settings-field--compact">
+                      <label>更新季数：</label>
+                      <InputNumber
+                        min={1}
+                        max={999}
+                        value={activeSettingsDraft.applied_update_state.season ?? undefined}
+                        placeholder="留空则沿用自动识别"
+                        className="resource-ops-follow-settings-control resource-ops-follow-settings-control--short"
+                        onChange={(value) =>
+                          updateAppliedUpdateDraft((state) => ({
+                            ...state,
+                            season: value === null ? null : Number(value || 0) || null,
+                          }))
+                        }
+                      />
+                    </div>
+
+                    <div className="resource-ops-follow-settings-field resource-ops-follow-settings-field--compact">
+                      <label>更新集数：</label>
+                      <InputNumber
+                        min={1}
+                        max={9999}
+                        value={activeSettingsDraft.applied_update_state.episode ?? undefined}
+                        placeholder="留空则沿用自动识别"
+                        className="resource-ops-follow-settings-control resource-ops-follow-settings-control--short"
+                        onChange={(value) =>
+                          updateAppliedUpdateDraft((state) => ({
+                            ...state,
+                            episode: value === null ? null : Number(value || 0) || null,
+                          }))
+                        }
+                      />
+                    </div>
+
+                    <div className="resource-ops-follow-settings-field resource-ops-follow-settings-field--compact">
+                      <label>期号：</label>
+                      <Input
+                        className="resource-ops-follow-settings-control resource-ops-follow-settings-control--issue"
+                        value={activeSettingsDraft.applied_update_state.issue_no || ''}
+                        placeholder="综艺/期号类资源可手动维护"
+                        onChange={(event) =>
+                          updateAppliedUpdateDraft((state) => ({
+                            ...state,
+                            issue_no: event.target.value.trim() || null,
+                          }))
+                        }
+                      />
+                    </div>
+
+                    <div className="resource-ops-follow-settings-field resource-ops-follow-settings-field--status">
+                      <label>当前状态：</label>
+                      <div className="resource-ops-follow-status-panel">
+                        <div className="resource-ops-follow-status-summary">
+                          <Tag color="processing">{formatFollowAppliedUpdateStatus(activeSettingsDraft.applied_update_state)}</Tag>
+                          <Tag>{getFollowAppliedUpdateModeLabel(activeSettingsDraft.applied_update_state)}</Tag>
+                        </div>
+                        <div className="resource-ops-follow-chip-row resource-ops-follow-chip-row--status">
+                          <Checkbox
+                            checked={Boolean(activeSettingsDraft.applied_update_state.is_completed)}
+                            onChange={(event) =>
+                              updateAppliedUpdateDraft((state) => ({
+                                ...state,
+                                is_completed: event.target.checked,
+                              }))
+                            }
+                          >
+                            已完结
+                          </Checkbox>
+                          <Checkbox
+                            checked={Boolean(activeSettingsDraft.applied_update_state.locked)}
+                            onChange={(event) =>
+                              updateAppliedUpdateDraft((state) => ({
+                                ...state,
+                                locked: event.target.checked,
+                              }))
+                            }
+                          >
+                            手动锁定更新状态
+                          </Checkbox>
+                        </div>
+                      </div>
+                    </div>
                   </div>
 
                   <div className="resource-ops-follow-automation-panel">
@@ -2289,7 +2458,12 @@ const FollowTasksSectionV2 = ({ refreshToken, isActive = true }: FollowTasksSect
             <Card size="small" title="AI 识别身份" className="resource-ops-follow-sync-card">
               <div className="resource-ops-follow-sync-meta resource-ops-follow-identity-card">
                 <span>{detailTask.identity_snapshot.core_title || getFollowTaskTitle(detailTask)}</span>
-                <small>{`当前资源标题：${detailTask.identity_snapshot.resource_title || getFollowTaskTitle(detailTask)}`}</small>
+                <small>{`当前分享标题：${getFollowAppliedTaskTitle(detailTask)}`}</small>
+                <small>{`当前更新状态：${formatFollowAppliedUpdateStatus(detailTask.applied_update_state)}`}</small>
+                {detailTask.identity_snapshot.resource_title &&
+                detailTask.identity_snapshot.resource_title !== getFollowAppliedTaskTitle(detailTask) ? (
+                  <small>{`当前追踪源标题：${detailTask.identity_snapshot.resource_title}`}</small>
+                ) : null}
                 <small>
                   {[
                     detailTask.identity_snapshot.release_year ? `年份 ${detailTask.identity_snapshot.release_year}` : null,
@@ -2698,7 +2872,7 @@ const FollowTasksSectionV2 = ({ refreshToken, isActive = true }: FollowTasksSect
         )}
       </Drawer>
 
-      <FollowTaskFileDiagnosisModal
+      <FollowTaskFileDiagnosisDialog
         open={fileDiagnosisOpen}
         task={detailTask}
         hasCandidate={hasCandidate}
@@ -3014,4 +3188,4 @@ const FollowTasksSectionV2 = ({ refreshToken, isActive = true }: FollowTasksSect
   )
 }
 
-export default FollowTasksSectionV2
+export default FollowTasksSection

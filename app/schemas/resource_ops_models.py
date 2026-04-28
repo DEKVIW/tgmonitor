@@ -1,9 +1,12 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_serializer
+
+
+RESOURCE_OPS_LEGACY_LOCAL_TZ = timezone(timedelta(hours=8))
 
 
 def _serialize_resource_ops_datetime(value: datetime) -> str:
@@ -12,6 +15,30 @@ def _serialize_resource_ops_datetime(value: datetime) -> str:
     else:
         normalized = value.astimezone(timezone.utc)
     return normalized.isoformat().replace("+00:00", "Z")
+
+
+def _serialize_legacy_local_datetime(value: datetime) -> str:
+    if value.tzinfo is None:
+        normalized = value.replace(tzinfo=RESOURCE_OPS_LEGACY_LOCAL_TZ)
+    else:
+        normalized = value.astimezone(RESOURCE_OPS_LEGACY_LOCAL_TZ)
+    return normalized.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _normalize_utc_datetime(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _normalize_legacy_local_datetime(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=RESOURCE_OPS_LEGACY_LOCAL_TZ)
+    return value.astimezone(RESOURCE_OPS_LEGACY_LOCAL_TZ)
 
 
 class ResourceOpsBaseModel(BaseModel):
@@ -124,6 +151,12 @@ class ResourceOpsCandidateItem(ResourceOpsBaseModel):
     last_message_time: datetime | None = None
     last_clicked_at: datetime | None = None
 
+    @field_serializer("first_seen_at", "last_seen_at", "last_message_time", when_used="json")
+    def serialize_legacy_local_candidate_datetimes(self, value: datetime | None) -> str | None:
+        if value is None:
+            return None
+        return _serialize_legacy_local_datetime(value)
+
 
 class ResourceOpsCandidateListResponse(ResourceOpsBaseModel):
     items: list[ResourceOpsCandidateItem]
@@ -140,6 +173,12 @@ class ResourceOpsCandidateRefItem(ResourceOpsBaseModel):
     source: str = ""
     message_timestamp: datetime | None = None
     links: list[dict[str, Any]] = Field(default_factory=list)
+
+    @field_serializer("message_timestamp", when_used="json")
+    def serialize_legacy_local_message_timestamp(self, value: datetime | None) -> str | None:
+        if value is None:
+            return None
+        return _serialize_legacy_local_datetime(value)
 
 
 class ResourceOpsCandidateDetailResponse(ResourceOpsBaseModel):
@@ -255,6 +294,29 @@ class ResourceOpsWorkbenchItem(ResourceOpsBaseModel):
     work_year_hint: int | None = None
     work_last_attempted_at: datetime | None = None
     work_matched_at: datetime | None = None
+
+    @field_serializer(
+        "first_seen_at",
+        "last_seen_at",
+        "last_message_time",
+        "topic_last_message_time",
+        when_used="json",
+    )
+    def serialize_legacy_local_workbench_datetimes(self, value: datetime | None) -> str | None:
+        if value is None:
+            return None
+        return _serialize_legacy_local_datetime(value)
+
+    @field_serializer("topic_last_activity_at", when_used="json")
+    def serialize_topic_last_activity_at(self, value: datetime | None) -> str | None:
+        normalized_click = _normalize_utc_datetime(self.topic_last_clicked_at)
+        normalized_message = _normalize_legacy_local_datetime(self.topic_last_message_time)
+        candidates = [candidate for candidate in [normalized_click, normalized_message] if candidate is not None]
+        if candidates:
+            return max(candidates).astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+        if value is None:
+            return None
+        return _serialize_resource_ops_datetime(value)
 
 
 class ResourceOpsWorkbenchListResponse(ResourceOpsBaseModel):
