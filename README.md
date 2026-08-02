@@ -236,7 +236,7 @@ npm run build
 
 构建产物位于 `frontend/dist`，通常交给 Nginx 托管，并把 `/api` 反向代理到后端 API。
 
-Docker 部署可以参考 `docker/docker-compose.yml`，Nginx 示例配置在 `docker/nginx.conf`。
+Docker 部署可以参考 `docker/docker-compose.yml`，前端容器内的 Nginx 配置在 `docker/nginx.conf`。如果使用外层 Nginx 托管前端并反代后端 API，可以参考 `docker/nginx_proxy/conf.d/tg-monitor.example.conf`。
 
 ## 说明
 
