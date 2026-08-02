@@ -54,9 +54,7 @@ tg/
 ├── docker/               # Dockerfile、Compose 和 Nginx 配置
 ├── scripts/              # systemd 服务、备份和恢复脚本
 ├── tests/                # 后端测试
-├── data/                 # 本地运行数据目录
-├── docs/                 # 本地运维文档，默认不推送 GitHub
-└── references/           # 本地参考项目，默认不推送 GitHub
+└── data/                 # 本地运行数据目录
 ```
 
 ## 环境要求
@@ -90,6 +88,18 @@ PUBLIC_DASHBOARD_ENABLED=false
 
 ## 快速开始
 
+### 0. 启动数据库
+
+项目依赖 PostgreSQL。初始化数据库、启动 API、启动监听和 Worker 之前，都需要先确保 PostgreSQL 已启动，并且 `.env` 中的 `DATABASE_URL` 可以连接成功。
+
+常见检查方式：
+
+```bash
+pg_isready -h 127.0.0.1 -p 5432
+```
+
+如果使用 `docker/docker-compose.yml`，PostgreSQL 会由其中的 `db` 服务启动；如果使用 systemd 或手动部署，需要先安装并启动宿主机上的 PostgreSQL。
+
 ### 1. 安装后端依赖
 
 Linux / macOS:
@@ -110,20 +120,26 @@ pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-### 2. 初始化数据库和默认用户
+### 2. 初始化数据库和账号引导
 
 ```bash
 python -m app.scripts.init_db
 ```
 
-首次初始化会创建数据库表、写入默认频道，并在 `users.json` 不存在时创建默认管理员。
+首次初始化会创建数据库表，并写入默认频道。当前运行时账号以数据库表 `user_accounts` 和 `auth_identities` 为准。
 
-默认管理员：
+API 启动时会执行账号存储引导：
+
+- 如果数据库里已有账号，直接使用数据库账号
+- 如果数据库为空但存在旧版 `users.json`，会把旧用户迁移到数据库
+- 如果数据库为空且没有旧用户，才会创建默认管理员
+
+空库默认管理员：
 
 - 用户名：`admin`
 - 密码：`admin123`
 
-首次登录后请立即在 UI 中修改密码。
+首次登录后请立即在 UI 中修改密码。当前版本不再把 `users.json` 作为主要账号存储，它只作为旧版本迁移来源保留兼容。
 
 ### 3. 完成 Telegram Session 登录
 
@@ -222,15 +238,8 @@ npm run build
 
 Docker 部署可以参考 `docker/docker-compose.yml`，Nginx 示例配置在 `docker/nginx.conf`。
 
-## 本地文档与参考项目
-
-`docs/` 和 `references/` 是本地维护目录，已经在 `.gitignore` 中忽略，不会推送到 GitHub。
-
-- `docs/`：故障复盘、部署记录、优化步骤等本地运维文档
-- `references/`：转存、网盘、检测相关参考项目
-
 ## 说明
 
 - 旧版 Streamlit 启动方式已经弃用
-- 前端构建产物、测试缓存、会话文件和本地文档默认不纳入 Git
-- 生产环境请妥善保存 `.env`、`users.json`、`tg_monitor_session.session` 和数据库备份
+- 前端构建产物、测试缓存和会话文件默认不纳入 Git
+- 生产环境请妥善保存 `.env`、`tg_monitor_session.session` 和数据库备份
