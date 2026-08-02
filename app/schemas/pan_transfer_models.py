@@ -272,7 +272,7 @@ class PanTransferBatchCreateRequest(PanTransferManualPreviewRequest):
         normalized = _normalize_text(value, field_name=info.field_name).lower()
         allowed_map = {
             "transfer_layout": {"independent", "batch_archive"},
-            "item_folder_mode": {"auto", "custom"},
+            "item_folder_mode": {"auto", "original", "custom"},
             "share_target_mode": {"resource_dir", "content_root"},
         }
         if normalized not in allowed_map[info.field_name]:

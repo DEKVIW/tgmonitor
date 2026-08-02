@@ -609,6 +609,44 @@ def _resolve_follow_sync_source(
     return source_target, _normalize_text(source_target.original_url), source_snapshot
 
 
+def _normalize_follow_sync_link_status(value: Any) -> str | None:
+    normalized = _normalize_text(value, max_length=32).lower()
+    if not normalized or normalized in {"unknown", "pending"}:
+        return None
+    return normalized
+
+
+def _resolve_follow_sync_source_link_status(
+    *,
+    source_kind: str,
+    task: PanTransferSyncTask | None = None,
+    item: PanTransferBatchItem | None = None,
+    extra_json: dict[str, Any] | None = None,
+) -> str | None:
+    if source_kind == "current":
+        task_status = _normalize_follow_sync_link_status(getattr(task, "source_link_status", None))
+        item_status = _normalize_follow_sync_link_status(getattr(item, "latest_link_health", None))
+        return task_status or item_status
+
+    task_extra = dict(extra_json or getattr(task, "extra_json", {}) or {})
+    candidate_assessment = dict(task_extra.get("candidate_assessment") or {})
+    validation_payload = dict(candidate_assessment.get("validation") or {})
+    for raw_status in (
+        candidate_assessment.get("validation_status"),
+        candidate_assessment.get("source_link_status"),
+        candidate_assessment.get("link_status"),
+        validation_payload.get("status"),
+        getattr(item, "latest_link_health", None),
+    ):
+        normalized = _normalize_follow_sync_link_status(raw_status)
+        if normalized:
+            return normalized
+
+    if source_kind == "candidate":
+        return "valid"
+    return None
+
+
 async def create_pan_transfer_follow_sync_batch(
     session: Session,
     *,
@@ -642,6 +680,14 @@ async def create_pan_transfer_follow_sync_batch(
         source_kind=source_kind,
         sync_mode=sync_mode,
         source_message_snapshot=source_message_snapshot,
+    )
+    source_link_status = (
+        _resolve_follow_sync_source_link_status(
+            source_kind=source_kind,
+            task=task,
+            extra_json=dict(task.extra_json or {}),
+        )
+        or "unknown"
     )
 
     path_strategy, resolved_paths = _resolve_follow_sync_paths(task)
@@ -694,6 +740,7 @@ async def create_pan_transfer_follow_sync_batch(
             "sync_mode": sync_mode,
             "source_link_target_id": int(source_target.id),
             "source_url": source_url,
+            "source_link_status": source_link_status,
             "reuse_existing_share_if_valid": reuse_existing_share_if_valid,
             "update_publish_record": update_publish_record,
             "confirm_full_replace": confirm_full_replace,
@@ -728,7 +775,7 @@ async def create_pan_transfer_follow_sync_batch(
             _parse_datetime(source_message_snapshot.get("message_time"))
             or (task.last_candidate_message_time if source_kind == "candidate" else task.last_checked_at)
         ),
-        latest_link_health=_normalize_text(task.source_link_status if source_kind == "current" else "unknown", max_length=32) or "unknown",
+        latest_link_health=source_link_status,
         transfer_status=PAN_TRANSFER_ITEM_STATUS_QUEUED,
         share_status=PAN_TRANSFER_SHARE_STATUS_PENDING,
         validation_status=PAN_TRANSFER_VALIDATION_STATUS_PENDING,
@@ -755,6 +802,7 @@ async def create_pan_transfer_follow_sync_batch(
                 "sync_mode": sync_mode,
                 "source_link_target_id": int(source_target.id),
                 "source_url": source_url,
+                "source_link_status": source_link_status,
                 "clear_existing_contents": clear_existing_contents,
                 "reuse_existing_share_if_valid": reuse_existing_share_if_valid,
                 "existing_share_url": _normalize_text(task.current_share_url) or None,
@@ -931,6 +979,17 @@ def handle_follow_sync_item_success(
     source_share_key = _normalize_text(getattr(source_target, "share_key", None), max_length=255) or None
     if promote_source_metadata and source_share_key:
         task.source_share_key = source_share_key
+    promoted_source_link_status = (
+        _resolve_follow_sync_source_link_status(
+            source_kind=source_kind,
+            task=task,
+            item=item,
+            extra_json=previous_extra_json,
+        )
+        or _normalize_follow_sync_link_status(context.get("source_link_status"))
+    )
+    if promote_source_metadata and promoted_source_link_status:
+        task.source_link_status = promoted_source_link_status
 
     synced_source_message_snapshot = _build_follow_sync_success_source_snapshot(
         session,
@@ -1019,6 +1078,7 @@ def handle_follow_sync_item_success(
         "actual_share_target_mode": effective_actual_share_target_snapshot.get("actual_share_target_mode"),
         "actual_share_target_relative_path": effective_actual_share_target_snapshot.get("actual_share_target_relative_path"),
         "actual_share_target_is_root": effective_actual_share_target_snapshot.get("actual_share_target_is_root"),
+        "source_link_status": _normalize_text(task.source_link_status, max_length=32).lower() or None,
         "source_metadata_promoted": promote_source_metadata,
         "source_metadata_promotion": source_metadata_promotion,
     }
@@ -1085,6 +1145,7 @@ def handle_follow_sync_item_success(
             "actual_share_target_mode": effective_actual_share_target_snapshot.get("actual_share_target_mode"),
             "actual_share_target_relative_path": effective_actual_share_target_snapshot.get("actual_share_target_relative_path"),
             "actual_share_target_is_root": effective_actual_share_target_snapshot.get("actual_share_target_is_root"),
+            "source_link_status": _normalize_text(task.source_link_status, max_length=32).lower() or None,
             "source_metadata_promoted": promote_source_metadata,
             "source_metadata_promotion": source_metadata_promotion,
             "applied_update_state": applied_update_state,

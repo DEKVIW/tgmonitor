@@ -1417,27 +1417,60 @@ def delete_ai_provider(session: Session, *, provider_id: int) -> dict[str, Any]:
     if row is None:
         raise LookupError("AI provider not found")
 
-    active_route_steps = (
-        session.query(AiRouteStep)
-        .filter(AiRouteStep.provider_id == int(row.id), AiRouteStep.is_enabled.is_(True))
-        .count()
-    )
-    if active_route_steps > 0:
-        raise ValueError("Please detach this provider from AI routes before deleting it")
+    route_step_ids = [
+        int(step_id)
+        for (step_id,) in (
+            session.query(AiRouteStep.id)
+            .filter(AiRouteStep.provider_id == int(row.id))
+            .all()
+        )
+        if step_id is not None
+    ]
+    deleted_route_steps = 0
+    if route_step_ids:
+        (
+            session.query(AiCallEvent)
+            .filter(AiCallEvent.route_step_id.in_(route_step_ids))
+            .update({"route_step_id": None}, synchronize_session=False)
+        )
+        deleted_route_steps = int(
+            session.query(AiRouteStep)
+            .filter(AiRouteStep.id.in_(route_step_ids))
+            .delete(synchronize_session=False)
+            or 0
+        )
 
     (
         session.query(AiCallEvent)
         .filter(AiCallEvent.provider_id == int(row.id))
         .update({"provider_id": None}, synchronize_session=False)
     )
-    (
+    deleted_models = int(
         session.query(AiProviderModel)
         .filter(AiProviderModel.provider_id == int(row.id))
         .delete(synchronize_session=False)
+        or 0
     )
+    was_default = bool(row.is_default)
     session.delete(row)
+    if was_default:
+        fallback_provider = (
+            session.query(AiProviderConfig)
+            .filter(AiProviderConfig.id != int(provider_id), AiProviderConfig.is_enabled.is_(True))
+            .order_by(AiProviderConfig.priority.asc(), AiProviderConfig.id.asc())
+            .first()
+        )
+        if fallback_provider is not None:
+            fallback_provider.is_default = True
+            session.add(fallback_provider)
+            _set_provider_default(session, provider_id=int(fallback_provider.id))
     session.flush()
-    return {"id": int(provider_id), "deleted": True}
+    return {
+        "id": int(provider_id),
+        "deleted": True,
+        "deleted_models": deleted_models,
+        "deleted_route_steps": deleted_route_steps,
+    }
 
 
 def refresh_ai_provider_models(session: Session, *, provider_id: int) -> dict[str, Any]:

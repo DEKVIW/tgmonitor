@@ -56,6 +56,7 @@ import {
   ITEM_FOLDER_TEMPLATE_PRESET_OPTIONS,
   MASKED_MIX_ITEM_TEMPLATE,
   MASKED_CN_ITEM_TEMPLATE,
+  ORIGINAL_ITEM_TEMPLATE,
   PLATFORM_OPTIONS,
   type PreviewDraft,
   RETRY_DELAY_OPTIONS,
@@ -278,7 +279,9 @@ const ResourceOpsTransferCenterMain = () => {
 
   const batchPathPreview = useMemo(() => {
     const itemFolderName =
-      batchCreateDraft.itemFolderPreset === 'masked_mix'
+      batchCreateDraft.itemFolderPreset === 'original'
+        ? '<原始资源标题>'
+        : batchCreateDraft.itemFolderPreset === 'masked_mix'
         ? '<强混淆乱码标题>'
         : batchCreateDraft.itemFolderPreset === 'masked_cn'
           ? '<中文混淆标题>'
@@ -1058,8 +1061,11 @@ const ResourceOpsTransferCenterMain = () => {
                 batchCreateDraft.transferLayout === 'batch_archive'
                   ? batchCreateDraft.batchFolderName || null
                   : null,
-              item_folder_mode: 'custom',
-              item_folder_template: resolveBatchCreateTemplate(batchCreateDraft) || null,
+              item_folder_mode: batchCreateDraft.itemFolderPreset === 'original' ? 'original' : 'custom',
+              item_folder_template:
+                batchCreateDraft.itemFolderPreset === 'original'
+                  ? null
+                  : resolveBatchCreateTemplate(batchCreateDraft) || null,
               share_target_mode: batchCreateDraft.shareTargetMode,
             }
             const response = await createManualPanTransferBatch(payload)
@@ -1216,7 +1222,9 @@ const ResourceOpsTransferCenterMain = () => {
                               ? MASKED_CN_ITEM_TEMPLATE
                               : value === 'coded'
                                 ? CODED_ITEM_TEMPLATE
-                                : current.itemFolderTemplate || MASKED_MIX_ITEM_TEMPLATE,
+                                : value === 'original'
+                                  ? ORIGINAL_ITEM_TEMPLATE
+                                  : current.itemFolderTemplate || MASKED_MIX_ITEM_TEMPLATE,
                       }))
                     }
                   />

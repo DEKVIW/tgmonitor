@@ -48,5 +48,10 @@ env.bak/
 *.session-journal
 telegram_sessions/ 
 *.md 
+
+# local operation notes and reference projects
+/docs/
+/references/
+
 # local tests
 /tests/

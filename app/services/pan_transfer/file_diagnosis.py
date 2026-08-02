@@ -249,6 +249,30 @@ def _extract_quality_tags(text: str) -> list[str]:
     return tags
 
 
+def _extract_leading_quality_episode(text: str) -> tuple[bool, int | None]:
+    normalized = _normalize_text(text, max_length=500)
+    if not normalized:
+        return False, None
+    for raw_segment in reversed(re.split(r"\s*/\s*", normalized)):
+        segment = _normalize_text(raw_segment, max_length=255)
+        if not segment:
+            continue
+        matched = re.match(r"^0*(\d{1,4})(?:[\s._-]+|$)(.*)$", segment)
+        if matched is None:
+            continue
+        suffix = _normalize_text(matched.group(2), max_length=255)
+        if not suffix or not _extract_quality_tags(suffix):
+            continue
+        try:
+            episode = int(matched.group(1))
+        except (TypeError, ValueError):
+            return True, None
+        if 0 < episode <= 500:
+            return True, episode
+        return True, None
+    return False, None
+
+
 def _extract_season_quick(text: str) -> int | None:
     normalized = _normalize_text(text, max_length=500)
     for pattern in _SEASON_PATTERNS:
@@ -294,6 +318,11 @@ def _extract_episode_numbers_quick(text: str) -> list[int]:
     if positive_values:
         highest = max(positive_values)
         return [highest] if highest > 0 else []
+    matched_leading_quality_episode, leading_quality_episode = _extract_leading_quality_episode(normalized)
+    if leading_quality_episode is not None:
+        return [leading_quality_episode]
+    if matched_leading_quality_episode:
+        return []
     if any(char.isdigit() for char in normalized):
         trailing = _DIGIT_AT_END_PATTERN.search(normalized)
         if trailing is not None:

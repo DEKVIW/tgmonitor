@@ -43,6 +43,7 @@ DEFAULT_SHARE_TARGET_MODE = "resource_dir"
 TRANSFER_LAYOUT_INDEPENDENT = "independent"
 TRANSFER_LAYOUT_BATCH_ARCHIVE = "batch_archive"
 ITEM_FOLDER_MODE_AUTO = "auto"
+ITEM_FOLDER_MODE_ORIGINAL = "original"
 ITEM_FOLDER_MODE_CUSTOM = "custom"
 SHARE_TARGET_RESOURCE_DIR = "resource_dir"
 SHARE_TARGET_CONTENT_ROOT = "content_root"
@@ -197,7 +198,7 @@ def normalize_batch_path_strategy(payload: dict[str, Any] | None) -> dict[str, A
         transfer_layout = DEFAULT_TRANSFER_LAYOUT
 
     item_folder_mode = str(raw.get("item_folder_mode") or DEFAULT_ITEM_FOLDER_MODE).strip().lower()
-    if item_folder_mode not in {ITEM_FOLDER_MODE_AUTO, ITEM_FOLDER_MODE_CUSTOM}:
+    if item_folder_mode not in {ITEM_FOLDER_MODE_AUTO, ITEM_FOLDER_MODE_ORIGINAL, ITEM_FOLDER_MODE_CUSTOM}:
         item_folder_mode = DEFAULT_ITEM_FOLDER_MODE
 
     share_target_mode = str(raw.get("share_target_mode") or DEFAULT_SHARE_TARGET_MODE).strip().lower()
@@ -265,6 +266,8 @@ def build_item_folder_name(
     strategy: dict[str, Any] | None = None,
 ) -> str:
     normalized = normalize_batch_path_strategy(strategy)
+    if normalized["item_folder_mode"] == ITEM_FOLDER_MODE_ORIGINAL:
+        return sanitize_path_segment(title, fallback=f"item-{int(item_id)}", max_length=96)
     if normalized["item_folder_mode"] != ITEM_FOLDER_MODE_CUSTOM:
         return build_staging_folder_name(batch_id=batch_id, item_id=item_id, title=title)
 

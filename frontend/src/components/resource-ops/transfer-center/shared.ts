@@ -18,7 +18,7 @@ export type BatchCreateDraft = {
   retryDelaySeconds: number
   transferLayout: 'independent' | 'batch_archive'
   batchFolderName: string
-  itemFolderPreset: 'masked_mix' | 'masked_cn' | 'coded' | 'custom'
+  itemFolderPreset: 'masked_mix' | 'masked_cn' | 'coded' | 'original' | 'custom'
   itemFolderTemplate: string
   shareTargetMode: 'resource_dir' | 'content_root'
 }
@@ -60,6 +60,7 @@ export const DEFAULT_PREVIEW_DRAFT: PreviewDraft = {
 export const MASKED_MIX_ITEM_TEMPLATE = '{title_masked_mix}'
 export const MASKED_CN_ITEM_TEMPLATE = '{title_masked_cn}'
 export const CODED_ITEM_TEMPLATE = 'tg-transfer-{batch_id}-{item_id}-{title_slug}'
+export const ORIGINAL_ITEM_TEMPLATE = '{title}'
 
 export const DEFAULT_BATCH_CREATE_DRAFT: BatchCreateDraft = {
   startImmediately: true,
@@ -110,6 +111,13 @@ export const ITEM_FOLDER_TEMPLATE_PRESET_OPTIONS = [
     description: '手动填写模板，支持 title / title_masked_mix / title_masked_cn / title_slug 等变量。',
   },
 ]
+
+ITEM_FOLDER_TEMPLATE_PRESET_OPTIONS.splice(3, 0, {
+  label: '原名目录',
+  value: 'original',
+  template: ORIGINAL_ITEM_TEMPLATE,
+  description: '直接使用原始标题作为目录名，仅清理路径非法字符，不追加项目编号。',
+})
 
 export const SHARE_TARGET_MODE_OPTIONS = [
   { label: '原分享目录', value: 'content_root' },
@@ -202,6 +210,7 @@ export const resolveBatchCreateTemplate = (draft: BatchCreateDraft) => {
   if (draft.itemFolderPreset === 'masked_mix') return MASKED_MIX_ITEM_TEMPLATE
   if (draft.itemFolderPreset === 'masked_cn') return MASKED_CN_ITEM_TEMPLATE
   if (draft.itemFolderPreset === 'coded') return CODED_ITEM_TEMPLATE
+  if (draft.itemFolderPreset === 'original') return ORIGINAL_ITEM_TEMPLATE
   return draft.itemFolderTemplate.trim() || MASKED_MIX_ITEM_TEMPLATE
 }
 

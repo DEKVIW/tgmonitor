@@ -15,6 +15,7 @@ from app.services.pan_transfer import (
     process_next_pan_transfer_item,
     process_next_pan_transfer_publish_rule,
 )
+from app.services.pan_transfer.maintenance import run_pan_transfer_log_retention_if_due
 from app.services.resource_ops.recognition_worker import (
     process_next_recognition_task,
     run_resource_ops_maintenance_if_due,
@@ -84,6 +85,7 @@ def main() -> None:
                     with Session(engine) as session:
                         try:
                             run_resource_ops_maintenance_if_due(session, worker_name=WORKER_NAME)
+                            run_pan_transfer_log_retention_if_due(session, worker_name=WORKER_NAME)
                             processed_recognition = process_next_recognition_task(session, worker_name=WORKER_NAME)
                             session.commit()
                         except Exception:

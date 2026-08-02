@@ -29,6 +29,7 @@ MAX_LOG_LINES = 800
 DEFAULT_MAX_LINKS_PER_TASK = 5000
 DEFAULT_MAX_CONCURRENT_PER_TASK = 10
 MAX_URL_LOG_LENGTH = 96
+ACTIVE_TASK_STALE_SECONDS = 30 * 60
 RUNNING_TASK_STATUSES = {"running", "stopping"}
 FINAL_TASK_STATUSES = {"completed", "failed", "stopped"}
 
@@ -290,13 +291,27 @@ def _load_persisted_task_status(task_id: str) -> Optional[Dict[str, Any]]:
 
 def _persist_active_task(task_id: str) -> None:
     try:
-        _persist_json(ACTIVE_TASK_FILE, {"task_id": task_id, "updated_at": _now_iso()})
+        _persist_json(
+            ACTIVE_TASK_FILE,
+            {
+                "task_id": task_id,
+                "updated_at": _now_iso(),
+                "owner_pid": os.getpid(),
+            },
+        )
     except OSError as exc:
         logger.warning("failed to persist active task: %s", exc)
 
 
-def _load_active_task_id() -> Optional[str]:
+def _load_active_task_payload() -> Optional[Dict[str, Any]]:
     payload = _load_json(ACTIVE_TASK_FILE)
+    if not payload:
+        return None
+    return payload
+
+
+def _load_active_task_id() -> Optional[str]:
+    payload = _load_active_task_payload()
     if not payload:
         return None
     task_id = str(payload.get("task_id") or "").strip()
@@ -304,13 +319,81 @@ def _load_active_task_id() -> Optional[str]:
 
 
 def _clear_active_task(task_id: Optional[str] = None) -> None:
-    current_task_id = _load_active_task_id()
+    payload = _load_active_task_payload()
+    current_task_id = str((payload or {}).get("task_id") or "").strip()
     if task_id is not None and current_task_id and current_task_id != task_id:
         return
     try:
         ACTIVE_TASK_FILE.unlink(missing_ok=True)
     except OSError as exc:
         logger.warning("failed to clear active task marker: %s", exc)
+
+
+def _parse_iso_datetime(value: Any) -> Optional[datetime]:
+    if value in (None, ""):
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).replace(tzinfo=None)
+    except ValueError:
+        return None
+
+
+def _pid_exists(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    if pid == os.getpid():
+        return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _is_active_task_stale(status: Dict[str, Any]) -> bool:
+    timestamp = _parse_iso_datetime(status.get("updated_at")) or _parse_iso_datetime(status.get("started_at"))
+    if timestamp is None:
+        return True
+    return datetime.now() - timestamp > timedelta(seconds=ACTIVE_TASK_STALE_SECONDS)
+
+
+def _recover_stale_active_task(
+    task_id: str,
+    status: Dict[str, Any],
+    active_payload: Optional[Dict[str, Any]],
+) -> bool:
+    if task_id in _active_task_threads:
+        return False
+
+    owner_pid: Optional[int] = None
+    raw_owner_pid = (active_payload or {}).get("owner_pid")
+    try:
+        owner_pid = int(raw_owner_pid) if raw_owner_pid is not None else None
+    except (TypeError, ValueError):
+        owner_pid = None
+
+    owner_missing = owner_pid is not None and not _pid_exists(owner_pid)
+    status_stale = _is_active_task_stale(status)
+    legacy_stale = owner_pid is None and status_stale
+    if not owner_missing and not legacy_stale:
+        return False
+
+    reason = "owner process is gone" if owner_missing else "legacy status heartbeat is stale"
+    logger.warning("recovering stale link check task task_id=%s reason=%s", task_id, reason)
+    _update_task_status(
+        task_id,
+        status="stopped",
+        current_phase="stopped",
+        stop_requested=True,
+        error=f"stale active task recovered: {reason}",
+        append_log=f"[system] Stale active task recovered: {reason}",
+    )
+    _clear_active_task(task_id)
+    return True
 
 
 def _normalize_logs(logs: Optional[List[str]]) -> List[str]:
@@ -412,7 +495,8 @@ def _run_task_thread(task_id: str, task_payload: Any, max_concurrent: int) -> No
 
 
 def get_active_task_snapshot() -> Optional[Tuple[str, Dict[str, Any]]]:
-    task_id = _load_active_task_id()
+    active_payload = _load_active_task_payload()
+    task_id = str((active_payload or {}).get("task_id") or "").strip()
     if not task_id:
         return None
 
@@ -423,6 +507,9 @@ def get_active_task_snapshot() -> Optional[Tuple[str, Dict[str, Any]]]:
 
     if status.get("status") not in RUNNING_TASK_STATUSES:
         _clear_active_task(task_id)
+        return None
+
+    if _recover_stale_active_task(task_id, status, active_payload):
         return None
 
     return task_id, status

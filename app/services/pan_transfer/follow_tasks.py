@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import unicodedata
 from collections.abc import Mapping
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
@@ -64,6 +65,7 @@ PAN_TRANSFER_FOLLOW_IDENTITY_ROUTE_KEY = "pan_transfer_follow_identity_extract"
 PAN_TRANSFER_FOLLOW_CANDIDATE_JUDGE_ROUTE_KEY = "pan_transfer_follow_candidate_judge"
 PAN_TRANSFER_FOLLOW_MAX_RECALL_CANDIDATES = 6
 PAN_TRANSFER_FOLLOW_MAX_JUDGE_CANDIDATES = 3
+PAN_TRANSFER_FOLLOW_MAX_SEARCH_QUERIES = 4
 PAN_TRANSFER_FOLLOW_MIN_RECALL_CANDIDATES = 1
 PAN_TRANSFER_FOLLOW_RECALL_CANDIDATES_LIMIT = 30
 PAN_TRANSFER_FOLLOW_MIN_JUDGE_CANDIDATES = 1
@@ -245,6 +247,19 @@ def _normalize_match_key(value: Any) -> str:
     return "".join(char for char in text if char.isalnum() or "\u4e00" <= char <= "\u9fff")
 
 
+def _normalize_follow_query_text(value: Any, *, max_length: int = 255) -> str:
+    text = unicodedata.normalize("NFKC", _normalize_text(value, max_length=max_length))
+    text = (
+        text.replace("\u200b", " ")
+        .replace("\u200c", " ")
+        .replace("\u200d", " ")
+        .replace("\ufeff", " ")
+        .replace("\u200e", " ")
+        .replace("\u200f", " ")
+    )
+    return _normalize_text(re.sub(r"\s+", " ", text), max_length=max_length)
+
+
 def _dedupe_texts(values: list[str], *, max_items: int = 6, max_length: int = 120) -> list[str]:
     normalized: list[str] = []
     seen: set[str] = set()
@@ -280,13 +295,31 @@ def _is_meaningful_follow_search_query(value: Any) -> bool:
     return FOLLOW_GENERIC_QUERY_PATTERN.fullmatch(cleaned) is None
 
 
-def _build_follow_identity_search_queries(*values: Any, max_items: int = 1) -> list[str]:
+def _expand_follow_search_query(value: Any) -> list[str]:
+    cleaned = _clean_follow_title(_normalize_follow_query_text(value))
+    if not cleaned:
+        return []
+    normalized = _normalize_follow_query_text(cleaned, max_length=80)
+    variants = [normalized]
+    parts = [
+        part
+        for part in re.split(r"[\s:：·・•|/\\_\-]+", normalized)
+        if _is_meaningful_follow_search_query(part)
+    ]
+    if len(parts) > 1:
+        variants.extend(parts)
+        variants.append(" ".join(parts))
+    return _dedupe_texts(
+        [item for item in variants if _is_meaningful_follow_search_query(item)],
+        max_items=PAN_TRANSFER_FOLLOW_MAX_SEARCH_QUERIES,
+        max_length=80,
+    )
+
+
+def _build_follow_identity_search_queries(*values: Any, max_items: int = PAN_TRANSFER_FOLLOW_MAX_SEARCH_QUERIES) -> list[str]:
     queries: list[str] = []
     for raw_value in values:
-        cleaned = _clean_follow_title(raw_value)
-        if not cleaned or not _is_meaningful_follow_search_query(cleaned):
-            continue
-        queries.append(cleaned)
+        queries.extend(_expand_follow_search_query(raw_value))
     return _dedupe_texts(queries, max_items=max_items, max_length=80)
 
 

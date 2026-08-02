@@ -34,6 +34,28 @@
   display: none;
 }
 
+.guest-header-actions {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  margin-left: auto;
+}
+
+.guest-login-button {
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  color: rgba(22, 50, 74, 0.76);
+}
+
+.guest-login-button.ant-btn-text:not(:disabled):hover,
+.guest-login-button.ant-btn-text:not(:disabled):focus-visible {
+  color: #1677ff;
+  background: rgba(232, 243, 255, 0.9);
+}
+
 .guest-brand > div:first-child {
   font-size: 20px !important;
   font-weight: 600 !important;
@@ -80,9 +102,20 @@
 
   .guest-header-toolbar {
     flex: 1 1 100%;
+    order: 3;
     width: 100%;
     padding-bottom: 0;
     margin-bottom: 0;
+  }
+
+  .guest-header-actions {
+    order: 2;
+  }
+
+  .guest-login-button {
+    width: 34px;
+    min-width: 34px;
+    height: 34px;
   }
 }
 

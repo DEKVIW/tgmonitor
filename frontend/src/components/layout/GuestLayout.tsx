@@ -1,7 +1,10 @@
 import { ReactNode } from 'react'
-import { Layout as AntLayout } from 'antd'
+import { Button, Layout as AntLayout, Tooltip } from 'antd'
+import { UserOutlined } from '@ant-design/icons'
+import { useNavigate } from 'react-router-dom'
 
 import { formatBrandTitle, useSiteBranding } from '@/utils/siteBranding'
+import { LOGIN_PATH } from '@/utils/routes'
 
 import BackToTopButton from './BackToTopButton'
 import SiteFooter from './SiteFooter'
@@ -18,6 +21,7 @@ interface GuestLayoutProps {
 
 const GuestLayout = ({ children, toolbar }: GuestLayoutProps) => {
   const siteBranding = useSiteBranding()
+  const navigate = useNavigate()
 
   return (
     <AntLayout className="app-layout guest-layout">
@@ -27,6 +31,17 @@ const GuestLayout = ({ children, toolbar }: GuestLayoutProps) => {
           <span className="guest-subtitle">{'\u516c\u5f00\u9875\u9762'}</span>
         </div>
         {toolbar ? <div className="guest-header-toolbar">{toolbar}</div> : null}
+        <div className="guest-header-actions">
+          <Tooltip title="登录" placement="bottomRight">
+            <Button
+              type="text"
+              icon={<UserOutlined />}
+              className="guest-login-button"
+              aria-label="登录"
+              onClick={() => navigate(LOGIN_PATH)}
+            />
+          </Tooltip>
+        </div>
       </header>
       <Content className="content-wrapper guest-content-wrapper">{children}</Content>
       <SiteFooter />

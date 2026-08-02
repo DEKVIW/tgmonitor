@@ -450,7 +450,7 @@ const AiCenterAdminRuntime = () => {
   const handleDeleteProvider = async (record: AiCenterProviderItem) => {
     Modal.confirm({
       title: `删除提供方：${record.display_name}`,
-      content: '删除前请确认这个提供方没有被任何路由步骤使用。',
+      content: '删除后会自动移除引用该提供方的路由步骤，历史调用记录会保留但解除提供方关联。',
       okButtonProps: { danger: true },
       okText: '删除',
       cancelText: '取消',
