@@ -10,7 +10,6 @@ import {
   PauseCircleOutlined,
   PlayCircleOutlined,
   SearchOutlined,
-  SyncOutlined,
 } from '@ant-design/icons'
 import { Alert, Button, Card, Checkbox, Collapse, Descriptions, Drawer, Dropdown, Empty, Input, InputNumber, Modal, Segmented, Space, Table, Tabs, Tag, Tooltip, Typography, message } from 'antd'
 import type { MenuProps } from 'antd'
@@ -1631,6 +1630,16 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
 
   const buildMoreActionsMenu = (record: PanTransferFollowTaskItem): MenuProps => ({
     items: [
+      ...(String(record.rule_assessment?.execution_mode || '').toLowerCase() === 'manual_modal'
+        ? [
+            {
+              key: 'recommended',
+              icon: <FolderOpenOutlined />,
+              label: `执行推荐：${record.rule_assessment.rule_label}`,
+              disabled: !record.rule_assessment.can_execute,
+            },
+          ]
+        : []),
       {
         key: 'advanced',
         icon: <FolderOpenOutlined />,
@@ -1655,6 +1664,10 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
       },
     ],
     onClick: ({ key }) => {
+      if (key === 'recommended') {
+        void runRecommendedAction(record)
+        return
+      }
       if (key === 'advanced') {
         void openManualSyncModal(record, record.last_candidate_url ? 'candidate' : 'current')
         return
@@ -1876,32 +1889,11 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
     {
       title: '操作',
       key: 'actions',
-      width: 148,
+      width: 116,
       fixed: 'right',
       render: (_, record) => {
-        const executionMode = String(record.rule_assessment?.execution_mode || '').toLowerCase()
-        const primaryActionIcon =
-          executionMode === 'manual_modal' ? (
-            <FolderOpenOutlined />
-          ) : executionMode === 'recheck_only' ? (
-            <SearchOutlined />
-          ) : (
-            <SyncOutlined />
-          )
-        const primaryActionTitle =
-          executionMode === 'manual_modal'
-            ? `执行推荐：${record.rule_assessment.rule_label}`
-            : executionMode === 'recheck_only'
-              ? isFollowAutoRuleKey(record.rule_assessment.rule_key)
-                ? `执行推荐：按${record.rule_assessment.rule_label}立即巡检`
-                : '执行推荐：先重新检查'
-              : executionMode === 'wait_candidate'
-                ? '当前先等待候选原链'
-                : executionMode === 'busy'
-                  ? '当前任务进行中'
-                  : `执行推荐：${record.rule_assessment.rule_label}`
         return (
-          <div className="resource-ops-transfer-action-grid resource-ops-transfer-action-grid--wide">
+          <div className="resource-ops-transfer-action-grid">
             <Tooltip title="查看详情">
               <Button size="small" type="text" icon={<EyeOutlined />} onClick={() => void loadTaskDetail(record.id, { open: true })} />
             </Tooltip>
@@ -1913,19 +1905,6 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
                 loading={queueingTaskId === record.id}
                 disabled={record.status !== 'active'}
                 onClick={() => void queueTaskCheck(record.id)}
-              />
-            </Tooltip>
-            <Tooltip title={primaryActionTitle}>
-              <Button
-                size="small"
-                type="text"
-                icon={primaryActionIcon}
-                disabled={
-                  !record.rule_assessment.can_execute ||
-                  ((executionMode === 'recheck_only' || executionMode === 'wait_candidate') && record.status !== 'active')
-                }
-                loading={executionMode === 'recheck_only' ? queueingTaskId === record.id : false}
-                onClick={() => void runRecommendedAction(record)}
               />
             </Tooltip>
             <Dropdown menu={buildMoreActionsMenu(record)} trigger={['click']}>
@@ -1999,6 +1978,7 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
       ? 'success'
       : 'warning'
   const detailRuleTone = detailTask ? getFollowRuleTone(detailTask) : FOLLOW_RULE_TONE.info
+  const showSystemSuggestionAction: boolean = false
   const preferredManualSourceKind: FollowSyncSourceKind = hasCandidate ? 'candidate' : 'current'
   const detailRecommendedSourceLabel = formatFollowSourceKind(
     detailTask?.rule_assessment.recommended_source_kind || preferredManualSourceKind
@@ -2934,7 +2914,7 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
                     )}
                   </div>
                 }
-                action={
+                action={showSystemSuggestionAction ? (
                   isFollowAutoRuleKey(detailTask.rule_assessment.rule_key) ? (
                     <Button size="small" disabled={detailTask.status !== 'active'} loading={queueingTaskId === detailTask.id} onClick={() => void queueTaskCheck(detailTask.id)}>
                       {`立即按${detailTask.rule_assessment.rule_label}巡检`}
@@ -2952,7 +2932,7 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
                       重新检查
                     </Button>
                   ) : null
-                }
+                ) : null}
               />
             </Card>
 

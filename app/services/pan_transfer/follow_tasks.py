@@ -27,10 +27,10 @@ from app.services.ai_center import execute_text_route, extract_json_object_from_
 from app.services.resource_identity import compare_follow_candidate, parse_resource_identity
 from app.services.resource_ops import get_work_binding_lookup
 
-from .common import normalize_relative_path, utcnow
+from .common import DEFAULT_SHARE_TARGET_MODE, generate_share_passcode, normalize_relative_path, utcnow
 from .providers import decrypt_account_credential, get_pan_transfer_provider
 from .providers.base import PanTransferProviderError
-from .replacement import replace_link_target_references_with_url, rewrite_message_link_ref_with_url
+from .replacement import _ensure_link_target_for_url, replace_link_target_references_with_url, rewrite_message_link_ref_with_url
 from .validation import validate_share_url
 
 
@@ -76,6 +76,7 @@ PAN_TRANSFER_FOLLOW_AUTOMATION_MODE_AUTO_REPLACE_ALL = "auto_replace_all"
 PAN_TRANSFER_FOLLOW_AUTOMATION_STOP_SOURCE_INVALID = "source_invalid"
 PAN_TRANSFER_FOLLOW_AUTOMATION_STOP_SOURCE_SWITCHED = "source_switched"
 PAN_TRANSFER_FOLLOW_AUTOMATION_STOP_STRUCTURE_CONFLICT = "structure_conflict"
+PAN_TRANSFER_FOLLOW_SHARE_REFRESH_COOLDOWN_MINUTES = 6 * 60
 
 FOLLOW_EPISODE_PATTERNS = (
     re.compile(r"更\s*(\d{1,4})\s*集"),
@@ -1782,6 +1783,549 @@ def bind_follow_task_publish_record(
     session.add(task)
     session.flush()
     return publish_record
+
+
+def _normalize_follow_share_target_mode(value: Any) -> str:
+    normalized = _normalize_text(value, max_length=32).lower() or DEFAULT_SHARE_TARGET_MODE
+    return normalized if normalized in {"resource_dir", "content_root"} else DEFAULT_SHARE_TARGET_MODE
+
+
+def _build_follow_task_share_snapshot(task: PanTransferSyncTask) -> dict[str, Any] | None:
+    extra_json = dict(task.extra_json or {})
+    resolved_paths = dict(extra_json.get("resolved_paths") or {})
+    path_strategy = dict(extra_json.get("path_strategy") or {})
+    fixed_save_path = normalize_relative_path(_normalize_text(task.fixed_save_path, max_length=512))
+
+    staging_root = normalize_relative_path(_normalize_text(resolved_paths.get("staging_root"), max_length=512))
+    staging_folder_name = _normalize_text(resolved_paths.get("staging_folder_name"), max_length=255)
+    staging_folder_id = _normalize_text(resolved_paths.get("staging_folder_id"), max_length=255) or None
+
+    if (not staging_root or not staging_folder_name) and fixed_save_path:
+        parts = [part for part in fixed_save_path.split("/") if part]
+        if parts:
+            staging_folder_name = staging_folder_name or parts[-1]
+            staging_root = staging_root or "/".join(parts[:-1])
+
+    if not staging_root or not staging_folder_name:
+        return None
+
+    return {
+        "staging_root": staging_root,
+        "staging_folder_name": staging_folder_name,
+        "staging_folder_id": staging_folder_id,
+        "share_target_mode": _normalize_follow_share_target_mode(
+            resolved_paths.get("share_target_mode")
+            or task.share_target_mode
+            or path_strategy.get("share_target_mode")
+        ),
+    }
+
+
+def _build_follow_task_direct_share_request(
+    *,
+    account: PanTransferAccount,
+    task: PanTransferSyncTask,
+    snapshot: Mapping[str, Any],
+) -> dict[str, Any]:
+    share_mode = _normalize_text(account.default_share_mode, max_length=32).lower() or "public"
+    share_passcode = _normalize_text(account.default_share_passcode, max_length=32) or None
+    if share_mode == "private" and not share_passcode:
+        share_passcode = generate_share_passcode()
+    current_share_identity = _get_follow_task_current_share_identity(task)
+    title_hint = (
+        _normalize_text(current_share_identity.get("resource_title"), max_length=255)
+        or _resolve_follow_applied_update_state_resource_title(task)
+        or _normalize_text(task.task_name, max_length=255)
+        or _normalize_text(snapshot.get("staging_folder_name"), max_length=255)
+    )
+    return {
+        "staging_root": normalize_relative_path(_normalize_text(snapshot.get("staging_root"), max_length=512)),
+        "staging_folder_name": _normalize_text(snapshot.get("staging_folder_name"), max_length=255),
+        "staging_folder_id": _normalize_text(snapshot.get("staging_folder_id"), max_length=255) or None,
+        "share_target_mode": _normalize_follow_share_target_mode(snapshot.get("share_target_mode")),
+        "share_mode": share_mode,
+        "share_passcode": share_passcode,
+        "share_expire_days": int(account.default_share_expire_days) if account.default_share_expire_days is not None else None,
+        "title_hint": title_hint,
+    }
+
+
+def _replace_frontend_current_share_references_after_refresh(
+    session: Session,
+    *,
+    task: PanTransferSyncTask,
+    old_share_url: str | None,
+    old_share_link_target_id: int | None,
+    new_share_url: str,
+) -> dict[str, Any]:
+    normalized_new_url = _normalize_text(new_share_url)
+    normalized_old_url = _normalize_text(old_share_url)
+    if not normalized_new_url:
+        return {
+            "status": "skipped",
+            "reason": "new_share_url_missing",
+            "old_share_url": normalized_old_url or None,
+            "new_share_url": None,
+        }
+    if not normalized_old_url and old_share_link_target_id is None:
+        return {
+            "status": "skipped",
+            "reason": "old_share_missing",
+            "old_share_url": None,
+            "new_share_url": normalized_new_url,
+        }
+
+    old_target_id = _normalize_optional_int(old_share_link_target_id)
+    if old_target_id is None and normalized_old_url:
+        try:
+            old_target = _ensure_link_target_for_url(session, url=normalized_old_url, observed_at=utcnow())
+            old_target_id = int(old_target.id)
+        except Exception as exc:
+            result = {
+                "status": "failed",
+                "reason": "old_link_target_lookup_failed",
+                "old_share_url": normalized_old_url,
+                "new_share_url": normalized_new_url,
+                "error": _normalize_text(exc, max_length=500) or type(exc).__name__,
+            }
+            _append_follow_task_log(
+                session,
+                task=task,
+                stage="share_refresh",
+                level="warning",
+                message="Refreshed share was created but the old frontend share target could not be resolved",
+                payload=result,
+            )
+            return result
+
+    if old_target_id is None:
+        return {
+            "status": "skipped",
+            "reason": "old_link_target_missing",
+            "old_share_url": normalized_old_url or None,
+            "new_share_url": normalized_new_url,
+        }
+
+    try:
+        result = replace_link_target_references_with_url(
+            session,
+            old_target_id=int(old_target_id),
+            new_share_url=normalized_new_url,
+            expected_platform=str(task.platform or ""),
+        )
+    except Exception as exc:
+        result = {
+            "status": "failed",
+            "reason": "frontend_reference_replacement_failed",
+            "old_link_target_id": int(old_target_id),
+            "old_share_url": normalized_old_url or None,
+            "new_share_url": normalized_new_url,
+            "error": _normalize_text(exc, max_length=1000) or type(exc).__name__,
+        }
+        _append_follow_task_log(
+            session,
+            task=task,
+            stage="share_refresh",
+            level="warning",
+            message="Refreshed share was created but old frontend references could not be updated",
+            payload=result,
+        )
+        return result
+
+    affected_refs = int(result.get("affected_ref_count") or 0)
+    affected_messages = int(result.get("affected_message_count") or 0)
+    status = _normalize_text(result.get("status"), max_length=32).lower()
+    if status == "replaced" and (affected_refs > 0 or affected_messages > 0):
+        message = "Updated old frontend share references to the refreshed valid share"
+    elif status == "skipped":
+        message = "Old frontend share references already matched the refreshed share"
+    else:
+        message = "No old frontend share references needed updating"
+    _append_follow_task_log(
+        session,
+        task=task,
+        stage="share_refresh",
+        message=message,
+        payload={
+            "old_share_url": normalized_old_url or None,
+            "new_share_url": normalized_new_url,
+            "replacement": result,
+        },
+    )
+    return result
+
+
+async def _auto_refresh_follow_task_share_from_snapshot(
+    session: Session,
+    *,
+    task: PanTransferSyncTask,
+    worker_name: str,
+    validation_result: Mapping[str, Any] | None,
+    previous_error: str | None = None,
+) -> bool:
+    account_id = _normalize_optional_int(task.target_account_id)
+    if account_id is None:
+        raise ValueError("target account is missing")
+    account = session.get(PanTransferAccount, int(account_id))
+    if account is None:
+        raise LookupError("target account not found")
+    if not bool(account.is_enabled):
+        raise ValueError("target account is disabled")
+
+    snapshot = _build_follow_task_share_snapshot(task)
+    if snapshot is None:
+        raise ValueError("follow task resource directory snapshot is missing")
+    share_request = _build_follow_task_direct_share_request(account=account, task=task, snapshot=snapshot)
+
+    _append_follow_task_log(
+        session,
+        task=task,
+        stage="share_refresh",
+        message="Attempting direct share refresh from follow task directory snapshot",
+        payload={
+            "account_id": int(account.id),
+            "account_name": _normalize_text(account.account_name, max_length=128) or None,
+            "old_share_url": _normalize_text(task.current_share_url) or None,
+            "previous_error": previous_error,
+            "validation_result": dict(validation_result or {}),
+            **share_request,
+        },
+    )
+
+    credential_value = decrypt_account_credential(account)
+    provider = get_pan_transfer_provider(str(task.platform or account.platform or ""))
+    _commit_before_external_call(session)
+    share_result = await provider.share_staging_target(
+        credential_value=credential_value,
+        account_name=_normalize_text(account.account_name, max_length=128),
+        staging_root=share_request["staging_root"],
+        staging_folder_name=share_request["staging_folder_name"],
+        staging_folder_id=share_request["staging_folder_id"],
+        share_target_mode=share_request["share_target_mode"],
+        share_mode=share_request["share_mode"],
+        share_passcode=share_request["share_passcode"],
+        share_expire_days=share_request["share_expire_days"],
+        title_hint=share_request["title_hint"],
+    )
+    new_share_url = _normalize_text(share_result.new_share_url)
+    if not new_share_url:
+        raise ValueError("share provider did not return a new share url")
+
+    validation = await validate_share_url(new_share_url)
+    validation_status = _normalize_text(validation.get("status"), max_length=32).lower() or "unknown"
+    if validation_status in {"invalid", "error"}:
+        detail = _normalize_text(validation.get("detail_message"), max_length=255) or "new share URL validation failed"
+        raise ValueError(detail)
+
+    new_target_id: int | None = None
+    try:
+        new_target = _ensure_link_target_for_url(session, url=new_share_url, observed_at=utcnow())
+        new_target_id = int(new_target.id)
+    except Exception as exc:
+        _append_follow_task_log(
+            session,
+            task=task,
+            stage="share_refresh",
+            level="warning",
+            message=f"Refreshed share was created but link target indexing failed: {_normalize_text(exc, max_length=500) or type(exc).__name__}",
+            payload={"new_share_url": new_share_url},
+        )
+
+    previous_identity = _get_follow_task_current_share_identity(task)
+    last_sync = _get_task_extra_section(task, "last_sync")
+    share_payload = dict(share_result.payload or {})
+    actual_share_target_mode = (
+        _normalize_text(share_payload.get("share_target_mode_resolved"), max_length=32)
+        or _normalize_text(last_sync.get("actual_share_target_mode"), max_length=32)
+        or share_request["share_target_mode"]
+    )
+    actual_share_target_relative_path = (
+        normalize_relative_path(_normalize_text(share_payload.get("share_target_relative_path"), max_length=512))
+        or normalize_relative_path(_normalize_text(last_sync.get("actual_share_target_relative_path"), max_length=512))
+        or normalize_relative_path(_normalize_text(previous_identity.get("actual_share_target_relative_path"), max_length=512))
+    )
+    actual_share_target_is_root = _normalize_optional_bool(share_payload.get("share_target_is_root"))
+    if actual_share_target_is_root is None:
+        actual_share_target_is_root = _normalize_optional_bool(last_sync.get("actual_share_target_is_root"))
+
+    refreshed_at = utcnow()
+    current_share_identity = _build_follow_current_share_identity_snapshot(
+        share_url=new_share_url,
+        source_title=(
+            _normalize_text(previous_identity.get("resource_title"), max_length=255)
+            or _resolve_follow_applied_update_state_resource_title(task)
+            or share_request["title_hint"]
+        ),
+        source_kind=_normalize_text(previous_identity.get("source_kind"), max_length=32) or "current",
+        sync_mode=_normalize_text(previous_identity.get("sync_mode"), max_length=32) or "share_refresh",
+        source_link_target_id=task.source_link_target_id,
+        actual_share_target_mode=actual_share_target_mode,
+        actual_share_target_relative_path=actual_share_target_relative_path,
+        actual_share_target_is_root=actual_share_target_is_root,
+        synced_at=refreshed_at,
+    )
+
+    old_share_url = _normalize_text(task.current_share_url) or None
+    old_share_link_target_id = _normalize_optional_int(task.current_share_link_target_id)
+    task.current_share_url = new_share_url
+    if new_target_id is not None:
+        task.current_share_link_target_id = int(new_target_id)
+    task.current_share_status = validation_status if validation_status not in {"unknown"} else "valid"
+    task.last_change_type = "share_refreshed"
+    task.last_error_message = None
+    _set_task_extra_section(task, "current_share_identity", current_share_identity)
+    session.add(task)
+    session.flush()
+
+    frontend_replacement = _replace_frontend_current_share_references_after_refresh(
+        session,
+        task=task,
+        old_share_url=old_share_url,
+        old_share_link_target_id=old_share_link_target_id,
+        new_share_url=new_share_url,
+    )
+
+    state = {
+        "last_result": "success",
+        "last_attempt_at": _serialize_json_value(refreshed_at),
+        "last_success_at": _serialize_json_value(refreshed_at),
+        "cooldown_until": None,
+        "refresh_source": "follow_task_snapshot",
+        "old_share_url": old_share_url,
+        "new_share_url": new_share_url,
+        "new_link_target_id": new_target_id,
+        "validation_status": validation_status,
+        "validation_result": dict(validation or {}),
+        "share_request": share_request,
+        "provider_payload": share_payload,
+        "frontend_replacement": frontend_replacement,
+    }
+    _set_task_extra_section(task, "share_auto_refresh", state)
+    session.add(task)
+    session.flush()
+    _append_follow_task_log(
+        session,
+        task=task,
+        stage="share_refresh",
+        message="Automatic share refresh completed from follow task directory snapshot",
+        payload=state,
+    )
+    return True
+
+
+async def _auto_refresh_follow_task_share_if_needed(
+    session: Session,
+    *,
+    task: PanTransferSyncTask,
+    worker_name: str,
+    validation_result: Mapping[str, Any] | None,
+) -> bool:
+    current_status = _normalize_text(task.current_share_status, max_length=32).lower()
+    if current_status not in {"invalid", "error"}:
+        return False
+
+    now = utcnow()
+    state = _get_task_extra_section(task, "share_auto_refresh")
+    cooldown_until = _parse_datetime(state.get("cooldown_until"))
+    if (
+        cooldown_until is not None
+        and cooldown_until > now
+        and _normalize_text(state.get("last_result"), max_length=32).lower() == "failed"
+    ):
+        _append_follow_task_log(
+            session,
+            task=task,
+            stage="share_refresh",
+            message="Automatic share refresh skipped because failure cooldown is active",
+            payload={
+                "current_share_url": _normalize_text(task.current_share_url) or None,
+                "current_share_status": current_status,
+                "cooldown_until": _serialize_json_value(cooldown_until),
+                "last_error": _normalize_text(state.get("last_error"), max_length=500) or None,
+            },
+        )
+        return False
+
+    publish_record = bind_follow_task_publish_record(session, task=task)
+    if publish_record is None:
+        _append_follow_task_log(
+            session,
+            task=task,
+            stage="share_refresh",
+            level="warning",
+            message="No refreshable publish record is bound; falling back to follow task directory snapshot",
+            payload={
+                "old_share_url": _normalize_text(task.current_share_url) or None,
+                "validation_result": dict(validation_result or {}),
+            },
+        )
+        try:
+            return await _auto_refresh_follow_task_share_from_snapshot(
+                session,
+                task=task,
+                worker_name=worker_name,
+                validation_result=validation_result,
+                previous_error="no refreshable publish record is bound to this follow task",
+            )
+        except Exception as exc:
+            error_message = _normalize_text(exc, max_length=1000) or type(exc).__name__
+            cooldown_until = now + timedelta(minutes=PAN_TRANSFER_FOLLOW_SHARE_REFRESH_COOLDOWN_MINUTES)
+            state = {
+                "last_result": "failed",
+                "last_error": error_message,
+                "last_attempt_at": _serialize_json_value(now),
+                "cooldown_until": _serialize_json_value(cooldown_until),
+                "refresh_source": "follow_task_snapshot",
+                "old_share_url": _normalize_text(task.current_share_url) or None,
+                "validation_result": dict(validation_result or {}),
+            }
+            _set_task_extra_section(task, "share_auto_refresh", state)
+            session.add(task)
+            session.flush()
+            _append_follow_task_log(
+                session,
+                task=task,
+                stage="share_refresh",
+                level="error",
+                message=f"Automatic share refresh from follow task directory snapshot failed: {error_message}",
+                payload=state,
+            )
+            return False
+
+    old_share_url = _normalize_text(task.current_share_url) or None
+    old_share_link_target_id = _normalize_optional_int(task.current_share_link_target_id)
+    record_id = int(publish_record.id)
+    _append_follow_task_log(
+        session,
+        task=task,
+        stage="share_refresh",
+        level="warning",
+        message="Current share is invalid; attempting automatic share refresh",
+        payload={
+            "publish_record_id": record_id,
+            "old_share_url": old_share_url,
+            "validation_result": dict(validation_result or {}),
+        },
+    )
+
+    try:
+        _commit_before_external_call(session)
+        from .publishing import refresh_pan_transfer_publish_record_share
+
+        refreshed_record = await refresh_pan_transfer_publish_record_share(
+            session,
+            record_id=record_id,
+            operator=worker_name,
+        )
+    except Exception as exc:
+        error_message = _normalize_text(exc, max_length=1000) or type(exc).__name__
+        try:
+            return await _auto_refresh_follow_task_share_from_snapshot(
+                session,
+                task=task,
+                worker_name=worker_name,
+                validation_result=validation_result,
+                previous_error=error_message,
+            )
+        except Exception as fallback_exc:
+            error_message = _normalize_text(fallback_exc, max_length=1000) or type(fallback_exc).__name__
+        cooldown_until = now + timedelta(minutes=PAN_TRANSFER_FOLLOW_SHARE_REFRESH_COOLDOWN_MINUTES)
+        state = {
+            "last_result": "failed",
+            "last_error": error_message,
+            "last_attempt_at": _serialize_json_value(now),
+            "cooldown_until": _serialize_json_value(cooldown_until),
+            "publish_record_id": record_id,
+            "old_share_url": old_share_url,
+            "validation_result": dict(validation_result or {}),
+        }
+        _set_task_extra_section(task, "share_auto_refresh", state)
+        session.add(task)
+        session.flush()
+        _append_follow_task_log(
+            session,
+            task=task,
+            stage="share_refresh",
+            level="error",
+            message=f"Automatic share refresh failed: {error_message}",
+            payload=state,
+        )
+        return False
+
+    new_share_url = (
+        _normalize_text(refreshed_record.get("current_share_url"))
+        or _normalize_text(refreshed_record.get("source_url"))
+        or None
+    )
+    if not new_share_url:
+        cooldown_until = now + timedelta(minutes=PAN_TRANSFER_FOLLOW_SHARE_REFRESH_COOLDOWN_MINUTES)
+        state = {
+            "last_result": "failed",
+            "last_error": "share refresh did not return a new share url",
+            "last_attempt_at": _serialize_json_value(now),
+            "cooldown_until": _serialize_json_value(cooldown_until),
+            "publish_record_id": record_id,
+            "old_share_url": old_share_url,
+            "validation_result": dict(validation_result or {}),
+        }
+        _set_task_extra_section(task, "share_auto_refresh", state)
+        session.add(task)
+        session.flush()
+        _append_follow_task_log(
+            session,
+            task=task,
+            stage="share_refresh",
+            level="error",
+            message="Automatic share refresh failed because the refreshed record did not contain a share URL",
+            payload=state,
+        )
+        return False
+
+    refreshed_publish_record = session.get(PanTransferPublishRecord, record_id)
+    _sync_follow_task_publish_binding(task, publish_record=refreshed_publish_record)
+    task.current_share_url = new_share_url
+    task.current_share_link_target_id = _normalize_optional_int(refreshed_record.get("published_link_target_id")) or task.current_share_link_target_id
+    task.current_share_status = (
+        _normalize_text(refreshed_record.get("current_share_status"), max_length=32).lower()
+        or "valid"
+    )
+    if task.current_share_status in {"invalid", "error", "unknown"}:
+        task.current_share_status = "valid"
+    task.last_change_type = "share_refreshed"
+    task.last_error_message = None
+    session.add(task)
+    session.flush()
+
+    frontend_replacement = _replace_frontend_current_share_references_after_refresh(
+        session,
+        task=task,
+        old_share_url=old_share_url,
+        old_share_link_target_id=old_share_link_target_id,
+        new_share_url=new_share_url,
+    )
+
+    state = {
+        "last_result": "success",
+        "last_attempt_at": _serialize_json_value(now),
+        "last_success_at": _serialize_json_value(utcnow()),
+        "cooldown_until": None,
+        "publish_record_id": record_id,
+        "old_share_url": old_share_url,
+        "new_share_url": new_share_url,
+        "published_link_target_id": _normalize_optional_int(refreshed_record.get("published_link_target_id")),
+        "frontend_replacement": frontend_replacement,
+    }
+    _set_task_extra_section(task, "share_auto_refresh", state)
+    session.add(task)
+    session.flush()
+    _append_follow_task_log(
+        session,
+        task=task,
+        stage="share_refresh",
+        message="Automatic share refresh completed and the frontend link was updated",
+        payload=state,
+    )
+    return True
 
 
 def _serialize_follow_task(row: PanTransferSyncTask) -> dict[str, Any]:
@@ -3914,6 +4458,19 @@ async def _process_pan_transfer_follow_task_async(
         level="warning" if task.current_share_status in {"invalid", "error"} else "info",
         payload=dict(share_status),
     )
+    if task.current_share_status in {"invalid", "error"}:
+        refreshed = await _auto_refresh_follow_task_share_if_needed(
+            session,
+            task=task,
+            worker_name=worker_name,
+            validation_result=share_status,
+        )
+        if refreshed:
+            share_status = {
+                "status": task.current_share_status,
+                "detail_message": "automatic share refresh completed",
+                "result": None,
+            }
 
     _refresh_follow_task_source_message_snapshot(
         session,
