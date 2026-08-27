@@ -539,6 +539,60 @@ def _follow_applied_update_state_compare_key(value: Mapping[str, Any] | None) ->
     }
 
 
+def _normalize_follow_episode_numbers(value: Any) -> list[int]:
+    raw_values = value if isinstance(value, (list, tuple, set)) else [value]
+    normalized: set[int] = set()
+    for raw_value in raw_values:
+        episode = _normalize_optional_int(raw_value)
+        if episode is not None and episode > 0:
+            normalized.add(int(episode))
+    return sorted(normalized)
+
+
+def _normalize_follow_materialized_update_state(value: Mapping[str, Any] | None) -> dict[str, Any]:
+    raw = dict(value or {})
+    normalized = _normalize_follow_applied_update_state(raw)
+    episode_numbers = set(_normalize_follow_episode_numbers(raw.get("episode_numbers")))
+    state_episode = _normalize_optional_int(normalized.get("episode"))
+    if state_episode is not None and state_episode > 0:
+        episode_numbers.add(int(state_episode))
+    if episode_numbers:
+        normalized["episode_numbers"] = sorted(episode_numbers)[-200:]
+        normalized["episode"] = max(episode_numbers)
+
+    status = _normalize_text(raw.get("status"), max_length=32).lower() or None
+    if status:
+        normalized["status"] = status
+    error_message = _normalize_text(raw.get("error_message"), max_length=2000) or None
+    if error_message:
+        normalized["error_message"] = error_message
+    for key in ("batch_id", "batch_item_id", "selected_count"):
+        normalized_value = _normalize_optional_int(raw.get(key))
+        if normalized_value is not None:
+            normalized[key] = normalized_value
+    for key in ("source_kind", "sync_mode", "trigger_mode"):
+        normalized_value = _normalize_text(raw.get(key), max_length=32).lower() or None
+        if normalized_value:
+            normalized[key] = normalized_value
+    target_relative_path = normalize_relative_path(_normalize_text(raw.get("target_relative_path"), max_length=512))
+    if target_relative_path:
+        normalized["target_relative_path"] = target_relative_path
+    return {
+        key: item
+        for key, item in normalized.items()
+        if item not in (None, [], "", {})
+    }
+
+
+def _get_follow_task_materialized_update_state(task: PanTransferSyncTask) -> dict[str, Any]:
+    return _normalize_follow_materialized_update_state(_get_task_extra_section(task, "materialized_update_state"))
+
+
+def _collect_follow_task_materialized_episode_numbers(task: PanTransferSyncTask) -> list[int]:
+    materialized_state = _get_follow_task_materialized_update_state(task)
+    return _normalize_follow_episode_numbers(materialized_state.get("episode_numbers"))
+
+
 def _resolve_follow_applied_update_state_resource_title(
     task: PanTransferSyncTask,
     *,
@@ -646,6 +700,103 @@ def _update_follow_task_applied_update_state_from_sync(
     return next_state
 
 
+def _update_follow_task_materialized_update_state_from_sync(
+    task: PanTransferSyncTask,
+    *,
+    source_snapshot: Mapping[str, Any] | None,
+    current_share_identity: Mapping[str, Any] | None,
+    source_metadata_promotion: Mapping[str, Any] | None,
+    episode_numbers: Any,
+    materialized_at: datetime | None,
+    updated_by: str | None,
+    status: str,
+    error_message: str | None = None,
+    batch_id: int | None = None,
+    batch_item_id: int | None = None,
+    source_kind: str | None = None,
+    sync_mode: str | None = None,
+    trigger_mode: str | None = None,
+    target_relative_path: str | None = None,
+    selected_count: int | None = None,
+) -> dict[str, Any]:
+    promotion = dict(source_metadata_promotion or {})
+    transfer_materialization = dict(promotion.get("transfer_materialization") or {})
+    requires_material_transfer = bool(promotion.get("requires_material_transfer"))
+    if requires_material_transfer and not bool(transfer_materialization.get("materialized")):
+        return _get_follow_task_materialized_update_state(task)
+
+    normalized_episode_numbers = set(_normalize_follow_episode_numbers(episode_numbers))
+    candidate_episode = _normalize_optional_int(promotion.get("candidate_episode"))
+    if not normalized_episode_numbers and candidate_episode is not None and candidate_episode > 0:
+        normalized_episode_numbers.add(int(candidate_episode))
+    if not normalized_episode_numbers:
+        return _get_follow_task_materialized_update_state(task)
+
+    persisted = _get_follow_task_materialized_update_state(task)
+    previous_episode_numbers = set(_normalize_follow_episode_numbers(persisted.get("episode_numbers")))
+    merged_episode_numbers = sorted(previous_episode_numbers | normalized_episode_numbers)[-200:]
+    normalized_share_identity = _normalize_follow_current_share_identity(current_share_identity)
+    source_title = _normalize_text(dict(source_snapshot or {}).get("title"), max_length=255) or None
+    parsed_identity = parse_resource_identity(source_title) if source_title else None
+    share_completed = (
+        _normalize_optional_bool(normalized_share_identity.get("is_completed"))
+        if normalized_share_identity
+        else None
+    )
+    parsed_completed = _normalize_optional_bool(getattr(parsed_identity, "is_complete", None))
+    persisted_completed = _normalize_optional_bool(persisted.get("is_completed"))
+    is_completed = next(
+        (value for value in (share_completed, parsed_completed, persisted_completed) if value is not None),
+        None,
+    )
+
+    next_state = _normalize_follow_materialized_update_state(
+        {
+            "resource_title": (
+                source_title
+                or _normalize_text(normalized_share_identity.get("resource_title"), max_length=255)
+                or _normalize_text(persisted.get("resource_title"), max_length=255)
+                or _resolve_follow_applied_update_state_resource_title(task, fallback_state=persisted)
+            ),
+            "core_title": (
+                _normalize_text(normalized_share_identity.get("core_title"), max_length=255)
+                or _normalize_text(getattr(parsed_identity, "core_title", None), max_length=255)
+                or _normalize_text(persisted.get("core_title"), max_length=255)
+            ),
+            "season": (
+                _normalize_optional_int(normalized_share_identity.get("season"))
+                if normalized_share_identity
+                else None
+            )
+            or _normalize_optional_int(getattr(parsed_identity, "season", None))
+            or _normalize_optional_int(persisted.get("season")),
+            "episode": max(merged_episode_numbers),
+            "episode_numbers": merged_episode_numbers,
+            "issue_no": (
+                _normalize_text(normalized_share_identity.get("issue_no"), max_length=32)
+                or _normalize_text(getattr(parsed_identity, "issue_no", None), max_length=32)
+                or _normalize_text(persisted.get("issue_no"), max_length=32)
+            ),
+            "is_completed": is_completed,
+            "source": "auto",
+            "updated_at": materialized_at or utcnow(),
+            "updated_by": updated_by,
+            "status": _normalize_text(status, max_length=32).lower() or "share_pending",
+            "error_message": error_message,
+            "batch_id": batch_id,
+            "batch_item_id": batch_item_id,
+            "source_kind": source_kind,
+            "sync_mode": sync_mode,
+            "trigger_mode": trigger_mode,
+            "target_relative_path": target_relative_path,
+            "selected_count": selected_count,
+        }
+    )
+    if next_state:
+        _set_task_extra_section(task, "materialized_update_state", next_state)
+    return next_state
+
+
 def _update_follow_task_applied_update_state_from_settings(
     task: PanTransferSyncTask,
     *,
@@ -718,6 +869,44 @@ def _apply_follow_applied_update_state_to_snapshot(
     applied_complete = _normalize_optional_bool(applied_state.get("is_completed"))
     if applied_complete is not None:
         next_snapshot["is_complete"] = applied_complete
+    return next_snapshot
+
+
+def _apply_follow_materialized_update_state_to_snapshot(
+    task: PanTransferSyncTask,
+    snapshot: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    materialized_state = _get_follow_task_materialized_update_state(task)
+    next_snapshot = dict(snapshot or {})
+    if not materialized_state:
+        return next_snapshot
+
+    if not _normalize_text(next_snapshot.get("resource_title"), max_length=255):
+        resource_title = _normalize_text(materialized_state.get("resource_title"), max_length=255)
+        if resource_title:
+            next_snapshot["resource_title"] = resource_title
+    if not _normalize_text(next_snapshot.get("core_title"), max_length=255):
+        core_title = _normalize_text(materialized_state.get("core_title"), max_length=255)
+        if core_title:
+            next_snapshot["core_title"] = core_title
+    if _normalize_optional_int(next_snapshot.get("season")) is None:
+        materialized_season = _normalize_optional_int(materialized_state.get("season"))
+        if materialized_season is not None:
+            next_snapshot["season"] = materialized_season
+
+    materialized_episodes = set(_normalize_follow_episode_numbers(materialized_state.get("episode_numbers")))
+    if not materialized_episodes:
+        return next_snapshot
+    base_episode = _normalize_optional_int(next_snapshot.get("latest_episode"))
+    if base_episode is None:
+        next_snapshot["latest_episode"] = max(materialized_episodes)
+        return next_snapshot
+
+    effective_episode = int(base_episode)
+    while effective_episode + 1 in materialized_episodes:
+        effective_episode += 1
+    if effective_episode != base_episode:
+        next_snapshot["latest_episode"] = effective_episode
     return next_snapshot
 
 
@@ -2033,6 +2222,23 @@ async def _auto_refresh_follow_task_share_from_snapshot(
 
     previous_identity = _get_follow_task_current_share_identity(task)
     last_sync = _get_task_extra_section(task, "last_sync")
+    materialized_state = _get_follow_task_materialized_update_state(task)
+    materialized_episode = _normalize_optional_int(materialized_state.get("episode"))
+    previous_episode = _normalize_optional_int(previous_identity.get("episode"))
+    use_materialized_identity = bool(
+        materialized_state
+        and materialized_episode is not None
+        and (previous_episode is None or materialized_episode >= previous_episode)
+    )
+    refreshed_source_title = (
+        _normalize_text(materialized_state.get("resource_title"), max_length=255)
+        if use_materialized_identity
+        else None
+    ) or (
+        _normalize_text(previous_identity.get("resource_title"), max_length=255)
+        or _resolve_follow_applied_update_state_resource_title(task)
+        or share_request["title_hint"]
+    )
     share_payload = dict(share_result.payload or {})
     actual_share_target_mode = (
         _normalize_text(share_payload.get("share_target_mode_resolved"), max_length=32)
@@ -2051,14 +2257,27 @@ async def _auto_refresh_follow_task_share_from_snapshot(
     refreshed_at = utcnow()
     current_share_identity = _build_follow_current_share_identity_snapshot(
         share_url=new_share_url,
-        source_title=(
-            _normalize_text(previous_identity.get("resource_title"), max_length=255)
-            or _resolve_follow_applied_update_state_resource_title(task)
-            or share_request["title_hint"]
-        ),
-        source_kind=_normalize_text(previous_identity.get("source_kind"), max_length=32) or "current",
-        sync_mode=_normalize_text(previous_identity.get("sync_mode"), max_length=32) or "share_refresh",
-        source_link_target_id=task.source_link_target_id,
+        source_title=refreshed_source_title,
+        source_kind=(
+            _normalize_text(materialized_state.get("source_kind"), max_length=32)
+            if use_materialized_identity
+            else None
+        )
+        or _normalize_text(previous_identity.get("source_kind"), max_length=32)
+        or "current",
+        sync_mode=(
+            _normalize_text(materialized_state.get("sync_mode"), max_length=32)
+            if use_materialized_identity
+            else None
+        )
+        or _normalize_text(previous_identity.get("sync_mode"), max_length=32)
+        or "share_refresh",
+        source_link_target_id=(
+            _normalize_optional_int(last_sync.get("source_link_target_id"))
+            if use_materialized_identity
+            else None
+        )
+        or _normalize_optional_int(task.source_link_target_id),
         actual_share_target_mode=actual_share_target_mode,
         actual_share_target_relative_path=actual_share_target_relative_path,
         actual_share_target_is_root=actual_share_target_is_root,
@@ -2074,6 +2293,44 @@ async def _auto_refresh_follow_task_share_from_snapshot(
     task.last_change_type = "share_refreshed"
     task.last_error_message = None
     _set_task_extra_section(task, "current_share_identity", current_share_identity)
+    session.add(task)
+    session.flush()
+
+    applied_update_state = _update_follow_task_applied_update_state_from_sync(
+        task,
+        current_share_identity=current_share_identity,
+        source_metadata_promotion={
+            "promote": True,
+            "reason": "share_refresh_materialized_state_applied" if use_materialized_identity else "share_refresh",
+            "requires_material_transfer": False,
+        },
+        synced_at=refreshed_at,
+        updated_by=worker_name,
+    )
+    materialized_update_state = {}
+    materialized_episode_numbers = _normalize_follow_episode_numbers(materialized_state.get("episode_numbers"))
+    if materialized_episode_numbers:
+        materialized_update_state = _update_follow_task_materialized_update_state_from_sync(
+            task,
+            source_snapshot={"title": refreshed_source_title},
+            current_share_identity=current_share_identity,
+            source_metadata_promotion={
+                "promote": True,
+                "reason": "share_refresh_materialized_state_applied",
+                "requires_material_transfer": False,
+            },
+            episode_numbers=materialized_episode_numbers,
+            materialized_at=refreshed_at,
+            updated_by=worker_name,
+            status="share_applied",
+            batch_id=_normalize_optional_int(materialized_state.get("batch_id")),
+            batch_item_id=_normalize_optional_int(materialized_state.get("batch_item_id")),
+            source_kind=_normalize_text(materialized_state.get("source_kind"), max_length=32).lower() or None,
+            sync_mode=_normalize_text(materialized_state.get("sync_mode"), max_length=32).lower() or None,
+            trigger_mode=_normalize_text(materialized_state.get("trigger_mode"), max_length=32).lower() or None,
+            target_relative_path=_normalize_text(materialized_state.get("target_relative_path"), max_length=512) or None,
+            selected_count=_normalize_optional_int(materialized_state.get("selected_count")),
+        )
     session.add(task)
     session.flush()
 
@@ -2099,6 +2356,9 @@ async def _auto_refresh_follow_task_share_from_snapshot(
         "share_request": share_request,
         "provider_payload": share_payload,
         "frontend_replacement": frontend_replacement,
+        "applied_update_state": applied_update_state,
+        "materialized_update_state": materialized_update_state,
+        "used_materialized_identity": use_materialized_identity,
     }
     _set_task_extra_section(task, "share_auto_refresh", state)
     session.add(task)
@@ -2334,6 +2594,7 @@ def _serialize_follow_task(row: PanTransferSyncTask) -> dict[str, Any]:
     last_sync = dict(extra_json.get("last_sync") or {})
     identity_snapshot = dict(extra_json.get("identity_snapshot") or {})
     applied_update_state = _get_follow_task_applied_update_state(row)
+    materialized_update_state = _get_follow_task_materialized_update_state(row)
     candidate_assessment = dict(extra_json.get("candidate_assessment") or {})
     candidate_recall = dict(extra_json.get("candidate_recall") or {})
     candidate_policy = _build_follow_candidate_policy(extra_json.get("candidate_policy"))
@@ -2369,6 +2630,7 @@ def _serialize_follow_task(row: PanTransferSyncTask) -> dict[str, Any]:
         "current_share_message_title": current_share_message_title,
         "current_share_resource_title": current_share_resource_title,
         "applied_update_state": applied_update_state,
+        "materialized_update_state": materialized_update_state,
         "topic_key": str(row.topic_key or ""),
         "topic_title": str(row.topic_title or ""),
         "work_id": int(row.work_id) if row.work_id is not None else None,
@@ -3155,16 +3417,20 @@ def _judge_follow_candidate_fallback(
     snapshot: dict[str, Any],
     candidate: dict[str, Any],
 ) -> dict[str, Any]:
+    effective_snapshot = _apply_follow_materialized_update_state_to_snapshot(
+        task,
+        _apply_follow_applied_update_state_to_snapshot(task, snapshot),
+    )
     candidate_title = _normalize_text(candidate.get("title"), max_length=255)
-    current_resource_title = _normalize_text(snapshot.get("resource_title"), max_length=255) or _resolve_follow_task_resource_title(task)
+    current_resource_title = _normalize_text(effective_snapshot.get("resource_title"), max_length=255) or _resolve_follow_task_resource_title(task)
     query_keys = [
-        _normalize_match_key(snapshot.get("core_title")),
-        *[_normalize_match_key(item) for item in list(snapshot.get("aliases") or [])],
-        *[_normalize_match_key(item) for item in list(snapshot.get("search_queries") or [])],
+        _normalize_match_key(effective_snapshot.get("core_title")),
+        *[_normalize_match_key(item) for item in list(effective_snapshot.get("aliases") or [])],
+        *[_normalize_match_key(item) for item in list(effective_snapshot.get("search_queries") or [])],
     ]
     candidate_key = _normalize_match_key(candidate_title)
     same_work = any(key and key in candidate_key for key in query_keys)
-    current_episode = _normalize_optional_int(snapshot.get("latest_episode")) or _extract_follow_episode_hint(
+    current_episode = _normalize_optional_int(effective_snapshot.get("latest_episode")) or _extract_follow_episode_hint(
         current_resource_title,
     )
     candidate_episode = _extract_follow_episode_hint(candidate_title)
@@ -3191,17 +3457,21 @@ def _build_follow_candidate_judge_user_prompt(
     snapshot: dict[str, Any],
     candidate: dict[str, Any],
 ) -> str:
+    effective_snapshot = _apply_follow_materialized_update_state_to_snapshot(
+        task,
+        _apply_follow_applied_update_state_to_snapshot(task, snapshot),
+    )
     payload = {
         "tracked_resource": {
             "platform": _normalize_text(task.platform, max_length=64) or None,
-            "core_title": snapshot.get("core_title"),
-            "aliases": list(snapshot.get("aliases") or []),
-            "release_year": snapshot.get("release_year"),
-            "season": snapshot.get("season"),
-            "latest_episode": snapshot.get("latest_episode"),
-            "reference_titles": list(snapshot.get("reference_titles") or []),
-            "reference_message_time": snapshot.get("reference_message_time")
-            or _serialize_json_value(_get_follow_reference_message_time(task, snapshot)),
+            "core_title": effective_snapshot.get("core_title"),
+            "aliases": list(effective_snapshot.get("aliases") or []),
+            "release_year": effective_snapshot.get("release_year"),
+            "season": effective_snapshot.get("season"),
+            "latest_episode": effective_snapshot.get("latest_episode"),
+            "reference_titles": list(effective_snapshot.get("reference_titles") or []),
+            "reference_message_time": effective_snapshot.get("reference_message_time")
+            or _serialize_json_value(_get_follow_reference_message_time(task, effective_snapshot)),
         },
         "candidate": {
             "title": candidate.get("title"),
@@ -3229,7 +3499,10 @@ def _build_follow_candidate_judge_user_prompt_v2(
     snapshot: dict[str, Any],
     candidate: dict[str, Any],
 ) -> str:
-    effective_snapshot = _apply_follow_applied_update_state_to_snapshot(task, snapshot)
+    effective_snapshot = _apply_follow_materialized_update_state_to_snapshot(
+        task,
+        _apply_follow_applied_update_state_to_snapshot(task, snapshot),
+    )
     payload = {
         "tracked_resource": {
             "platform": _normalize_text(task.platform, max_length=64) or None,
@@ -3684,7 +3957,10 @@ def _judge_follow_candidate_fallback(
     snapshot: dict[str, Any],
     candidate: dict[str, Any],
 ) -> dict[str, Any]:
-    effective_snapshot = _apply_follow_applied_update_state_to_snapshot(task, snapshot)
+    effective_snapshot = _apply_follow_materialized_update_state_to_snapshot(
+        task,
+        _apply_follow_applied_update_state_to_snapshot(task, snapshot),
+    )
     tracked_resource_title = _normalize_text(effective_snapshot.get("resource_title"), max_length=255) or _resolve_follow_task_resource_title(task)
     tracked_identity = parse_resource_identity(
         tracked_resource_title,

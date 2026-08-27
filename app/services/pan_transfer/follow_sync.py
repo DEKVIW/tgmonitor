@@ -19,6 +19,7 @@ from .common import normalize_relative_path, utcnow
 from .constants import (
     DEFAULT_PAN_TRANSFER_MAX_ATTEMPTS,
     DEFAULT_PAN_TRANSFER_RETRY_DELAY_SECONDS,
+    PAN_TRANSFER_ITEM_STATUS_RETRY_WAIT,
     PAN_TRANSFER_BATCH_STATUS_RUNNING,
     PAN_TRANSFER_ITEM_STATUS_QUEUED,
     PAN_TRANSFER_REPLACEMENT_STATUS_PENDING,
@@ -29,6 +30,7 @@ from .follow_tasks import (
     PAN_TRANSFER_SYNC_STATE_CANDIDATE_FOUND,
     PAN_TRANSFER_SYNC_STATE_ERROR,
     PAN_TRANSFER_SYNC_STATE_IDLE,
+    PAN_TRANSFER_SYNC_STATE_SHARE_INVALID,
     PAN_TRANSFER_SYNC_STATE_SYNC_QUEUED,
     _append_follow_task_log,
     _build_follow_current_share_identity_snapshot,
@@ -50,6 +52,7 @@ from .follow_tasks import (
     _serialize_follow_task,
     _sync_follow_task_publish_binding,
     _update_follow_task_applied_update_state_from_sync,
+    _update_follow_task_materialized_update_state_from_sync,
     bind_follow_task_publish_record,
 )
 from .publishing import sync_pan_transfer_publish_record_source_url
@@ -213,6 +216,44 @@ def _build_follow_sync_transfer_materialization(
         "reused_existing_share": bool(dict(extra_json.get("share_reuse") or {}).get("reused")),
         "has_transfer_payload": bool(transfer_payload),
     }
+
+
+def _extract_follow_sync_materialized_episode_numbers(item: PanTransferBatchItem) -> tuple[list[int], int]:
+    extra_json = dict(item.extra_json or {})
+    source_selection = dict(extra_json.get("source_selection") or {})
+    selected_count = _normalize_optional_int(source_selection.get("selected_count")) or 0
+    values: set[int] = set()
+
+    def add_from_text(raw_value: Any) -> None:
+        text = _normalize_text(raw_value, max_length=1024)
+        if not text:
+            return
+        try:
+            from .file_diagnosis import _extract_episode_numbers_quick
+
+            episode_numbers = _extract_episode_numbers_quick(text)
+        except Exception:
+            parsed_identity = parse_resource_identity(text)
+            episode_numbers = [int(parsed_identity.episode)] if parsed_identity.episode is not None else []
+        for episode in episode_numbers:
+            normalized_episode = _normalize_optional_int(episode)
+            if normalized_episode is not None and normalized_episode > 0:
+                values.add(int(normalized_episode))
+
+    for group in list(source_selection.get("selection_groups") or []):
+        if not isinstance(group, dict):
+            continue
+        for entry in list(group.get("selected_entries") or []):
+            if not isinstance(entry, dict):
+                continue
+            selected_count += 1 if _normalize_optional_int(source_selection.get("selected_count")) is None else 0
+            add_from_text(entry.get("name"))
+            add_from_text(entry.get("path"))
+
+    if not values:
+        source_snapshot = dict(extra_json.get("source_message_snapshot") or {})
+        add_from_text(source_snapshot.get("title"))
+    return sorted(values), int(selected_count)
 
 
 def _resolve_follow_sync_source_metadata_promotion(
@@ -1090,6 +1131,27 @@ def handle_follow_sync_item_success(
         synced_at=synced_at,
         updated_by=worker_name,
     )
+    materialized_episode_numbers, materialized_selected_count = _extract_follow_sync_materialized_episode_numbers(item)
+    materialized_update_state = _update_follow_task_materialized_update_state_from_sync(
+        task,
+        source_snapshot=effective_source_message_snapshot,
+        current_share_identity=current_share_identity,
+        source_metadata_promotion=source_metadata_promotion,
+        episode_numbers=materialized_episode_numbers,
+        materialized_at=synced_at,
+        updated_by=worker_name,
+        status="share_applied",
+        batch_id=int(item.batch_id),
+        batch_item_id=int(item.id),
+        source_kind=source_kind,
+        sync_mode=sync_mode,
+        trigger_mode=trigger_mode,
+        target_relative_path=(
+            effective_actual_share_target_snapshot.get("actual_share_target_relative_path")
+            or preferred_target_relative_path
+        ),
+        selected_count=materialized_selected_count,
+    )
     if sync_mode == "incremental" and preferred_target_relative_path:
         _remember_follow_task_target_path(
             task,
@@ -1149,6 +1211,7 @@ def handle_follow_sync_item_success(
             "source_metadata_promoted": promote_source_metadata,
             "source_metadata_promotion": source_metadata_promotion,
             "applied_update_state": applied_update_state,
+            "materialized_update_state": materialized_update_state,
             "automation": automation,
         },
     )
@@ -1205,7 +1268,6 @@ def handle_follow_sync_item_failure(
     if task is None:
         return
 
-    task.task_state = PAN_TRANSFER_SYNC_STATE_ERROR
     source_kind = _normalize_text(context.get("source_kind"), max_length=32) or "current"
     sync_mode = _normalize_text(context.get("sync_mode"), max_length=32) or "standard"
     trigger_mode = _normalize_text(context.get("trigger_mode"), max_length=32).lower() or "manual"
@@ -1219,14 +1281,59 @@ def handle_follow_sync_item_failure(
         ]
         if normalized_path
     ]
-    task.last_change_type = PAN_TRANSFER_SYNC_STATE_CANDIDATE_FOUND if source_kind == "candidate" else "sync_failed"
+    source_metadata_promotion = _resolve_follow_sync_source_metadata_promotion(
+        source_kind=source_kind,
+        sync_mode=sync_mode,
+        raw_promotion=context.get("source_metadata_promotion"),
+        item=item,
+    )
+    failed_at = utcnow()
+    materialized_episode_numbers, materialized_selected_count = _extract_follow_sync_materialized_episode_numbers(item)
+    transfer_materialized = bool(
+        dict(source_metadata_promotion.get("transfer_materialization") or {}).get("materialized")
+    )
+    should_record_materialized = bool(
+        source_kind == "candidate"
+        and sync_mode == "incremental"
+        and source_metadata_promotion.get("promote")
+        and transfer_materialized
+    )
+    waiting_for_retry = _normalize_text(item.transfer_status, max_length=32).lower() == PAN_TRANSFER_ITEM_STATUS_RETRY_WAIT
+    materialized_update_state: dict[str, Any] = {}
+    if should_record_materialized:
+        materialized_update_state = _update_follow_task_materialized_update_state_from_sync(
+            task,
+            source_snapshot=dict(dict(item.extra_json or {}).get("source_message_snapshot") or {}),
+            current_share_identity=None,
+            source_metadata_promotion=source_metadata_promotion,
+            episode_numbers=materialized_episode_numbers,
+            materialized_at=failed_at,
+            updated_by=worker_name,
+            status="share_failed",
+            error_message=_normalize_text(error_message, max_length=2000) or None,
+            batch_id=int(item.batch_id),
+            batch_item_id=int(item.id),
+            source_kind=source_kind,
+            sync_mode=sync_mode,
+            trigger_mode=trigger_mode,
+            target_relative_path=preferred_target_relative_path or (selection_target_relative_paths[0] if selection_target_relative_paths else None),
+            selected_count=materialized_selected_count,
+        )
+
+    if waiting_for_retry:
+        task.task_state = PAN_TRANSFER_SYNC_STATE_SYNC_QUEUED
+        task.last_change_type = "sync_retry_wait"
+    else:
+        task.task_state = PAN_TRANSFER_SYNC_STATE_SHARE_INVALID if should_record_materialized else PAN_TRANSFER_SYNC_STATE_ERROR
+        task.last_change_type = "materialized_share_failed" if should_record_materialized else (PAN_TRANSFER_SYNC_STATE_CANDIDATE_FOUND if source_kind == "candidate" else "sync_failed")
     task.last_error_message = _normalize_text(error_message, max_length=2000) or task.last_error_message
     task.updated_by = _normalize_text(worker_name, max_length=128) or task.updated_by
     extra_json = dict(task.extra_json or {})
     last_sync = dict(extra_json.get("last_sync") or {})
-    failed_at = utcnow()
     last_sync["failed_at"] = failed_at.isoformat() + "Z"
     last_sync["error_message"] = _normalize_text(error_message, max_length=2000) or None
+    last_sync["source_metadata_promotion"] = source_metadata_promotion
+    last_sync["materialized_update_state"] = materialized_update_state or None
     extra_json["last_sync"] = last_sync
     task.extra_json = extra_json
     if trigger_mode == "automation":
@@ -1248,8 +1355,16 @@ def handle_follow_sync_item_failure(
         session,
         task=task,
         stage="sync",
-        level="error",
-        message=f"Follow-sync batch failed: {_normalize_text(error_message, max_length=2000) or 'unknown error'}",
+        level="warning" if waiting_for_retry or should_record_materialized else "error",
+        message=(
+            "Follow-sync attempt failed and is waiting for retry"
+            if waiting_for_retry
+            else (
+                "Follow-sync transfer materialized but share/replacement failed"
+                if should_record_materialized
+                else f"Follow-sync batch failed: {_normalize_text(error_message, max_length=2000) or 'unknown error'}"
+            )
+        ),
         payload={
             "batch_id": int(item.batch_id),
             "batch_item_id": int(item.id),
@@ -1259,5 +1374,9 @@ def handle_follow_sync_item_failure(
             "preferred_target_relative_path": preferred_target_relative_path,
             "target_relative_path_source": target_relative_path_source,
             "selection_target_relative_paths": selection_target_relative_paths,
+            "waiting_for_retry": waiting_for_retry,
+            "source_metadata_promotion": source_metadata_promotion,
+            "materialized_episode_numbers": materialized_episode_numbers,
+            "materialized_update_state": materialized_update_state or None,
         },
     )

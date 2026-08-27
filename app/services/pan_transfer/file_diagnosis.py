@@ -14,9 +14,12 @@ from app.services.resource_identity import normalize_match_key, parse_resource_i
 from .constants import PLATFORM_BAIDU, PLATFORM_QUARK, normalize_transfer_platform
 from .follow_tasks import (
     _apply_follow_applied_update_state_to_snapshot,
+    _apply_follow_materialized_update_state_to_snapshot,
     _append_follow_task_log,
     _build_follow_identity_fallback,
+    _collect_follow_task_materialized_episode_numbers,
     _get_follow_task,
+    _get_follow_task_materialized_update_state,
     _normalize_optional_bool,
     _normalize_optional_int,
     _normalize_text,
@@ -1086,6 +1089,7 @@ def _collect_tracked_snapshot(task: PanTransferSyncTask, *, source_kind: str | N
     existing_snapshot = dict(extra_json.get("identity_snapshot") or {})
     snapshot = existing_snapshot if existing_snapshot.get("core_title") else _build_follow_identity_fallback(task)
     snapshot = _apply_follow_applied_update_state_to_snapshot(task, snapshot)
+    snapshot = _apply_follow_materialized_update_state_to_snapshot(task, snapshot)
     if _normalize_optional_int(snapshot.get("season")) is not None:
         return snapshot
 
@@ -1386,6 +1390,7 @@ def _build_recommended_entries(
     *,
     anchor_episode: int | None,
     inferred_target_relative_path: str | None,
+    existing_episode_numbers: list[int] | None = None,
 ) -> tuple[list[_FileEntry], list[int], str]:
     if not source_entries:
         return [], [], "no_source_video"
@@ -1403,11 +1408,22 @@ def _build_recommended_entries(
 
     start_episode = min(grouped) if anchor_episode is None else max(1, int(anchor_episode) + 1)
     expected = start_episode
+    known_existing_episodes = {
+        int(episode)
+        for episode in [_normalize_optional_int(value) for value in list(existing_episode_numbers or [])]
+        if episode is not None and episode > 0
+    }
+    skipped_existing = False
     selected_entries: list[_FileEntry] = []
     selected_keys: set[str] = set()
     covered_episodes: set[int] = set()
     recommended_episode_numbers: list[int] = []
-    while expected in grouped:
+    while expected in grouped or expected in known_existing_episodes:
+        if expected in known_existing_episodes:
+            skipped_existing = True
+            covered_episodes.add(expected)
+            expected += 1
+            continue
         best_entry = _pick_best_entry(grouped[expected])
         if best_entry.unique_key not in selected_keys:
             best_entry.selected = True
@@ -1422,7 +1438,9 @@ def _build_recommended_entries(
             recommended_episode_numbers.append(expected)
             expected += 1
     return selected_entries, sorted({int(value) for value in recommended_episode_numbers}), (
-        "contiguous_window_hit" if recommended_episode_numbers else "gap_before_next_episode"
+        "contiguous_window_hit"
+        if recommended_episode_numbers
+        else ("existing_episode_window_hit" if skipped_existing else "gap_before_next_episode")
     )
 
 
@@ -1444,6 +1462,8 @@ def _build_diagnosis_summary(
     full_episode_numbers: list[int],
     full_selection_groups: list[dict[str, Any]],
     target_entries: list[_FileEntry],
+    materialized_update_state: dict[str, Any],
+    materialized_episode_numbers: list[int],
 ) -> dict[str, Any]:
     target_episode_numbers = _collect_episode_numbers(target_entries, accepted_only=True)
     return {
@@ -1475,6 +1495,8 @@ def _build_diagnosis_summary(
         "source_latest_episode": max(full_episode_numbers, default=None),
         "source_episode_numbers": list(full_episode_numbers),
         "target_episode_numbers": target_episode_numbers,
+        "materialized_episode_numbers": list(materialized_episode_numbers),
+        "materialized_update_state": dict(materialized_update_state),
         "full_entry_count": len(full_entries),
         "full_selection_group_count": len(full_selection_groups),
         "inferred_target_relative_path": inferred_target_relative_path,
@@ -1512,6 +1534,8 @@ async def diagnose_pan_transfer_follow_task_files(
     tracked_episode = _normalize_optional_int(snapshot.get("latest_episode"))
     tracked_season = _normalize_optional_int(snapshot.get("season"))
     tracked_keys = _build_tracked_keys(snapshot)
+    materialized_update_state = _get_follow_task_materialized_update_state(task)
+    materialized_episode_numbers = _collect_follow_task_materialized_episode_numbers(task)
     source_url = _normalize_text(task.last_candidate_url if normalized_source_kind == "candidate" else task.source_url)
     if not source_url:
         raise ValueError("source url is empty")
@@ -1635,6 +1659,7 @@ async def diagnose_pan_transfer_follow_task_files(
         source_video_entries,
         anchor_episode=anchor_episode,
         inferred_target_relative_path=inferred_target_relative_path,
+        existing_episode_numbers=materialized_episode_numbers,
     )
     stats.stop_reason = stop_reason
     selection_groups = _build_sync_selection_groups(
@@ -1671,6 +1696,8 @@ async def diagnose_pan_transfer_follow_task_files(
         full_episode_numbers=full_episode_numbers,
         full_selection_groups=full_selection_groups,
         target_entries=target_video_entries,
+        materialized_update_state=materialized_update_state,
+        materialized_episode_numbers=materialized_episode_numbers,
     )
 
     extra_json = dict(task.extra_json or {})
@@ -1695,6 +1722,7 @@ async def diagnose_pan_transfer_follow_task_files(
             "anchor_episode": anchor_episode,
             "latest_target_episode": latest_target_episode,
             "target_scope_relative_path": target_scope_relative_path,
+            "materialized_episode_numbers": materialized_episode_numbers,
             "recommended_episode_numbers": recommended_episode_numbers,
             "recommended_entry_count": len(recommended_entries),
             "selection_group_count": len(selection_groups),

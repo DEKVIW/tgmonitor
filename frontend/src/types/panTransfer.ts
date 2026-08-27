@@ -308,6 +308,19 @@ export interface PanTransferFollowTaskAppliedUpdateState {
   updated_by?: string | null
 }
 
+export interface PanTransferFollowTaskMaterializedUpdateState extends PanTransferFollowTaskAppliedUpdateState {
+  episode_numbers?: number[]
+  status?: string | null
+  error_message?: string | null
+  batch_id?: number | null
+  batch_item_id?: number | null
+  source_kind?: string | null
+  sync_mode?: string | null
+  trigger_mode?: string | null
+  target_relative_path?: string | null
+  selected_count?: number | null
+}
+
 export interface PanTransferFollowTaskSettingsUpdateRequest {
   check_interval_minutes?: number | null
   candidate_policy?: Partial<PanTransferFollowTaskCandidatePolicy> | null
@@ -454,6 +467,7 @@ export interface PanTransferFollowTaskItem {
   current_share_message_title?: string | null
   current_share_resource_title?: string | null
   applied_update_state: PanTransferFollowTaskAppliedUpdateState
+  materialized_update_state: PanTransferFollowTaskMaterializedUpdateState
   topic_key: string
   topic_title: string
   work_id?: number | null
@@ -593,6 +607,8 @@ export interface PanTransferFollowTaskFileDiagnosisSummary {
   source_latest_episode?: number | null
   source_episode_numbers: number[]
   target_episode_numbers: number[]
+  materialized_episode_numbers: number[]
+  materialized_update_state: PanTransferFollowTaskMaterializedUpdateState
   full_entry_count: number
   full_selection_group_count: number
   inferred_target_relative_path?: string | null
