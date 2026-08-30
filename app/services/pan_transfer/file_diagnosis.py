@@ -405,8 +405,11 @@ def _score_title_match(entry: _FileEntry, *, tracked_keys: set[str]) -> float:
 
 def _full_parse_entry(entry: _FileEntry, *, tracked_keys: set[str], tracked_season: int | None) -> None:
     identity = parse_resource_identity(_build_parse_title(entry))
-    resolved_episodes = list(entry.quick_episode_numbers)
-    if identity.episode and identity.episode not in resolved_episodes:
+    # Parent directories provide useful work and season context, but their
+    # episode labels are not evidence for each individual file.
+    file_episode_numbers = _extract_episode_numbers_quick(entry.name)
+    resolved_episodes = list(file_episode_numbers or entry.quick_episode_numbers)
+    if not file_episode_numbers and identity.episode and identity.episode not in resolved_episodes:
         resolved_episodes.append(int(identity.episode))
     resolved_episodes = sorted({int(value) for value in resolved_episodes if int(value) > 0})
     match_score = _score_title_match(entry, tracked_keys=tracked_keys)
@@ -1060,9 +1063,13 @@ def _prepare_quick_entries(
             is_disguised_video = True
         else:
             continue
+        # An explicit episode in the filename is authoritative. Directory names
+        # often describe the newest episode in a whole collection (for example,
+        # "更新至156集") and must not turn a file named S01E142 into E156.
+        file_episode_numbers = _extract_episode_numbers_quick(entry.name)
         quick_parse_title = _build_parse_title(entry)
         entry.is_video = True
-        entry.quick_episode_numbers = _extract_episode_numbers_quick(quick_parse_title)
+        entry.quick_episode_numbers = file_episode_numbers or _extract_episode_numbers_quick(quick_parse_title)
         entry.quick_season = _extract_season_quick(quick_parse_title)
         entry.quality_tags = _extract_quality_tags(entry.name)
         if is_disguised_video:

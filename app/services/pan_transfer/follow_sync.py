@@ -247,8 +247,13 @@ def _extract_follow_sync_materialized_episode_numbers(item: PanTransferBatchItem
             if not isinstance(entry, dict):
                 continue
             selected_count += 1 if _normalize_optional_int(source_selection.get("selected_count")) is None else 0
+            # The selected filename is authoritative for materialized progress.
+            # A parent directory can say "更新至156集" while the selected file is
+            # S01E142, so inspect the path only if the filename has no episode.
+            before_count = len(values)
             add_from_text(entry.get("name"))
-            add_from_text(entry.get("path"))
+            if len(values) == before_count:
+                add_from_text(entry.get("path"))
 
     if not values:
         source_snapshot = dict(extra_json.get("source_message_snapshot") or {})

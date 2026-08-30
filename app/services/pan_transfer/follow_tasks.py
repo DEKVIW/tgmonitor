@@ -4440,6 +4440,32 @@ def _collect_follow_automation_episode_set(values: Any) -> set[int]:
     return collected
 
 
+def _collect_follow_automation_selected_episode_set(groups: list[dict[str, Any]] | None) -> set[int]:
+    """Read episode evidence from the selected filenames, not their folders."""
+    from .file_diagnosis import _extract_episode_numbers_quick
+
+    collected: set[int] = set()
+    for group in list(groups or []):
+        if not isinstance(group, dict):
+            continue
+        for entry in list(group.get("selected_entries") or []):
+            if not isinstance(entry, dict):
+                continue
+            filename = _normalize_text(entry.get("name"), max_length=255)
+            episodes = _extract_episode_numbers_quick(filename) if filename else []
+            if not episodes:
+                # Some shares use opaque filenames. Only then use the path as a
+                # fallback; explicit filename evidence must always win.
+                episodes = _extract_episode_numbers_quick(
+                    _normalize_text(entry.get("path"), max_length=1024)
+                )
+            for episode in episodes:
+                normalized = _normalize_optional_int(episode)
+                if normalized is not None and normalized > 0:
+                    collected.add(int(normalized))
+    return collected
+
+
 def _summarize_follow_selection_groups(groups: list[dict[str, Any]] | None) -> dict[str, Any]:
     normalized_groups = [dict(group or {}) for group in list(groups or []) if isinstance(group, dict)]
     target_relative_paths = sorted(
@@ -4643,6 +4669,38 @@ async def _handle_follow_task_automation(
                 "recommended_episode_numbers": recommended_episode_numbers,
                 "selection_group_count": len(selection_groups),
                 "stop_reason": _normalize_text(summary.get("stop_reason"), max_length=64) or None,
+            },
+        )
+        return
+
+    selected_episode_numbers = _collect_follow_automation_selected_episode_set(selection_groups)
+    missing_selected_episodes = sorted(set(recommended_episode_numbers) - selected_episode_numbers)
+    if missing_selected_episodes:
+        _set_follow_task_automation_state(
+            task,
+            enabled=True,
+            cooldown_until=None,
+            last_auto_check_at=now,
+            last_auto_source_kind=source_kind,
+            last_auto_sync_mode=sync_mode,
+            last_auto_result="selection_mismatch",
+            last_auto_batch_id=None,
+        )
+        session.add(task)
+        session.flush()
+        _append_follow_task_log(
+            session,
+            task=task,
+            stage="automation",
+            level="warning",
+            message="Automatic incremental sync skipped because selected files do not match the planned episodes",
+            payload={
+                "mode": mode,
+                "source_kind": source_kind,
+                "recommended_episode_numbers": recommended_episode_numbers,
+                "selected_episode_numbers": sorted(selected_episode_numbers),
+                "missing_selected_episodes": missing_selected_episodes,
+                "selection_group_count": len(selection_groups),
             },
         )
         return
