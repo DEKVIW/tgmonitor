@@ -32,7 +32,7 @@ class BackupTargetBase(BaseModel):
     schedule_weekday: Optional[int] = Field(default=None, ge=0, le=6)
     schedule_day: Optional[int] = Field(default=None, ge=1, le=31)
     timezone: str = Field(default="Asia/Shanghai", max_length=64)
-    retention_count: int = Field(default=10, ge=0, le=3650)
+    retention_count: int = Field(default=1, ge=0, le=3650)
     local_dir: str = Field(default="", max_length=2000)
     webdav_base_url: str = Field(default="", max_length=2000)
     webdav_username: str = Field(default="", max_length=255)

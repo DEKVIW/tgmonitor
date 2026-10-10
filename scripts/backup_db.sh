@@ -103,8 +103,8 @@ if pg_dump -U "$DB_USER" -h "$DB_HOST" -p "$DB_PORT" -d "$DB_NAME" | gzip > "$TE
     if cp "$TEMP_BACKUP_FILE" "$CLOUD_BACKUP_FILE"; then
         echo "✅ 云端备份成功: $CLOUD_BACKUP_FILE ($BACKUP_SIZE)"
         
-        # 清理云端旧备份文件（保留最近3个）
-        OLD_CLOUD_BACKUPS=$(ls -t "$CLOUD_BACKUP_DIR"/tg_monitor_*.sql.gz 2>/dev/null | tail -n +4)
+        # 清理云端旧备份文件（仅保留最近1个）
+        OLD_CLOUD_BACKUPS=$(ls -t "$CLOUD_BACKUP_DIR"/tg_monitor_*.sql.gz 2>/dev/null | tail -n +2)
         if [ -n "$OLD_CLOUD_BACKUPS" ]; then
             echo "$OLD_CLOUD_BACKUPS" | xargs rm -f >/dev/null 2>&1
         fi
@@ -116,8 +116,8 @@ if pg_dump -U "$DB_USER" -h "$DB_HOST" -p "$DB_PORT" -d "$DB_NAME" | gzip > "$TE
     if cp "$TEMP_BACKUP_FILE" "$LOCAL_BACKUP_FILE"; then
         echo "✅ 本地备份成功: $LOCAL_BACKUP_FILE ($BACKUP_SIZE)"
         
-        # 清理本地旧备份文件（保留最近3个）
-        OLD_LOCAL_BACKUPS=$(ls -t "$LOCAL_BACKUP_DIR"/tg_monitor_*.sql.gz 2>/dev/null | tail -n +4)
+        # 清理本地旧备份文件（仅保留最近1个）
+        OLD_LOCAL_BACKUPS=$(ls -t "$LOCAL_BACKUP_DIR"/tg_monitor_*.sql.gz 2>/dev/null | tail -n +2)
         if [ -n "$OLD_LOCAL_BACKUPS" ]; then
             echo "$OLD_LOCAL_BACKUPS" | xargs rm -f >/dev/null 2>&1
         fi
@@ -144,4 +144,4 @@ else
 fi
 
 # 清除密码环境变量
-unset PGPASSWORD 
+unset PGPASSWORD

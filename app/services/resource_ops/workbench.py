@@ -5,7 +5,7 @@ from datetime import date, datetime, timedelta
 from typing import Any, Iterable
 
 from sqlalchemy import Date as SQLDate
-from sqlalchemy import case, cast, distinct, func, or_
+from sqlalchemy import case, cast, distinct, func, or_, select, union
 from sqlalchemy.orm import Session, aliased
 
 from app.models.models import (
@@ -818,6 +818,21 @@ def _load_workbench_topic_rows(
     ]
 
 
+def _build_workbench_candidate_target_ids(*, start: date, platform: str | None):
+    recent_candidate_ids = select(LinkTargetDailyStat.link_target_id).join(
+        LinkTarget,
+        LinkTarget.id == LinkTargetDailyStat.link_target_id,
+    ).where(LinkTargetDailyStat.stat_date >= start)
+    profiled_candidate_ids = select(ResourceCandidateProfile.link_target_id).join(
+        LinkTarget,
+        LinkTarget.id == ResourceCandidateProfile.link_target_id,
+    )
+    if platform:
+        recent_candidate_ids = recent_candidate_ids.where(LinkTarget.platform == platform)
+        profiled_candidate_ids = profiled_candidate_ids.where(LinkTarget.platform == platform)
+    return union(recent_candidate_ids, profiled_candidate_ids).cte("workbench_candidate_target_ids")
+
+
 def _find_topic_item_by_link_target_id(items: list[dict[str, Any]], *, link_target_id: int) -> dict[str, Any] | None:
     for item in items:
         if _to_int(item.get("link_target_id")) == int(link_target_id):
@@ -844,6 +859,15 @@ def _load_workbench_candidate_rows(
     day_1 = date.today()
     keyword_value = _normalize_keyword(keyword)
 
+    candidate_target_ids = _build_workbench_candidate_target_ids(start=start, platform=platform)
+    candidate_urls = (
+        select(LinkTarget.normalized_url.label("normalized_url"))
+        .join(candidate_target_ids, candidate_target_ids.c.link_target_id == LinkTarget.id)
+        .where(LinkTarget.normalized_url.isnot(None))
+        .distinct()
+        .cte("workbench_candidate_urls")
+    )
+
     click_metrics_subquery = (
         session.query(
             LinkTargetDailyStat.link_target_id.label("link_target_id"),
@@ -857,6 +881,7 @@ def _load_workbench_candidate_rows(
             func.count(distinct(LinkTargetDailyStat.stat_date)).label("active_days_30d"),
             func.max(LinkTargetDailyStat.last_clicked_at).label("last_clicked_at"),
         )
+        .join(candidate_target_ids, candidate_target_ids.c.link_target_id == LinkTargetDailyStat.link_target_id)
         .filter(LinkTargetDailyStat.stat_date >= start)
         .group_by(LinkTargetDailyStat.link_target_id)
         .subquery()
@@ -866,6 +891,7 @@ def _load_workbench_candidate_rows(
             LinkTargetDailyStat.link_target_id.label("link_target_id"),
             func.sum(LinkTargetDailyStat.click_count).label("clicks_total"),
         )
+        .join(candidate_target_ids, candidate_target_ids.c.link_target_id == LinkTargetDailyStat.link_target_id)
         .group_by(LinkTargetDailyStat.link_target_id)
         .subquery()
     )
@@ -886,6 +912,7 @@ def _load_workbench_candidate_rows(
                 )
             ).label("ref_active_days_30d"),
         )
+        .join(candidate_target_ids, candidate_target_ids.c.link_target_id == MessageLinkRef.link_target_id)
         .group_by(MessageLinkRef.link_target_id)
         .subquery()
     )
@@ -895,6 +922,7 @@ def _load_workbench_candidate_rows(
             MessageLinkRef.link_target_id.label("link_target_id"),
             func.max(MessageLinkRef.id).label("latest_ref_id"),
         )
+        .join(candidate_target_ids, candidate_target_ids.c.link_target_id == MessageLinkRef.link_target_id)
         .group_by(MessageLinkRef.link_target_id)
         .subquery()
     )
@@ -907,6 +935,7 @@ def _load_workbench_candidate_rows(
             func.count(LinkCheckDetails.id).label("total_checks_30d"),
             func.sum(case((LinkCheckDetails.is_valid.is_(False), 1), else_=0)).label("invalid_checks_30d"),
         )
+        .join(candidate_urls, candidate_urls.c.normalized_url == LinkCheckDetails.normalized_url)
         .filter(LinkCheckDetails.normalized_url.isnot(None), LinkCheckDetails.check_time >= start_dt)
         .group_by(LinkCheckDetails.normalized_url)
         .subquery()
@@ -917,6 +946,7 @@ def _load_workbench_candidate_rows(
             LinkCheckDetails.normalized_url.label("normalized_url"),
             func.max(LinkCheckDetails.id).label("latest_detail_id"),
         )
+        .join(candidate_urls, candidate_urls.c.normalized_url == LinkCheckDetails.normalized_url)
         .filter(LinkCheckDetails.normalized_url.isnot(None))
         .group_by(LinkCheckDetails.normalized_url)
         .subquery()
@@ -967,6 +997,7 @@ def _load_workbench_candidate_rows(
             profile.updated_by.label("updated_by"),
             profile.id.label("profile_id"),
         )
+        .join(candidate_target_ids, candidate_target_ids.c.link_target_id == LinkTarget.id)
         .join(ref_stats_subquery, ref_stats_subquery.c.link_target_id == LinkTarget.id)
         .outerjoin(click_total_subquery, click_total_subquery.c.link_target_id == LinkTarget.id)
         .outerjoin(click_metrics_subquery, click_metrics_subquery.c.link_target_id == LinkTarget.id)

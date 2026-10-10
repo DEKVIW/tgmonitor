@@ -95,8 +95,12 @@ _EPISODE_SINGLE_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"(?:更至|更新至|更新到|更)\s*0*(\d{1,4})\s*[集话話]"),
     re.compile(r"第\s*0*(\d{1,4})\s*[集话話]"),
 )
+_LEADING_EPISODE_QUALITY_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9])(?:8K|4K|2K|4320P|2160P|1080P|720P)(?:HQ|HDR(?:10\+?)?)?",
+    re.IGNORECASE,
+)
 _NO_EPISODE_HINT_PATTERN = re.compile(r"\b(?:预告|花絮|海报|封面|字幕|片头|片尾|ost|mv|合集|全集)\b", re.IGNORECASE)
-_DIGIT_AT_END_PATTERN = re.compile(r"(?:^|[^\d])(\d{1,4})(?:\D*)$")
+_DIGIT_AT_END_PATTERN = re.compile(r"(?:^|[^A-Za-z0-9])(\d{1,4})(?:[\s._-]*[集话話]?)?$")
 
 _DEFAULT_NEAR_EPISODE_WINDOW = 5
 _DEFAULT_MAX_SCAN_DIRS = 24
@@ -264,7 +268,9 @@ def _extract_leading_quality_episode(text: str) -> tuple[bool, int | None]:
         if matched is None:
             continue
         suffix = _normalize_text(matched.group(2), max_length=255)
-        if not suffix or not _extract_quality_tags(suffix):
+        if not suffix or not (
+            _extract_quality_tags(suffix) or _LEADING_EPISODE_QUALITY_PATTERN.search(suffix)
+        ):
             continue
         try:
             episode = int(matched.group(1))
@@ -298,6 +304,8 @@ def _expand_episode_range(start: int, end: int) -> list[int]:
 
 def _extract_episode_numbers_quick(text: str) -> list[int]:
     normalized = _normalize_text(text, max_length=500)
+    if _split_name_and_extension(normalized)[1] in _VIDEO_EXTENSIONS:
+        normalized = _split_name_and_extension(normalized)[0]
     if not normalized or _NO_EPISODE_HINT_PATTERN.search(normalized):
         return []
     for pattern in _EPISODE_RANGE_PATTERNS:

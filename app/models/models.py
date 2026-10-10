@@ -762,7 +762,7 @@ class BackupTarget(Base):
     schedule_weekday = Column(Integer, nullable=True)
     schedule_day = Column(Integer, nullable=True)
     timezone = Column(String(64), nullable=False, default="Asia/Shanghai")
-    retention_count = Column(Integer, nullable=False, default=10)
+    retention_count = Column(Integer, nullable=False, default=1)
     retention_days = Column(Integer, nullable=False, default=30)
     run_log_retention_days = Column(Integer, nullable=False, default=0)
     local_dir = Column(Text, nullable=False, default="")
