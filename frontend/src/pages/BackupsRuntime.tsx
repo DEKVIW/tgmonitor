@@ -186,6 +186,11 @@ const buildTargetContent = (target: BackupTarget) =>
     include_env_file: target.include_env_file,
   })
 
+const buildTargetDestination = (target: BackupTarget) =>
+  target.target_kind === 'local'
+    ? target.local_dir
+    : `${target.webdav_base_url}${target.webdav_root_path ? ` / ${target.webdav_root_path}` : ''}`
+
 const issues = (values: FormValues) => {
   const list: string[] = []
   if (!values.name.trim()) list.push('填写目标名称')
@@ -437,21 +442,48 @@ export default function BackupsRuntime() {
               className="backup-runtime-target-card"
               loading={loading}
               variant="outlined"
-              title={<div className="backup-runtime-target-title">{ellipsis(target.name, 'backup-runtime-target-name')}<div className="backup-runtime-tag-row">{statusTag(target.active_run_status || target.last_status)}<Tag>{fmtKind(target.target_kind)}</Tag><Tag color="blue">{fmtMode(target.backup_mode)}</Tag></div></div>}
-              extra={<div className="backup-runtime-target-actions">
-                <Button size="small" icon={<PlayCircleOutlined />} loading={runningId === target.id} onClick={() => void run(target)} disabled={target.has_active_run}>立即执行</Button>
-                <Button size="small" icon={<CheckCircleOutlined />} loading={testingId === target.id} onClick={() => void test(target)}>测试连接</Button>
-                {target.target_kind === 'webdav' ? <Button size="small" icon={<LinkOutlined />} onClick={() => void (setRemoteTarget(target), loadRemoteFiles(target))}>远端文件</Button> : null}
-                <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(target)}>编辑</Button>
-                <Popconfirm title="确认删除这个备份目标？" onConfirm={() => void remove(target)}><Button size="small" icon={<DeleteOutlined />} danger>删除</Button></Popconfirm>
-              </div>}
             >
-              <div className="backup-runtime-target-meta">
-                <div className="backup-runtime-target-meta-row"><span className="backup-runtime-target-meta-key"><FolderOpenOutlined />位置</span><div className="backup-runtime-target-meta-value">{ellipsis(target.target_kind === 'local' ? target.local_dir : `${target.webdav_base_url}${target.webdav_root_path ? ` / ${target.webdav_root_path}` : ''}`)}</div></div>
-                <div className="backup-runtime-target-meta-row"><span className="backup-runtime-target-meta-key"><DatabaseOutlined />内容</span><div className="backup-runtime-target-meta-value">{ellipsis(buildTargetContent(target))}</div></div>
-                <div className="backup-runtime-target-meta-row"><span className="backup-runtime-target-meta-key"><ClockCircleOutlined />计划</span><div className="backup-runtime-target-meta-value">{ellipsis(fmtSchedule(target))}</div></div>
-                <div className="backup-runtime-target-meta-row"><span className="backup-runtime-target-meta-key"><SafetyCertificateOutlined />保留</span><div className="backup-runtime-target-meta-value">{target.retention_count > 0 ? `最多 ${target.retention_count} 份` : '不限份数'}</div></div>
-                <div className="backup-runtime-target-meta-row"><span className="backup-runtime-target-meta-key"><InboxOutlined />最近备份</span><div className="backup-runtime-target-meta-value">{fmtTime(target.last_run_at)}</div></div>
+              <div className="backup-runtime-target-shell">
+                <div className="backup-runtime-target-header">
+                  <div className="backup-runtime-target-identity">
+                    <div className={`backup-runtime-target-icon backup-runtime-target-icon--${target.target_kind}`} aria-hidden="true">
+                      {target.target_kind === 'webdav' ? <CloudUploadOutlined /> : <FolderOpenOutlined />}
+                    </div>
+                    <div className="backup-runtime-target-heading">
+                      <div className="backup-runtime-target-name-line">
+                        {ellipsis(target.name, 'backup-runtime-target-name')}
+                        <div className="backup-runtime-tag-row">
+                          {statusTag(target.active_run_status || target.last_status)}
+                          <Tag>{fmtKind(target.target_kind)}</Tag>
+                          <Tag color="blue">{fmtMode(target.backup_mode)}</Tag>
+                          <Tag color={target.is_enabled ? 'success' : 'default'}>{target.is_enabled ? '已启用' : '已停用'}</Tag>
+                        </div>
+                      </div>
+                      <span className="backup-runtime-target-caption">{target.schedule_enabled && target.is_enabled ? '自动计划已启用' : '手动执行目标'}</span>
+                    </div>
+                  </div>
+                  <div className="backup-runtime-target-actions">
+                    <Button type="primary" size="small" icon={<PlayCircleOutlined />} loading={runningId === target.id} onClick={() => void run(target)} disabled={target.has_active_run}>立即执行</Button>
+                    <Button size="small" icon={<CheckCircleOutlined />} loading={testingId === target.id} onClick={() => void test(target)}>测试连接</Button>
+                    {target.target_kind === 'webdav' ? <Button size="small" icon={<LinkOutlined />} onClick={() => void (setRemoteTarget(target), loadRemoteFiles(target))}>远端文件</Button> : null}
+                    <span className="backup-runtime-target-action-divider" aria-hidden="true" />
+                    <Button type="text" size="small" icon={<EditOutlined />} onClick={() => openEdit(target)}>编辑</Button>
+                    <Popconfirm title="确认删除这个备份目标？" onConfirm={() => void remove(target)}><Button type="text" size="small" icon={<DeleteOutlined />} danger>删除</Button></Popconfirm>
+                  </div>
+                </div>
+
+                <div className="backup-runtime-target-overview">
+                  <div className="backup-runtime-target-destination">
+                    <span className="backup-runtime-target-overline"><FolderOpenOutlined />保存位置</span>
+                    {ellipsis(buildTargetDestination(target), 'backup-runtime-target-path')}
+                  </div>
+                  <div className="backup-runtime-target-metrics">
+                    <div className="backup-runtime-target-metric"><span className="backup-runtime-target-metric-label"><DatabaseOutlined />内容</span><strong>{ellipsis(buildTargetContent(target))}</strong></div>
+                    <div className="backup-runtime-target-metric"><span className="backup-runtime-target-metric-label"><ClockCircleOutlined />计划</span><strong>{ellipsis(fmtSchedule(target))}</strong></div>
+                    <div className="backup-runtime-target-metric"><span className="backup-runtime-target-metric-label"><SafetyCertificateOutlined />保留</span><strong>{target.retention_count > 0 ? `最多 ${target.retention_count} 份` : '不限份数'}</strong></div>
+                    <div className="backup-runtime-target-metric"><span className="backup-runtime-target-metric-label"><InboxOutlined />最近备份</span><strong>{fmtTime(target.last_run_at)}</strong></div>
+                  </div>
+                </div>
               </div>
               {target.last_error_message ? <Alert className="backup-runtime-inline-alert" type="error" showIcon message={target.last_error_message} /> : null}
             </Card>
