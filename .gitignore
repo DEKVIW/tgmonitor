@@ -58,3 +58,4 @@ telegram_sessions/
 !/tests/test_resource_ops_workbench_query_scope.py
 !/tests/test_pan_transfer_file_diagnosis_episode_extension.py
 !/tests/test_backup_retention_default.py
+!/tests/test_resource_identity_parser.py

@@ -36,6 +36,14 @@ MUSIC_NOISE_PATTERN = re.compile(
     r"(?:FLAC|WAV|APE|SACD|24bit|96kHz|44\.1kHz|无损|单曲|专辑|原抓)",
     re.IGNORECASE,
 )
+PLATFORM_LABEL_PATTERN = re.compile(
+    r"^(?:夸克网盘|百度网盘|阿里云盘|阿里网盘|迅雷云盘|115网盘|123云盘|天翼云盘|UC网盘|蓝奏云|移动云盘)$",
+    re.IGNORECASE,
+)
+PLATFORM_TRAILING_PATTERN = re.compile(
+    r"(?:夸克网盘|百度网盘|阿里云盘|阿里网盘|迅雷云盘|115网盘|123云盘|天翼云盘|UC网盘|蓝奏云|移动云盘)\s*$",
+    re.IGNORECASE,
+)
 YEAR_PATTERN = re.compile(r"(?<!\d)((?:19|20)\d{2})(?!\d)")
 SEASON_PATTERNS = (
     re.compile(r"\bSeason\s*([0-9]{1,2})\b", re.IGNORECASE),
@@ -75,6 +83,7 @@ META_CUT_PATTERNS = (
 )
 TRAILING_NOISE_PATTERNS = (
     YEAR_PATTERN,
+    PLATFORM_TRAILING_PATTERN,
     re.compile(r"\bS\d{1,2}E\d{1,4}(?:\s*[-~至]\s*E?\d{1,4})?\b", re.IGNORECASE),
     re.compile(r"\bEP?\s*\d+\b", re.IGNORECASE),
     re.compile(r"第\s*[零一二三四五六七八九十百两\d]+\s*季"),
@@ -187,6 +196,8 @@ def _detect_non_target_reason(text: str) -> str | None:
     normalized = normalize_text(text, max_length=500)
     if not normalized:
         return "empty_title"
+    if PLATFORM_LABEL_PATTERN.fullmatch(normalized):
+        return "link_platform_label"
     if any(pattern.search(normalized) for pattern in DIRECTORY_NOISE_PATTERNS):
         return "directory_index"
     if AUDIO_NOISE_PATTERN.search(normalized):
@@ -328,6 +339,8 @@ def _clean_title_candidate(text: str) -> str:
         candidate = re.sub(r"\s+", " ", candidate).strip(" -_|/,.，。:：;；[]【】()（）<>《》")
         candidate = _trim_repeated_tail(candidate)
     if not candidate:
+        return ""
+    if PLATFORM_LABEL_PATTERN.fullmatch(candidate):
         return ""
     if candidate in GENERIC_EMPTY_TITLES:
         return ""

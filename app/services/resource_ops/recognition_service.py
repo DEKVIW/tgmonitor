@@ -251,7 +251,7 @@ def _collect_processing_target_ids(session: Session, *, mode: str) -> list[int]:
 
 def _get_recent_candidate_titles(session: Session, *, link_target_id: int, limit: int = 5) -> list[str]:
     rows = (
-        session.query(Message.title, MessageLinkRef.display_text)
+        session.query(Message.title, MessageLinkRef.link_label)
         .outerjoin(Message, Message.id == MessageLinkRef.message_id)
         .filter(MessageLinkRef.link_target_id == int(link_target_id))
         .order_by(
@@ -264,7 +264,7 @@ def _get_recent_candidate_titles(session: Session, *, link_target_id: int, limit
     )
     titles: list[str] = []
     for row in rows:
-        for value in (row.title, row.display_text):
+        for value in (row.title, row.link_label):
             normalized = _normalize_text(value, max_length=255)
             if normalized and normalized not in titles:
                 titles.append(normalized)
