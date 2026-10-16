@@ -1044,6 +1044,15 @@ def _build_task_automation_config(raw_value: Any) -> dict[str, Any]:
     }
 
 
+def _build_follow_task_creation_automation(raw_value: Any) -> dict[str, Any]:
+    if raw_value is None or raw_value == {}:
+        raw_value = {
+            "enabled": True,
+            "mode": PAN_TRANSFER_FOLLOW_AUTOMATION_MODE_AUTO_INCREMENTAL,
+        }
+    return _build_task_automation_config(raw_value)
+
+
 def _get_task_automation_config(task: PanTransferSyncTask) -> dict[str, Any]:
     return _build_task_automation_config(_get_task_extra_section(task, "automation"))
 
@@ -2909,7 +2918,7 @@ def create_pan_transfer_follow_task_from_batch_item(
             "path_strategy": path_strategy,
             "resolved_paths": resolved_paths,
             "publish_binding": _build_follow_publish_binding_snapshot(publish_record),
-            "automation": _build_task_automation_config((payload or {}).get("automation")),
+            "automation": _build_follow_task_creation_automation((payload or {}).get("automation")),
             "candidate_policy": candidate_policy,
             "created_from_batch_item": {
                 "batch_id": int(item.batch_id),

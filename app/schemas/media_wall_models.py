@@ -95,7 +95,7 @@ class MediaWallItemListResponse(BaseModel):
 class MediaWallItemCreateRequest(BaseModel):
     display_title: str = Field(min_length=1, max_length=255)
     metadata_query_title: Optional[str] = Field(default=None, max_length=255)
-    visibility: str = Field(default="draft", max_length=32)
+    visibility: str = Field(default="public", max_length=32)
     sort_order: int = Field(default=0, ge=-100000, le=100000)
     category_ids: list[int] = Field(default_factory=list)
     sync_task_id: Optional[int] = None
@@ -106,7 +106,7 @@ class MediaWallItemCreateRequest(BaseModel):
 class MediaWallItemUpdateRequest(BaseModel):
     display_title: str = Field(min_length=1, max_length=255)
     metadata_query_title: Optional[str] = Field(default=None, max_length=255)
-    visibility: str = Field(default="draft", max_length=32)
+    visibility: str = Field(default="public", max_length=32)
     sort_order: int = Field(default=0, ge=-100000, le=100000)
     category_ids: list[int] = Field(default_factory=list)
     sync_task_id: Optional[int] = None
@@ -177,7 +177,7 @@ class MediaWallImportPreviewResponse(BaseModel):
 
 class MediaWallImportConfirmRequest(BaseModel):
     category_ids: list[int] = Field(default_factory=list)
-    visibility: str = Field(default="draft", max_length=32)
+    visibility: str = Field(default="public", max_length=32)
 
 
 class MediaWallImportConfirmResponse(BaseModel):

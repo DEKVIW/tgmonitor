@@ -9,10 +9,16 @@ os.environ.setdefault("DATABASE_URL", "postgresql://user:password@127.0.0.1:5432
 os.environ.setdefault("DEFAULT_CHANNELS", "test")
 os.environ.setdefault("SECRET_SALT", "test-salt")
 
-from app.services.media_wall import _build_import_preview, _fingerprint_url, _normalize_title
+from app.models.models import AiProviderConfig, MediaWallItem
+from app.services.media_wall import MEDIA_WALL_VISIBILITIES, _build_import_preview, _fingerprint_url, _normalize_title
 
 
 class MediaWallServiceTests(unittest.TestCase):
+    def test_media_wall_has_no_draft_state_and_ai_provider_tracks_operator(self) -> None:
+        self.assertEqual(MEDIA_WALL_VISIBILITIES, {"public", "hidden"})
+        self.assertEqual(MediaWallItem.__table__.c.visibility.default.arg, "public")
+        self.assertTrue(hasattr(AiProviderConfig, "updated_by"))
+
     def test_import_preview_groups_duplicate_titles_and_links(self) -> None:
         preview = _build_import_preview([
             ["影视名称", "夸克链接", "备用链接"],

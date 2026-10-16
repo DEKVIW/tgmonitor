@@ -84,7 +84,7 @@ const MediaWallAdminPanel = () => {
   const [editingSource, setEditingSource] = useState<MediaWallSource | null>(null)
   const [importPreview, setImportPreview] = useState<MediaWallImportPreview | null>(null)
   const [importCategoryIds, setImportCategoryIds] = useState<number[]>([])
-  const [importVisibility, setImportVisibility] = useState('draft')
+  const [importVisibility, setImportVisibility] = useState('public')
   const [itemCategoryFilter, setItemCategoryFilter] = useState<number | undefined>()
   const [selectedItemKeys, setSelectedItemKeys] = useState<number[]>([])
   const [itemForm] = Form.useForm<ItemFormValues>()
@@ -130,7 +130,7 @@ const MediaWallAdminPanel = () => {
       custom_poster_url: item.poster_url || undefined,
       links_text: item.links.map((link) => `${link.url}\t${link.label || ''}`).join('\n'),
     } : {
-      display_title: '', metadata_query_title: undefined, visibility: 'draft', sort_order: 0, category_ids: [], sync_task_id: undefined, custom_poster_url: '', links_text: '',
+      display_title: '', metadata_query_title: undefined, visibility: 'public', sort_order: 0, category_ids: [], sync_task_id: undefined, custom_poster_url: '', links_text: '',
     })
     setItemModalOpen(true)
   }
@@ -230,7 +230,7 @@ const MediaWallAdminPanel = () => {
     { title: '影视名称', dataIndex: 'display_title', render: (value: string, item: MediaWallItem) => <div><strong>{value}</strong><div className="media-wall-admin-subtitle">{item.progress.label}</div></div> },
     { title: '分类', dataIndex: 'categories', render: (value: MediaWallCategory[]) => <Space wrap>{value.map((category) => <Tag key={category.id}>{category.name}</Tag>)}</Space> },
     { title: '链接', dataIndex: 'link_count', width: 80, render: (value: number) => `${value} 个` },
-    { title: '状态', dataIndex: 'visibility', width: 90, render: (value: string) => <Tag color={value === 'public' ? 'green' : value === 'hidden' ? 'default' : 'gold'}>{value === 'public' ? '公开' : value === 'hidden' ? '隐藏' : '草稿'}</Tag> },
+    { title: '状态', dataIndex: 'visibility', width: 90, render: (value: string) => <Tag color={value === 'public' ? 'green' : 'default'}>{value === 'public' ? '公开' : '隐藏'}</Tag> },
     {
       title: '操作',
       key: 'action',
@@ -327,14 +327,14 @@ const MediaWallAdminPanel = () => {
           },
           { key: 'categories', label: '分类管理', children: <Card className="resource-ops-panel-card media-wall-admin-card" extra={<Button type="primary" icon={<PlusOutlined />} onClick={() => openCategoryModal()}>添加分类</Button>}><Table rowKey="id" loading={loading} columns={categoryColumns} dataSource={categories} pagination={false} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无分类" /> }} /></Card> },
           { key: 'sources', label: '采集源', children: <Card className="resource-ops-panel-card media-wall-admin-card" extra={<Button type="primary" icon={<PlusOutlined />} onClick={() => openSourceModal()}>添加采集源</Button>}><Table rowKey="id" loading={loading} columns={sourceColumns} dataSource={sources} pagination={false} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无采集源" /> }} /></Card> },
-          { key: 'import', label: '批量导入', children: <Card className="resource-ops-panel-card media-wall-admin-card"><Upload {...uploadProps}><Button icon={<UploadOutlined />}>选择 TXT / XLSX 文件</Button></Upload>{importPreview ? <div className="media-wall-import-preview"><Alert type="info" showIcon message={`解析 ${importPreview.total_records} 条影视，${importPreview.total_links} 个链接，${importPreview.invalid_count} 行异常`} /><div className="media-wall-import-toolbar"><Select mode="multiple" allowClear placeholder="导入到分类" value={importCategoryIds} options={categoryOptions} onChange={setImportCategoryIds} /><Select value={importVisibility} options={[{ label: '导入为草稿', value: 'draft' }, { label: '直接公开', value: 'public' }]} onChange={setImportVisibility} /><Button type="primary" onClick={() => void confirmMediaWallImport(importPreview.id, { category_ids: importCategoryIds, visibility: importVisibility }).then(() => { message.success('导入已确认'); setImportPreview(null); void loadData() }).catch((error: unknown) => message.error(getRequestErrorMessage(error, '确认导入失败')))}>确认导入</Button></div><Table rowKey="display_title" size="small" pagination={{ pageSize: 8 }} dataSource={importPreview.records} columns={[{ title: '影视名称', dataIndex: 'display_title' }, { title: '链接', dataIndex: 'links', render: (links: Array<{ platform: string }>) => links.map((link) => <Tag key={link.platform}>{link.platform}</Tag>) }]} /></div> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="选择文件后先预览，再确认写入影视墙" />}</Card> },
+          { key: 'import', label: '批量导入', children: <Card className="resource-ops-panel-card media-wall-admin-card"><Upload {...uploadProps}><Button icon={<UploadOutlined />}>选择 TXT / XLSX 文件</Button></Upload>{importPreview ? <div className="media-wall-import-preview"><Alert type="info" showIcon message={`解析 ${importPreview.total_records} 条影视，${importPreview.total_links} 个链接，${importPreview.invalid_count} 行异常`} /><div className="media-wall-import-toolbar"><Select mode="multiple" allowClear placeholder="导入到分类" value={importCategoryIds} options={categoryOptions} onChange={setImportCategoryIds} /><Select value={importVisibility} options={[{ label: '直接公开', value: 'public' }, { label: '隐藏', value: 'hidden' }]} onChange={setImportVisibility} /><Button type="primary" onClick={() => void confirmMediaWallImport(importPreview.id, { category_ids: importCategoryIds, visibility: importVisibility }).then(() => { message.success('导入已确认'); setImportPreview(null); void loadData() }).catch((error: unknown) => message.error(getRequestErrorMessage(error, '确认导入失败')))}>确认导入</Button></div><Table rowKey="display_title" size="small" pagination={{ pageSize: 8 }} dataSource={importPreview.records} columns={[{ title: '影视名称', dataIndex: 'display_title' }, { title: '链接', dataIndex: 'links', render: (links: Array<{ platform: string }>) => links.map((link) => <Tag key={link.platform}>{link.platform}</Tag>) }]} /></div> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="选择文件后先预览，再确认写入影视墙" />}</Card> },
         ]}
       />
 
       <Modal open={itemModalOpen} title={editingItem ? '编辑影视条目' : '添加影视条目'} okText="保存" cancelText="取消" onOk={() => itemForm.submit()} onCancel={() => setItemModalOpen(false)} width={720} destroyOnClose>
         <Form form={itemForm} layout="vertical" onFinish={(values) => void submitItem(values)}>
           <div className="media-wall-form-grid"><Form.Item name="display_title" label="前台显示名称" rules={[{ required: true }]}><Input /></Form.Item><Form.Item name="metadata_query_title" label="资料查询名称"><Input placeholder="默认使用显示名称" /></Form.Item></div>
-          <div className="media-wall-form-grid"><Form.Item name="visibility" label="公开状态"><Select options={[{ label: '草稿', value: 'draft' }, { label: '公开', value: 'public' }, { label: '隐藏', value: 'hidden' }]} /></Form.Item><Form.Item name="sort_order" label="排序"><InputNumber className="media-wall-full-width" /></Form.Item></div>
+          <div className="media-wall-form-grid"><Form.Item name="visibility" label="公开状态"><Select options={[{ label: '公开', value: 'public' }, { label: '隐藏', value: 'hidden' }]} /></Form.Item><Form.Item name="sort_order" label="排序"><InputNumber className="media-wall-full-width" /></Form.Item></div>
           <div className="media-wall-form-grid"><Form.Item name="category_ids" label="分类"><Select mode="multiple" options={categoryOptions} /></Form.Item><Form.Item name="sync_task_id" label="绑定追更任务"><Select allowClear showSearch optionFilterProp="label" options={syncTaskOptions} /></Form.Item></div>
           <Form.Item name="custom_poster_url" label="人工海报地址"><Input placeholder="可选，优先于采集源海报" /></Form.Item>
           <Form.Item name="links_text" label="网盘链接"><Input.TextArea rows={4} placeholder="每行一个链接；可用 Tab 或 | 添加备注" /></Form.Item>

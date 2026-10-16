@@ -481,6 +481,7 @@ class AiProviderConfig(Base):
     extra_json = Column(JSONB, nullable=False, default=dict)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_by = Column(String(128), nullable=True)
 
 
 class MediaWallCategory(Base):
@@ -507,7 +508,7 @@ class MediaWallItem(Base):
     id = Column(Integer, primary_key=True, index=True)
     display_title = Column(String(255), nullable=False, index=True)
     metadata_query_title = Column(String(255), nullable=False, index=True)
-    visibility = Column(String(32), nullable=False, default="draft", index=True)
+    visibility = Column(String(32), nullable=False, default="public", index=True)
     sort_order = Column(Integer, nullable=False, default=0, index=True)
     sync_task_id = Column(Integer, ForeignKey("pan_transfer_sync_tasks.id"), nullable=True, index=True)
     custom_poster_url = Column(Text, nullable=True)
@@ -1155,6 +1156,8 @@ def ensure_runtime_storage_tables() -> None:
         _ensure_channel_daily_stats_indexes()
         _ensure_resource_ops_indexes()
         _ensure_pan_transfer_columns()
+        _ensure_ai_center_columns()
+        _ensure_media_wall_visibility()
         _ensure_pan_transfer_indexes()
         _runtime_storage_checked = True
 
@@ -1203,6 +1206,39 @@ def _ensure_backup_target_columns() -> None:
             if column_name in columns:
                 continue
             connection.execute(text(sql))
+
+
+def _ensure_ai_center_columns() -> None:
+    inspector = inspect(engine)
+    try:
+        columns = {column["name"] for column in inspector.get_columns("ai_provider_configs")}
+    except Exception:
+        columns = set()
+
+    if not columns or "updated_by" in columns:
+        return
+
+    with engine.begin() as connection:
+        connection.execute(text("ALTER TABLE ai_provider_configs ADD COLUMN updated_by VARCHAR(128)"))
+
+
+def _ensure_media_wall_visibility() -> None:
+    inspector = inspect(engine)
+    try:
+        columns = {column["name"] for column in inspector.get_columns("media_wall_items")}
+    except Exception:
+        columns = set()
+
+    if not columns or "visibility" not in columns:
+        return
+
+    with engine.begin() as connection:
+        connection.execute(
+            text("UPDATE media_wall_items SET visibility = 'public' WHERE visibility = 'draft'")
+        )
+        connection.execute(
+            text("ALTER TABLE media_wall_items ALTER COLUMN visibility SET DEFAULT 'public'")
+        )
 
 
 def _ensure_link_check_columns() -> None:
