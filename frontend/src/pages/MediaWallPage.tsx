@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Alert, Button, Empty, Image, Skeleton, Spin, Tabs, Tag, Typography } from 'antd'
-import { ArrowLeftOutlined, ExportOutlined, LinkOutlined, ReloadOutlined } from '@ant-design/icons'
+import { ArrowLeftOutlined, CloseOutlined, ExportOutlined, LinkOutlined, ReloadOutlined } from '@ant-design/icons'
 
 import { getPublicMediaWall, getPublicMediaWallCategories, getPublicMediaWallItem } from '@/api/mediaWall'
 import type { MediaWallCategory, MediaWallItem } from '@/types/mediaWall'
@@ -93,29 +93,33 @@ const MediaWallDetail = ({ item, onBack }: { item: MediaWallItem; onBack: () => 
 
   return (
     <div className="media-wall-detail-page">
-      <Button type="text" icon={<ArrowLeftOutlined />} onClick={onBack} className="media-wall-back-button">
-        返回影视墙
-      </Button>
       <section className="media-wall-detail-hero">
-        <div className="media-wall-detail-poster">
-          {item.poster_url ? <Image src={item.poster_url} preview={false} alt={item.display_title} /> : <PosterPlaceholder title={item.display_title} />}
-        </div>
-        <div className="media-wall-detail-copy">
+        <div className="media-wall-detail-heading">
           <div className="media-wall-detail-title-row">
             <Title level={1}>{item.display_title}</Title>
             {item.progress.episode ? <Tag color="blue" className="media-wall-detail-progress-tag">{progressLabel}</Tag> : null}
           </div>
-          {visibleMetadataRows.length ? (
-            <div className="media-wall-detail-meta">
-              {visibleMetadataRows.map(([label, value]) => (
-                <div key={label} className="media-wall-detail-meta-item" title={`${label}: ${value}`}>
-                  <span>{label}</span>
-                  <strong>{value}</strong>
-                </div>
-              ))}
-            </div>
-          ) : null}
+          <Button
+            type="text"
+            icon={<CloseOutlined />}
+            onClick={onBack}
+            className="media-wall-detail-close"
+            aria-label="关闭影视详情"
+          />
         </div>
+        <div className="media-wall-detail-poster">
+          {item.poster_url ? <Image src={item.poster_url} preview={false} alt={item.display_title} /> : <PosterPlaceholder title={item.display_title} />}
+        </div>
+        {visibleMetadataRows.length ? (
+          <div className="media-wall-detail-meta">
+            {visibleMetadataRows.map(([label, value]) => (
+              <div key={label} className="media-wall-detail-meta-item" title={`${label}: ${value}`}>
+                <span>{label}</span>
+                <strong>{value}</strong>
+              </div>
+            ))}
+          </div>
+        ) : null}
         {item.summary ? (
           <div
             className="media-wall-detail-summary"

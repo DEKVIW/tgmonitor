@@ -2,6 +2,11 @@
   max-width: calc(100vw - 32px);
 }
 
+.message-query-modal-root .ant-modal-wrap {
+  overflow: hidden;
+  overscroll-behavior: contain;
+}
+
 .message-query-modal .ant-modal-content,
 .public-search-modal .ant-modal-content {
   overflow: hidden;
@@ -150,6 +155,14 @@
     overscroll-behavior: contain;
     touch-action: pan-y;
     -webkit-overflow-scrolling: touch;
+  }
+
+  .message-query-modal .ant-input-affix-wrapper,
+  .message-query-modal .ant-input,
+  .message-query-modal .ant-input-number,
+  .message-query-modal .ant-input-number-input,
+  .message-query-modal .ant-select-selector {
+    font-size: 16px;
   }
 
   .message-query-modal .ant-modal-header {

@@ -206,6 +206,44 @@ const MessageFilters = ({
   }, [queryOpen])
 
   useEffect(() => {
+    if (!queryOpen && !challengeOpen) {
+      return
+    }
+
+    const scrollTop = window.scrollY
+    const bodyStyle = document.body.style
+    const documentStyle = document.documentElement.style
+    const previousBodyStyles = {
+      position: bodyStyle.position,
+      top: bodyStyle.top,
+      left: bodyStyle.left,
+      right: bodyStyle.right,
+      width: bodyStyle.width,
+      overflow: bodyStyle.overflow,
+    }
+    const previousDocumentOverflow = documentStyle.overflow
+
+    bodyStyle.position = 'fixed'
+    bodyStyle.top = `-${scrollTop}px`
+    bodyStyle.left = '0'
+    bodyStyle.right = '0'
+    bodyStyle.width = '100%'
+    bodyStyle.overflow = 'hidden'
+    documentStyle.overflow = 'hidden'
+
+    return () => {
+      bodyStyle.position = previousBodyStyles.position
+      bodyStyle.top = previousBodyStyles.top
+      bodyStyle.left = previousBodyStyles.left
+      bodyStyle.right = previousBodyStyles.right
+      bodyStyle.width = previousBodyStyles.width
+      bodyStyle.overflow = previousBodyStyles.overflow
+      documentStyle.overflow = previousDocumentOverflow
+      window.scrollTo(0, scrollTop)
+    }
+  }, [challengeOpen, queryOpen])
+
+  useEffect(() => {
     if (!allowedTimeRangeSet || !fallbackTimeRange) {
       return
     }
@@ -277,7 +315,7 @@ const MessageFilters = ({
         className="message-query-modal"
         rootClassName="message-query-modal-root"
       >
-        <div className="message-query-grid">
+        <div className="message-query-grid" onTouchMove={(event) => event.stopPropagation()}>
           <div className="message-query-field message-query-field--search">
             <label htmlFor="message-query-search">关键词</label>
             <Input
