@@ -132,7 +132,6 @@ const MediaWallDetail = ({ item, onBack }: { item: MediaWallItem; onBack: () => 
         <div className="media-wall-section-heading">
           <div>
             <Title level={3}>网盘资源入口</Title>
-            <Text type="secondary">选择对应网盘打开分享页面，可及时转存保存。</Text>
           </div>
           <Tag icon={<LinkOutlined />}>{enabledLinks.length} 个链接</Tag>
         </div>
@@ -142,7 +141,9 @@ const MediaWallDetail = ({ item, onBack }: { item: MediaWallItem; onBack: () => 
               <div key={link.id} className="media-wall-link-row">
                 <div>
                   <strong>{getPlatformLabel(link.platform)}</strong>
-                  <span>{link.label || (link.is_primary ? '主链接' : '备用链接')}</span>
+                  {link.source_type === 'sync' ? null : (
+                    <span>{link.label || (link.is_primary ? '主链接' : '备用链接')}</span>
+                  )}
                 </div>
                 <Button
                   type="primary"

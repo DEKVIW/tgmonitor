@@ -69,3 +69,15 @@
     height: 34px;
   }
 }
+
+@media (orientation: landscape) and (max-height: 500px) {
+  .guest-header {
+    height: 52px;
+    min-height: 52px;
+    padding-block: 6px;
+  }
+
+  .guest-header-actions {
+    min-width: max-content;
+  }
+}

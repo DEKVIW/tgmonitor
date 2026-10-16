@@ -39,6 +39,7 @@
 }
 
 .message-query-modal .ant-modal-body {
+  min-height: 0;
   padding: 22px 24px 24px;
 }
 
@@ -151,6 +152,7 @@
 
   .message-query-modal-root .ant-modal-body {
     max-height: calc(100vh - 190px);
+    max-height: calc(100dvh - 190px);
     overflow-y: auto;
     overscroll-behavior: contain;
     touch-action: pan-y;
@@ -214,5 +216,44 @@
   .message-query-modal-footer > .ant-btn,
   .message-query-modal-footer .ant-space-item > .ant-btn {
     padding-inline: 8px;
+  }
+}
+
+@media (orientation: landscape) and (max-height: 500px) {
+  .message-query-modal-root .ant-modal {
+    width: calc(100vw - 24px) !important;
+    max-width: 760px;
+    margin: 12px auto;
+    top: 0;
+    padding-bottom: 0;
+  }
+
+  .message-query-modal-root .ant-modal-content {
+    max-height: calc(100vh - 24px);
+    max-height: calc(100dvh - 24px);
+    display: flex;
+    flex-direction: column;
+  }
+
+  .message-query-modal .ant-modal-header,
+  .message-query-modal .ant-modal-footer {
+    flex: 0 0 auto;
+  }
+
+  .message-query-modal .ant-modal-body {
+    flex: 1 1 auto;
+    max-height: none;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    touch-action: pan-y;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .message-query-modal .ant-input-affix-wrapper,
+  .message-query-modal .ant-input,
+  .message-query-modal .ant-input-number,
+  .message-query-modal .ant-input-number-input,
+  .message-query-modal .ant-select-selector {
+    font-size: 16px;
   }
 }

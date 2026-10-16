@@ -315,9 +315,18 @@
   gap: 3px;
 }
 
-.media-wall-link-row span {
+.media-wall-link-row > div > span {
   color: var(--text-muted);
   font-size: 12px;
+}
+
+.media-wall-link-row .ant-btn-primary {
+  color: #fff;
+}
+
+.media-wall-link-row .ant-btn-primary:hover,
+.media-wall-link-row .ant-btn-primary:focus-visible {
+  color: #fff;
 }
 
 .media-wall-detail-updated {

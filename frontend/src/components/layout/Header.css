@@ -184,6 +184,11 @@
     padding: 16px 18px 18px;
   }
 
+  .public-search-modal .ant-input-affix-wrapper,
+  .public-search-modal .ant-input {
+    font-size: 16px;
+  }
+
   .public-search-modal .ant-modal-footer {
     padding: 10px 18px calc(12px + env(safe-area-inset-bottom));
   }
@@ -289,6 +294,68 @@
     gap: 5px;
     padding-inline: 8px;
     font-size: 13px;
+  }
+}
+
+@media (orientation: landscape) and (max-height: 500px) {
+  .app-header {
+    height: 52px;
+    padding-inline: 12px;
+    gap: 8px;
+  }
+
+  .public-primary-nav {
+    position: static;
+    flex: 1 1 auto;
+    min-width: 0;
+    margin-left: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+    transform: none;
+  }
+
+  .public-primary-nav::-webkit-scrollbar {
+    display: none;
+  }
+
+  .public-nav-link {
+    min-height: 34px;
+    gap: 5px;
+    padding-inline: 8px;
+    font-size: 13px;
+  }
+
+  .site-brand-name {
+    max-width: 150px;
+    font-size: 18px;
+  }
+
+  .public-search-modal-root .ant-modal {
+    width: calc(100vw - 24px) !important;
+    max-width: 600px;
+    margin: 12px auto;
+    top: 0;
+    padding-bottom: 0;
+  }
+
+  .public-search-modal-root .ant-modal-content {
+    max-height: calc(100vh - 24px);
+    max-height: calc(100dvh - 24px);
+    display: flex;
+    flex-direction: column;
+  }
+
+  .public-search-modal .ant-modal-header,
+  .public-search-modal .ant-modal-footer {
+    flex: 0 0 auto;
+  }
+
+  .public-search-modal .ant-modal-body {
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    touch-action: pan-y;
+    -webkit-overflow-scrolling: touch;
   }
 }
 
