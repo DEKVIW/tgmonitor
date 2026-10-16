@@ -26,6 +26,10 @@ build/
 *.sqlite
 *.pkl
 *.json
+!frontend/package.json
+!frontend/package-lock.json
+!frontend/tsconfig.json
+!frontend/tsconfig.node.json
 tokens.json
 users.json
 
