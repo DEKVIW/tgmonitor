@@ -71,7 +71,7 @@
 }
 
 .message-query-field--search .ant-input {
-  height: 48px;
+  height: 42px;
   border-radius: 10px;
   font-size: 15px;
 }
@@ -119,8 +119,7 @@
 }
 
 @media (max-width: 576px) {
-  .message-query-modal-root .ant-modal,
-  .public-search-modal-root .ant-modal {
+  .message-query-modal-root .ant-modal {
     width: 100vw !important;
     max-width: 100vw;
     margin: 0;
@@ -128,8 +127,7 @@
     padding-bottom: 0;
   }
 
-  .message-query-modal-root .ant-modal-content,
-  .public-search-modal-root .ant-modal-content {
+  .message-query-modal-root .ant-modal-content {
     min-height: 100vh;
     border: 0;
     border-radius: 0;
@@ -137,20 +135,17 @@
     flex-direction: column;
   }
 
-  .message-query-modal-root .ant-modal-body,
-  .public-search-modal-root .ant-modal-body {
+  .message-query-modal-root .ant-modal-body {
     flex: 1;
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
   }
 
-  .message-query-modal .ant-modal-header,
-  .public-search-modal .ant-modal-header {
+  .message-query-modal .ant-modal-header {
     padding: 18px 18px 14px;
   }
 
-  .message-query-modal .ant-modal-body,
-  .public-search-modal .ant-modal-body {
+  .message-query-modal .ant-modal-body {
     padding: 18px;
   }
 
@@ -159,29 +154,31 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .message-query-modal .ant-modal-footer,
-  .public-search-modal .ant-modal-footer {
+  .message-query-modal .ant-modal-footer {
     padding: 12px 18px calc(16px + env(safe-area-inset-bottom));
   }
 
-  .message-query-modal-footer,
-  .public-search-modal-footer {
-    align-items: stretch;
-    flex-direction: column-reverse;
+  .message-query-modal-footer {
+    align-items: center;
+    flex-direction: row;
   }
 
-  .message-query-modal-footer > .ant-space,
-  .public-search-modal-footer > .ant-space {
-    width: 100%;
+  .message-query-modal-footer > .ant-space {
+    width: auto;
+    flex: 2 1 0;
     display: flex;
   }
 
-  .message-query-modal-footer .ant-space-item,
-  .public-search-modal-footer .ant-space-item,
-  .message-query-modal-footer .ant-space-item > .ant-btn,
-  .public-search-modal-footer .ant-space-item > .ant-btn,
-  .message-query-modal-footer > .ant-btn,
-  .public-search-modal-footer > .ant-btn {
+  .message-query-modal-footer > .ant-btn {
     flex: 1 1 0;
+  }
+
+  .message-query-modal-footer .ant-space-item,
+  .message-query-modal-footer .ant-space-item > .ant-btn {
+    flex: 1 1 0;
+  }
+
+  .message-query-modal-footer .ant-space-item > .ant-btn {
+    width: 100%;
   }
 }

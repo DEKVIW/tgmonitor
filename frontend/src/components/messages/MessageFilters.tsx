@@ -282,7 +282,6 @@ const MessageFilters = ({
             <label htmlFor="message-query-search">关键词</label>
             <Input
               id="message-query-search"
-              autoFocus
               allowClear
               prefix={<SearchOutlined />}
               value={searchValue}
@@ -322,7 +321,7 @@ const MessageFilters = ({
               <label>标签</label>
               <Select
                 mode="multiple"
-                showSearch
+                showSearch={false}
                 allowClear
                 value={draft.selected_tags || []}
                 onChange={(value) => setDraft({ ...draft, selected_tags: value })}
@@ -337,6 +336,7 @@ const MessageFilters = ({
               <label>网盘类型</label>
               <Select
                 mode="multiple"
+                showSearch={false}
                 allowClear
                 value={draft.selected_netdisks || []}
                 onChange={(value) => setDraft({ ...draft, selected_netdisks: value })}

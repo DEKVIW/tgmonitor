@@ -6,10 +6,11 @@ import { ArrowLeftOutlined, ExportOutlined, LinkOutlined, ReloadOutlined } from 
 import { getPublicMediaWall, getPublicMediaWallCategories, getPublicMediaWallItem } from '@/api/mediaWall'
 import type { MediaWallCategory, MediaWallItem } from '@/types/mediaWall'
 import { formatServerDateTime } from '@/utils/dateTime'
+import { sanitizeHtml } from '@/utils/safeHtml'
 
 import './MediaWallPage.css'
 
-const { Title, Text, Paragraph } = Typography
+const { Title, Text } = Typography
 
 const getRequestErrorMessage = (error: unknown, fallback: string) => {
   if (typeof error === 'object' && error !== null && 'response' in error) {
@@ -40,6 +41,14 @@ const PosterPlaceholder = ({ title }: { title: string }) => (
   </div>
 )
 
+const isProgressRemark = (remark: string | null | undefined, episode: number | null | undefined) => {
+  if (!remark || !episode || !/(更新至|更至)/.test(remark)) {
+    return false
+  }
+  const episodeNumbers = remark.match(/\d+/g) || []
+  return episodeNumbers.some((value) => Number(value) === episode)
+}
+
 const MediaWallCard = ({ item, onClick }: { item: MediaWallItem; onClick: () => void }) => {
   const [imageError, setImageError] = useState(false)
 
@@ -69,6 +78,8 @@ const MediaWallCard = ({ item, onClick }: { item: MediaWallItem; onClick: () => 
 const MediaWallDetail = ({ item, onBack }: { item: MediaWallItem; onBack: () => void }) => {
   const enabledLinks = item.links.filter((link) => link.is_enabled)
   const info = [item.year, item.area, item.type_name].filter(Boolean).join(' · ')
+  const progressLabel = item.progress.label.replace(/\s+/g, '')
+  const showRemarks = item.remarks && !isProgressRemark(item.remarks, item.progress.episode)
 
   return (
     <div className="media-wall-detail-page">
@@ -80,16 +91,19 @@ const MediaWallDetail = ({ item, onBack }: { item: MediaWallItem; onBack: () => 
           {item.poster_url ? <Image src={item.poster_url} preview={false} alt={item.display_title} /> : <PosterPlaceholder title={item.display_title} />}
         </div>
         <div className="media-wall-detail-copy">
-          <div className="media-wall-eyebrow">影视墙 · 公开资源入口</div>
-          <Title level={1}>{item.display_title}</Title>
-          {info ? <Text className="media-wall-detail-info">{info}</Text> : null}
-          <div className="media-wall-detail-progress">
-            <span>追更进度</span>
-            <strong>{item.progress.label}</strong>
+          <div className="media-wall-detail-title-row">
+            <Title level={1}>{item.display_title}</Title>
+            {item.progress.episode ? <Tag color="blue" className="media-wall-detail-progress-tag">{progressLabel}</Tag> : null}
           </div>
-          {item.remarks ? <Tag color="blue">{item.remarks}</Tag> : null}
-          {item.summary ? <Paragraph className="media-wall-detail-summary">{item.summary}</Paragraph> : null}
+          {info ? <Text className="media-wall-detail-info">{info}</Text> : null}
+          {showRemarks ? <Tag color="blue">{item.remarks}</Tag> : null}
         </div>
+        {item.summary ? (
+          <div
+            className="media-wall-detail-summary"
+            dangerouslySetInnerHTML={{ __html: sanitizeHtml(item.summary) }}
+          />
+        ) : null}
       </section>
 
       <section className="media-wall-links-section">

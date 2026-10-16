@@ -134,17 +134,62 @@
 }
 
 .public-search-modal .ant-modal-body {
-  padding: 26px 24px 30px;
+  padding: 22px 24px 24px;
 }
 
 .public-search-modal-body .ant-input {
-  height: 50px;
+  height: 42px;
   border-radius: 10px;
-  font-size: 16px;
+  font-size: 15px;
 }
 
 .public-search-modal-footer {
   min-height: 32px;
+}
+
+.message-query-modal-root .ant-modal-wrap,
+.public-search-modal-root .ant-modal-wrap {
+  overscroll-behavior: contain;
+}
+
+@media (max-width: 576px) {
+  .public-search-modal-root .ant-modal {
+    width: calc(100vw - 32px) !important;
+    max-width: 420px;
+    margin: 0 auto;
+    top: 72px;
+    padding-bottom: 0;
+  }
+
+  .public-search-modal-root .ant-modal-content {
+    min-height: 0;
+    border-radius: 16px;
+  }
+
+  .public-search-modal .ant-modal-header {
+    padding: 16px 18px 12px;
+  }
+
+  .public-search-modal .ant-modal-body {
+    padding: 16px 18px 18px;
+  }
+
+  .public-search-modal .ant-modal-footer {
+    padding: 10px 18px calc(12px + env(safe-area-inset-bottom));
+  }
+
+  .public-search-modal-footer {
+    justify-content: flex-end;
+  }
+
+  .public-search-modal-footer > .ant-space {
+    display: flex;
+  }
+
+  .public-search-modal-footer .ant-space-item,
+  .public-search-modal-footer .ant-space-item > .ant-btn {
+    flex: 1 1 0;
+  }
 }
 
 .user-info {

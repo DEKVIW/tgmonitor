@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Button, Input, Modal, Space, Tooltip } from 'antd'
-import { ClearOutlined, SearchOutlined } from '@ant-design/icons'
+import { SearchOutlined } from '@ant-design/icons'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuthStore } from '@/store/authStore'
 import MessageFilters from '@/components/messages/MessageFilters'
@@ -45,7 +45,6 @@ const MediaWallSearch = () => {
             <span>搜索影视</span>
           </div>
         }
-        onOk={submitSearch}
         onCancel={() => setSearchOpen(false)}
         destroyOnClose
         width={600}
@@ -53,19 +52,16 @@ const MediaWallSearch = () => {
         rootClassName="public-search-modal-root"
         footer={
           <div className="public-search-modal-footer">
-            <Button icon={<ClearOutlined />} onClick={() => setSearchValue('')}>清空</Button>
             <Space>
               <Button onClick={() => setSearchOpen(false)}>取消</Button>
-              <Button type="primary" icon={<SearchOutlined />} onClick={submitSearch}>搜索影视</Button>
+              <Button type="primary" icon={<SearchOutlined />} onClick={submitSearch}>搜索</Button>
             </Space>
           </div>
         }
       >
         <div className="public-search-modal-body">
           <Input
-            autoFocus
             allowClear
-            size="large"
             value={searchValue}
             prefix={<SearchOutlined />}
             placeholder="输入影视名称"
