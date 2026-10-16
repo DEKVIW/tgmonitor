@@ -81,7 +81,7 @@ def _serialize_category(category: MediaWallCategory) -> dict[str, Any]:
         "name": category.name,
         "slug": category.slug,
         "is_enabled": bool(category.is_enabled),
-        "show_in_tabs": bool(category.show_in_tabs),
+        "show_in_tabs": bool(category.is_enabled),
         "sort_order": int(category.sort_order or 0),
         "created_at": category.created_at,
         "updated_at": category.updated_at,
@@ -292,7 +292,7 @@ def _get_categories_for_item(session: Session, item_id: int, *, enabled_only: bo
         .order_by(MediaWallCategory.sort_order.asc(), MediaWallCategory.id.asc())
     )
     if enabled_only:
-        query = query.filter(MediaWallCategory.is_enabled.is_(True), MediaWallCategory.show_in_tabs.is_(True))
+        query = query.filter(MediaWallCategory.is_enabled.is_(True))
     return query.all()
 
 
@@ -355,7 +355,7 @@ def list_public_categories(session: Session) -> list[dict[str, Any]]:
     ensure_runtime_storage_tables()
     categories = (
         session.query(MediaWallCategory)
-        .filter(MediaWallCategory.is_enabled.is_(True), MediaWallCategory.show_in_tabs.is_(True))
+        .filter(MediaWallCategory.is_enabled.is_(True))
         .order_by(MediaWallCategory.sort_order.asc(), MediaWallCategory.id.asc())
         .all()
     )
@@ -384,7 +384,6 @@ def list_public_items(
             .filter(
                 func.lower(MediaWallCategory.slug) == normalized_category,
                 MediaWallCategory.is_enabled.is_(True),
-                MediaWallCategory.show_in_tabs.is_(True),
             )
             .first()
         )
@@ -426,7 +425,7 @@ def list_admin_categories(session: Session) -> list[dict[str, Any]]:
     ]
 
 
-def create_category(session: Session, *, name: str, slug: str | None, sort_order: int, show_in_tabs: bool, operator: str) -> dict[str, Any]:
+def create_category(session: Session, *, name: str, slug: str | None, sort_order: int, is_enabled: bool, operator: str) -> dict[str, Any]:
     clean_name = _clean_text(name, max_length=120)
     if not clean_name:
         raise ValueError("分类名称不能为空")
@@ -437,7 +436,8 @@ def create_category(session: Session, *, name: str, slug: str | None, sort_order
         name=clean_name,
         slug=clean_slug,
         sort_order=int(sort_order or 0),
-        show_in_tabs=bool(show_in_tabs),
+        is_enabled=bool(is_enabled),
+        show_in_tabs=bool(is_enabled),
         created_by=operator,
         updated_by=operator,
     )
@@ -446,7 +446,7 @@ def create_category(session: Session, *, name: str, slug: str | None, sort_order
     return _serialize_category(category)
 
 
-def update_category(session: Session, *, category_id: int, name: str, slug: str | None, sort_order: int, is_enabled: bool, show_in_tabs: bool, operator: str) -> dict[str, Any]:
+def update_category(session: Session, *, category_id: int, name: str, slug: str | None, sort_order: int, is_enabled: bool, operator: str) -> dict[str, Any]:
     category = session.get(MediaWallCategory, int(category_id))
     if category is None:
         raise LookupError("分类不存在")
@@ -465,7 +465,7 @@ def update_category(session: Session, *, category_id: int, name: str, slug: str 
     category.slug = clean_slug
     category.sort_order = int(sort_order or 0)
     category.is_enabled = bool(is_enabled)
-    category.show_in_tabs = bool(show_in_tabs)
+    category.show_in_tabs = bool(is_enabled)
     category.updated_by = operator
     session.flush()
     return _serialize_category(category)
@@ -481,17 +481,70 @@ def disable_category(session: Session, *, category_id: int) -> dict[str, Any]:
     return _serialize_category(category)
 
 
-def list_admin_items(session: Session, *, search: str | None = None, visibility: str | None = None) -> list[dict[str, Any]]:
+def list_admin_items(
+    session: Session,
+    *,
+    search: str | None = None,
+    visibility: str | None = None,
+    category_id: int | None = None,
+) -> list[dict[str, Any]]:
     ensure_runtime_storage_tables()
     query = session.query(MediaWallItem)
     if search:
         query = query.filter(MediaWallItem.display_title.ilike(f"%{_clean_text(search, max_length=120)}%"))
     if visibility in MEDIA_WALL_VISIBILITIES:
         query = query.filter(MediaWallItem.visibility == visibility)
+    if category_id is not None and int(category_id) > 0:
+        query = query.join(MediaWallItemCategory, MediaWallItemCategory.item_id == MediaWallItem.id).filter(
+            MediaWallItemCategory.category_id == int(category_id)
+        )
     return [
         _serialize_item(session, item, public=False, include_metadata=False)
         for item in query.order_by(MediaWallItem.sort_order.asc(), MediaWallItem.updated_at.desc(), MediaWallItem.id.desc()).all()
     ]
+
+
+def _delete_item_rows(session: Session, item_ids: Iterable[int]) -> list[MediaWallItem]:
+    normalized_ids = sorted({int(item_id) for item_id in item_ids if int(item_id) > 0})
+    if not normalized_ids:
+        return []
+    rows = session.query(MediaWallItem).filter(MediaWallItem.id.in_(normalized_ids)).all()
+    found_ids = {int(row.id) for row in rows}
+    missing_ids = [item_id for item_id in normalized_ids if item_id not in found_ids]
+    if missing_ids:
+        raise LookupError(f"影视条目不存在: {missing_ids[0]}")
+    session.query(MediaWallItemCategory).filter(MediaWallItemCategory.item_id.in_(normalized_ids)).delete(
+        synchronize_session=False
+    )
+    session.query(MediaWallLink).filter(MediaWallLink.item_id.in_(normalized_ids)).delete(synchronize_session=False)
+    for row in rows:
+        session.delete(row)
+    session.flush()
+    return rows
+
+
+def delete_item(session: Session, *, item_id: int) -> dict[str, Any]:
+    row = session.get(MediaWallItem, int(item_id))
+    if row is None:
+        raise LookupError("影视条目不存在")
+    result = _serialize_item(session, row, public=False, include_metadata=False)
+    _delete_item_rows(session, [row.id])
+    return result
+
+
+def delete_items(session: Session, *, item_ids: Iterable[int]) -> list[int]:
+    rows = _delete_item_rows(session, item_ids)
+    return [int(row.id) for row in rows]
+
+
+def delete_items_for_sync_task(session: Session, *, sync_task_id: int) -> int:
+    item_ids = [
+        int(item_id)
+        for (item_id,) in session.query(MediaWallItem.id)
+        .filter(MediaWallItem.sync_task_id == int(sync_task_id))
+        .all()
+    ]
+    return len(delete_items(session, item_ids=item_ids))
 
 
 def _validate_category_ids(session: Session, category_ids: Iterable[int]) -> list[int]:

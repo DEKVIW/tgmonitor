@@ -6,7 +6,6 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, 
 from sqlalchemy.orm import Session
 
 from app.api.dependencies_runtime_v2 import get_admin_user, get_db, get_optional_current_user
-from app.models.models import MediaWallItem, MediaWallSourceConfig
 from app.schemas.media_wall_models import (
     MediaWallCategoryCreateRequest,
     MediaWallCategoryResponse,
@@ -15,6 +14,8 @@ from app.schemas.media_wall_models import (
     MediaWallImportConfirmResponse,
     MediaWallImportPreviewResponse,
     MediaWallItemCreateRequest,
+    MediaWallItemBulkDeleteRequest,
+    MediaWallItemBulkDeleteResponse,
     MediaWallItemListResponse,
     MediaWallItemResponse,
     MediaWallItemUpdateRequest,
@@ -32,6 +33,8 @@ from app.services.media_wall import (
     create_category,
     create_item,
     create_source,
+    delete_item,
+    delete_items,
     disable_category,
     get_public_item,
     list_admin_categories,
@@ -128,7 +131,7 @@ async def create_admin_media_wall_category(
             name=payload.name,
             slug=payload.slug,
             sort_order=payload.sort_order,
-            show_in_tabs=payload.show_in_tabs,
+            is_enabled=payload.is_enabled,
             operator=_operator(current_user),
         )
         db.commit()
@@ -153,7 +156,6 @@ async def update_admin_media_wall_category(
             slug=payload.slug,
             sort_order=payload.sort_order,
             is_enabled=payload.is_enabled,
-            show_in_tabs=payload.show_in_tabs,
             operator=_operator(current_user),
         )
         db.commit()
@@ -186,11 +188,15 @@ async def delete_admin_media_wall_category(
 async def get_admin_media_wall_items(
     search: Optional[str] = Query(default=None, max_length=120),
     visibility: Optional[str] = Query(default=None, max_length=32),
+    category_id: Optional[int] = Query(default=None, ge=1),
     db: Session = Depends(get_db),
     current_user: Dict[str, Any] = Depends(get_admin_user),
 ) -> list[MediaWallItemResponse]:
     del current_user
-    return [MediaWallItemResponse(**item) for item in list_admin_items(db, search=search, visibility=visibility)]
+    return [
+        MediaWallItemResponse(**item)
+        for item in list_admin_items(db, search=search, visibility=visibility, category_id=category_id)
+    ]
 
 
 @router.post("/api/admin/media-wall/items", response_model=MediaWallItemResponse, summary="创建影视墙条目")
@@ -249,20 +255,40 @@ async def update_admin_media_wall_item(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
-@router.delete("/api/admin/media-wall/items/{item_id}", response_model=MediaWallItemResponse, summary="隐藏影视墙条目")
+@router.post(
+    "/api/admin/media-wall/items/bulk-delete",
+    response_model=MediaWallItemBulkDeleteResponse,
+    summary="批量删除影视墙条目",
+)
+async def bulk_delete_admin_media_wall_items(
+    payload: MediaWallItemBulkDeleteRequest,
+    db: Session = Depends(get_db),
+    current_user: Dict[str, Any] = Depends(get_admin_user),
+) -> MediaWallItemBulkDeleteResponse:
+    del current_user
+    try:
+        deleted_ids = delete_items(db, item_ids=payload.item_ids)
+        db.commit()
+        return MediaWallItemBulkDeleteResponse(deleted_ids=deleted_ids, deleted_count=len(deleted_ids))
+    except LookupError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.delete("/api/admin/media-wall/items/{item_id}", response_model=MediaWallItemResponse, summary="删除影视墙条目")
 async def delete_admin_media_wall_item(
     item_id: int,
     db: Session = Depends(get_db),
     current_user: Dict[str, Any] = Depends(get_admin_user),
 ) -> MediaWallItemResponse:
-    item = db.get(MediaWallItem, int(item_id))
-    if item is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="影视条目不存在")
-    item.visibility = "hidden"
-    item.updated_by = _operator(current_user)
-    db.commit()
-    result = next(item for item in list_admin_items(db) if int(item["id"]) == int(item_id))
-    return MediaWallItemResponse(**result)
+    del current_user
+    try:
+        result = delete_item(db, item_id=item_id)
+        db.commit()
+        return MediaWallItemResponse(**result)
+    except LookupError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
 
 @router.post("/api/admin/media-wall/items/{item_id}/links", response_model=MediaWallLinkResponse, summary="添加影视墙链接")

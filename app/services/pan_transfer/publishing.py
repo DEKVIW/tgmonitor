@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 from datetime import datetime, time as daytime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -156,32 +155,6 @@ def _build_publish_links_payload(*, platform: str, source_url: str, title: str) 
 def _build_message_netdisk_types(platform: str) -> list[str]:
     normalized_platform = _normalize_text(platform, max_length=64)
     return [normalized_platform] if normalized_platform else []
-
-
-def _resolve_publish_source_url(session: Session, *, item: PanTransferBatchItem) -> str:
-    if item.new_link_target_id is not None:
-        target = session.get(LinkTarget, int(item.new_link_target_id))
-        if target is not None and _normalize_text(target.original_url):
-            return _normalize_text(target.original_url)
-    if _normalize_text(item.new_share_url):
-        return _normalize_text(item.new_share_url)
-    if _normalize_text(item.original_url):
-        return _normalize_text(item.original_url)
-    raise ValueError("no publishable source url is available for this transfer item")
-
-
-def _append_publish_history(item: PanTransferBatchItem, *, entry: dict[str, Any]) -> None:
-    extra_json = dict(item.extra_json or {})
-    current_history = extra_json.get("manual_publish_history")
-    history: list[dict[str, Any]] = []
-    if isinstance(current_history, list):
-        for raw_entry in current_history:
-            if isinstance(raw_entry, dict):
-                history.append(dict(raw_entry))
-    history.append(dict(entry))
-    extra_json["last_manual_publish"] = dict(entry)
-    extra_json["manual_publish_history"] = history[-20:]
-    item.extra_json = extra_json
 
 
 def _append_publish_record_refresh_history(row: PanTransferPublishRecord, *, entry: dict[str, Any]) -> None:
@@ -1101,8 +1074,6 @@ def update_pan_transfer_publish_record(
     session.add(row)
     session.flush()
     return _serialize_publish_record(session, row)
-
-
 def sync_pan_transfer_publish_record_source_url(
     session: Session,
     *,
@@ -1164,8 +1135,6 @@ def sync_pan_transfer_publish_record_source_url(
     session.add(row)
     session.flush()
     return _serialize_publish_record(session, row)
-
-
 async def validate_pan_transfer_publish_record(
     session: Session,
     *,
@@ -1934,165 +1903,8 @@ async def refresh_pan_transfer_publish_record_share(
     return _serialize_publish_record(session, row)
 
 
-def publish_manual_pan_transfer_message(
-    session: Session,
-    *,
-    payload: dict[str, Any],
-    operator: str | None,
-) -> dict[str, Any]:
-    publish_platform = _normalize_text(payload.get("platform"), max_length=64)
-    publish_source_url = _normalize_text(payload.get("source_url"))
-    publish_title = _normalize_text(payload.get("title"), max_length=255)
-    publish_description = _normalize_text(payload.get("description"), max_length=1000) or None
-    publish_tags = _normalize_publish_tags(list(payload.get("tags") or []))
+__all__ = [
+    "process_next_pan_transfer_publish_rule",
+    "refresh_pan_transfer_publish_record_share",
+]
 
-    created = _create_admin_manual_message(
-        session,
-        platform=publish_platform,
-        source_url=publish_source_url,
-        title=publish_title,
-        description=publish_description,
-        tags=publish_tags,
-        operator=operator,
-    )
-    message = created["message"]
-    _create_publish_record(
-        session,
-        source_type="manual",
-        platform=created["platform"],
-        source_url=publish_source_url,
-        title=publish_title,
-        description=publish_description,
-        tags=publish_tags,
-        operator=operator,
-        message_id=int(message.id),
-        published_at=created["published_at"],
-        source_link_target_id=created["published_link_target_id"],
-        extra_json={
-            "reused_existing_target": created["reused_existing_target"],
-            "published_link_target_id": created["published_link_target_id"],
-        },
-    )
-    return {
-        "message_id": int(message.id),
-        "title": publish_title,
-        "source_url": publish_source_url,
-        "link_target_id": created["published_link_target_id"],
-        "published_at": message.timestamp,
-        "reused_existing_target": created["reused_existing_target"],
-    }
-
-
-def publish_pan_transfer_batch_item_message(
-    session: Session,
-    *,
-    batch_id: int,
-    item_id: int,
-    payload: dict[str, Any],
-    operator: str | None,
-) -> dict[str, Any]:
-    ensure_runtime_storage_tables()
-    item = (
-        session.query(PanTransferBatchItem)
-        .filter(
-            PanTransferBatchItem.batch_id == int(batch_id),
-            PanTransferBatchItem.id == int(item_id),
-        )
-        .first()
-    )
-    if item is None:
-        raise LookupError("pan transfer batch item not found")
-
-    publish_title = _normalize_text(payload.get("title"), max_length=255)
-    if not publish_title:
-        raise ValueError("title cannot be empty")
-
-    publish_description = _normalize_text(payload.get("description"), max_length=1000) or None
-    publish_tags = _normalize_publish_tags(list(payload.get("tags") or []))
-    source_url = _resolve_publish_source_url(session, item=item)
-    created = _create_admin_manual_message(
-        session,
-        platform=str(item.platform or ""),
-        source_url=source_url,
-        title=publish_title,
-        description=publish_description,
-        tags=publish_tags,
-        operator=operator,
-    )
-    message = created["message"]
-
-    publish_entry = {
-        "message_id": int(message.id),
-        "title": publish_title,
-        "source_url": source_url,
-        "link_target_id": created["published_link_target_id"],
-        "operator": _normalize_text(operator, max_length=128) or "admin",
-        "published_at": created["published_at"].isoformat(),
-    }
-    _append_publish_history(item, entry=publish_entry)
-    session.add(item)
-    session.flush()
-
-    publish_record = _create_publish_record(
-        session,
-        source_type="batch_item",
-        platform=created["platform"],
-        source_url=source_url,
-        title=publish_title,
-        description=publish_description,
-        tags=publish_tags,
-        operator=operator,
-        message_id=int(message.id),
-        published_at=created["published_at"],
-        source_batch_id=int(item.batch_id),
-        source_batch_item_id=int(item.id),
-        source_link_target_id=int(item.link_target_id),
-        source_new_link_target_id=int(item.new_link_target_id) if item.new_link_target_id is not None else None,
-        extra_json={
-            "reused_existing_target": created["reused_existing_target"],
-            "published_link_target_id": created["published_link_target_id"],
-            "source_original_url": _normalize_text(item.original_url) or None,
-            "current_share_url": _normalize_text(item.new_share_url) or None,
-        },
-    )
-
-    follow_task = None
-    try:
-        from .follow_tasks import bind_follow_task_publish_record
-
-        follow_task = (
-            session.query(PanTransferSyncTask)
-            .filter(PanTransferSyncTask.source_batch_item_id == int(item.id))
-            .order_by(PanTransferSyncTask.updated_at.desc(), PanTransferSyncTask.id.desc())
-            .first()
-        )
-        if follow_task is not None:
-            bind_follow_task_publish_record(session, task=follow_task)
-    except Exception:
-        follow_task = None
-
-    append_pan_transfer_execution_log(
-        session,
-        item=item,
-        stage="publish",
-        message="Admin message published to feed",
-        payload={
-            "published_message_id": int(message.id),
-            "published_title": publish_title,
-            "source_url": source_url,
-            "published_link_target_id": created["published_link_target_id"],
-            "reused_existing_target": created["reused_existing_target"],
-            "operator": _normalize_text(operator, max_length=128) or "admin",
-            "publish_record_id": int(publish_record.id),
-            "follow_task_id": int(follow_task.id) if follow_task is not None else None,
-        },
-    )
-
-    return {
-        "message_id": int(message.id),
-        "title": publish_title,
-        "source_url": source_url,
-        "link_target_id": created["published_link_target_id"],
-        "published_at": message.timestamp,
-        "reused_existing_target": created["reused_existing_target"],
-    }

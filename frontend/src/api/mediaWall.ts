@@ -41,12 +41,12 @@ export const getMediaWallCategories = async (): Promise<MediaWallCategory[]> => 
   return response.data
 }
 
-export const createMediaWallCategory = async (payload: { name: string; slug?: string; sort_order: number; show_in_tabs: boolean }): Promise<MediaWallCategory> => {
+export const createMediaWallCategory = async (payload: { name: string; slug?: string; sort_order: number; is_enabled: boolean }): Promise<MediaWallCategory> => {
   const response = await apiClient.post<MediaWallCategory>('/admin/media-wall/categories', payload)
   return response.data
 }
 
-export const updateMediaWallCategory = async (id: number, payload: { name: string; slug?: string; sort_order: number; show_in_tabs: boolean; is_enabled: boolean }): Promise<MediaWallCategory> => {
+export const updateMediaWallCategory = async (id: number, payload: { name: string; slug?: string; sort_order: number; is_enabled: boolean }): Promise<MediaWallCategory> => {
   const response = await apiClient.put<MediaWallCategory>(`/admin/media-wall/categories/${id}`, payload)
   return response.data
 }
@@ -56,10 +56,10 @@ export const disableMediaWallCategory = async (id: number): Promise<MediaWallCat
   return response.data
 }
 
-export const getMediaWallItems = async (params: { search?: string; visibility?: string } = {}): Promise<MediaWallItem[]> => {
+export const getMediaWallItems = async (params: { search?: string; visibility?: string; category_id?: number } = {}): Promise<MediaWallItem[]> => {
   const query = new URLSearchParams()
   Object.entries(params).forEach(([key, value]) => {
-    if (value) query.set(key, value)
+    if (value !== undefined && value !== null && value !== '') query.set(key, String(value))
   })
   const suffix = query.toString() ? `?${query.toString()}` : ''
   const response = await apiClient.get<MediaWallItem[]>(`/admin/media-wall/items${suffix}`)
@@ -76,8 +76,15 @@ export const updateMediaWallItem = async (id: number, payload: MediaWallItemInpu
   return response.data
 }
 
-export const hideMediaWallItem = async (id: number): Promise<MediaWallItem> => {
-  const response = await apiClient.delete<MediaWallItem>(`/admin/media-wall/items/${id}`)
+export const deleteMediaWallItem = async (id: number): Promise<MediaWallItem> => {
+    const response = await apiClient.delete<MediaWallItem>(`/admin/media-wall/items/${id}`)
+    return response.data
+}
+
+export const deleteMediaWallItems = async (itemIds: number[]): Promise<{ deleted_ids: number[]; deleted_count: number }> => {
+  const response = await apiClient.post<{ deleted_ids: number[]; deleted_count: number }>('/admin/media-wall/items/bulk-delete', {
+    item_ids: itemIds,
+  })
   return response.data
 }
 

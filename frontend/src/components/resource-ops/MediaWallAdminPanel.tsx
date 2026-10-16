@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Alert, Button, Card, Empty, Form, Input, InputNumber, Modal, Select, Space, Switch, Table, Tabs, Tag, Upload, message } from 'antd'
+import { Alert, Button, Card, Empty, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Switch, Table, Tabs, Tag, Upload, message } from 'antd'
 import type { UploadProps } from 'antd'
-import { EditOutlined, PlusOutlined, ReloadOutlined, SafetyOutlined, UploadOutlined } from '@ant-design/icons'
+import { DeleteOutlined, EditOutlined, PlusOutlined, ReloadOutlined, SafetyOutlined, UploadOutlined } from '@ant-design/icons'
 
 import {
   addMediaWallLink,
@@ -9,12 +9,13 @@ import {
   createMediaWallCategory,
   createMediaWallItem,
   createMediaWallSource,
+  deleteMediaWallItem,
+  deleteMediaWallItems,
   disableMediaWallCategory,
   getMediaWallCategories,
   getMediaWallItems,
   getMediaWallSources,
   getMediaWallSyncTasks,
-  hideMediaWallItem,
   previewMediaWallImport,
   testMediaWallSource,
   updateMediaWallCategory,
@@ -48,7 +49,6 @@ interface CategoryFormValues {
   name: string
   slug?: string
   sort_order: number
-  show_in_tabs: boolean
   is_enabled: boolean
 }
 
@@ -85,16 +85,18 @@ const MediaWallAdminPanel = () => {
   const [importPreview, setImportPreview] = useState<MediaWallImportPreview | null>(null)
   const [importCategoryIds, setImportCategoryIds] = useState<number[]>([])
   const [importVisibility, setImportVisibility] = useState('draft')
+  const [itemCategoryFilter, setItemCategoryFilter] = useState<number | undefined>()
+  const [selectedItemKeys, setSelectedItemKeys] = useState<number[]>([])
   const [itemForm] = Form.useForm<ItemFormValues>()
   const [categoryForm] = Form.useForm<CategoryFormValues>()
   const [sourceForm] = Form.useForm<SourceFormValues>()
 
-  const loadData = async () => {
+  const loadData = async (categoryId = itemCategoryFilter) => {
     setLoading(true)
     try {
       const [categoryData, itemData, sourceData, taskData] = await Promise.all([
         getMediaWallCategories(),
-        getMediaWallItems(),
+        getMediaWallItems({ category_id: categoryId }),
         getMediaWallSources(),
         getMediaWallSyncTasks(),
       ])
@@ -102,6 +104,7 @@ const MediaWallAdminPanel = () => {
       setItems(itemData)
       setSources(sourceData)
       setSyncTasks(taskData)
+      setSelectedItemKeys((current) => current.filter((itemId) => itemData.some((item) => item.id === itemId)))
     } catch (error: unknown) {
       message.error(getRequestErrorMessage(error, '影视墙数据加载失败'))
     } finally {
@@ -112,6 +115,7 @@ const MediaWallAdminPanel = () => {
   useEffect(() => { void loadData() }, [])
 
   const categoryOptions = useMemo(() => categories.filter((category) => category.is_enabled).map((category) => ({ label: category.name, value: category.id })), [categories])
+  const categoryFilterOptions = useMemo(() => categories.map((category) => ({ label: category.name, value: category.id })), [categories])
   const syncTaskOptions = useMemo(() => syncTasks.map((task) => ({ label: `${task.work_title || task.topic_title} · ${task.progress.label}`, value: task.id })), [syncTasks])
 
   const openItemModal = (item?: MediaWallItem) => {
@@ -157,7 +161,7 @@ const MediaWallAdminPanel = () => {
 
   const openCategoryModal = (category?: MediaWallCategory) => {
     setEditingCategory(category || null)
-    categoryForm.setFieldsValue(category || { name: '', slug: '', sort_order: 0, show_in_tabs: true, is_enabled: true })
+    categoryForm.setFieldsValue(category || { name: '', slug: '', sort_order: 0, is_enabled: true })
     setCategoryModalOpen(true)
   }
 
@@ -170,6 +174,23 @@ const MediaWallAdminPanel = () => {
       await loadData()
     } catch (error: unknown) {
       message.error(getRequestErrorMessage(error, '保存分类失败'))
+    }
+  }
+
+  const handleDeleteItems = async (itemIds: number[]) => {
+    const normalizedIds = [...new Set(itemIds.map(Number).filter((itemId) => itemId > 0))]
+    if (normalizedIds.length === 0) return
+    try {
+      if (normalizedIds.length === 1) {
+        await deleteMediaWallItem(normalizedIds[0])
+      } else {
+        await deleteMediaWallItems(normalizedIds)
+      }
+      setSelectedItemKeys((current) => current.filter((itemId) => !normalizedIds.includes(itemId)))
+      message.success(`已删除 ${normalizedIds.length} 个影视条目`)
+      await loadData(itemCategoryFilter)
+    } catch (error: unknown) {
+      message.error(getRequestErrorMessage(error, '删除影视条目失败'))
     }
   }
 
@@ -210,14 +231,33 @@ const MediaWallAdminPanel = () => {
     { title: '分类', dataIndex: 'categories', render: (value: MediaWallCategory[]) => <Space wrap>{value.map((category) => <Tag key={category.id}>{category.name}</Tag>)}</Space> },
     { title: '链接', dataIndex: 'link_count', width: 80, render: (value: number) => `${value} 个` },
     { title: '状态', dataIndex: 'visibility', width: 90, render: (value: string) => <Tag color={value === 'public' ? 'green' : value === 'hidden' ? 'default' : 'gold'}>{value === 'public' ? '公开' : value === 'hidden' ? '隐藏' : '草稿'}</Tag> },
-    { title: '操作', key: 'action', width: 140, render: (_: unknown, item: MediaWallItem) => <Space><Button type="text" icon={<EditOutlined />} onClick={() => openItemModal(item)}>编辑</Button><Button type="text" danger onClick={() => void hideMediaWallItem(item.id).then(() => loadData())}>隐藏</Button></Space> },
+    {
+      title: '操作',
+      key: 'action',
+      width: 160,
+      render: (_: unknown, item: MediaWallItem) => (
+        <Space>
+          <Button type="text" icon={<EditOutlined />} onClick={() => openItemModal(item)}>编辑</Button>
+          <Popconfirm
+            title="确认删除这个影视条目吗？"
+            description="删除后会同时移除分类关联和网盘入口，影视墙将不再显示。"
+            okText="删除"
+            cancelText="取消"
+            okButtonProps={{ danger: true }}
+            onConfirm={() => void handleDeleteItems([item.id])}
+          >
+            <Button type="text" danger icon={<DeleteOutlined />}>删除</Button>
+          </Popconfirm>
+        </Space>
+      ),
+    },
   ]
 
   const categoryColumns = [
     { title: '分类', dataIndex: 'name' },
     { title: '路径', dataIndex: 'slug' },
     { title: '排序', dataIndex: 'sort_order' },
-    { title: '前台显示', dataIndex: 'show_in_tabs', render: (value: boolean) => value ? '显示' : '隐藏' },
+    { title: '状态', dataIndex: 'is_enabled', render: (value: boolean) => value ? <Tag color="green">启用</Tag> : <Tag>停用</Tag> },
     { title: '操作', key: 'action', render: (_: unknown, category: MediaWallCategory) => <Space><Button type="text" icon={<EditOutlined />} onClick={() => openCategoryModal(category)}>编辑</Button><Button type="text" danger onClick={() => void disableMediaWallCategory(category.id).then(() => loadData())}>停用</Button></Space> },
   ]
 
@@ -236,7 +276,55 @@ const MediaWallAdminPanel = () => {
         className="media-wall-admin-tabs"
         tabBarExtraContent={<Button icon={<ReloadOutlined />} onClick={() => void loadData()} loading={loading}>刷新</Button>}
         items={[
-          { key: 'items', label: '影视条目', children: <Card className="resource-ops-panel-card media-wall-admin-card" extra={<Button type="primary" icon={<PlusOutlined />} onClick={() => openItemModal()}>添加影视</Button>}><Table rowKey="id" loading={loading} columns={itemColumns} dataSource={items} pagination={{ pageSize: 10 }} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无影视条目" /> }} /></Card> },
+          {
+            key: 'items',
+            label: '影视条目',
+            children: (
+              <Card
+                className="resource-ops-panel-card media-wall-admin-card"
+                extra={
+                  <Space wrap>
+                    <Select
+                      allowClear
+                      placeholder="按分类筛选"
+                      value={itemCategoryFilter}
+                      options={categoryFilterOptions}
+                      onChange={(value) => {
+                        setItemCategoryFilter(value)
+                        setSelectedItemKeys([])
+                        void loadData(value)
+                      }}
+                      style={{ minWidth: 160 }}
+                    />
+                    <Popconfirm
+                      title={`确认删除已选的 ${selectedItemKeys.length} 个影视条目吗？`}
+                      description="删除后会同时移除分类关联和网盘入口，影视墙将不再显示。"
+                      okText="批量删除"
+                      cancelText="取消"
+                      okButtonProps={{ danger: true }}
+                      disabled={selectedItemKeys.length === 0}
+                      onConfirm={() => void handleDeleteItems(selectedItemKeys)}
+                    >
+                      <Button danger icon={<DeleteOutlined />} disabled={selectedItemKeys.length === 0}>
+                        批量删除{selectedItemKeys.length > 0 ? ` (${selectedItemKeys.length})` : ''}
+                      </Button>
+                    </Popconfirm>
+                    <Button type="primary" icon={<PlusOutlined />} onClick={() => openItemModal()}>添加影视</Button>
+                  </Space>
+                }
+              >
+                <Table
+                  rowKey="id"
+                  loading={loading}
+                  columns={itemColumns}
+                  dataSource={items}
+                  rowSelection={{ selectedRowKeys: selectedItemKeys, onChange: (keys) => setSelectedItemKeys(keys.map(Number)) }}
+                  pagination={{ pageSize: 10 }}
+                  locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无影视条目" /> }}
+                />
+              </Card>
+            ),
+          },
           { key: 'categories', label: '分类管理', children: <Card className="resource-ops-panel-card media-wall-admin-card" extra={<Button type="primary" icon={<PlusOutlined />} onClick={() => openCategoryModal()}>添加分类</Button>}><Table rowKey="id" loading={loading} columns={categoryColumns} dataSource={categories} pagination={false} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无分类" /> }} /></Card> },
           { key: 'sources', label: '采集源', children: <Card className="resource-ops-panel-card media-wall-admin-card" extra={<Button type="primary" icon={<PlusOutlined />} onClick={() => openSourceModal()}>添加采集源</Button>}><Table rowKey="id" loading={loading} columns={sourceColumns} dataSource={sources} pagination={false} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无采集源" /> }} /></Card> },
           { key: 'import', label: '批量导入', children: <Card className="resource-ops-panel-card media-wall-admin-card"><Upload {...uploadProps}><Button icon={<UploadOutlined />}>选择 TXT / XLSX 文件</Button></Upload>{importPreview ? <div className="media-wall-import-preview"><Alert type="info" showIcon message={`解析 ${importPreview.total_records} 条影视，${importPreview.total_links} 个链接，${importPreview.invalid_count} 行异常`} /><div className="media-wall-import-toolbar"><Select mode="multiple" allowClear placeholder="导入到分类" value={importCategoryIds} options={categoryOptions} onChange={setImportCategoryIds} /><Select value={importVisibility} options={[{ label: '导入为草稿', value: 'draft' }, { label: '直接公开', value: 'public' }]} onChange={setImportVisibility} /><Button type="primary" onClick={() => void confirmMediaWallImport(importPreview.id, { category_ids: importCategoryIds, visibility: importVisibility }).then(() => { message.success('导入已确认'); setImportPreview(null); void loadData() }).catch((error: unknown) => message.error(getRequestErrorMessage(error, '确认导入失败')))}>确认导入</Button></div><Table rowKey="display_title" size="small" pagination={{ pageSize: 8 }} dataSource={importPreview.records} columns={[{ title: '影视名称', dataIndex: 'display_title' }, { title: '链接', dataIndex: 'links', render: (links: Array<{ platform: string }>) => links.map((link) => <Tag key={link.platform}>{link.platform}</Tag>) }]} /></div> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="选择文件后先预览，再确认写入影视墙" />}</Card> },
@@ -253,7 +341,7 @@ const MediaWallAdminPanel = () => {
         </Form>
       </Modal>
       <Modal open={categoryModalOpen} title={editingCategory ? '编辑分类' : '添加分类'} okText="保存" cancelText="取消" onOk={() => categoryForm.submit()} onCancel={() => setCategoryModalOpen(false)} destroyOnClose>
-        <Form form={categoryForm} layout="vertical" onFinish={(values) => void submitCategory(values)}><Form.Item name="name" label="分类名称" rules={[{ required: true }]}><Input /></Form.Item><Form.Item name="slug" label="访问路径"><Input placeholder="可选，自动生成" /></Form.Item><div className="media-wall-form-grid"><Form.Item name="sort_order" label="排序"><InputNumber className="media-wall-full-width" /></Form.Item><Form.Item name="show_in_tabs" label="显示在前台 Tab" valuePropName="checked"><Switch /></Form.Item></div><Form.Item name="is_enabled" label="分类启用" valuePropName="checked"><Switch /></Form.Item></Form>
+        <Form form={categoryForm} layout="vertical" onFinish={(values) => void submitCategory(values)}><Form.Item name="name" label="分类名称" rules={[{ required: true }]}><Input /></Form.Item><Form.Item name="slug" label="访问路径"><Input placeholder="可选，自动生成" /></Form.Item><div className="media-wall-form-grid"><Form.Item name="sort_order" label="排序"><InputNumber className="media-wall-full-width" /></Form.Item><Form.Item name="is_enabled" label="分类启用" valuePropName="checked"><Switch /></Form.Item></div></Form>
       </Modal>
       <Modal open={sourceModalOpen} title={editingSource ? '编辑采集源' : '添加采集源'} okText="保存" cancelText="取消" onOk={() => sourceForm.submit()} onCancel={() => setSourceModalOpen(false)} destroyOnClose>
         <Form form={sourceForm} layout="vertical" onFinish={(values) => void submitSource(values)}><Form.Item name="name" label="名称" rules={[{ required: true }]}><Input /></Form.Item><Form.Item name="source_url" label="源地址" rules={[{ required: true, type: 'url' }]}><Input /></Form.Item><div className="media-wall-form-grid"><Form.Item name="source_type" label="类型"><Select options={[{ label: 'LibreTV / SourceList', value: 'source-list' }, { label: 'TVBox', value: 'tvbox' }, { label: 'Apple CMS API', value: 'apple-cms' }]} /></Form.Item><Form.Item name="priority" label="优先级"><InputNumber className="media-wall-full-width" min={0} /></Form.Item></div><div className="media-wall-form-grid"><Form.Item name="timeout_seconds" label="超时秒数"><InputNumber className="media-wall-full-width" min={2} max={20} /></Form.Item><Form.Item name="is_enabled" label="启用" valuePropName="checked"><Switch /></Form.Item></div></Form>

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { Key } from 'react'
-import { Alert, Form, Input, InputNumber, Modal, Select, Space, Switch, Tabs, Tooltip, message } from 'antd'
+import { Form, Input, InputNumber, Modal, Select, Space, Switch, Tabs, Tooltip, message } from 'antd'
 import type { TablePaginationConfig } from 'antd/es/table'
 import { QuestionCircleOutlined } from '@ant-design/icons'
 
@@ -15,7 +15,6 @@ import {
   getPanTransferBatchDetail,
   listPanTransferAccounts,
   listPanTransferBatches,
-  publishPanTransferBatchItemMessage,
   previewManualPanTransfer,
   retryPanTransferBatch,
   startPanTransferBatch,
@@ -33,13 +32,11 @@ import type {
   PanTransferBatchSummaryItem,
   PanTransferManualPreviewRequest,
   PanTransferManualPreviewResponse,
-  PanTransferMessagePublishRequest,
 } from '@/types/panTransfer'
 
 import AccountsSection from './AccountsSection'
 import BatchSection from './BatchSection'
 import FollowTasksSection from './FollowTasksSection'
-import PublishSection from './PublishSectionPanel'
 import PreviewSection from './PreviewSection'
 import {
   BATCH_FOLDER_NAME_OPTIONS,
@@ -69,7 +66,7 @@ import {
 import '../ResourceOpsTransferCenter.css'
 
 const TRANSFER_CENTER_TAB_STORAGE_KEY = 'resource-ops-transfer-center-active-tab'
-const TRANSFER_CENTER_TAB_KEYS = new Set(['accounts', 'batches', 'follow', 'publish'])
+const TRANSFER_CENTER_TAB_KEYS = new Set(['accounts', 'batches', 'follow'])
 
 const getInitialTransferCenterTab = () => {
   if (typeof window === 'undefined') {
@@ -126,18 +123,12 @@ const ResourceOpsTransferCenterMain = () => {
   const [detailData, setDetailData] = useState<PanTransferBatchDetailResponse | null>(null)
   const [selectedBatchKeys, setSelectedBatchKeys] = useState<Key[]>([])
   const [selectedDetailItemKeys, setSelectedDetailItemKeys] = useState<Key[]>([])
-  const [publishModalOpen, setPublishModalOpen] = useState(false)
-  const [publishingItem, setPublishingItem] = useState<PanTransferBatchItem | null>(null)
-  const [publishingItemId, setPublishingItemId] = useState<number | null>(null)
-  const [bulkPublishing, setBulkPublishing] = useState(false)
   const [creatingFollowItemId, setCreatingFollowItemId] = useState<number | null>(null)
   const [bulkCreatingFollow, setBulkCreatingFollow] = useState(false)
   const [batchBulkAction, setBatchBulkAction] = useState<BatchBulkAction | null>(null)
   const [followRefreshToken, setFollowRefreshToken] = useState(0)
-  const [publishRefreshToken, setPublishRefreshToken] = useState(0)
 
   const [accountForm] = Form.useForm()
-  const [publishForm] = Form.useForm()
 
   const loadAccounts = async () => {
     setAccountsLoading(true)
@@ -331,33 +322,6 @@ const ResourceOpsTransferCenterMain = () => {
     return parts.length > 0 ? parts.join(' / ') : '按各平台默认账号执行'
   }, [previewDraft.platforms, targetAccountIdsByPlatform, targetAccountOptionsByPlatform])
 
-  const publishSourceHint = useMemo(() => {
-    if (!publishingItem) return null
-    if (publishingItem.new_link_target_url) {
-      return { label: '已回写新链接', url: publishingItem.new_link_target_url }
-    }
-    if (publishingItem.new_share_url) {
-      return { label: '新分享链接', url: publishingItem.new_share_url }
-    }
-    if (publishingItem.original_url) {
-      return { label: '原始链接', url: publishingItem.original_url }
-    }
-    return null
-  }, [publishingItem])
-
-  const getBatchItemPublishDefaults = (item: PanTransferBatchItem) => {
-    const snapshot = (item.extra_json?.source_message_snapshot as Record<string, unknown> | undefined) || {}
-    const snapshotDescription = typeof snapshot.description === 'string' ? snapshot.description.trim() : ''
-    const snapshotTags = Array.isArray(snapshot.tags)
-      ? snapshot.tags.filter((tag): tag is string => typeof tag === 'string').map((tag) => tag.trim()).filter(Boolean)
-      : []
-    return {
-      title: item.short_title || (typeof snapshot.title === 'string' ? snapshot.title : '') || '',
-      description: item.source_message_description || snapshotDescription || '',
-      tags: Array.isArray(item.source_message_tags) && item.source_message_tags.length > 0 ? item.source_message_tags : snapshotTags,
-    }
-  }
-
   const openCreateModal = () => {
     setEditingAccount(null)
     accountForm.resetFields()
@@ -392,18 +356,6 @@ const ResourceOpsTransferCenterMain = () => {
       is_default: account.is_default,
     })
     setAccountModalOpen(true)
-  }
-
-  const openPublishModal = (item: PanTransferBatchItem) => {
-    setPublishingItem(item)
-    publishForm.resetFields()
-    const defaults = getBatchItemPublishDefaults(item)
-    publishForm.setFieldsValue({
-      title: defaults.title,
-      description: defaults.description,
-      tags: defaults.tags,
-    })
-    setPublishModalOpen(true)
   }
 
   const handleSaveAccount = async () => {
@@ -519,36 +471,6 @@ const ResourceOpsTransferCenterMain = () => {
     }
   }
 
-  const handlePublishMessage = async () => {
-    if (!publishingItem) return
-    try {
-      const values = await publishForm.validateFields()
-      setPublishingItemId(publishingItem.id)
-      const payload: PanTransferMessagePublishRequest = {
-        title: values.title,
-        description: values.description || null,
-        tags: Array.isArray(values.tags) ? values.tags : [],
-      }
-      const response = await publishPanTransferBatchItemMessage(
-        publishingItem.batch_id,
-        publishingItem.id,
-        payload
-      )
-      message.success(`已发布到前台，消息 #${response.message_id}`)
-      setPublishModalOpen(false)
-      setPublishingItem(null)
-      publishForm.resetFields()
-      setPublishRefreshToken((current) => current + 1)
-      await loadBatchDetail(publishingItem.batch_id, { open: false })
-      await loadBatches(batchPagination.page, batchPagination.pageSize)
-    } catch (error) {
-      if ((error as { errorFields?: unknown })?.errorFields) return
-      message.error(getErrorMessage(error, '发布消息失败'))
-    } finally {
-      setPublishingItemId(null)
-    }
-  }
-
   const handleCreateFollowTask = async (item: PanTransferBatchItem) => {
     setCreatingFollowItemId(item.id)
     try {
@@ -575,43 +497,6 @@ const ResourceOpsTransferCenterMain = () => {
       message.error(getErrorMessage(error, '查询转存资源失败'))
     } finally {
       setPreviewLoading(false)
-    }
-  }
-
-  const handleBulkPublishSelected = async () => {
-    if (!detailData) return
-    const selectedSet = new Set(selectedDetailItemKeys.map((item) => Number(item)))
-    const selectedRows = detailData.items.filter((item) => selectedSet.has(item.id))
-    if (selectedRows.length <= 0) {
-      message.warning('请先选择要发布的资源')
-      return
-    }
-    setBulkPublishing(true)
-    let successCount = 0
-    let failureCount = 0
-    for (const item of selectedRows) {
-      try {
-        const defaults = getBatchItemPublishDefaults(item)
-        await publishPanTransferBatchItemMessage(item.batch_id, item.id, {
-          title: defaults.title,
-          description: defaults.description || null,
-          tags: defaults.tags,
-        })
-        successCount += 1
-      } catch {
-        failureCount += 1
-      }
-    }
-    setBulkPublishing(false)
-    if (successCount > 0) {
-      setPublishRefreshToken((current) => current + 1)
-      await loadBatchDetail(detailData.batch.id, { open: false })
-      await loadBatches(batchPagination.page, batchPagination.pageSize)
-    }
-    if (failureCount > 0) {
-      message.warning(`批量发布完成，成功 ${successCount} 条，失败 ${failureCount} 条`)
-    } else {
-      message.success(`已批量发布 ${successCount} 条资源到前台`)
     }
   }
 
@@ -918,7 +803,6 @@ const ResourceOpsTransferCenterMain = () => {
                   startingBatchId={startingBatchId}
                   cancellingBatchId={cancellingBatchId}
                   retryingBatchId={retryingBatchId}
-                  publishingItemId={publishingItemId}
                   creatingFollowItemId={creatingFollowItemId}
                   deletingBatchId={deletingBatchId}
                   clearingLogsBatchId={clearingLogsBatchId}
@@ -928,7 +812,6 @@ const ResourceOpsTransferCenterMain = () => {
                   selectedBatchKeys={selectedBatchKeys}
                   selectedItemKeys={selectedDetailItemKeys}
                   batchBulkAction={batchBulkAction}
-                  bulkPublishing={bulkPublishing}
                   bulkCreatingFollow={bulkCreatingFollow}
                   onRefresh={() => void loadBatches()}
                   onTableChange={(pagination) =>
@@ -978,13 +861,11 @@ const ResourceOpsTransferCenterMain = () => {
                   onRefreshDetail={(batchId) => void loadBatchDetail(batchId, { open: false })}
                   onSelectItemKeys={setSelectedDetailItemKeys}
                   onClearLogs={(batchId) => void runBatchClearLogs(batchId)}
-                  onPublish={(item) => openPublishModal(item)}
                   onCreateFollow={(item) => void handleCreateFollowTask(item)}
                   onBulkStart={() => void handleBulkStartBatches()}
                   onBulkCancel={() => void handleBulkCancelBatches()}
                   onBulkRetry={() => void handleBulkRetryBatches()}
                   onBulkDelete={() => void handleBulkDeleteBatches()}
-                  onBulkPublish={() => void handleBulkPublishSelected()}
                   onBulkCreateFollow={() => void handleBulkCreateFollowSelected()}
                 />
               </div>
@@ -994,11 +875,6 @@ const ResourceOpsTransferCenterMain = () => {
             key: 'follow',
             label: '追更同步',
             children: <FollowTasksSection refreshToken={followRefreshToken} isActive={activeTab === 'follow'} />,
-          },
-          {
-            key: 'publish',
-            label: '运营发布',
-            children: <PublishSection refreshToken={publishRefreshToken} />,
           },
         ]}
       />
@@ -1279,48 +1155,6 @@ const ResourceOpsTransferCenterMain = () => {
         </div>
       </Modal>
 
-      <Modal
-        open={publishModalOpen}
-        title={publishingItem ? `发布到前台：${publishingItem.short_title}` : '发布到前台'}
-        onCancel={() => {
-          setPublishModalOpen(false)
-          setPublishingItem(null)
-          publishForm.resetFields()
-        }}
-        onOk={() => void handlePublishMessage()}
-        confirmLoading={publishingItemId !== null}
-        okText="确认发布"
-        destroyOnHidden
-      >
-        <Form form={publishForm} layout="vertical">
-          <Alert
-            type="info"
-            showIcon
-            style={{ marginBottom: 16 }}
-            message="发布后会作为一条新消息进入前台列表"
-            description={
-              <div className="resource-ops-transfer-validation">
-                <small>优先复用转存回写后的链接；如果该条任务还没有新链接，则回退使用当前可用的原链接。</small>
-                {publishSourceHint ? <small>当前预计使用：{publishSourceHint.label} {'->'} {publishSourceHint.url}</small> : null}
-              </div>
-            }
-          />
-          <Form.Item label="标题" name="title" rules={[{ required: true, message: '请输入标题' }]}>
-            <Input placeholder="请输入前台展示标题" maxLength={255} />
-          </Form.Item>
-          <Form.Item label="简介" name="description">
-            <Input.TextArea rows={4} placeholder="可选，补充前台展示说明" maxLength={1000} />
-          </Form.Item>
-          <Form.Item label="标签" name="tags">
-            <Select
-              mode="tags"
-              tokenSeparators={[',', '，']}
-              placeholder="可选，输入后回车"
-              open={false}
-            />
-          </Form.Item>
-        </Form>
-      </Modal>
     </div>
   )
 }

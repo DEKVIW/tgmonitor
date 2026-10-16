@@ -26,6 +26,7 @@ from app.models.models import (
 from app.services.ai_center import execute_text_route, extract_json_object_from_text
 from app.services.resource_identity import compare_follow_candidate, parse_resource_identity
 from app.services.resource_ops import get_work_binding_lookup
+from app.services.media_wall import delete_items_for_sync_task
 
 from .common import DEFAULT_SHARE_TARGET_MODE, generate_share_passcode, normalize_relative_path, utcnow
 from .providers import decrypt_account_credential, get_pan_transfer_provider
@@ -3188,6 +3189,7 @@ async def delete_pan_transfer_follow_task(
     if delete_transferred_resource:
         delete_details = await _delete_follow_task_transferred_resource(session, task=task)
         task = _get_follow_task(session, task_id=task_id)
+    media_wall_deleted_count = delete_items_for_sync_task(session, sync_task_id=task.id)
     (
         session.query(PanTransferSyncTaskLog)
         .filter(PanTransferSyncTaskLog.task_id == int(task.id))
@@ -3195,11 +3197,14 @@ async def delete_pan_transfer_follow_task(
     )
     session.delete(task)
     session.flush()
-    return {
+    result = {
         "id": int(task_id),
         "deleted": True,
         **delete_details,
     }
+    if media_wall_deleted_count > 0:
+        result["media_wall_deleted_count"] = media_wall_deleted_count
+    return result
 
 
 def _build_task_excluded_target_ids(task: PanTransferSyncTask) -> list[int]:

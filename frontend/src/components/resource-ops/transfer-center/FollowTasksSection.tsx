@@ -1503,22 +1503,25 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
         setDetailOpen(false)
         setDetailData(null)
       }
+      const mediaWallText = response.media_wall_deleted_count
+        ? `，同时删除 ${response.media_wall_deleted_count} 个影视墙条目`
+        : ''
       if (!deleteTransferredResource) {
-        message.success(`追更任务 #${record.id} 已删除`)
+        message.success(`追更任务 #${record.id} 已删除${mediaWallText}`)
       } else if (response.recycle_bin_cleared) {
         const resourceText = response.resource_deleted
           ? '已删除转存资源目录'
           : response.resource_already_missing
             ? '转存资源目录原本已不存在'
             : '已处理转存资源目录'
-        message.success(`追更任务 #${record.id} 已删除，${resourceText}，并已清空回收站`)
+        message.success(`追更任务 #${record.id} 已删除${mediaWallText}，${resourceText}，并已清空回收站`)
       } else {
         const resourceText = response.resource_deleted
           ? '转存资源目录已删除'
           : response.resource_already_missing
             ? '转存资源目录已不存在'
             : '未确认转存资源目录处理结果'
-        message.warning(`追更任务 #${record.id} 已删除，${resourceText}，但未确认回收站已清空`)
+        message.warning(`追更任务 #${record.id} 已删除${mediaWallText}，${resourceText}，但未确认回收站已清空`)
       }
       const nextPage = pagination.page > 1 && tasks.length === 1 ? pagination.page - 1 : pagination.page
       await loadTasks(nextPage, pagination.pageSize, statusFilter)
@@ -1686,7 +1689,7 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
           title: `确认删除追更任务 #${record.id} 吗？`,
           content: (
             <Space direction="vertical" size={8}>
-              <span>默认只删除追更任务记录和日志，不会删除已转存的资源目录或前台消息。</span>
+              <span>会同时删除绑定的影视墙条目；默认不会删除已转存的资源目录或前台消息。</span>
               <Checkbox
                 onChange={(event) => {
                   deleteTransferredResource = event.target.checked

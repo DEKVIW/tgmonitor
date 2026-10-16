@@ -21,7 +21,7 @@ class MediaWallCategoryCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     slug: Optional[str] = Field(default=None, max_length=160)
     sort_order: int = Field(default=0, ge=-100000, le=100000)
-    show_in_tabs: bool = True
+    is_enabled: bool = True
 
 
 class MediaWallCategoryUpdateRequest(MediaWallCategoryCreateRequest):
@@ -111,6 +111,15 @@ class MediaWallItemUpdateRequest(BaseModel):
     category_ids: list[int] = Field(default_factory=list)
     sync_task_id: Optional[int] = None
     custom_poster_url: Optional[str] = Field(default=None, max_length=1000)
+
+
+class MediaWallItemBulkDeleteRequest(BaseModel):
+    item_ids: list[int] = Field(min_length=1, max_length=500)
+
+
+class MediaWallItemBulkDeleteResponse(BaseModel):
+    deleted_ids: list[int]
+    deleted_count: int
 
 
 class MediaWallSourceResponse(BaseModel):

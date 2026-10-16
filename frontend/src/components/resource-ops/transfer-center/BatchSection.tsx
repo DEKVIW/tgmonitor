@@ -193,7 +193,6 @@ type BatchSectionProps = {
   startingBatchId: number | null
   cancellingBatchId: number | null
   retryingBatchId: number | null
-  publishingItemId: number | null
   creatingFollowItemId: number | null
   deletingBatchId: number | null
   clearingLogsBatchId: number | null
@@ -203,7 +202,6 @@ type BatchSectionProps = {
   selectedBatchKeys: Key[]
   selectedItemKeys: Key[]
   batchBulkAction: BatchBulkAction | null
-  bulkPublishing: boolean
   bulkCreatingFollow: boolean
   onRefresh: () => void
   onTableChange: (pagination: TablePaginationConfig) => void
@@ -217,13 +215,11 @@ type BatchSectionProps = {
   onRefreshDetail: (batchId: number) => void
   onSelectItemKeys: (keys: Key[]) => void
   onClearLogs: (batchId: number) => void
-  onPublish: (item: PanTransferBatchItem) => void
   onCreateFollow: (item: PanTransferBatchItem) => void
   onBulkStart: () => void
   onBulkCancel: () => void
   onBulkRetry: () => void
   onBulkDelete: () => void
-  onBulkPublish: () => void
   onBulkCreateFollow: () => void
 }
 
@@ -234,7 +230,6 @@ const BatchSection = ({
   startingBatchId,
   cancellingBatchId,
   retryingBatchId,
-  publishingItemId,
   creatingFollowItemId,
   deletingBatchId,
   clearingLogsBatchId,
@@ -244,7 +239,6 @@ const BatchSection = ({
   selectedBatchKeys,
   selectedItemKeys,
   batchBulkAction,
-  bulkPublishing,
   bulkCreatingFollow,
   onRefresh,
   onTableChange,
@@ -258,13 +252,11 @@ const BatchSection = ({
   onRefreshDetail,
   onSelectItemKeys,
   onClearLogs,
-  onPublish,
   onCreateFollow,
   onBulkStart,
   onBulkCancel,
   onBulkRetry,
   onBulkDelete,
-  onBulkPublish,
   onBulkCreateFollow,
 }: BatchSectionProps) => {
   const [terminalFilter, setTerminalFilter] = useState<TerminalFilter>('all')
@@ -560,10 +552,9 @@ const BatchSection = ({
       width: 220,
       fixed: 'right',
       render: (_, record) => {
-        const canPublish = Boolean(record.new_link_target_url) || Boolean(record.new_share_url) || Boolean(record.original_url)
         const canCreateFollow = Boolean(record.original_url)
         const canRetry = record.transfer_status === 'failed' && detailData
-        if (!canPublish && !canRetry && !canCreateFollow) {
+        if (!canRetry && !canCreateFollow) {
           return <Text type="secondary">-</Text>
         }
         return (
@@ -575,11 +566,6 @@ const BatchSection = ({
                 onClick={() => onRetry(detailData.batch.id, [record.id])}
               >
                 立即重试
-              </Button>
-            ) : null}
-            {canPublish ? (
-              <Button size="small" loading={publishingItemId === record.id} onClick={() => onPublish(record)}>
-                发布到前台
               </Button>
             ) : null}
             {canCreateFollow ? (
@@ -690,9 +676,6 @@ const BatchSection = ({
                   {selectedFailedCount > 0 ? `重试所选失败项 (${selectedFailedCount})` : '重试全部失败项'}
                 </Button>
               ) : null}
-              <Button disabled={selectedItemKeys.length <= 0} loading={bulkPublishing} onClick={onBulkPublish}>
-                批量发布到前台
-              </Button>
               <Button disabled={selectedItemKeys.length <= 0} loading={bulkCreatingFollow} onClick={onBulkCreateFollow}>
                 批量转为追更
               </Button>

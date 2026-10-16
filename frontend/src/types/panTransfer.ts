@@ -55,6 +55,7 @@ export interface PanTransferDeleteResponse {
   resource_deleted?: boolean | null
   resource_already_missing?: boolean | null
   recycle_bin_cleared?: boolean | null
+  media_wall_deleted_count?: number
 }
 
 export interface PanTransferPreviewItem {
@@ -136,29 +137,6 @@ export interface PanTransferBatchCreateRequest extends PanTransferManualPreviewR
   share_target_mode?: 'resource_dir' | 'content_root' | string
 }
 
-export interface PanTransferMessagePublishRequest {
-  title: string
-  description?: string | null
-  tags?: string[]
-}
-
-export interface PanTransferMessagePublishResponse {
-  message_id: number
-  title: string
-  source_url: string
-  link_target_id?: number | null
-  published_at: string
-  reused_existing_target: boolean
-}
-
-export interface PanTransferManualPublishRequest {
-  platform: string
-  source_url: string
-  title: string
-  description?: string | null
-  tags?: string[]
-}
-
 export interface PanTransferLinkDirectoryPreviewRequest {
   url: string
   entry_id?: string | null
@@ -186,82 +164,6 @@ export interface PanTransferLinkDirectoryPreviewResponse {
   current_name?: string | null
   message?: string | null
   items: PanTransferLinkDirectoryEntry[]
-}
-
-export interface PanTransferPublishRecordItem {
-  id: number
-  source_type: string
-  source_batch_id?: number | null
-  source_batch_item_id?: number | null
-  source_link_target_id?: number | null
-  source_new_link_target_id?: number | null
-  platform: string
-  source_url: string
-  source_original_url?: string | null
-  current_share_url?: string | null
-  published_link_target_id?: number | null
-  published_message_id?: number | null
-  published_title: string
-  published_description?: string | null
-  published_tags: string[]
-  original_link_status?: string | null
-  original_link_detail_message?: string | null
-  original_link_checked_at?: string | null
-  current_share_status?: string | null
-  current_share_detail_message?: string | null
-  current_share_checked_at?: string | null
-  published_link_status?: string | null
-  published_link_detail_message?: string | null
-  published_link_checked_at?: string | null
-  published_clicks_total: number
-  publish_count: number
-  can_refresh_share: boolean
-  can_offline: boolean
-  can_reclaim: boolean
-  can_republish: boolean
-  frontend_online: boolean
-  can_edit: boolean
-  operator?: string | null
-  is_archived: boolean
-  archived_at?: string | null
-  lifecycle_state: string
-  lifecycle_label?: string | null
-  lifecycle_summary?: string | null
-  retired_at?: string | null
-  resource_path?: string | null
-  resource_account_name?: string | null
-  publish_rule_enabled: boolean
-  publish_rule_summary?: string | null
-  next_publish_at?: string | null
-  extra_json: Record<string, unknown>
-  published_at: string
-  created_at: string
-  updated_at: string
-}
-
-export interface PanTransferPublishRecordListResponse {
-  items: PanTransferPublishRecordItem[]
-  page: number
-  page_size: number
-  total: number
-}
-
-export interface PanTransferPublishRecordUpdateRequest {
-  source_url: string
-  title: string
-  description?: string | null
-  tags?: string[]
-}
-
-export interface PanTransferPublishRetireRequest {
-  mode: 'archive' | 'offline_frontend' | 'reclaim_resource' | string
-}
-
-export interface PanTransferPublishRuleUpdateRequest {
-  enabled: boolean
-  weekdays: number[]
-  time_of_day?: string | null
-  timezone?: string
 }
 
 export interface PanTransferFollowTaskCreateRequest {
