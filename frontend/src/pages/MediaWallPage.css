@@ -5,7 +5,6 @@
   padding: 28px clamp(16px, 2.2vw, 32px) 48px;
 }
 
-.media-wall-heading,
 .media-wall-section-heading {
   display: flex;
   align-items: flex-end;
@@ -13,23 +12,27 @@
   gap: 20px;
 }
 
-.media-wall-eyebrow {
-  color: var(--primary-strong);
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.media-wall-heading .ant-typography {
-  margin: 8px 0 4px;
+.media-wall-tabs-header {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
 }
 
 .media-wall-tabs-wrap {
-  margin: 24px 0 20px;
+  min-width: 0;
+  flex: 1 1 auto;
+  margin: 0 0 20px;
   overflow-x: auto;
   border-bottom: 1px solid var(--surface-border);
   scrollbar-width: none;
+}
+
+.media-wall-tabs-header > .ant-btn {
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+  margin-bottom: 20px;
+  color: var(--text-muted);
 }
 
 .media-wall-tabs-wrap::-webkit-scrollbar {
@@ -266,9 +269,12 @@
     padding: 16px 12px 30px;
   }
 
-  .media-wall-heading,
   .media-wall-section-heading {
     align-items: flex-start;
+  }
+
+  .media-wall-tabs-header > .ant-btn {
+    margin-bottom: 16px;
   }
 
   .media-wall-grid {

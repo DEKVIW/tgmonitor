@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { Button, Input, Modal, Tooltip } from 'antd'
-import { SearchOutlined } from '@ant-design/icons'
+import { Button, Input, Modal, Space, Tooltip } from 'antd'
+import { ClearOutlined, SearchOutlined } from '@ant-design/icons'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuthStore } from '@/store/authStore'
 import MessageFilters from '@/components/messages/MessageFilters'
@@ -39,22 +39,40 @@ const MediaWallSearch = () => {
       </Tooltip>
       <Modal
         open={searchOpen}
-        title="搜索影视"
-        okText="搜索"
-        cancelText="取消"
+        title={
+          <div className="public-search-modal-title">
+            <SearchOutlined />
+            <span>搜索影视</span>
+          </div>
+        }
         onOk={submitSearch}
         onCancel={() => setSearchOpen(false)}
         destroyOnClose
+        width={600}
+        className="public-search-modal"
+        rootClassName="public-search-modal-root"
+        footer={
+          <div className="public-search-modal-footer">
+            <Button icon={<ClearOutlined />} onClick={() => setSearchValue('')}>清空</Button>
+            <Space>
+              <Button onClick={() => setSearchOpen(false)}>取消</Button>
+              <Button type="primary" icon={<SearchOutlined />} onClick={submitSearch}>搜索影视</Button>
+            </Space>
+          </div>
+        }
       >
-        <Input
-          autoFocus
-          allowClear
-          value={searchValue}
-          prefix={<SearchOutlined />}
-          placeholder="输入影视名称"
-          onChange={(event) => setSearchValue(event.target.value)}
-          onPressEnter={submitSearch}
-        />
+        <div className="public-search-modal-body">
+          <Input
+            autoFocus
+            allowClear
+            size="large"
+            value={searchValue}
+            prefix={<SearchOutlined />}
+            placeholder="输入影视名称"
+            onChange={(event) => setSearchValue(event.target.value)}
+            onPressEnter={submitSearch}
+          />
+        </div>
       </Modal>
     </>
   )

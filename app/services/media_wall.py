@@ -134,7 +134,11 @@ def _build_progress(task: PanTransferSyncTask | None) -> dict[str, Any]:
     if task is None:
         return {"episode": None, "label": "暂无追更进度", "task_state": None, "share_status": None}
 
-    episode = _extract_episode(task.extra_json)
+    extra_json = dict(task.extra_json or {})
+    applied_update_state = extra_json.get("applied_update_state")
+    episode = _extract_episode(applied_update_state) if isinstance(applied_update_state, dict) else None
+    if episode is None and not applied_update_state:
+        episode = _extract_episode(extra_json)
     if episode is None:
         identity = parse_resource_identity(task.last_candidate_title or task.work_title or task.topic_title or "")
         episode = identity.episode

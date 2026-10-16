@@ -5,13 +5,10 @@
   height: auto;
   min-height: 64px;
   padding-block: 10px;
-  overflow: hidden;
+  min-width: 0;
 }
 
 .guest-brand {
-  display: inline-flex;
-  align-items: center;
-  gap: 14px;
   flex: 0 0 auto;
   min-width: max-content;
 }
@@ -38,34 +35,6 @@
   background: rgba(232, 243, 255, 0.9);
 }
 
-.guest-brand > div:first-child {
-  font-size: 20px !important;
-  font-weight: 600 !important;
-  color: var(--text-strong);
-  letter-spacing: 0.01em;
-}
-
-.guest-subtitle {
-  display: inline-flex;
-  align-items: center;
-  font-size: 0;
-  color: transparent;
-  user-select: none;
-}
-
-.guest-subtitle::after {
-  content: '公开页面';
-  display: inline-flex;
-  align-items: center;
-  padding: 6px 12px;
-  border-radius: 999px;
-  border: 1px solid rgba(216, 227, 238, 0.82);
-  background: rgba(244, 248, 251, 0.92);
-  color: var(--text-muted);
-  font-size: 13px;
-  line-height: 1;
-}
-
 .guest-content-wrapper {
   flex: 1 0 auto;
   min-height: 0;
@@ -75,16 +44,22 @@
   .guest-header {
     padding-inline: 14px;
     gap: 10px;
-    flex-wrap: wrap;
   }
 
   .public-primary-nav {
-    order: 3;
-    width: 100%;
+    flex: 1 1 auto;
+    min-width: 0;
+    margin-left: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
   }
 
   .guest-header-actions {
-    order: 2;
+    margin-left: auto;
+  }
+
+  .public-primary-nav::-webkit-scrollbar {
+    display: none;
   }
 
   .public-search-button,
@@ -92,11 +67,5 @@
     width: 34px;
     min-width: 34px;
     height: 34px;
-  }
-}
-
-@media (max-width: 576px) {
-  .guest-subtitle {
-    display: none;
   }
 }

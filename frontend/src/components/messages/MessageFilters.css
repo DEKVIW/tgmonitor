@@ -1,15 +1,60 @@
-.message-query-modal .ant-modal-content {
-  border-radius: 22px;
+.message-query-modal-root .ant-modal {
+  max-width: calc(100vw - 32px);
+}
+
+.message-query-modal .ant-modal-content,
+.public-search-modal .ant-modal-content {
+  overflow: hidden;
+  border: 1px solid rgba(216, 227, 238, 0.9);
+  border-radius: 18px;
+  box-shadow: 0 24px 70px rgba(25, 52, 79, 0.18);
+}
+
+.message-query-modal .ant-modal-header,
+.public-search-modal .ant-modal-header {
+  margin-bottom: 0;
+  padding: 20px 24px 14px;
+  border-bottom: 1px solid var(--surface-border);
+}
+
+.message-query-modal-title,
+.public-search-modal-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--text-strong);
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.message-query-modal-title .anticon,
+.public-search-modal-title .anticon {
+  color: var(--primary);
+  font-size: 18px;
 }
 
 .message-query-modal .ant-modal-body {
-  padding-top: 8px;
+  padding: 22px 24px 24px;
 }
 
 .message-query-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 16px;
+  gap: 18px;
+}
+
+.message-query-quick-row,
+.message-query-filter-grid {
+  display: grid;
+  gap: 14px;
+}
+
+.message-query-quick-row {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.message-query-filter-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  padding-top: 2px;
 }
 
 .message-query-field {
@@ -19,14 +64,16 @@
   gap: 7px;
 }
 
-.message-query-field--search {
-  grid-column: span 3;
-}
-
 .message-query-field label {
   color: var(--text-strong);
   font-size: 13px;
   font-weight: 600;
+}
+
+.message-query-field--search .ant-input {
+  height: 48px;
+  border-radius: 10px;
+  font-size: 15px;
 }
 
 .message-query-field .ant-input,
@@ -46,56 +93,95 @@
   white-space: nowrap;
 }
 
-.message-query-modal-footer {
+.message-query-modal-footer,
+.public-search-modal-footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
 }
 
-.message-query-challenge-modal .ant-modal-content {
-  border-radius: 22px;
+.message-query-modal .ant-modal-footer,
+.public-search-modal .ant-modal-footer {
+  margin-top: 0;
+  padding: 14px 24px 20px;
+  border-top: 1px solid var(--surface-border);
 }
 
-@media (max-width: 900px) {
-  .message-query-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
+.message-query-challenge-modal .ant-modal-content {
+  border-radius: 18px;
+}
 
-  .message-query-field--search {
-    grid-column: 1 / -1;
+@media (max-width: 720px) {
+  .message-query-filter-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
 @media (max-width: 576px) {
-  .message-query-grid {
+  .message-query-modal-root .ant-modal,
+  .public-search-modal-root .ant-modal {
+    width: 100vw !important;
+    max-width: 100vw;
+    margin: 0;
+    top: 0;
+    padding-bottom: 0;
+  }
+
+  .message-query-modal-root .ant-modal-content,
+  .public-search-modal-root .ant-modal-content {
+    min-height: 100vh;
+    border: 0;
+    border-radius: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .message-query-modal-root .ant-modal-body,
+  .public-search-modal-root .ant-modal-body {
+    flex: 1;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .message-query-modal .ant-modal-header,
+  .public-search-modal .ant-modal-header {
+    padding: 18px 18px 14px;
+  }
+
+  .message-query-modal .ant-modal-body,
+  .public-search-modal .ant-modal-body {
+    padding: 18px;
+  }
+
+  .message-query-quick-row,
+  .message-query-filter-grid {
     grid-template-columns: minmax(0, 1fr);
-    gap: 14px;
   }
 
-  .message-query-field--search {
-    grid-column: auto;
+  .message-query-modal .ant-modal-footer,
+  .public-search-modal .ant-modal-footer {
+    padding: 12px 18px calc(16px + env(safe-area-inset-bottom));
   }
 
-  .message-query-modal .ant-modal-body {
-    padding-inline: 16px;
-  }
-
-  .message-query-modal-footer {
+  .message-query-modal-footer,
+  .public-search-modal-footer {
     align-items: stretch;
     flex-direction: column-reverse;
   }
 
-  .message-query-modal-footer .ant-space {
+  .message-query-modal-footer > .ant-space,
+  .public-search-modal-footer > .ant-space {
     width: 100%;
+    display: flex;
   }
 
   .message-query-modal-footer .ant-space-item,
-  .message-query-modal-footer .ant-space-item > .ant-btn {
+  .public-search-modal-footer .ant-space-item,
+  .message-query-modal-footer .ant-space-item > .ant-btn,
+  .public-search-modal-footer .ant-space-item > .ant-btn,
+  .message-query-modal-footer > .ant-btn,
+  .public-search-modal-footer > .ant-btn {
     flex: 1 1 0;
-  }
-
-  .message-query-modal-footer .ant-space {
-    display: flex;
   }
 }

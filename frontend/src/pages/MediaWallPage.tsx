@@ -202,22 +202,22 @@ const MediaWallPage = () => {
 
   return (
     <div className="media-wall-page">
-      <section className="media-wall-heading">
-        <div>
-          <div className="media-wall-eyebrow">PUBLIC MEDIA WALL</div>
-          <Title level={1}>影视墙</Title>
-          <Text type="secondary">追更影视与公开网盘资源入口，持续整理更新。</Text>
+      <div className="media-wall-tabs-header">
+        <div className="media-wall-tabs-wrap">
+          <Tabs
+            activeKey={selectedCategory}
+            onChange={handleCategoryChange}
+            items={tabItems}
+            className="media-wall-tabs"
+            destroyInactiveTabPane={false}
+          />
         </div>
-        <Button icon={<ReloadOutlined />} onClick={() => void loadList()} loading={loading}>刷新</Button>
-      </section>
-
-      <div className="media-wall-tabs-wrap">
-        <Tabs
-          activeKey={selectedCategory}
-          onChange={handleCategoryChange}
-          items={tabItems}
-          className="media-wall-tabs"
-          destroyInactiveTabPane={false}
+        <Button
+          type="text"
+          icon={<ReloadOutlined />}
+          onClick={() => void loadList()}
+          loading={loading}
+          aria-label="刷新影视墙"
         />
       </div>
 

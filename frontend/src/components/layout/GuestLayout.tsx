@@ -3,13 +3,13 @@ import { Button, Layout as AntLayout, Tooltip } from 'antd'
 import { UserOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 
-import { formatBrandTitle, useSiteBranding } from '@/utils/siteBranding'
 import { LOGIN_PATH } from '@/utils/routes'
 import { useAuthStore } from '@/store/authStore'
 
 import BackToTopButton from './BackToTopButton'
 import GlobalSearch from './GlobalSearch'
 import PublicNavigation from './PublicNavigation'
+import SiteBrand from './SiteBrand'
 import SiteFooter from './SiteFooter'
 import UserAccountMenu from './UserAccountMenu'
 import './Layout.css'
@@ -23,17 +23,13 @@ interface GuestLayoutProps {
 }
 
 const GuestLayout = ({ children }: GuestLayoutProps) => {
-  const siteBranding = useSiteBranding()
   const navigate = useNavigate()
   const { isAuthenticated, token } = useAuthStore()
 
   return (
     <AntLayout className="app-layout guest-layout">
       <header className="app-header guest-header">
-        <div className="guest-brand">
-          <div style={{ fontSize: '18px', fontWeight: 500 }}>{formatBrandTitle(siteBranding)}</div>
-          <span className="guest-subtitle">{'\u516c\u5f00\u9875\u9762'}</span>
-        </div>
+        <SiteBrand className="guest-brand" />
         <PublicNavigation messagePath="/" />
         <div className="guest-header-actions">
           <GlobalSearch />

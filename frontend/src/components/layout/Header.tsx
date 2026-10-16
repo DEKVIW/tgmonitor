@@ -7,8 +7,8 @@ import { MenuFoldOutlined, MenuUnfoldOutlined } from '@ant-design/icons'
 import { useNavigate, useLocation } from 'react-router-dom'
 import GlobalSearch from './GlobalSearch'
 import PublicNavigation from './PublicNavigation'
+import SiteBrand from './SiteBrand'
 import UserAccountMenu from './UserAccountMenu'
-import { formatBrandTitle, useSiteBranding } from '@/utils/siteBranding'
 import './Header.css'
 
 interface HeaderProps {
@@ -19,8 +19,6 @@ interface HeaderProps {
 const Header = ({ collapsed, onToggle }: HeaderProps) => {
   const navigate = useNavigate()
   const location = useLocation()
-  const siteBranding = useSiteBranding()
-
   const handleTitleClick = () => {
     // 如果当前不在 dashboard，则跳转
     if (location.pathname !== '/dashboard') {
@@ -36,9 +34,7 @@ const Header = ({ collapsed, onToggle }: HeaderProps) => {
           icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
           onClick={onToggle}
         />
-        <h1 className="header-title clickable" onClick={handleTitleClick}>
-          {formatBrandTitle(siteBranding)}
-        </h1>
+        <SiteBrand className="header-site-brand" onClick={handleTitleClick} />
       </div>
       <PublicNavigation messagePath="/dashboard" />
       <div className="header-right">

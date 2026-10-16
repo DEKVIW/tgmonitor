@@ -251,7 +251,12 @@ const MessageFilters = ({
       <span onClick={disabled ? undefined : openQuery}>{trigger}</span>
       <Modal
         open={queryOpen}
-        title="搜索与筛选消息"
+        title={
+          <div className="message-query-modal-title">
+            <SearchOutlined />
+            <span>搜索消息</span>
+          </div>
+        }
         onCancel={closeQuery}
         footer={
           <div className="message-query-modal-footer">
@@ -270,6 +275,7 @@ const MessageFilters = ({
         width={760}
         maskClosable={!disabled}
         className="message-query-modal"
+        rootClassName="message-query-modal-root"
       >
         <div className="message-query-grid">
           <div className="message-query-field message-query-field--search">
@@ -287,70 +293,74 @@ const MessageFilters = ({
             />
           </div>
 
-          <div className="message-query-field message-query-field--sort">
-            <label>排序方式</label>
-            <Segmented
-              block
-              options={SORT_MODE_OPTIONS}
-              value={draft.sort_mode || 'newest'}
-              onChange={(value) => setDraft({ ...draft, sort_mode: value as MessageSortMode })}
-              disabled={disabled}
-            />
+          <div className="message-query-quick-row">
+            <div className="message-query-field">
+              <label>排序方式</label>
+              <Segmented
+                block
+                options={SORT_MODE_OPTIONS}
+                value={draft.sort_mode || 'newest'}
+                onChange={(value) => setDraft({ ...draft, sort_mode: value as MessageSortMode })}
+                disabled={disabled}
+              />
+            </div>
+
+            <div className="message-query-field">
+              <label>时间范围</label>
+              <Select
+                value={draft.time_range || defaultTimeRangeValue}
+                onChange={(value) => setDraft({ ...draft, time_range: value })}
+                disabled={disabled}
+              >
+                {timeRangeOptions}
+              </Select>
+            </div>
           </div>
 
-          <div className="message-query-field">
-            <label>时间范围</label>
-            <Select
-              value={draft.time_range || defaultTimeRangeValue}
-              onChange={(value) => setDraft({ ...draft, time_range: value })}
-              disabled={disabled}
-            >
-              {timeRangeOptions}
-            </Select>
-          </div>
+          <div className="message-query-filter-grid">
+            <div className="message-query-field">
+              <label>标签</label>
+              <Select
+                mode="multiple"
+                showSearch
+                allowClear
+                value={draft.selected_tags || []}
+                onChange={(value) => setDraft({ ...draft, selected_tags: value })}
+                maxTagCount="responsive"
+                placeholder="全部标签"
+                disabled={disabled}
+                options={tagOptions.map((tag) => ({ label: `${tag.tag} (${tag.count})`, value: tag.tag }))}
+              />
+            </div>
 
-          <div className="message-query-field">
-            <label>标签</label>
-            <Select
-              mode="multiple"
-              showSearch
-              allowClear
-              value={draft.selected_tags || []}
-              onChange={(value) => setDraft({ ...draft, selected_tags: value })}
-              maxTagCount="responsive"
-              placeholder="全部标签"
-              disabled={disabled}
-              options={tagOptions.map((tag) => ({ label: `${tag.tag} (${tag.count})`, value: tag.tag }))}
-            />
-          </div>
+            <div className="message-query-field">
+              <label>网盘类型</label>
+              <Select
+                mode="multiple"
+                allowClear
+                value={draft.selected_netdisks || []}
+                onChange={(value) => setDraft({ ...draft, selected_netdisks: value })}
+                maxTagCount="responsive"
+                placeholder="全部网盘"
+                disabled={disabled}
+              >
+                {netdiskOptions}
+              </Select>
+            </div>
 
-          <div className="message-query-field">
-            <label>网盘类型</label>
-            <Select
-              mode="multiple"
-              allowClear
-              value={draft.selected_netdisks || []}
-              onChange={(value) => setDraft({ ...draft, selected_netdisks: value })}
-              maxTagCount="responsive"
-              placeholder="全部网盘"
-              disabled={disabled}
-            >
-              {netdiskOptions}
-            </Select>
-          </div>
-
-          <div className="message-query-field">
-            <label>自动刷新间隔</label>
-            <InputNumber
-              min={30}
-              max={300}
-              step={30}
-              value={draftRefreshInterval}
-              onChange={(value) => setDraftRefreshInterval(normalizeRefreshInterval(value))}
-              controls
-              addonAfter="秒"
-              disabled={disabled}
-            />
+            <div className="message-query-field">
+              <label>自动刷新间隔</label>
+              <InputNumber
+                min={30}
+                max={300}
+                step={30}
+                value={draftRefreshInterval}
+                onChange={(value) => setDraftRefreshInterval(normalizeRefreshInterval(value))}
+                controls
+                addonAfter="秒"
+                disabled={disabled}
+              />
+            </div>
           </div>
         </div>
       </Modal>
