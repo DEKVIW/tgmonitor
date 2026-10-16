@@ -59,3 +59,4 @@ telegram_sessions/
 !/tests/test_pan_transfer_file_diagnosis_episode_extension.py
 !/tests/test_backup_retention_default.py
 !/tests/test_resource_identity_parser.py
+!/tests/test_media_wall_service.py

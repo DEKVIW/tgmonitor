@@ -481,6 +481,108 @@ class AiProviderConfig(Base):
     extra_json = Column(JSONB, nullable=False, default=dict)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class MediaWallCategory(Base):
+    __tablename__ = "media_wall_categories"
+    __table_args__ = (
+        UniqueConstraint("slug", name="ux_media_wall_categories_slug"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(120), nullable=False)
+    slug = Column(String(160), nullable=False, index=True)
+    is_enabled = Column(Boolean, nullable=False, default=True, index=True)
+    show_in_tabs = Column(Boolean, nullable=False, default=True, index=True)
+    sort_order = Column(Integer, nullable=False, default=0, index=True)
+    created_by = Column(String(128), nullable=True, index=True)
+    updated_by = Column(String(128), nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class MediaWallItem(Base):
+    __tablename__ = "media_wall_items"
+
+    id = Column(Integer, primary_key=True, index=True)
+    display_title = Column(String(255), nullable=False, index=True)
+    metadata_query_title = Column(String(255), nullable=False, index=True)
+    visibility = Column(String(32), nullable=False, default="draft", index=True)
+    sort_order = Column(Integer, nullable=False, default=0, index=True)
+    sync_task_id = Column(Integer, ForeignKey("pan_transfer_sync_tasks.id"), nullable=True, index=True)
+    custom_poster_url = Column(Text, nullable=True)
+    created_by = Column(String(128), nullable=True, index=True)
+    updated_by = Column(String(128), nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class MediaWallItemCategory(Base):
+    __tablename__ = "media_wall_item_categories"
+    __table_args__ = (
+        UniqueConstraint("item_id", "category_id", name="ux_media_wall_item_categories_item_category"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    item_id = Column(Integer, ForeignKey("media_wall_items.id"), nullable=False, index=True)
+    category_id = Column(Integer, ForeignKey("media_wall_categories.id"), nullable=False, index=True)
+    is_primary = Column(Boolean, nullable=False, default=False, index=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class MediaWallLink(Base):
+    __tablename__ = "media_wall_links"
+    __table_args__ = (
+        UniqueConstraint("item_id", "url_fingerprint", name="ux_media_wall_links_item_url"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    item_id = Column(Integer, ForeignKey("media_wall_items.id"), nullable=False, index=True)
+    platform = Column(String(64), nullable=False, index=True)
+    url = Column(Text, nullable=False)
+    url_fingerprint = Column(String(64), nullable=False, index=True)
+    label = Column(String(120), nullable=True)
+    is_primary = Column(Boolean, nullable=False, default=False, index=True)
+    is_enabled = Column(Boolean, nullable=False, default=True, index=True)
+    source_type = Column(String(32), nullable=False, default="manual", index=True)
+    last_checked_at = Column(DateTime, nullable=True)
+    last_status = Column(String(32), nullable=False, default="unknown", index=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class MediaWallSourceConfig(Base):
+    __tablename__ = "media_wall_source_configs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(120), nullable=False)
+    source_url = Column(Text, nullable=False)
+    source_type = Column(String(32), nullable=False, default="source-list")
+    is_enabled = Column(Boolean, nullable=False, default=True, index=True)
+    priority = Column(Integer, nullable=False, default=100, index=True)
+    timeout_seconds = Column(Integer, nullable=False, default=8)
+    last_checked_at = Column(DateTime, nullable=True)
+    last_refreshed_at = Column(DateTime, nullable=True)
+    last_error_message = Column(Text, nullable=True)
+    extra_json = Column(JSONB, nullable=False, default=dict)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class MediaWallImportJob(Base):
+    __tablename__ = "media_wall_import_jobs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    filename = Column(String(255), nullable=False)
+    file_hash = Column(String(64), nullable=False, index=True)
+    status = Column(String(32), nullable=False, default="preview", index=True)
+    preview_json = Column(JSONB, nullable=False, default=dict)
+    summary_json = Column(JSONB, nullable=False, default=dict)
+    created_by = Column(String(128), nullable=True, index=True)
+    confirmed_by = Column(String(128), nullable=True)
+    error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
     updated_by = Column(String(128), nullable=True)
 
 
@@ -1030,6 +1132,12 @@ def ensure_runtime_storage_tables() -> None:
                 PanTransferPublishRecord.__table__,
                 PanTransferSyncTask.__table__,
                 PanTransferSyncTaskLog.__table__,
+                MediaWallCategory.__table__,
+                MediaWallItem.__table__,
+                MediaWallItemCategory.__table__,
+                MediaWallLink.__table__,
+                MediaWallSourceConfig.__table__,
+                MediaWallImportJob.__table__,
                 AiProviderConfig.__table__,
                 AiProviderModel.__table__,
                 AiRouteProfile.__table__,

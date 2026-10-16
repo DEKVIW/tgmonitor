@@ -2,13 +2,25 @@
  * 消息列表页面（主页面）
  */
 
+import { useEffect } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import MessageList from '@/components/messages/MessageList'
 import { useAuthStore } from '@/store/authStore'
+import { useMessageStore } from '@/store/messageStore'
 import { Spin } from 'antd'
 import './Dashboard.css'
 
 const Dashboard = () => {
   const { isAuthenticated, _hasHydrated } = useAuthStore()
+  const [searchParams] = useSearchParams()
+  const setFilters = useMessageStore((state) => state.setFilters)
+
+  useEffect(() => {
+    const search = searchParams.get('search')
+    if (search !== null) {
+      setFilters({ search_query: search })
+    }
+  }, [searchParams, setFilters])
   
   // 等待 Zustand persist 从 localStorage 恢复状态
   if (!_hasHydrated) {

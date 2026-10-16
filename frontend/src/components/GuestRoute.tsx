@@ -16,9 +16,10 @@ import GuestLayout from './layout/GuestLayout'
 interface GuestRouteProps {
   children: ReactNode
   toolbar?: ReactNode
+  redirectAuthenticated?: boolean
 }
 
-const GuestRoute = ({ children, toolbar }: GuestRouteProps) => {
+const GuestRoute = ({ children, toolbar, redirectAuthenticated = true }: GuestRouteProps) => {
   const { isAuthenticated, token, _hasHydrated } = useAuthStore()
   const [loading, setLoading] = useState(true)
   const [publicDashboardEnabled, setPublicDashboardEnabled] = useState(false)
@@ -50,9 +51,13 @@ const GuestRoute = ({ children, toolbar }: GuestRouteProps) => {
     )
   }
 
-  // 如果用户已登录，重定向到 /dashboard
-  if (isAuthenticated && token) {
+  // 消息页保持原有重定向行为，影视墙允许登录用户继续浏览。
+  if (isAuthenticated && token && redirectAuthenticated) {
     return <Navigate to="/dashboard" replace />
+  }
+
+  if (isAuthenticated && token && !redirectAuthenticated) {
+    return <GuestLayout toolbar={toolbar}>{children}</GuestLayout>
   }
 
   // 如果游客模式未启用，重定向到登录页

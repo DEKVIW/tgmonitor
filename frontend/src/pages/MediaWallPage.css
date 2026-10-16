@@ -1,0 +1,319 @@
+.media-wall-page,
+.media-wall-detail-page {
+  width: min(100%, var(--page-max-width));
+  margin: 0 auto;
+  padding: 28px clamp(16px, 2.2vw, 32px) 48px;
+}
+
+.media-wall-heading,
+.media-wall-section-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.media-wall-eyebrow {
+  color: var(--primary-strong);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.media-wall-heading .ant-typography {
+  margin: 8px 0 4px;
+}
+
+.media-wall-tabs-wrap {
+  margin: 24px 0 20px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--surface-border);
+  scrollbar-width: none;
+}
+
+.media-wall-tabs-wrap::-webkit-scrollbar {
+  display: none;
+}
+
+.media-wall-tabs {
+  min-width: max-content;
+}
+
+.media-wall-tabs .ant-tabs-nav {
+  margin: 0;
+}
+
+.media-wall-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+  gap: 20px;
+}
+
+.media-wall-card {
+  display: flex;
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+  flex-direction: column;
+  border: 1px solid var(--surface-border);
+  border-radius: 10px;
+  background: var(--surface-bg);
+  box-shadow: var(--shadow-soft);
+  color: var(--text-strong);
+  cursor: pointer;
+  text-align: left;
+  transition: transform var(--transition-base), box-shadow var(--transition-base), border-color var(--transition-base);
+}
+
+.media-wall-card:hover,
+.media-wall-card:focus-visible {
+  border-color: rgba(11, 107, 203, 0.48);
+  box-shadow: var(--shadow-strong);
+  outline: none;
+  transform: translateY(-3px);
+}
+
+.media-wall-card-poster {
+  position: relative;
+  aspect-ratio: 2 / 2.9;
+  overflow: hidden;
+  background: linear-gradient(135deg, #dbeafe, #eef4f8 58%, #d4e4ee);
+}
+
+.media-wall-card-poster .ant-image,
+.media-wall-card-poster img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.media-wall-poster-placeholder {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  place-items: center;
+  color: rgba(22, 50, 74, 0.56);
+  font-size: clamp(36px, 5vw, 62px);
+  font-weight: 700;
+}
+
+.media-wall-card-overlay {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  padding: 24px 10px 9px;
+  background: linear-gradient(transparent, rgba(9, 27, 43, 0.78));
+  color: #fff;
+  font-size: 12px;
+}
+
+.media-wall-card-body {
+  display: flex;
+  min-height: 70px;
+  padding: 12px 12px 13px;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.media-wall-card-body strong {
+  overflow: hidden;
+  display: -webkit-box;
+  font-size: 14px;
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.media-wall-card-body span,
+.media-wall-detail-info,
+.media-wall-detail-updated {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.media-wall-skeleton {
+  min-height: 290px;
+  border-radius: 10px;
+}
+
+.media-wall-empty,
+.media-wall-state {
+  display: grid;
+  min-height: 360px;
+  place-items: center;
+}
+
+.media-wall-alert {
+  margin-bottom: 20px;
+}
+
+.media-wall-back-button {
+  margin-bottom: 18px;
+  padding-left: 0;
+}
+
+.media-wall-detail-hero {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 28px;
+  padding: 24px;
+  border: 1px solid var(--surface-border);
+  border-radius: 14px;
+  background: var(--surface-bg);
+  box-shadow: var(--shadow-soft);
+}
+
+.media-wall-detail-poster {
+  aspect-ratio: 2 / 2.9;
+  overflow: hidden;
+  border-radius: 8px;
+  background: var(--surface-muted);
+}
+
+.media-wall-detail-poster .ant-image,
+.media-wall-detail-poster img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.media-wall-detail-copy {
+  min-width: 0;
+  padding-top: 12px;
+}
+
+.media-wall-detail-copy h1 {
+  margin: 8px 0 10px;
+}
+
+.media-wall-detail-progress {
+  display: flex;
+  width: fit-content;
+  margin: 20px 0 14px;
+  padding: 10px 14px;
+  flex-direction: column;
+  gap: 3px;
+  border-left: 3px solid var(--primary);
+  background: var(--primary-soft);
+}
+
+.media-wall-detail-progress span {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.media-wall-detail-summary {
+  max-width: 760px;
+  margin-top: 18px;
+  color: var(--text-base);
+  line-height: 1.8;
+}
+
+.media-wall-links-section {
+  margin-top: 24px;
+  padding: 24px;
+  border: 1px solid var(--surface-border);
+  border-radius: 14px;
+  background: var(--surface-bg);
+  box-shadow: var(--shadow-soft);
+}
+
+.media-wall-section-heading h3 {
+  margin: 0 0 4px;
+}
+
+.media-wall-link-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.media-wall-link-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--surface-border);
+  border-radius: 8px;
+  background: var(--surface-muted);
+}
+
+.media-wall-link-row > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.media-wall-link-row span {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.media-wall-detail-updated {
+  display: block;
+  margin-top: 16px;
+  text-align: right;
+}
+
+@media (max-width: 768px) {
+  .media-wall-page,
+  .media-wall-detail-page {
+    padding: 16px 12px 30px;
+  }
+
+  .media-wall-heading,
+  .media-wall-section-heading {
+    align-items: flex-start;
+  }
+
+  .media-wall-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  .media-wall-detail-hero {
+    grid-template-columns: 112px minmax(0, 1fr);
+    gap: 16px;
+    padding: 16px;
+  }
+
+  .media-wall-detail-copy {
+    padding-top: 0;
+  }
+
+  .media-wall-detail-copy h1 {
+    font-size: 24px;
+  }
+
+  .media-wall-detail-progress {
+    margin: 12px 0;
+  }
+
+  .media-wall-links-section {
+    padding: 16px;
+  }
+
+  .media-wall-link-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .media-wall-link-row .ant-btn {
+    width: 100%;
+  }
+}
+
+@media (max-width: 380px) {
+  .media-wall-detail-hero {
+    grid-template-columns: 92px minmax(0, 1fr);
+  }
+
+  .media-wall-detail-copy h1 {
+    font-size: 21px;
+  }
+}

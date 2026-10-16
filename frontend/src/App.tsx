@@ -12,6 +12,7 @@ import PublicDashboardToolbar from './components/messages/PublicDashboardToolbar
 import Login from './pages/LoginRuntime'
 import LoginLinuxDoCallback from './pages/LoginLinuxDoCallback'
 import Dashboard from './pages/Dashboard'
+import MediaWallPage from './pages/MediaWallPage'
 import Statistics from './pages/Statistics'
 import Analytics from './pages/AnalyticsDashboardModern'
 import Admin from './pages/AdminRuntime'
@@ -35,6 +36,30 @@ function App() {
           element={
             <GuestRoute toolbar={<PublicDashboardToolbar />}>
               <Dashboard />
+            </GuestRoute>
+          }
+        />
+        <Route
+          path="/popular"
+          element={
+            <GuestRoute redirectAuthenticated={false}>
+              <MediaWallPage />
+            </GuestRoute>
+          }
+        />
+        <Route
+          path="/popular/category/:categorySlug"
+          element={
+            <GuestRoute redirectAuthenticated={false}>
+              <MediaWallPage />
+            </GuestRoute>
+          }
+        />
+        <Route
+          path="/popular/item/:itemId"
+          element={
+            <GuestRoute redirectAuthenticated={false}>
+              <MediaWallPage />
             </GuestRoute>
           }
         />

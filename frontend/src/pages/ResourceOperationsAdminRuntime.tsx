@@ -23,6 +23,7 @@ import {
 import ResourceOpsPlatformChart from '@/components/resource-ops/ResourceOpsPlatformChart'
 import ResourceOpsRecognitionRoutePanel from '@/components/resource-ops/ResourceOpsRecognitionRoutePanel'
 import ResourceOpsTransferCenter from '@/components/resource-ops/transfer-center/ResourceOpsTransferCenterMain'
+import MediaWallAdminPanel from '@/components/resource-ops/MediaWallAdminPanel'
 import ResourceOpsTrendChart from '@/components/resource-ops/ResourceOpsTrendChart'
 import ResourceOpsWorkbenchDrawerTopic from '@/components/resource-ops/ResourceOpsWorkbenchDrawerTopic'
 import type {
@@ -48,7 +49,7 @@ const formatNumber = (value?: number | null) => new Intl.NumberFormat('zh-CN').f
 const formatResourceOpsDateTime = (value?: string | null) =>
   formatServerDateTime(value, 'YYYY-MM-DD HH:mm', 'Asia/Shanghai')
 const RESOURCE_OPS_TAB_STORAGE_KEY = 'resource-ops-active-tab'
-const RESOURCE_OPS_TAB_KEYS = new Set(['overview', 'workbench', 'transfer'])
+const RESOURCE_OPS_TAB_KEYS = new Set(['overview', 'workbench', 'transfer', 'media-wall'])
 
 const getInitialResourceOpsTab = () => {
   if (typeof window === 'undefined') {
@@ -788,6 +789,15 @@ const ResourceOperationsAdminRuntime = () => {
             children: (
               <div className="resource-ops-tab-stack">
                 <ResourceOpsTransferCenter />
+              </div>
+            ),
+          },
+          {
+            key: 'media-wall',
+            label: '影视墙',
+            children: (
+              <div className="resource-ops-tab-stack">
+                <MediaWallAdminPanel />
               </div>
             ),
           },
