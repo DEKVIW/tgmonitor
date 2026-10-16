@@ -77,9 +77,19 @@ const MediaWallCard = ({ item, onClick }: { item: MediaWallItem; onClick: () => 
 
 const MediaWallDetail = ({ item, onBack }: { item: MediaWallItem; onBack: () => void }) => {
   const enabledLinks = item.links.filter((link) => link.is_enabled)
-  const info = [item.year, item.area, item.type_name].filter(Boolean).join(' · ')
   const progressLabel = item.progress.label.replace(/\s+/g, '')
   const showRemarks = item.remarks && !isProgressRemark(item.remarks, item.progress.episode)
+  const metadataRows: Array<[string, string | null | undefined]> = [
+    ['类型', item.type_name],
+    ['年份', item.year],
+    ['地区', item.area],
+    ['导演', item.director],
+    ['主演', item.actor],
+  ]
+  if (showRemarks) {
+    metadataRows.push(['备注', item.remarks])
+  }
+  const visibleMetadataRows = metadataRows.filter((row): row is [string, string] => Boolean(row[1]))
 
   return (
     <div className="media-wall-detail-page">
@@ -95,8 +105,16 @@ const MediaWallDetail = ({ item, onBack }: { item: MediaWallItem; onBack: () => 
             <Title level={1}>{item.display_title}</Title>
             {item.progress.episode ? <Tag color="blue" className="media-wall-detail-progress-tag">{progressLabel}</Tag> : null}
           </div>
-          {info ? <Text className="media-wall-detail-info">{info}</Text> : null}
-          {showRemarks ? <Tag color="blue">{item.remarks}</Tag> : null}
+          {visibleMetadataRows.length ? (
+            <div className="media-wall-detail-meta">
+              {visibleMetadataRows.map(([label, value]) => (
+                <div key={label} className="media-wall-detail-meta-item" title={`${label}: ${value}`}>
+                  <span>{label}</span>
+                  <strong>{value}</strong>
+                </div>
+              ))}
+            </div>
+          ) : null}
         </div>
         {item.summary ? (
           <div

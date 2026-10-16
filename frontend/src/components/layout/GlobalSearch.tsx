@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Button, Input, Modal, Space, Tooltip } from 'antd'
+import { Button, Input, Modal, Space } from 'antd'
 import { SearchOutlined } from '@ant-design/icons'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuthStore } from '@/store/authStore'
@@ -28,15 +28,13 @@ const MediaWallSearch = () => {
 
   return (
     <>
-      <Tooltip title="搜索" placement="bottomRight">
-        <Button
-          type="text"
-          icon={<SearchOutlined />}
-          className="public-search-button"
-          aria-label="搜索"
-          onClick={() => setSearchOpen(true)}
-        />
-      </Tooltip>
+      <Button
+        type="text"
+        icon={<SearchOutlined />}
+        className="public-search-button"
+        aria-label="搜索"
+        onClick={() => setSearchOpen(true)}
+      />
       <Modal
         open={searchOpen}
         title={
@@ -89,14 +87,12 @@ const GlobalSearch = () => {
       allowedTimeRanges={isAuthenticated ? undefined : PUBLIC_DASHBOARD_ALLOWED_TIME_RANGES}
       fallbackTimeRange={isAuthenticated ? undefined : PUBLIC_DASHBOARD_FALLBACK_TIME_RANGE}
       trigger={
-        <Tooltip title="搜索与筛选" placement="bottomRight">
-          <Button
-            type="text"
-            icon={<SearchOutlined />}
-            className="public-search-button"
-            aria-label="搜索与筛选"
-          />
-        </Tooltip>
+        <Button
+          type="text"
+          icon={<SearchOutlined />}
+          className="public-search-button"
+          aria-label="搜索与筛选"
+        />
       }
     />
   )

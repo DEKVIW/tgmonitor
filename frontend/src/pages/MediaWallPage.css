@@ -160,8 +160,9 @@
 
 .media-wall-detail-hero {
   display: grid;
-  grid-template-columns: 220px minmax(0, 1fr);
-  gap: 28px;
+  grid-template-columns: 180px minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  gap: 20px 24px;
   padding: 24px;
   border: 1px solid var(--surface-border);
   border-radius: 14px;
@@ -170,6 +171,7 @@
 }
 
 .media-wall-detail-poster {
+  grid-row: 1 / span 2;
   aspect-ratio: 2 / 2.9;
   overflow: hidden;
   border-radius: 8px;
@@ -185,7 +187,6 @@
 
 .media-wall-detail-copy {
   min-width: 0;
-  padding-top: 12px;
 }
 
 .media-wall-detail-title-row {
@@ -197,6 +198,7 @@
 
 .media-wall-detail-title-row h1 {
   margin: 0;
+  font-size: clamp(24px, 2.8vw, 32px);
 }
 
 .media-wall-detail-progress-tag {
@@ -204,10 +206,46 @@
   white-space: nowrap;
 }
 
+.media-wall-detail-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 24px;
+  margin-top: 18px;
+}
+
+.media-wall-detail-meta-item {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 3.5em minmax(0, 1fr);
+  gap: 7px;
+  align-items: start;
+  color: var(--text-base);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.media-wall-detail-meta-item > span {
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.media-wall-detail-meta-item > strong {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
 .media-wall-detail-summary {
-  grid-column: 1 / -1;
+  grid-column: 2;
+  grid-row: 2;
   max-width: none;
-  margin: 4px 0 0;
+  margin: 0;
+  padding-top: 2px;
   color: var(--text-base);
   line-height: 1.8;
   overflow-wrap: anywhere;
@@ -295,16 +333,24 @@
   }
 
   .media-wall-detail-copy {
-    padding-top: 0;
+    grid-column: 2;
+    grid-row: 1;
   }
 
   .media-wall-detail-title-row h1 {
     font-size: 24px;
   }
 
+  .media-wall-detail-meta {
+    grid-template-columns: 1fr;
+    gap: 6px;
+    margin-top: 14px;
+  }
+
   .media-wall-detail-summary {
-    margin-top: 0;
-    line-height: 1.7;
+    grid-column: 1 / -1;
+    grid-row: 2;
+    padding-top: 0;
   }
 
   .media-wall-links-section {

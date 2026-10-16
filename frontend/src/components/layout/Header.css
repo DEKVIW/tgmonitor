@@ -137,10 +137,20 @@
   padding: 22px 24px 24px;
 }
 
-.public-search-modal-body .ant-input {
+.public-search-modal-body .ant-input-affix-wrapper {
   height: 42px;
+  min-height: 42px;
+  align-items: center;
+  padding: 4px 11px;
   border-radius: 10px;
   font-size: 15px;
+}
+
+.public-search-modal-body .ant-input {
+  height: auto;
+  min-height: 0;
+  padding: 0;
+  line-height: 1.4;
 }
 
 .public-search-modal-footer {
