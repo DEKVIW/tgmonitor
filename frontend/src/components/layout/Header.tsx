@@ -2,10 +2,11 @@
  * 顶部导航栏
  */
 
-import { ReactNode } from 'react'
 import { Button } from 'antd'
 import { MenuFoldOutlined, MenuUnfoldOutlined } from '@ant-design/icons'
 import { useNavigate, useLocation } from 'react-router-dom'
+import GlobalSearch from './GlobalSearch'
+import PublicNavigation from './PublicNavigation'
 import UserAccountMenu from './UserAccountMenu'
 import { formatBrandTitle, useSiteBranding } from '@/utils/siteBranding'
 import './Header.css'
@@ -13,10 +14,9 @@ import './Header.css'
 interface HeaderProps {
   collapsed: boolean
   onToggle: () => void
-  toolbar?: ReactNode
 }
 
-const Header = ({ collapsed, onToggle, toolbar }: HeaderProps) => {
+const Header = ({ collapsed, onToggle }: HeaderProps) => {
   const navigate = useNavigate()
   const location = useLocation()
   const siteBranding = useSiteBranding()
@@ -29,7 +29,7 @@ const Header = ({ collapsed, onToggle, toolbar }: HeaderProps) => {
   }
 
   return (
-    <div className={`app-header ${toolbar ? 'app-header--with-toolbar' : ''}`}>
+    <div className="app-header">
       <div className="header-left">
         <Button
           type="text"
@@ -40,8 +40,9 @@ const Header = ({ collapsed, onToggle, toolbar }: HeaderProps) => {
           {formatBrandTitle(siteBranding)}
         </h1>
       </div>
-      {toolbar ? <div className="header-toolbar-slot">{toolbar}</div> : null}
+      <PublicNavigation messagePath="/dashboard" />
       <div className="header-right">
+        <GlobalSearch />
         <UserAccountMenu variant="header" />
       </div>
     </div>

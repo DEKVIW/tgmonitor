@@ -1,23 +1,19 @@
 .media-wall-admin-panel {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 0;
 }
 
-.media-wall-admin-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
+.media-wall-admin-tabs .ant-tabs-nav {
+  margin-bottom: 16px;
 }
 
-.media-wall-admin-head h4 {
-  margin: 0 0 4px;
+.media-wall-admin-tabs .ant-tabs-extra-content {
+  padding-bottom: 8px;
 }
 
-.media-wall-admin-card {
-  padding: 0;
-  background: transparent;
+.media-wall-admin-card .ant-card-body {
+  padding: 20px;
 }
 
 .media-wall-admin-subtitle {
@@ -47,10 +43,18 @@
 }
 
 @media (max-width: 720px) {
-  .media-wall-admin-head,
   .media-wall-form-grid,
   .media-wall-import-toolbar {
     grid-template-columns: 1fr;
     flex-direction: column;
+  }
+
+  .media-wall-admin-tabs .ant-tabs-extra-content {
+    padding-bottom: 0;
+  }
+
+  .media-wall-admin-tabs .ant-tabs-nav {
+    flex-wrap: wrap;
+    gap: 8px;
   }
 }

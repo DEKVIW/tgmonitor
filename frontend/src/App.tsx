@@ -8,7 +8,6 @@ import ProtectedRoute from './components/ProtectedRoute'
 import AdminRoute from './components/AdminRoute'
 import GuestRoute from './components/GuestRoute'
 import AnalyticsBootstrap from './components/analytics/AnalyticsBootstrap'
-import PublicDashboardToolbar from './components/messages/PublicDashboardToolbar'
 import Login from './pages/LoginRuntime'
 import LoginLinuxDoCallback from './pages/LoginLinuxDoCallback'
 import Dashboard from './pages/Dashboard'
@@ -34,7 +33,7 @@ function App() {
         <Route
           path="/"
           element={
-            <GuestRoute toolbar={<PublicDashboardToolbar />}>
+            <GuestRoute>
               <Dashboard />
             </GuestRoute>
           }

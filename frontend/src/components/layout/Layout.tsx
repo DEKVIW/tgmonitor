@@ -10,7 +10,6 @@ import Header from './Header'
 import Sidebar from './SidebarNavRuntime'
 import BackToTopButton from './BackToTopButton'
 import SiteFooter from './SiteFooter'
-import AuthenticatedDashboardToolbar from '@/components/messages/AuthenticatedDashboardToolbar'
 import { useAuthStore } from '@/store/authStore'
 import './Layout.css'
 
@@ -92,7 +91,6 @@ const Layout = ({ children }: LayoutProps) => {
       <Header
         collapsed={collapsed}
         onToggle={() => setCollapsed((current) => !current)}
-        toolbar={showDashboardToolbar ? <AuthenticatedDashboardToolbar /> : undefined}
       />
       <AntLayout>
         <Sidebar

@@ -15,11 +15,10 @@ import GuestLayout from './layout/GuestLayout'
 
 interface GuestRouteProps {
   children: ReactNode
-  toolbar?: ReactNode
   redirectAuthenticated?: boolean
 }
 
-const GuestRoute = ({ children, toolbar, redirectAuthenticated = true }: GuestRouteProps) => {
+const GuestRoute = ({ children, redirectAuthenticated = true }: GuestRouteProps) => {
   const { isAuthenticated, token, _hasHydrated } = useAuthStore()
   const [loading, setLoading] = useState(true)
   const [publicDashboardEnabled, setPublicDashboardEnabled] = useState(false)
@@ -57,7 +56,7 @@ const GuestRoute = ({ children, toolbar, redirectAuthenticated = true }: GuestRo
   }
 
   if (isAuthenticated && token && !redirectAuthenticated) {
-    return <GuestLayout toolbar={toolbar}>{children}</GuestLayout>
+    return <GuestLayout>{children}</GuestLayout>
   }
 
   // 如果游客模式未启用，重定向到登录页
@@ -66,7 +65,7 @@ const GuestRoute = ({ children, toolbar, redirectAuthenticated = true }: GuestRo
   }
 
   // 游客模式：未登录且游客模式已启用
-  return <GuestLayout toolbar={toolbar}>{children}</GuestLayout>
+  return <GuestLayout>{children}</GuestLayout>
 }
 
 export default GuestRoute
