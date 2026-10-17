@@ -8,7 +8,6 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from passlib.context import CryptContext
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -26,6 +25,7 @@ from app.services.system_config_service import (
     build_default_system_settings_values,
     ensure_runtime_configuration_seeded,
 )
+from app.services.password_service import hash_password, is_argon2id_hash, verify_password
 
 logger = logging.getLogger(__name__)
 
@@ -64,23 +64,9 @@ SORTABLE_USER_FIELDS = {
     "created_at",
 }
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
 
 def _utcnow() -> datetime:
     return datetime.utcnow()
-
-
-def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
-
-
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    try:
-        return pwd_context.verify(plain_password, hashed_password)
-    except Exception as exc:
-        logger.warning("Password verification failed: %s", exc)
-        return False
 
 
 def _coerce_text(value: Any, default: str = "", *, max_length: int | None = None) -> str:
@@ -519,28 +505,36 @@ def bootstrap_account_storage() -> None:
         legacy_users = _load_legacy_users()
         if legacy_users:
             migrated_count = 0
+            skipped_count = 0
             for username, payload in legacy_users.items():
                 if not isinstance(payload, dict):
+                    continue
+                password_hash = _coerce_text(payload.get("password"))
+                if not is_argon2id_hash(password_hash):
+                    skipped_count += 1
                     continue
                 try:
                     _create_account_record(
                         session,
                         username=username,
-                        password_hash=_coerce_text(payload.get("password")),
+                        password_hash=password_hash,
                         name=_coerce_text(payload.get("name"), username, max_length=128),
                         email=_coerce_text(payload.get("email"), "", max_length=255),
                         role=_coerce_text(payload.get("role"), "user", max_length=32).lower() or "user",
-                        created_by="legacy_migration",
+                        created_by="argon2_migration",
                     )
                     migrated_count += 1
                 except Exception as exc:
-                    logger.warning("Failed to migrate legacy user %s: %s", username, exc)
+                    logger.warning("Failed to migrate Argon2 user %s: %s", username, exc)
 
             if migrated_count:
                 session.commit()
-                logger.info("Migrated %s users from users.json into database accounts", migrated_count)
+                if skipped_count:
+                    logger.warning("Skipped %s legacy users without Argon2id password hashes", skipped_count)
+                logger.info("Migrated %s Argon2id users from users.json into database accounts", migrated_count)
                 return
             session.rollback()
+            logger.warning("Skipped legacy users.json because it contains no Argon2id password hashes")
 
         _create_default_admin(session)
         session.commit()

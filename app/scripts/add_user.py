@@ -2,15 +2,13 @@ import argparse
 import json
 from pathlib import Path
 
-from passlib.context import CryptContext
+from app.services.password_service import hash_password
 
 
 USERS_FILE = Path("users.json")
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
 
 def add_user(username: str, password: str, name: str, email: str, role: str = "admin") -> None:
-    """向 users.json 添加一个用户，使用与后端一致的 bcrypt 哈希。"""
+    """向 users.json 添加一个使用 Argon2id 哈希的用户。"""
     # 读取现有用户
     if USERS_FILE.exists():
         try:
@@ -21,8 +19,7 @@ def add_user(username: str, password: str, name: str, email: str, role: str = "a
     else:
         users = {}
 
-    # 生成 bcrypt 哈希（与后端登录校验一致）
-    hashed_password = pwd_context.hash(password)
+    hashed_password = hash_password(password)
 
     # 添加/覆盖用户
     users[username] = {

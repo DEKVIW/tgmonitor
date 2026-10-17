@@ -4,12 +4,9 @@ from sqlalchemy import text
 import json
 import os
 
-from passlib.context import CryptContext
 from app.services.channel_registry import load_default_channels_from_settings
+from app.services.password_service import hash_password
 from app.services.system_config_service import ensure_runtime_configuration_seeded
-
-
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 def init_channels():
     # 从配置中获取默认频道列表
@@ -57,11 +54,10 @@ def init_default_users():
     
     # 创建新用户文件
     try:
-        # 生成 bcrypt 哈希密码（与后端一致）
         users_with_hash = {}
 
         for username, user_info in default_users.items():
-            hashed_password = pwd_context.hash(user_info["password"])
+            hashed_password = hash_password(user_info["password"])
             users_with_hash[username] = {
                 "password": hashed_password,
                 "name": user_info["name"],

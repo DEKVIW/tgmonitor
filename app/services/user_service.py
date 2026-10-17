@@ -10,7 +10,7 @@ import string
 import threading
 from typing import Any, Dict, List, Optional
 
-from passlib.context import CryptContext
+from app.services.password_service import hash_password
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +21,6 @@ USER_ROLES = {
     "user": "普通用户",
 }
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 _file_lock = threading.RLock()
 
 
@@ -127,7 +126,7 @@ def add_user(
             return False
 
         users[username] = {
-            "password": pwd_context.hash(password),
+            "password": hash_password(password),
             "name": name or username,
             "email": email,
             "role": role,
@@ -169,7 +168,7 @@ def change_password(username: str, new_password: str) -> bool:
         if username not in users:
             return False
 
-        users[username]["password"] = pwd_context.hash(new_password)
+        users[username]["password"] = hash_password(new_password)
         return _save_users_unlocked(users)
 
 
@@ -268,7 +267,7 @@ def bulk_create_random_users(
 
             password = _generate_random_password(password_length)
             users[username] = {
-                "password": pwd_context.hash(password),
+                "password": hash_password(password),
                 "name": username,
                 "email": "",
                 "role": role,
@@ -326,7 +325,7 @@ def bulk_reset_passwords(usernames: List[str], password_length: int = 12) -> Dic
                 continue
 
             password = _generate_random_password(password_length)
-            users[username]["password"] = pwd_context.hash(password)
+            users[username]["password"] = hash_password(password)
             successes.append({"username": username, "password": password})
 
         if not _save_users_unlocked(users):

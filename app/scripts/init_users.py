@@ -9,7 +9,7 @@ import os
 import sys
 from typing import Dict, Any
 
-from passlib.context import CryptContext
+from app.services.password_service import hash_password
 
 USER_DATA_FILE = "users.json"
 
@@ -19,9 +19,6 @@ USER_ROLES = {
     "user": "普通用户",
     "viewer": "只读用户"
 }
-
-# 与后端 app.services.auth_service 使用的配置保持一致
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 def load_existing_users() -> Dict[str, Any]:
     """加载现有用户"""
@@ -63,9 +60,9 @@ def create_default_users():
         print("现有用户:", list(users.keys()))
         return
     
-    # 创建默认用户（使用 passlib bcrypt，与后端保持一致）
+    # 创建默认用户
     for username, user_info in default_users.items():
-        hashed_password = pwd_context.hash(user_info["password"])
+        hashed_password = hash_password(user_info["password"])
         users[username] = {
             "password": hashed_password,
             "name": user_info["name"],
@@ -96,8 +93,7 @@ def add_user(username: str, password: str, name: str = "", email: str = "", role
         print(f"可用角色: {', '.join(USER_ROLES.keys())}")
         return False
     
-    # 生成密码哈希（与后端一致）
-    hashed_password = pwd_context.hash(password)
+    hashed_password = hash_password(password)
     
     # 添加用户
     users[username] = {
@@ -155,8 +151,7 @@ def change_password(username: str, new_password: str):
         print(f"❌ 用户 {username} 不存在！")
         return False
     
-    # 生成新密码哈希（与后端一致）
-    hashed_password = pwd_context.hash(new_password)
+    hashed_password = hash_password(new_password)
     
     # 更新密码
     users[username]["password"] = hashed_password
@@ -352,4 +347,4 @@ def main():
         print_help()
 
 if __name__ == "__main__":
-    main() 
+    main()
