@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import logging
+import asyncio
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
 from app.api.dependencies_runtime_v2 import get_db, get_optional_current_user
@@ -20,10 +21,6 @@ from app.services.resource_ops import (
 )
 from app.services.foreground_link_health_service import (
     FOREGROUND_LINK_HEALTH,
-    contains_any_link,
-    extract_netdisk_types,
-    filter_link_payload,
-    filter_tracked_links,
 )
 from app.services.security_service import SEARCH_CLEARANCE_HEADER, ensure_search_challenge_clearance
 from app.services.system_config_service import is_public_dashboard_enabled
@@ -35,6 +32,30 @@ _UNSET = object()
 
 PUBLIC_DASHBOARD_ALLOWED_TIME_RANGES = frozenset({"最近1小时", "最近24小时", "最近7天"})
 PUBLIC_DASHBOARD_MAX_AGE_DAYS = 7
+_FOREGROUND_CHECK_CONCURRENCY = 2
+_FOREGROUND_CHECK_SEMAPHORE = asyncio.Semaphore(_FOREGROUND_CHECK_CONCURRENCY)
+
+
+def _record_foreground_link_health_observations(observations: List[Dict[str, Any]]) -> None:
+    with Session(engine) as observation_db:
+        FOREGROUND_LINK_HEALTH.record_observations(observation_db, observations)
+
+
+async def _run_foreground_link_health_check(messages: List[Any]) -> None:
+    async with _FOREGROUND_CHECK_SEMAPHORE:
+        try:
+            foreground_check = await FOREGROUND_LINK_HEALTH.check_messages(messages)
+            if not foreground_check.network_observations:
+                return
+
+            await asyncio.to_thread(
+                _record_foreground_link_health_observations,
+                foreground_check.network_observations,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("background foreground link health check failed")
 
 
 def _is_public_guest(current_user: Optional[Dict[str, Any]]) -> bool:
@@ -114,6 +135,7 @@ def _load_tracked_links_for_message_ids(
 @router.get("", response_model=MessageListResponse, summary="获取消息列表")
 async def get_messages(
     request: Request,
+    background_tasks: BackgroundTasks,
     sort_mode: Literal["relevance", "newest"] = Query("newest", description="search result sort mode"),
     search_query: Optional[str] = Query(None, description="搜索关键词（支持多关键词，空格分隔）"),
     time_range: str = Query("最近24小时", description="时间范围"),
@@ -162,61 +184,25 @@ async def get_messages(
             message_ids=[int(message.id) for message in messages if getattr(message, "id", None) is not None],
         )
 
-        invalid_by_message: Dict[int, set[str]] = {}
-        removed_message_ids: set[int] = set()
         if search_query and search_query.strip():
+            background_tasks.add_task(_run_foreground_link_health_check, list(messages))
             db.close()
-            try:
-                foreground_check = await FOREGROUND_LINK_HEALTH.check_messages(messages)
-                with Session(engine) as observation_db:
-                    maintenance_result = FOREGROUND_LINK_HEALTH.record_observations(
-                        observation_db,
-                        foreground_check.network_observations,
-                    )
-                removed_message_ids = {
-                    int(message_id)
-                    for message_id in maintenance_result.get("deleted_message_ids", [])
-                }
-                invalid_by_message = foreground_check.invalid_by_message
-            except Exception:
-                logger.exception("foreground link health check failed; returning unfiltered search results")
 
         visible_messages = []
-        hidden_page_message_ids: set[int] = set(removed_message_ids)
         for message in messages:
-            message_id = int(message.id)
-            if message_id in removed_message_ids:
-                continue
-            invalid_urls = invalid_by_message.get(message_id, set())
-            filtered_links = filter_link_payload(message.links, invalid_urls)
-            if invalid_urls and not contains_any_link(filtered_links):
-                hidden_page_message_ids.add(message_id)
-                continue
-            visible_netdisk_types = (
-                extract_netdisk_types(filtered_links)
-                if invalid_urls
-                else _UNSET
-            )
             visible_messages.append(
                 _build_message_response(
                     message,
-                    filter_tracked_links(tracked_by_message.get(message_id), invalid_urls),
-                    links=filtered_links,
-                    netdisk_types=visible_netdisk_types,
+                    tracked_by_message.get(int(message.id)),
                 )
             )
 
-        page_message_ids = {int(message.id) for message in messages}
-        hidden_page_message_count = len(hidden_page_message_ids.intersection(page_message_ids))
-        visible_total = max(0, int(total) - hidden_page_message_count)
-        visible_max_page = max(1, (visible_total + page_size - 1) // page_size) if visible_total else 0
-
         return MessageListResponse(
             messages=visible_messages,
-            total=visible_total,
+            total=total,
             page=page,
             page_size=page_size,
-            max_page=visible_max_page if hidden_page_message_ids.intersection(page_message_ids) else max_page,
+            max_page=max_page,
         )
     except HTTPException:
         raise

@@ -1174,3 +1174,49 @@ class ForegroundLinkHealthCandidateList(BaseModel):
     items: List[ForegroundLinkHealthCandidateItem]
 
 
+class ForegroundLinkHealthCandidateBatchDeleteRequest(BaseModel):
+    candidate_ids: List[int] = Field(default_factory=list, max_length=500)
+    delete_all: bool = False
+
+    @model_validator(mode="after")
+    def validate_candidate_selection(self) -> "ForegroundLinkHealthCandidateBatchDeleteRequest":
+        normalized_ids: List[int] = []
+        seen: set[int] = set()
+        for candidate_id in self.candidate_ids:
+            normalized_id = int(candidate_id)
+            if normalized_id <= 0:
+                raise ValueError("candidate_ids must contain positive integers")
+            if normalized_id not in seen:
+                normalized_ids.append(normalized_id)
+                seen.add(normalized_id)
+
+        if self.delete_all:
+            self.candidate_ids = []
+            return self
+        if not normalized_ids:
+            raise ValueError("candidate_ids cannot be empty when delete_all is false")
+
+        self.candidate_ids = normalized_ids
+        return self
+
+
+class ForegroundLinkHealthCandidateDeleteResult(BaseModel):
+    success: bool
+    candidate_id: int
+    message_id: int
+    removed_links: int = 0
+    deleted_messages: int = 0
+    deleted_message_ids: List[int] = Field(default_factory=list)
+
+
+class ForegroundLinkHealthCandidateBatchDeleteResult(BaseModel):
+    success: bool
+    delete_all: bool
+    requested_count: int = 0
+    removed_candidates: int = 0
+    removed_links: int = 0
+    deleted_messages: int = 0
+    deleted_message_ids: List[int] = Field(default_factory=list)
+    missing_candidate_ids: List[int] = Field(default_factory=list)
+
+

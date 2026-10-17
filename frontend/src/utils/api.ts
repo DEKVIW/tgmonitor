@@ -51,6 +51,10 @@ apiClient.interceptors.response.use(
     return response
   },
   (error: AxiosError) => {
+    if (axios.isCancel(error) || error.code === 'ERR_CANCELED') {
+      return Promise.reject(error)
+    }
+
     if (isLinkCheckTaskPoll404(error)) {
       return Promise.reject(error)
     }

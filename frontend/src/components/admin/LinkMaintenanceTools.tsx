@@ -5,6 +5,8 @@ import { DeleteOutlined, ReloadOutlined, SaveOutlined, SyncOutlined } from '@ant
 import {
   clearLinkCheckData,
   clearOldLinkCheckData,
+  batchDeleteForegroundLinkHealthCandidates,
+  deleteForegroundLinkHealthCandidate,
   dedupLinks,
   getForegroundLinkHealthCandidates,
   getDedupRuntimeSettings,
@@ -69,6 +71,9 @@ const LinkMaintenanceTools = () => {
   const [candidateTotal, setCandidateTotal] = useState(0)
   const [candidatePage, setCandidatePage] = useState(1)
   const [candidateLoading, setCandidateLoading] = useState(false)
+  const [candidateDeletingId, setCandidateDeletingId] = useState<number | null>(null)
+  const [selectedCandidateIds, setSelectedCandidateIds] = useState<number[]>([])
+  const [candidateBatchDeleting, setCandidateBatchDeleting] = useState(false)
 
   const loadConfig = async () => {
     setLoading(true)
@@ -93,6 +98,7 @@ const LinkMaintenanceTools = () => {
       setCandidateItems(result.items)
       setCandidateTotal(result.total)
       setCandidatePage(page)
+      setSelectedCandidateIds([])
     } catch (error: any) {
       message.error(error.response?.data?.detail || '加载前台失效候选失败')
     } finally {
@@ -183,6 +189,44 @@ const LinkMaintenanceTools = () => {
     }
   }
 
+  const handleDeleteCandidate = async (candidate: ForegroundLinkHealthCandidateItem) => {
+    setCandidateDeletingId(candidate.id)
+    try {
+      const result = await deleteForegroundLinkHealthCandidate(candidate.id)
+      if (result.deleted_messages > 0) {
+        message.success('已删除失效链接及其所在消息')
+      } else {
+        message.success('已删除失效链接')
+      }
+      const nextPage = candidateItems.length === 1 && candidatePage > 1 ? candidatePage - 1 : candidatePage
+      await loadCandidates(nextPage)
+    } catch (error: any) {
+      message.error(error.response?.data?.detail || '删除失效链接失败')
+    } finally {
+      setCandidateDeletingId(null)
+    }
+  }
+
+  const handleBatchDeleteCandidates = async (deleteAll = false) => {
+    if (!deleteAll && selectedCandidateIds.length === 0) {
+      message.warning('请先选择要删除的候选链接')
+      return
+    }
+
+    setCandidateBatchDeleting(true)
+    try {
+      const result = await batchDeleteForegroundLinkHealthCandidates(selectedCandidateIds, deleteAll)
+      const summary = `已删除 ${result.removed_links} 条失效链接`
+      const messageSummary = result.deleted_messages > 0 ? `，同时删除 ${result.deleted_messages} 条消息` : ''
+      message.success(`${summary}${messageSummary}`)
+      await loadCandidates(1)
+    } catch (error: any) {
+      message.error(error.response?.data?.detail || '批量删除失效链接失败')
+    } finally {
+      setCandidateBatchDeleting(false)
+    }
+  }
+
   const candidateColumns = [
     {
       title: '消息',
@@ -227,6 +271,32 @@ const LinkMaintenanceTools = () => {
         <Typography.Link href={value} target="_blank" rel="noreferrer" ellipsis title={value}>
           {value}
         </Typography.Link>
+      ),
+    },
+    {
+      title: '操作',
+      key: 'actions',
+      width: 100,
+      fixed: 'right' as const,
+      render: (_value: unknown, record: ForegroundLinkHealthCandidateItem) => (
+        <Popconfirm
+          title="确认删除这个失效链接？"
+          description="如果消息没有其他链接，会同时删除整条消息。"
+          okText="删除"
+          cancelText="取消"
+          okButtonProps={{ danger: true }}
+          onConfirm={() => void handleDeleteCandidate(record)}
+        >
+          <Button
+            type="link"
+            danger
+            size="small"
+            icon={<DeleteOutlined />}
+            loading={candidateDeletingId === record.id}
+          >
+            删除
+          </Button>
+        </Popconfirm>
       ),
     },
   ]
@@ -520,13 +590,49 @@ const LinkMaintenanceTools = () => {
           message={`当前待复核 ${candidateTotal} 条`}
           description="需要提取码、限流、网络异常和不确定结果不会进入失效候选。候选超过保留期限未再次观察会自动清理，避免候选表持续增长。"
         />
+        <div className="maintenance-tools-panel-head-actions">
+          <Text type="secondary">已选择 {selectedCandidateIds.length} 条</Text>
+          <Popconfirm
+            title="确认删除已选候选链接？"
+            description="会立即移除对应链接；消息没有其他链接时会同时删除消息。"
+            okText="删除"
+            cancelText="取消"
+            okButtonProps={{ danger: true }}
+            onConfirm={() => void handleBatchDeleteCandidates()}
+          >
+            <Button
+              danger
+              icon={<DeleteOutlined />}
+              disabled={selectedCandidateIds.length === 0}
+              loading={candidateBatchDeleting}
+            >
+              批量删除
+            </Button>
+          </Popconfirm>
+          <Popconfirm
+            title="确认清空全部待复核候选？"
+            description="将删除全部候选对应的失效链接；消息没有其他链接时会同时删除消息，且不可恢复。"
+            okText="全部删除"
+            cancelText="取消"
+            okButtonProps={{ danger: true }}
+            onConfirm={() => void handleBatchDeleteCandidates(true)}
+          >
+            <Button danger icon={<DeleteOutlined />} loading={candidateBatchDeleting}>
+              清空全部候选
+            </Button>
+          </Popconfirm>
+        </div>
         <Table<ForegroundLinkHealthCandidateItem>
           rowKey="id"
           size="small"
           loading={candidateLoading}
           columns={candidateColumns}
           dataSource={candidateItems}
-          scroll={{ x: 780 }}
+          rowSelection={{
+            selectedRowKeys: selectedCandidateIds,
+            onChange: (selectedRowKeys) => setSelectedCandidateIds(selectedRowKeys.map((key) => Number(key))),
+          }}
+          scroll={{ x: 920 }}
           pagination={{
             current: candidatePage,
             pageSize: CANDIDATE_PAGE_SIZE,

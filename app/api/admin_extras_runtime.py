@@ -20,6 +20,9 @@ from app.schemas.admin_models import (
     LinkCheckPreviewResponse,
     LinkCheckHistoryDeleteResult,
     LinkCheckTaskStatus,
+    ForegroundLinkHealthCandidateBatchDeleteRequest,
+    ForegroundLinkHealthCandidateBatchDeleteResult,
+    ForegroundLinkHealthCandidateDeleteResult,
     ForegroundLinkHealthCandidateList,
 )
 from app.services.channel_service import fetch_channel_message_samples
@@ -142,6 +145,71 @@ async def get_foreground_link_health_candidates_api(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"获取前台失效候选失败: {exc}",
+        ) from exc
+
+
+@router.post(
+    "/link-check/foreground-candidates/batch-delete",
+    response_model=ForegroundLinkHealthCandidateBatchDeleteResult,
+    summary="批量移除前台失效候选链接",
+)
+async def batch_delete_foreground_link_health_candidates_api(
+    request: ForegroundLinkHealthCandidateBatchDeleteRequest,
+    db: Session = Depends(get_db),
+    current_user: Dict[str, Any] = Depends(get_admin_user),
+) -> ForegroundLinkHealthCandidateBatchDeleteResult:
+    del current_user
+
+    try:
+        return ForegroundLinkHealthCandidateBatchDeleteResult(
+            **FOREGROUND_LINK_HEALTH.remove_candidate_links(
+                db,
+                candidate_ids=request.candidate_ids,
+                delete_all=request.delete_all,
+            )
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"批量移除前台失效候选失败: {exc}",
+        ) from exc
+
+
+@router.delete(
+    "/link-check/foreground-candidates/{candidate_id}",
+    response_model=ForegroundLinkHealthCandidateDeleteResult,
+    summary="手动移除前台失效候选链接",
+)
+async def delete_foreground_link_health_candidate_api(
+    candidate_id: int,
+    db: Session = Depends(get_db),
+    current_user: Dict[str, Any] = Depends(get_admin_user),
+) -> ForegroundLinkHealthCandidateDeleteResult:
+    del current_user
+
+    try:
+        return ForegroundLinkHealthCandidateDeleteResult(
+            **FOREGROUND_LINK_HEALTH.remove_candidate_link(db, candidate_id)
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"移除前台失效候选失败: {exc}",
         ) from exc
 
 

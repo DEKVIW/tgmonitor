@@ -51,6 +51,8 @@ import {
   LinkCheckHistoryBatchDeleteRequest,
   LinkCheckHistoryBatchDeleteResult,
   LinkCheckHistoryDeleteResult,
+  ForegroundLinkHealthCandidateBatchDeleteResult,
+  ForegroundLinkHealthCandidateDeleteResult,
   ForegroundLinkHealthCandidateList,
 } from '@/types/admin'
 
@@ -183,6 +185,26 @@ export const getForegroundLinkHealthCandidates = async (
   const query = search.toString()
   const response = await apiClient.get<ForegroundLinkHealthCandidateList>(
     `/admin/link-check/foreground-candidates${query ? `?${query}` : ''}`
+  )
+  return response.data
+}
+
+export const deleteForegroundLinkHealthCandidate = async (
+  candidateId: number
+): Promise<ForegroundLinkHealthCandidateDeleteResult> => {
+  const response = await apiClient.delete<ForegroundLinkHealthCandidateDeleteResult>(
+    `/admin/link-check/foreground-candidates/${candidateId}`
+  )
+  return response.data
+}
+
+export const batchDeleteForegroundLinkHealthCandidates = async (
+  candidateIds: number[] = [],
+  deleteAll = false
+): Promise<ForegroundLinkHealthCandidateBatchDeleteResult> => {
+  const response = await apiClient.post<ForegroundLinkHealthCandidateBatchDeleteResult>(
+    '/admin/link-check/foreground-candidates/batch-delete',
+    { candidate_ids: candidateIds, delete_all: deleteAll }
   )
   return response.data
 }

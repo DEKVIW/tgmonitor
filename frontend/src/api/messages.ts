@@ -11,7 +11,7 @@ import { readSearchChallengeClearance } from '@/utils/securityConfig'
 /**
  * 获取消息列表
  */
-export const getMessages = async (filters: MessageFilters): Promise<MessageListResponse> => {
+export const getMessages = async (filters: MessageFilters, signal?: AbortSignal): Promise<MessageListResponse> => {
   const params = new URLSearchParams()
   
   if (filters.search_query) params.append('search_query', filters.search_query)
@@ -31,6 +31,7 @@ export const getMessages = async (filters: MessageFilters): Promise<MessageListR
   const clearance = readSearchChallengeClearance(useAuthStore.getState().user)
   const response = await apiClient.get<MessageListResponse>(`/messages?${params.toString()}`, {
     headers: clearance ? { 'X-TG-Search-Challenge': clearance.clearance_token } : undefined,
+    signal,
   })
   return response.data
 }

@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from datetime import datetime, timedelta
 from typing import List, Optional, Tuple
 
-from sqlalchemy import and_, case, func, literal, or_
+from sqlalchemy import String, and_, case, cast, func, literal, or_
+from sqlalchemy.dialects.postgresql import ARRAY as PostgreSQLArray, JSONB
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import text as sql_text
 
@@ -43,6 +43,14 @@ def _split_search_terms(search_query: Optional[str]) -> List[str]:
     return terms
 
 
+def _tag_contains(term: str):
+    return Message.tags.op("@>")(cast([term], PostgreSQLArray(String)))
+
+
+def _netdisk_contains(netdisk: str):
+    return Message.netdisk_types.op("@>")(cast([netdisk], JSONB))
+
+
 def _build_search_match_condition(search_terms: List[str]):
     per_term_filters = []
     for term in search_terms:
@@ -51,7 +59,7 @@ def _build_search_match_condition(search_terms: List[str]):
             or_(
                 Message.title.ilike(like_pattern),
                 Message.description.ilike(like_pattern),
-                Message.tags.any(term),
+                _tag_contains(term),
             )
         )
 
@@ -76,7 +84,7 @@ def _build_search_rank_expression(search_terms: List[str]):
         normalized_term = term.lower()
         rank = rank + case((title_lower == normalized_term, 2500), else_=0)
         rank = rank + case((title_lower.like(f"{normalized_term}%"), 800), else_=0)
-        rank = rank + case((Message.tags.any(term), 500), else_=0)
+        rank = rank + case((_tag_contains(term), 500), else_=0)
         rank = rank + case((title_lower.like(f"%{normalized_term}%"), 300), else_=0)
         rank = rank + case((description_lower.like(f"%{normalized_term}%"), 80), else_=0)
 
@@ -120,14 +128,11 @@ def get_filtered_messages(
             query = query.filter(Message.timestamp >= datetime.now() - TIME_RANGE_DELTAS[time_range])
 
         if selected_tags:
-            filters = [Message.tags.any(tag) for tag in selected_tags]
+            filters = [_tag_contains(tag) for tag in selected_tags]
             query = query.filter(or_(*filters))
 
         if selected_netdisks:
-            filters = []
-            for netdisk in selected_netdisks:
-                filter_expr = sql_text("netdisk_types @> :netdisk_type")
-                filters.append(filter_expr.bindparams(netdisk_type=json.dumps([netdisk])))
+            filters = [_netdisk_contains(netdisk) for netdisk in selected_netdisks]
             query = query.filter(or_(*filters))
 
         if min_content_length > 0:

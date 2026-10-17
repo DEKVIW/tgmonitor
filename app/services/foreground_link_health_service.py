@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.config import settings
@@ -472,6 +473,94 @@ class ForegroundLinkHealthService:
             "deleted_messages": len(deleted_ids),
             "deleted_message_ids": deleted_ids,
         }
+
+    def remove_candidate_link(self, db: Session, candidate_id: int) -> Dict[str, Any]:
+        normalized_candidate_id = int(candidate_id)
+        if normalized_candidate_id <= 0:
+            raise ValueError("candidate_id must be positive")
+
+        result = self.remove_candidate_links(db, candidate_ids=[normalized_candidate_id])
+        if result["removed_candidates"] != 1:
+            raise LookupError(f"前台失效候选 {normalized_candidate_id} 不存在")
+
+        message_ids = result.get("message_ids") or []
+        return {
+            "success": True,
+            "candidate_id": normalized_candidate_id,
+            "message_id": int(message_ids[0]) if message_ids else 0,
+            "removed_links": result["removed_links"],
+            "deleted_messages": result["deleted_messages"],
+            "deleted_message_ids": result["deleted_message_ids"],
+        }
+
+    def remove_candidate_links(
+        self,
+        db: Session,
+        *,
+        candidate_ids: Optional[Iterable[int]] = None,
+        delete_all: bool = False,
+    ) -> Dict[str, Any]:
+        normalized_ids = sorted({int(candidate_id) for candidate_id in (candidate_ids or []) if int(candidate_id) > 0})
+        if not delete_all and not normalized_ids:
+            raise ValueError("candidate_ids cannot be empty when delete_all is false")
+
+        try:
+            with _CANDIDATE_WRITE_LOCK:
+                query = db.query(ForegroundLinkHealthCandidate).filter(
+                    ForegroundLinkHealthCandidate.candidate_status == _CANDIDATE_STATUS_PENDING,
+                )
+                if delete_all:
+                    requested_ids = [
+                        int(candidate.id)
+                        for candidate in query.with_for_update().all()
+                    ]
+                else:
+                    requested_ids = normalized_ids
+                    query = query.filter(ForegroundLinkHealthCandidate.id.in_(requested_ids))
+
+                candidates = query.with_for_update().all()
+                found_ids = {int(candidate.id) for candidate in candidates}
+                missing_ids = [] if delete_all else [candidate_id for candidate_id in requested_ids if candidate_id not in found_ids]
+                if not candidates:
+                    return {
+                        "success": True,
+                        "delete_all": delete_all,
+                        "requested_count": len(requested_ids),
+                        "removed_candidates": 0,
+                        "removed_links": 0,
+                        "deleted_messages": 0,
+                        "deleted_message_ids": [],
+                        "missing_candidate_ids": missing_ids,
+                        "message_ids": [],
+                    }
+
+                message_ids = sorted({int(candidate.message_id) for candidate in candidates})
+                for candidate in candidates:
+                    candidate.invalid_observations = max(
+                        int(candidate.invalid_observations or 0),
+                        self.min_invalid_confirmations,
+                    )
+                db.flush()
+
+                cleanup_result = self._cleanup_confirmed_candidates(
+                    db,
+                    [int(candidate.id) for candidate in candidates],
+                )
+                db.commit()
+
+                return {
+                    "success": True,
+                    "delete_all": delete_all,
+                    "requested_count": len(requested_ids),
+                    "removed_candidates": len(candidates),
+                    "missing_candidate_ids": missing_ids,
+                    "message_ids": message_ids,
+                    **cleanup_result,
+                }
+        except Exception:
+            db.rollback()
+            logger.exception("failed to remove foreground link health candidates")
+            raise
 
     def list_candidates(self, db: Session, *, limit: int = 100, offset: int = 0) -> Dict[str, Any]:
         query = db.query(ForegroundLinkHealthCandidate).filter(

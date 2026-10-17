@@ -1,5 +1,6 @@
 ﻿import threading
 from datetime import datetime
+import logging
 
 from sqlalchemy import ARRAY, JSON, BigInteger, Boolean, Column, Date, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine, inspect, text
 from sqlalchemy.dialects.postgresql import JSONB
@@ -8,6 +9,7 @@ from sqlalchemy.ext.declarative import declarative_base
 from app.models.config import settings
 
 Base = declarative_base()
+logger = logging.getLogger(__name__)
 
 
 class Message(Base):
@@ -1381,6 +1383,10 @@ def _ensure_backup_management_indexes() -> None:
 def _ensure_message_monitor_indexes() -> None:
     statements = (
         """
+        CREATE INDEX IF NOT EXISTS ix_messages_timestamp_desc
+        ON messages (timestamp DESC)
+        """,
+        """
         CREATE INDEX IF NOT EXISTS ix_messages_monitor_channel_config_timestamp
         ON messages (monitor_channel_config_id, timestamp DESC)
         """,
@@ -1392,10 +1398,46 @@ def _ensure_message_monitor_indexes() -> None:
         CREATE INDEX IF NOT EXISTS ix_messages_monitor_chat_message
         ON messages (monitor_chat_id, monitor_message_id DESC)
         """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_messages_tags_gin
+        ON messages USING GIN (tags)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_messages_netdisk_types_gin
+        ON messages USING GIN (netdisk_types)
+        """,
     )
-    with engine.begin() as connection:
-        for statement in statements:
-            connection.execute(text(statement))
+
+    for statement in statements:
+        try:
+            with engine.begin() as connection:
+                connection.execute(text(statement))
+        except Exception:
+            logger.warning("failed to create message search index", exc_info=True)
+
+    try:
+        with engine.begin() as connection:
+            connection.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
+    except Exception:
+        logger.warning("pg_trgm is unavailable; substring search indexes were skipped", exc_info=True)
+        return
+
+    trigram_statements = (
+        """
+        CREATE INDEX IF NOT EXISTS ix_messages_title_trgm
+        ON messages USING GIN (title gin_trgm_ops)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_messages_description_trgm
+        ON messages USING GIN (description gin_trgm_ops)
+        """,
+    )
+    for statement in trigram_statements:
+        try:
+            with engine.begin() as connection:
+                connection.execute(text(statement))
+        except Exception:
+            logger.warning("failed to create message trigram search index", exc_info=True)
 
 
 def _ensure_channel_daily_stats_indexes() -> None:

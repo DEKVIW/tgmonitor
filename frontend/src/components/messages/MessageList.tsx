@@ -28,20 +28,28 @@ const MessageList = ({ isGuestMode = false }: MessageListProps) => {
   const [publicConfig, setPublicConfig] = useState<PublicSystemConfigResponse | null>(null)
   const isMobile = useMediaQuery('(max-width: 768px)')
   const requestIdRef = useRef(0)
+  const requestAbortRef = useRef<AbortController | null>(null)
+  const previousFiltersRef = useRef(filters)
 
   const loadMessages = useCallback(async () => {
     const requestId = ++requestIdRef.current
+    requestAbortRef.current?.abort()
+    const abortController = new AbortController()
+    requestAbortRef.current = abortController
     setLoading(true)
     setError(null)
 
     try {
-      const response = await getMessages(filters)
+      const response = await getMessages(filters, abortController.signal)
       if (requestId !== requestIdRef.current) {
         return
       }
       setData(response)
     } catch (err: unknown) {
       if (requestId !== requestIdRef.current) {
+        return
+      }
+      if (abortController.signal.aborted || (err && typeof err === 'object' && 'code' in err && err.code === 'ERR_CANCELED')) {
         return
       }
       const message =
@@ -53,13 +61,24 @@ const MessageList = ({ isGuestMode = false }: MessageListProps) => {
     } finally {
       if (requestId === requestIdRef.current) {
         setLoading(false)
+        requestAbortRef.current = null
       }
     }
   }, [filters])
 
   useEffect(() => {
     loadMessages()
+
+    return () => requestAbortRef.current?.abort()
   }, [loadMessages, reloadToken])
+
+  useEffect(() => {
+    if (previousFiltersRef.current !== filters) {
+      setData(null)
+      setError(null)
+      previousFiltersRef.current = filters
+    }
+  }, [filters])
 
   useEffect(() => {
     if (!refreshInterval || refreshInterval <= 0) {

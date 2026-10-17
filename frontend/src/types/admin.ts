@@ -751,3 +751,23 @@ export interface ForegroundLinkHealthCandidateList {
   items: ForegroundLinkHealthCandidateItem[]
 }
 
+export interface ForegroundLinkHealthCandidateDeleteResult {
+  success: boolean
+  candidate_id: number
+  message_id: number
+  removed_links: number
+  deleted_messages: number
+  deleted_message_ids: number[]
+}
+
+export interface ForegroundLinkHealthCandidateBatchDeleteResult {
+  success: boolean
+  delete_all: boolean
+  requested_count: number
+  removed_candidates: number
+  removed_links: number
+  deleted_messages: number
+  deleted_message_ids: number[]
+  missing_candidate_ids: number[]
+}
+
