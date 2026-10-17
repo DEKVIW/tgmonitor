@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type Key } from 'react'
+import dayjs from 'dayjs'
 import {
   CloseCircleOutlined,
   CopyOutlined,
@@ -11,7 +12,7 @@ import {
   PlayCircleOutlined,
   SearchOutlined,
 } from '@ant-design/icons'
-import { Alert, Button, Card, Checkbox, Collapse, Descriptions, Drawer, Dropdown, Empty, Input, InputNumber, Modal, Segmented, Space, Table, Tabs, Tag, Tooltip, Typography, message } from 'antd'
+import { Alert, Button, Card, Checkbox, Collapse, Descriptions, Drawer, Dropdown, Empty, Input, InputNumber, Modal, Segmented, Space, Table, Tabs, Tag, TimePicker, Tooltip, Typography, message } from 'antd'
 import type { MenuProps } from 'antd'
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table'
 
@@ -35,6 +36,7 @@ import type {
   PanTransferFollowTaskCandidateRecallItem,
   PanTransferFollowTaskCandidatePolicy,
   PanTransferFollowTaskDetailResponse,
+  PanTransferFollowTaskInspectionSchedule,
   PanTransferFollowTaskItem,
   PanTransferFollowTaskLogItem,
   PanTransferFollowTaskSyncSelectionEntry,
@@ -68,7 +70,7 @@ type DirectoryTrailItem = {
 
 type FollowTaskSettingsDraft = {
   taskId: number
-  check_interval_minutes: number
+  inspection_schedule: PanTransferFollowTaskInspectionSchedule
   candidate_policy: PanTransferFollowTaskCandidatePolicy
   automation: PanTransferFollowTaskAutomationConfig
   applied_update_state: PanTransferFollowTaskAppliedUpdateState
@@ -115,10 +117,22 @@ const DIRECTORY_ROOT_LABELS: Record<FollowSyncSourceKind, string> = {
   candidate: '候选原链',
 }
 
-const DEFAULT_FOLLOW_CHECK_INTERVAL_MINUTES = 180
 const DEFAULT_FOLLOW_LOOKBACK_DAYS = 3
 const DEFAULT_FOLLOW_MAX_RECALL_CANDIDATES = 6
 const DEFAULT_FOLLOW_MAX_JUDGE_CANDIDATES = 3
+const DEFAULT_FOLLOW_INSPECTION_SCHEDULE: PanTransferFollowTaskInspectionSchedule = {
+  enabled: false,
+  weekdays: [],
+  start_time: '10:00',
+  end_time: '12:00',
+  trigger_interval_minutes: 30,
+  max_triggers: 3,
+}
+
+const parseFollowScheduleTime = (value: string) => {
+  const [hour, minute] = value.split(':').map(Number)
+  return dayjs().hour(Number.isFinite(hour) ? hour : 0).minute(Number.isFinite(minute) ? minute : 0).second(0).millisecond(0)
+}
 const DEFAULT_FOLLOW_AUTOMATION_CONFIG: PanTransferFollowTaskAutomationConfig = {
   enabled: false,
   mode: 'auto_incremental',
@@ -1005,7 +1019,15 @@ const getFollowAppliedUpdateModeLabel = (state: Partial<PanTransferFollowTaskApp
 
 const buildFollowSettingsDraft = (task: PanTransferFollowTaskItem): FollowTaskSettingsDraft => ({
   taskId: task.id,
-  check_interval_minutes: Number(task.check_interval_minutes || DEFAULT_FOLLOW_CHECK_INTERVAL_MINUTES),
+  inspection_schedule: {
+    ...DEFAULT_FOLLOW_INSPECTION_SCHEDULE,
+    ...(task.inspection_schedule || {}),
+    weekdays: [...(task.inspection_schedule?.weekdays || DEFAULT_FOLLOW_INSPECTION_SCHEDULE.weekdays)],
+    trigger_interval_minutes: Number(
+      task.inspection_schedule?.trigger_interval_minutes || DEFAULT_FOLLOW_INSPECTION_SCHEDULE.trigger_interval_minutes
+    ),
+    max_triggers: Number(task.inspection_schedule?.max_triggers || DEFAULT_FOLLOW_INSPECTION_SCHEDULE.max_triggers),
+  },
   candidate_policy: {
     lookback_days: Number(task.candidate_policy?.lookback_days || DEFAULT_FOLLOW_LOOKBACK_DAYS),
     max_recall_candidates: Number(task.candidate_policy?.max_recall_candidates || DEFAULT_FOLLOW_MAX_RECALL_CANDIDATES),
@@ -1446,7 +1468,7 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
     setSavingSettingsTaskId(detailTask.id)
     try {
       const response = await updatePanTransferFollowTaskSettings(detailTask.id, {
-        check_interval_minutes: settingsDraft.check_interval_minutes,
+        inspection_schedule: settingsDraft.inspection_schedule,
         candidate_policy: settingsDraft.candidate_policy,
         automation: settingsDraft.automation,
         applied_update_state: settingsDraft.applied_update_state,
@@ -1995,6 +2017,34 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
     String(detailTask?.rule_assessment.recommended_sync_mode || '').toLowerCase() === 'incremental'
   const manualReplaceRecommended =
     String(detailTask?.rule_assessment.recommended_sync_mode || '').toLowerCase() === 'replace_all'
+  const updateInspectionScheduleDraft = (
+    updater: (schedule: PanTransferFollowTaskInspectionSchedule) => PanTransferFollowTaskInspectionSchedule
+  ) => {
+    if (!detailTask) return
+    setSettingsDraft((current) => {
+      const base = current && current.taskId === detailTask.id ? current : buildFollowSettingsDraft(detailTask)
+      return {
+        ...base,
+        inspection_schedule: updater({
+          ...DEFAULT_FOLLOW_INSPECTION_SCHEDULE,
+          ...base.inspection_schedule,
+          weekdays: [...(base.inspection_schedule.weekdays || [])],
+        }),
+      }
+    })
+  }
+  const updateCandidatePolicyDraft = (
+    updater: (policy: PanTransferFollowTaskCandidatePolicy) => PanTransferFollowTaskCandidatePolicy
+  ) => {
+    if (!detailTask) return
+    setSettingsDraft((current) => {
+      const base = current && current.taskId === detailTask.id ? current : buildFollowSettingsDraft(detailTask)
+      return {
+        ...base,
+        candidate_policy: updater({ ...base.candidate_policy }),
+      }
+    })
+  }
   const updateAutomationDraft = (
     updater: (automation: PanTransferFollowTaskAutomationConfig) => PanTransferFollowTaskAutomationConfig
   ) => {
@@ -2342,118 +2392,182 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
                 }
               >
                 <div className="resource-ops-follow-settings-stack">
-                  <div className="resource-ops-follow-settings-grid">
-                    <div className="resource-ops-follow-settings-field">
-                      <label>巡检间隔：</label>
-                      <InputNumber
-                        min={15}
-                        max={10080}
-                        step={15}
-                        value={activeSettingsDraft.check_interval_minutes}
-                        addonAfter="分钟"
-                        style={{ width: '100%' }}
-                        onChange={(value) =>
-                          setSettingsDraft((current) =>
-                            current && current.taskId === detailTask.id
-                              ? { ...current, check_interval_minutes: Number(value || DEFAULT_FOLLOW_CHECK_INTERVAL_MINUTES) }
-                              : buildFollowSettingsDraft({
-                                  ...detailTask,
-                                  check_interval_minutes: Number(value || DEFAULT_FOLLOW_CHECK_INTERVAL_MINUTES),
-                                })
-                          )
+                  <section className="resource-ops-follow-settings-section resource-ops-follow-inspection-section">
+                    <div className="resource-ops-follow-settings-section-head">
+                      <div>
+                        <strong>巡检计划</strong>
+                        <small>按更新日和时间范围触发，手动立即检查不受此计划限制。</small>
+                      </div>
+                      <Checkbox
+                        checked={activeSettingsDraft.inspection_schedule.enabled}
+                        onChange={(event) =>
+                          updateInspectionScheduleDraft((schedule) => ({
+                            ...schedule,
+                            enabled: event.target.checked,
+                          }))
                         }
-                      />
+                      >
+                        启用定时巡检
+                      </Checkbox>
                     </div>
-
-                    <div className="resource-ops-follow-settings-field">
-                      <label>候选时间范围：</label>
-                      <InputNumber
-                        min={1}
-                        max={90}
-                        value={activeSettingsDraft.candidate_policy.lookback_days}
-                        addonAfter="天"
-                        style={{ width: '100%' }}
-                        onChange={(value) =>
-                          setSettingsDraft((current) =>
-                            current && current.taskId === detailTask.id
-                              ? {
-                                  ...current,
-                                  candidate_policy: {
-                                    ...current.candidate_policy,
-                                    lookback_days: Number(value || DEFAULT_FOLLOW_LOOKBACK_DAYS),
-                                  },
-                                }
-                              : buildFollowSettingsDraft({
-                                  ...detailTask,
-                                  candidate_policy: {
-                                    ...detailTask.candidate_policy,
-                                    lookback_days: Number(value || DEFAULT_FOLLOW_LOOKBACK_DAYS),
-                                  },
-                                })
-                          )
-                        }
-                      />
+                    <div className="resource-ops-follow-inspection-grid">
+                      <div className="resource-ops-follow-settings-field resource-ops-follow-settings-field--wide">
+                        <label>更新日</label>
+                        <Checkbox.Group
+                          className="resource-ops-follow-weekday-group"
+                          options={[
+                            { label: '周一', value: 1 },
+                            { label: '周二', value: 2 },
+                            { label: '周三', value: 3 },
+                            { label: '周四', value: 4 },
+                            { label: '周五', value: 5 },
+                            { label: '周六', value: 6 },
+                            { label: '周日', value: 7 },
+                          ]}
+                          value={activeSettingsDraft.inspection_schedule.weekdays}
+                          onChange={(values) =>
+                            updateInspectionScheduleDraft((schedule) => ({
+                              ...schedule,
+                              weekdays: values.map((value) => Number(value)),
+                            }))
+                          }
+                        />
+                      </div>
+                      <div className="resource-ops-follow-settings-field">
+                        <label>时间范围</label>
+                        <div className="resource-ops-follow-time-range">
+                          <TimePicker
+                            format="HH:mm"
+                            minuteStep={5}
+                            value={parseFollowScheduleTime(activeSettingsDraft.inspection_schedule.start_time)}
+                            onChange={(value) =>
+                              value &&
+                              updateInspectionScheduleDraft((schedule) => ({ ...schedule, start_time: value.format('HH:mm') }))
+                            }
+                          />
+                          <span>至</span>
+                          <TimePicker
+                            format="HH:mm"
+                            minuteStep={5}
+                            value={parseFollowScheduleTime(activeSettingsDraft.inspection_schedule.end_time)}
+                            onChange={(value) =>
+                              value &&
+                              updateInspectionScheduleDraft((schedule) => ({ ...schedule, end_time: value.format('HH:mm') }))
+                            }
+                          />
+                        </div>
+                      </div>
+                      <div className="resource-ops-follow-settings-field">
+                        <label>触发间隔</label>
+                        <InputNumber
+                          min={15}
+                          max={1440}
+                          step={15}
+                          value={activeSettingsDraft.inspection_schedule.trigger_interval_minutes}
+                          addonAfter="分钟"
+                          style={{ width: '100%' }}
+                          onChange={(value) =>
+                            updateInspectionScheduleDraft((schedule) => ({
+                              ...schedule,
+                              trigger_interval_minutes: Number(value || 30),
+                            }))
+                          }
+                        />
+                      </div>
+                      <div className="resource-ops-follow-settings-field">
+                        <label>最多触发</label>
+                        <InputNumber
+                          min={1}
+                          max={12}
+                          value={activeSettingsDraft.inspection_schedule.max_triggers}
+                          addonAfter="次"
+                          style={{ width: '100%' }}
+                          onChange={(value) =>
+                            updateInspectionScheduleDraft((schedule) => ({
+                              ...schedule,
+                              max_triggers: Number(value || 3),
+                            }))
+                          }
+                        />
+                      </div>
                     </div>
+                    <small className="resource-ops-follow-settings-section-note">
+                      {activeSettingsDraft.inspection_schedule.enabled
+                        ? `每周${activeSettingsDraft.inspection_schedule.weekdays.map((day) => ['一', '二', '三', '四', '五', '六', '日'][day - 1]).join('、') || '未选择日期'} · ${activeSettingsDraft.inspection_schedule.start_time} - ${activeSettingsDraft.inspection_schedule.end_time} · 每 ${activeSettingsDraft.inspection_schedule.trigger_interval_minutes} 分钟最多 ${activeSettingsDraft.inspection_schedule.max_triggers} 次`
+                        : '未启用定时计划时，任务继续沿用原有的间隔巡检设置。'}
+                    </small>
+                  </section>
 
-                    <div className="resource-ops-follow-settings-field">
-                      <label>最多召回候选：</label>
-                      <InputNumber
-                        min={1}
-                        max={30}
-                        value={activeSettingsDraft.candidate_policy.max_recall_candidates}
-                        style={{ width: '100%' }}
-                        onChange={(value) =>
-                          setSettingsDraft((current) => {
+                  <section className="resource-ops-follow-settings-section">
+                    <div className="resource-ops-follow-settings-section-head">
+                      <div>
+                        <strong>候选资源控制</strong>
+                        <small>只影响候选消息的搜索和评估数量，不影响巡检时间。</small>
+                      </div>
+                    </div>
+                    <div className="resource-ops-follow-candidate-grid">
+                      <div className="resource-ops-follow-settings-field">
+                        <label>消息回溯范围</label>
+                        <InputNumber
+                          min={1}
+                          max={90}
+                          value={activeSettingsDraft.candidate_policy.lookback_days}
+                          addonAfter="天"
+                          style={{ width: '100%' }}
+                          onChange={(value) =>
+                            updateCandidatePolicyDraft((policy) => ({
+                              ...policy,
+                              lookback_days: Number(value || DEFAULT_FOLLOW_LOOKBACK_DAYS),
+                            }))
+                          }
+                        />
+                      </div>
+                      <div className="resource-ops-follow-settings-field">
+                        <label>最多召回候选</label>
+                        <InputNumber
+                          min={1}
+                          max={30}
+                          value={activeSettingsDraft.candidate_policy.max_recall_candidates}
+                          style={{ width: '100%' }}
+                          onChange={(value) => {
                             const nextValue = Number(value || DEFAULT_FOLLOW_MAX_RECALL_CANDIDATES)
-                            if (current && current.taskId === detailTask.id) {
-                              return {
-                                ...current,
-                                candidate_policy: {
-                                  ...current.candidate_policy,
-                                  max_recall_candidates: nextValue,
-                                  max_judge_candidates: Math.min(current.candidate_policy.max_judge_candidates, nextValue),
-                                },
-                              }
-                            }
-                            const nextDraft = buildFollowSettingsDraft(detailTask)
-                            return {
-                              ...nextDraft,
-                              candidate_policy: {
-                                ...nextDraft.candidate_policy,
-                                max_recall_candidates: nextValue,
-                                max_judge_candidates: Math.min(nextDraft.candidate_policy.max_judge_candidates, nextValue),
-                              },
-                            }
-                          })
-                        }
-                      />
+                            updateCandidatePolicyDraft((policy) => ({
+                              ...policy,
+                              max_recall_candidates: nextValue,
+                              max_judge_candidates: Math.min(policy.max_judge_candidates, nextValue),
+                            }))
+                          }}
+                        />
+                      </div>
+                      <div className="resource-ops-follow-settings-field">
+                        <label>最多评估候选</label>
+                        <InputNumber
+                          min={1}
+                          max={Math.max(1, activeSettingsDraft.candidate_policy.max_recall_candidates)}
+                          value={activeSettingsDraft.candidate_policy.max_judge_candidates}
+                          style={{ width: '100%' }}
+                          onChange={(value) =>
+                            updateCandidatePolicyDraft((policy) => ({
+                              ...policy,
+                              max_judge_candidates: Math.min(
+                                Number(value || policy.max_judge_candidates || DEFAULT_FOLLOW_MAX_JUDGE_CANDIDATES),
+                                policy.max_recall_candidates
+                              ),
+                            }))
+                          }
+                        />
+                      </div>
                     </div>
+                  </section>
 
-                    <div className="resource-ops-follow-settings-field">
-                      <label>最多判定：</label>
-                      <InputNumber
-                        min={1}
-                        max={Math.max(1, activeSettingsDraft.candidate_policy.max_recall_candidates)}
-                        value={activeSettingsDraft.candidate_policy.max_judge_candidates}
-                        style={{ width: '100%' }}
-                        onChange={(value) =>
-                          setSettingsDraft((current) =>
-                            current && current.taskId === detailTask.id
-                              ? {
-                                  ...current,
-                                  candidate_policy: {
-                                    ...current.candidate_policy,
-                                    max_judge_candidates: Math.min(
-                                      Number(value || current.candidate_policy.max_judge_candidates || DEFAULT_FOLLOW_MAX_JUDGE_CANDIDATES),
-                                      current.candidate_policy.max_recall_candidates
-                                    ),
-                                  },
-                                }
-                              : buildFollowSettingsDraft(detailTask)
-                          )
-                        }
-                      />
+                  <section className="resource-ops-follow-settings-section">
+                    <div className="resource-ops-follow-settings-section-head">
+                      <div>
+                        <strong>更新信息</strong>
+                        <small>用于修正系统自动识别的季数、集数或期号。</small>
+                      </div>
                     </div>
+                    <div className="resource-ops-follow-settings-grid resource-ops-follow-settings-grid--update">
                     <div className="resource-ops-follow-settings-field resource-ops-follow-settings-field--compact">
                       <label>更新季数：</label>
                       <InputNumber
@@ -2536,7 +2650,8 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
                         </div>
                       </div>
                     </div>
-                  </div>
+                    </div>
+                  </section>
 
                   <div className="resource-ops-follow-automation-panel">
                     <div className="resource-ops-follow-automation-head">

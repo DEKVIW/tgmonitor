@@ -169,6 +169,7 @@ export interface PanTransferLinkDirectoryPreviewResponse {
 export interface PanTransferFollowTaskCreateRequest {
   task_name?: string | null
   check_interval_minutes?: number | null
+  inspection_schedule?: PanTransferFollowTaskInspectionSchedule | null
   candidate_policy?: PanTransferFollowTaskCandidatePolicy | null
   automation?: Partial<PanTransferFollowTaskAutomationConfig> | null
 }
@@ -177,6 +178,15 @@ export interface PanTransferFollowTaskCandidatePolicy {
   lookback_days: number
   max_recall_candidates: number
   max_judge_candidates: number
+}
+
+export interface PanTransferFollowTaskInspectionSchedule {
+  enabled: boolean
+  weekdays: number[]
+  start_time: string
+  end_time: string
+  trigger_interval_minutes: number
+  max_triggers: number
 }
 
 export interface PanTransferFollowTaskAutomationConfig {
@@ -225,6 +235,7 @@ export interface PanTransferFollowTaskMaterializedUpdateState extends PanTransfe
 
 export interface PanTransferFollowTaskSettingsUpdateRequest {
   check_interval_minutes?: number | null
+  inspection_schedule?: PanTransferFollowTaskInspectionSchedule | null
   candidate_policy?: Partial<PanTransferFollowTaskCandidatePolicy> | null
   automation?: Partial<PanTransferFollowTaskAutomationConfig> | null
   applied_update_state?: Partial<PanTransferFollowTaskAppliedUpdateState> | null
@@ -397,6 +408,7 @@ export interface PanTransferFollowTaskItem {
   last_candidate_title?: string | null
   last_candidate_message_time?: string | null
   check_interval_minutes: number
+  inspection_schedule: PanTransferFollowTaskInspectionSchedule
   last_checked_at?: string | null
   next_check_at?: string | null
   locked_by?: string | null

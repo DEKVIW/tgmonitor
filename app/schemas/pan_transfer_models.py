@@ -357,6 +357,7 @@ class PanTransferLinkDirectoryPreviewResponse(PanTransferBaseModel):
 class PanTransferFollowTaskCreateRequest(PanTransferBaseModel):
     task_name: str | None = Field(default=None, max_length=255)
     check_interval_minutes: int | None = Field(default=180, ge=15, le=10080)
+    inspection_schedule: "PanTransferFollowTaskInspectionSchedule | None" = None
     candidate_policy: "PanTransferFollowTaskCandidatePolicy | None" = None
     automation: "PanTransferFollowTaskAutomationConfig | None" = None
 
@@ -377,6 +378,43 @@ class PanTransferFollowTaskCandidatePolicy(PanTransferBaseModel):
     def validate_candidate_policy(self) -> "PanTransferFollowTaskCandidatePolicy":
         if self.max_judge_candidates > self.max_recall_candidates:
             raise ValueError("max_judge_candidates cannot be greater than max_recall_candidates")
+        return self
+
+
+class PanTransferFollowTaskInspectionSchedule(PanTransferBaseModel):
+    enabled: bool = False
+    weekdays: list[int] = Field(default_factory=list)
+    start_time: str = Field(default="10:00", min_length=5, max_length=5)
+    end_time: str = Field(default="12:00", min_length=5, max_length=5)
+    trigger_interval_minutes: int = Field(default=30, ge=15, le=1440)
+    max_triggers: int = Field(default=3, ge=1, le=12)
+
+    @field_validator("weekdays")
+    @classmethod
+    def validate_inspection_weekdays(cls, value: list[int]) -> list[int]:
+        normalized = sorted({int(day) for day in value})
+        if any(day < 1 or day > 7 for day in normalized):
+            raise ValueError("inspection weekdays must be between 1 and 7")
+        return normalized
+
+    @field_validator("start_time", "end_time")
+    @classmethod
+    def validate_inspection_time(cls, value: str) -> str:
+        normalized = value.strip()
+        try:
+            hour, minute = (int(part) for part in normalized.split(":", 1))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("inspection time must use HH:MM format") from exc
+        if hour < 0 or hour > 23 or minute < 0 or minute > 59:
+            raise ValueError("inspection time must use HH:MM format")
+        return f"{hour:02d}:{minute:02d}"
+
+    @model_validator(mode="after")
+    def validate_inspection_schedule(self) -> "PanTransferFollowTaskInspectionSchedule":
+        if self.enabled and not self.weekdays:
+            raise ValueError("inspection weekdays are required when the schedule is enabled")
+        if self.start_time >= self.end_time:
+            raise ValueError("inspection schedule end_time must be later than start_time")
         return self
 
 
@@ -421,6 +459,7 @@ class PanTransferFollowTaskAppliedUpdateStateUpdateRequest(PanTransferBaseModel)
 
 class PanTransferFollowTaskSettingsUpdateRequest(PanTransferBaseModel):
     check_interval_minutes: int | None = Field(default=None, ge=15, le=10080)
+    inspection_schedule: PanTransferFollowTaskInspectionSchedule | None = None
     candidate_policy: PanTransferFollowTaskCandidatePolicy | None = None
     automation: PanTransferFollowTaskAutomationConfig | None = None
     applied_update_state: PanTransferFollowTaskAppliedUpdateStateUpdateRequest | None = None
@@ -690,6 +729,7 @@ class PanTransferFollowTaskItem(PanTransferBaseModel):
     last_candidate_title: str | None = None
     last_candidate_message_time: datetime | None = None
     check_interval_minutes: int
+    inspection_schedule: PanTransferFollowTaskInspectionSchedule = Field(default_factory=PanTransferFollowTaskInspectionSchedule)
     last_checked_at: datetime | None = None
     next_check_at: datetime | None = None
     locked_by: str | None = None

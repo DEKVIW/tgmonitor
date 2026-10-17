@@ -7,6 +7,7 @@ import unicodedata
 from collections.abc import Mapping
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, aliased
@@ -59,6 +60,13 @@ PAN_TRANSFER_SYNC_ALLOWED_STATUS = {
 PAN_TRANSFER_SYNC_DEFAULT_INTERVAL_MINUTES = 3 * 60
 PAN_TRANSFER_SYNC_MIN_INTERVAL_MINUTES = 15
 PAN_TRANSFER_SYNC_MAX_INTERVAL_MINUTES = 7 * 24 * 60
+PAN_TRANSFER_FOLLOW_INSPECTION_DEFAULT_INTERVAL_MINUTES = 30
+PAN_TRANSFER_FOLLOW_INSPECTION_MAX_INTERVAL_MINUTES = 24 * 60
+PAN_TRANSFER_FOLLOW_INSPECTION_DEFAULT_MAX_TRIGGERS = 3
+PAN_TRANSFER_FOLLOW_INSPECTION_MAX_TRIGGERS = 12
+PAN_TRANSFER_FOLLOW_INSPECTION_TIMEZONE = ZoneInfo("Asia/Shanghai")
+PAN_TRANSFER_FOLLOW_INSPECTION_SCHEDULE_KEY = "inspection_schedule"
+PAN_TRANSFER_FOLLOW_INSPECTION_RUNTIME_KEY = "inspection_runtime"
 PAN_TRANSFER_SYNC_CANDIDATE_LOOKBACK_DAYS = 3
 PAN_TRANSFER_SYNC_MIN_CANDIDATE_LOOKBACK_DAYS = 1
 PAN_TRANSFER_SYNC_MAX_CANDIDATE_LOOKBACK_DAYS = 90
@@ -171,6 +179,127 @@ def _normalize_interval_minutes(value: Any) -> int:
             f"check_interval_minutes must be between {PAN_TRANSFER_SYNC_MIN_INTERVAL_MINUTES} and {PAN_TRANSFER_SYNC_MAX_INTERVAL_MINUTES}"
         )
     return normalized
+
+
+def _normalize_inspection_time(value: Any, *, field_name: str, default: str) -> str:
+    normalized = _normalize_text(value, max_length=5) or default
+    matched = re.fullmatch(r"(\d{1,2}):(\d{1,2})", normalized)
+    if matched is None:
+        raise ValueError(f"{field_name} must use HH:MM format")
+    hour, minute = int(matched.group(1)), int(matched.group(2))
+    if hour > 23 or minute > 59:
+        raise ValueError(f"{field_name} must use HH:MM format")
+    return f"{hour:02d}:{minute:02d}"
+
+
+def _normalize_inspection_schedule(raw_value: Any) -> dict[str, Any]:
+    raw = dict(raw_value or {}) if isinstance(raw_value, dict) else {}
+    weekdays: list[int] = []
+    for value in list(raw.get("weekdays") or []):
+        try:
+            day = int(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("inspection weekdays must be integers from 1 to 7") from exc
+        if day < 1 or day > 7:
+            raise ValueError("inspection weekdays must be integers from 1 to 7")
+        if day not in weekdays:
+            weekdays.append(day)
+    weekdays.sort()
+    enabled = bool(_normalize_optional_bool(raw.get("enabled")) or False)
+    start_time = _normalize_inspection_time(raw.get("start_time"), field_name="inspection start_time", default="10:00")
+    end_time = _normalize_inspection_time(raw.get("end_time"), field_name="inspection end_time", default="12:00")
+    if start_time >= end_time:
+        raise ValueError("inspection schedule end_time must be later than start_time")
+    if enabled and not weekdays:
+        raise ValueError("inspection weekdays are required when the schedule is enabled")
+    try:
+        trigger_interval_minutes = int(raw.get("trigger_interval_minutes") or PAN_TRANSFER_FOLLOW_INSPECTION_DEFAULT_INTERVAL_MINUTES)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("inspection trigger_interval_minutes must be an integer") from exc
+    if trigger_interval_minutes < PAN_TRANSFER_SYNC_MIN_INTERVAL_MINUTES or trigger_interval_minutes > PAN_TRANSFER_FOLLOW_INSPECTION_MAX_INTERVAL_MINUTES:
+        raise ValueError(
+            "inspection trigger_interval_minutes must be between "
+            f"{PAN_TRANSFER_SYNC_MIN_INTERVAL_MINUTES} and {PAN_TRANSFER_FOLLOW_INSPECTION_MAX_INTERVAL_MINUTES}"
+        )
+    try:
+        max_triggers = int(raw.get("max_triggers") or PAN_TRANSFER_FOLLOW_INSPECTION_DEFAULT_MAX_TRIGGERS)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("inspection max_triggers must be an integer") from exc
+    if max_triggers < 1 or max_triggers > PAN_TRANSFER_FOLLOW_INSPECTION_MAX_TRIGGERS:
+        raise ValueError(
+            f"inspection max_triggers must be between 1 and {PAN_TRANSFER_FOLLOW_INSPECTION_MAX_TRIGGERS}"
+        )
+    return {
+        "enabled": enabled,
+        "weekdays": weekdays,
+        "start_time": start_time,
+        "end_time": end_time,
+        "trigger_interval_minutes": trigger_interval_minutes,
+        "max_triggers": max_triggers,
+    }
+
+
+def _get_follow_inspection_schedule(task: PanTransferSyncTask) -> dict[str, Any]:
+    return _normalize_inspection_schedule(_get_task_extra_section(task, PAN_TRANSFER_FOLLOW_INSPECTION_SCHEDULE_KEY))
+
+
+def _get_follow_inspection_runtime(task: PanTransferSyncTask) -> dict[str, Any]:
+    raw = _get_task_extra_section(task, PAN_TRANSFER_FOLLOW_INSPECTION_RUNTIME_KEY)
+    try:
+        trigger_count = max(0, int(raw.get("trigger_count") or 0))
+    except (TypeError, ValueError):
+        trigger_count = 0
+    return {
+        "window_key": _normalize_text(raw.get("window_key"), max_length=16) or None,
+        "trigger_count": trigger_count,
+        "last_trigger_at": _parse_datetime(raw.get("last_trigger_at")),
+        "last_check_at": _parse_datetime(raw.get("last_check_at")),
+    }
+
+
+def _to_inspection_local(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(PAN_TRANSFER_FOLLOW_INSPECTION_TIMEZONE)
+
+
+def _inspection_window_bounds(schedule: dict[str, Any], target_date: date) -> tuple[datetime, datetime]:
+    start = time.fromisoformat(str(schedule["start_time"]))
+    end = time.fromisoformat(str(schedule["end_time"]))
+    return (
+        datetime.combine(target_date, start, tzinfo=PAN_TRANSFER_FOLLOW_INSPECTION_TIMEZONE),
+        datetime.combine(target_date, end, tzinfo=PAN_TRANSFER_FOLLOW_INSPECTION_TIMEZONE),
+    )
+
+
+def _record_follow_inspection_attempt(task: PanTransferSyncTask, *, now: datetime, consume_trigger: bool) -> None:
+    schedule = _get_follow_inspection_schedule(task)
+    if not schedule["enabled"]:
+        return
+    local_now = _to_inspection_local(now)
+    weekday = local_now.isoweekday()
+    start, end = _inspection_window_bounds(schedule, local_now.date())
+    if weekday not in schedule["weekdays"] or local_now < start or local_now > end:
+        return
+    runtime = _get_follow_inspection_runtime(task)
+    window_key = local_now.date().isoformat()
+    if runtime["window_key"] != window_key:
+        runtime["window_key"] = window_key
+        runtime["trigger_count"] = 0
+    if consume_trigger:
+        runtime["trigger_count"] = min(int(runtime["trigger_count"]) + 1, int(schedule["max_triggers"]))
+        runtime["last_trigger_at"] = now
+    runtime["last_check_at"] = now
+    _set_task_extra_section(
+        task,
+        PAN_TRANSFER_FOLLOW_INSPECTION_RUNTIME_KEY,
+        {
+            "window_key": runtime["window_key"],
+            "trigger_count": runtime["trigger_count"],
+            "last_trigger_at": runtime["last_trigger_at"],
+            "last_check_at": runtime["last_check_at"],
+        },
+    )
 
 
 def _normalize_candidate_lookback_days(value: Any) -> int:
@@ -1286,7 +1415,55 @@ def _schedule_follow_task_next_check(
         task.next_check_at = None
         return None
 
-    del now
+    now_utc = now or utcnow()
+    inspection_schedule = _get_follow_inspection_schedule(task)
+    if inspection_schedule["enabled"]:
+        local_now = _to_inspection_local(now_utc)
+        runtime = _get_follow_inspection_runtime(task)
+        interval = timedelta(minutes=int(inspection_schedule["trigger_interval_minutes"]))
+        for offset in range(0, 15):
+            target_date = local_now.date() + timedelta(days=offset)
+            if target_date.isoweekday() not in inspection_schedule["weekdays"]:
+                continue
+            start, end = _inspection_window_bounds(inspection_schedule, target_date)
+            window_key = target_date.isoformat()
+            trigger_count = int(runtime["trigger_count"]) if runtime["window_key"] == window_key else 0
+
+            if offset == 0:
+                if local_now < start:
+                    candidate_local = start
+                elif local_now > end or trigger_count >= int(inspection_schedule["max_triggers"]):
+                    continue
+                else:
+                    last_trigger_at = (
+                        runtime["last_check_at"] or runtime["last_trigger_at"]
+                    ) if runtime["window_key"] == window_key else None
+                    candidate_local = local_now
+                    if last_trigger_at is not None:
+                        candidate_local = max(candidate_local, _to_inspection_local(last_trigger_at) + interval)
+                    if candidate_local > end:
+                        continue
+            else:
+                candidate_local = start
+
+            runtime["window_key"] = window_key
+            runtime["trigger_count"] = trigger_count
+            _set_task_extra_section(
+                task,
+                PAN_TRANSFER_FOLLOW_INSPECTION_RUNTIME_KEY,
+                {
+                    "window_key": window_key,
+                    "trigger_count": trigger_count,
+                    "last_trigger_at": runtime["last_trigger_at"],
+                    "last_check_at": runtime["last_check_at"],
+                },
+            )
+            task.next_check_at = candidate_local.astimezone(timezone.utc).replace(tzinfo=None)
+            return task.next_check_at
+
+        task.next_check_at = None
+        return None
+
     next_check_at = _next_check_time(
         interval_minutes=int(task.check_interval_minutes or PAN_TRANSFER_SYNC_DEFAULT_INTERVAL_MINUTES)
     )
@@ -2608,6 +2785,7 @@ def _serialize_follow_task(row: PanTransferSyncTask) -> dict[str, Any]:
     candidate_assessment = dict(extra_json.get("candidate_assessment") or {})
     candidate_recall = dict(extra_json.get("candidate_recall") or {})
     candidate_policy = _build_follow_candidate_policy(extra_json.get("candidate_policy"))
+    inspection_schedule = _get_follow_inspection_schedule(row)
     automation = _build_task_automation_config(extra_json.get("automation"))
     origin_mode_status = _build_follow_task_origin_mode_status(row)
     automation["origin_mode_available"] = bool(origin_mode_status.get("available"))
@@ -2668,6 +2846,7 @@ def _serialize_follow_task(row: PanTransferSyncTask) -> dict[str, Any]:
         "last_candidate_title": str(row.last_candidate_title or "") or None,
         "last_candidate_message_time": row.last_candidate_message_time,
         "check_interval_minutes": int(row.check_interval_minutes or PAN_TRANSFER_SYNC_DEFAULT_INTERVAL_MINUTES),
+        "inspection_schedule": inspection_schedule,
         "last_checked_at": row.last_checked_at,
         "next_check_at": row.next_check_at,
         "locked_by": str(row.locked_by or "") or None,
@@ -2835,6 +3014,7 @@ def create_pan_transfer_follow_task_from_batch_item(
         source_message_snapshot["message_time"] = _serialize_json_value(item.latest_message_time)
     topic_payload = _build_follow_topic_payload(session, item=item)
     interval_minutes = _normalize_interval_minutes((payload or {}).get("check_interval_minutes"))
+    inspection_schedule = _normalize_inspection_schedule((payload or {}).get("inspection_schedule"))
     candidate_policy = _build_follow_candidate_policy((payload or {}).get("candidate_policy"))
     task_name = (
         _normalize_text((payload or {}).get("task_name"), max_length=255)
@@ -2873,7 +3053,7 @@ def create_pan_transfer_follow_task_from_batch_item(
     task = PanTransferSyncTask(
         task_name=task_name,
         status=PAN_TRANSFER_SYNC_STATUS_ACTIVE,
-        task_state=PAN_TRANSFER_SYNC_STATE_QUEUED,
+        task_state=PAN_TRANSFER_SYNC_STATE_IDLE if inspection_schedule["enabled"] else PAN_TRANSFER_SYNC_STATE_QUEUED,
         platform=str(item.platform or ""),
         source_batch_id=int(item.batch_id),
         source_batch_item_id=int(item.id),
@@ -2898,7 +3078,7 @@ def create_pan_transfer_follow_task_from_batch_item(
         source_link_status=_normalize_text(item.latest_link_health, max_length=32).lower() or "unknown",
         current_share_status=current_share_status or "unknown",
         check_interval_minutes=interval_minutes,
-        next_check_at=utcnow(),
+        next_check_at=None if inspection_schedule["enabled"] else utcnow(),
         extra_json={
             "source_message_snapshot": _normalize_source_message_snapshot(source_message_snapshot),
             "source_origin": _build_follow_source_origin(
@@ -2920,6 +3100,7 @@ def create_pan_transfer_follow_task_from_batch_item(
             "publish_binding": _build_follow_publish_binding_snapshot(publish_record),
             "automation": _build_follow_task_creation_automation((payload or {}).get("automation")),
             "candidate_policy": candidate_policy,
+            PAN_TRANSFER_FOLLOW_INSPECTION_SCHEDULE_KEY: inspection_schedule,
             "created_from_batch_item": {
                 "batch_id": int(item.batch_id),
                 "item_id": int(item.id),
@@ -2930,6 +3111,10 @@ def create_pan_transfer_follow_task_from_batch_item(
     )
     session.add(task)
     session.flush()
+    if inspection_schedule["enabled"]:
+        _schedule_follow_task_next_check(task)
+        session.add(task)
+        session.flush()
     identity_snapshot, identity_created = _ensure_follow_task_identity_snapshot(session, task=task)
     _append_follow_task_log(
         session,
@@ -3045,6 +3230,16 @@ def update_pan_transfer_follow_task_settings(
         next_interval_minutes = _normalize_interval_minutes(update_payload.get("check_interval_minutes"))
         task.check_interval_minutes = next_interval_minutes
 
+    next_inspection_schedule = _get_follow_inspection_schedule(task)
+    if "inspection_schedule" in update_payload:
+        raw_inspection_schedule = update_payload.get("inspection_schedule")
+        merged_inspection_schedule = {
+            **next_inspection_schedule,
+            **(dict(raw_inspection_schedule) if isinstance(raw_inspection_schedule, dict) else {}),
+        }
+        next_inspection_schedule = _normalize_inspection_schedule(merged_inspection_schedule)
+        _set_task_extra_section(task, PAN_TRANSFER_FOLLOW_INSPECTION_SCHEDULE_KEY, next_inspection_schedule)
+
     next_candidate_policy = _get_follow_candidate_policy(task)
     if "candidate_policy" in update_payload:
         raw_candidate_policy = update_payload.get("candidate_policy")
@@ -3098,6 +3293,7 @@ def update_pan_transfer_follow_task_settings(
         payload={
             "operator": _normalize_text(operator, max_length=128) or None,
             "check_interval_minutes": next_interval_minutes,
+            "inspection_schedule": next_inspection_schedule,
             "candidate_policy": next_candidate_policy,
             "automation": next_automation,
             "applied_update_state": next_applied_update_state,
@@ -5320,6 +5516,7 @@ def process_next_pan_transfer_follow_task(session: Session, *, worker_name: str)
     if task is None:
         return False
     task_id = int(task.id)
+    forced_check = str(task.task_state or "") == PAN_TRANSFER_SYNC_STATE_QUEUED
 
     task.task_state = PAN_TRANSFER_SYNC_STATE_CHECKING
     task.locked_by = worker_name[:128]
@@ -5336,6 +5533,7 @@ def process_next_pan_transfer_follow_task(session: Session, *, worker_name: str)
         task.locked_by = None
         task.locked_at = None
         task.last_checked_at = utcnow()
+        _record_follow_inspection_attempt(task, now=task.last_checked_at, consume_trigger=not forced_check)
         _schedule_follow_task_next_check(task, now=task.last_checked_at)
         task.last_error_message = None
         session.add(task)
@@ -5360,6 +5558,7 @@ def process_next_pan_transfer_follow_task(session: Session, *, worker_name: str)
         task.locked_at = None
         task.last_checked_at = utcnow()
         task.last_error_message = error_message
+        _record_follow_inspection_attempt(task, now=task.last_checked_at, consume_trigger=not forced_check)
         _schedule_follow_task_next_check(task, now=task.last_checked_at)
         session.add(task)
         session.flush()
