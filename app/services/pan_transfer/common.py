@@ -48,6 +48,7 @@ ITEM_FOLDER_MODE_CUSTOM = "custom"
 SHARE_TARGET_RESOURCE_DIR = "resource_dir"
 SHARE_TARGET_CONTENT_ROOT = "content_root"
 PATH_TEMPLATE_UNIQUE_TOKENS = ("{item_id}", "{share_key}")
+FOLLOW_TARGET_PATH_INFERENCE_VERSION = 2
 
 
 def utcnow() -> datetime:

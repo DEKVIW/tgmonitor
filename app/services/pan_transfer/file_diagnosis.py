@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.models.models import PanTransferAccount, PanTransferSyncTask, ensure_runtime_storage_tables
 from app.services.resource_identity import normalize_match_key, parse_resource_identity
 
+from .common import FOLLOW_TARGET_PATH_INFERENCE_VERSION
 from .constants import PLATFORM_BAIDU, PLATFORM_QUARK, normalize_transfer_platform
 from .follow_tasks import (
     _apply_follow_applied_update_state_to_snapshot,
@@ -517,22 +518,51 @@ def _pick_best_entry(entries: list[_FileEntry]) -> _FileEntry:
 
 
 def _infer_target_relative_path(target_entries: list[_FileEntry], *, anchor_episode: int | None) -> str | None:
-    scores: dict[str, float] = {}
+    directory_episodes: dict[str, set[int]] = {}
+    directory_latest_updates: dict[str, datetime] = {}
     for entry in target_entries:
-        if not entry.quick_episode_numbers and not entry.episode_numbers:
-            continue
-        relative_parent_path = entry.relative_parent_path or ""
-        episode_numbers = entry.episode_numbers or entry.quick_episode_numbers
+        episode_numbers = set(_entry_episode_numbers(entry))
         if not episode_numbers:
             continue
-        score = 1.0
-        if anchor_episode is not None:
-            score = max(0.5, 10.0 - min(abs(max(episode_numbers) - anchor_episode), 9))
-        scores[relative_parent_path] = scores.get(relative_parent_path, 0.0) + score
-    if not scores:
+        relative_parent_path = _normalize_relative_path_hint(entry.relative_parent_path) or ""
+        directory_episodes.setdefault(relative_parent_path, set()).update(episode_numbers)
+        if entry.updated_at is not None:
+            current_latest = directory_latest_updates.get(relative_parent_path)
+            if current_latest is None or entry.updated_at > current_latest:
+                directory_latest_updates[relative_parent_path] = entry.updated_at
+
+    if not directory_episodes:
         return None
-    best_path, best_score = max(scores.items(), key=lambda item: item[1])
-    return best_path or None if best_score > 0 else None
+
+    effective_anchor = anchor_episode
+    if effective_anchor is None:
+        effective_anchor = max(max(episodes) for episodes in directory_episodes.values())
+
+    ranked_paths: list[tuple[tuple[Any, ...], str]] = []
+    for relative_parent_path, episodes in directory_episodes.items():
+        eligible_episodes = {episode for episode in episodes if episode <= effective_anchor}
+        if not eligible_episodes:
+            continue
+
+        tail_end = max(eligible_episodes)
+        tail_length = 1
+        while tail_end - tail_length in eligible_episodes:
+            tail_length += 1
+
+        path_depth = len(_normalize_path_parts(relative_parent_path))
+        rank = (
+            tail_end,
+            tail_length,
+            directory_latest_updates.get(relative_parent_path) or datetime.min,
+            -path_depth,
+            relative_parent_path,
+        )
+        ranked_paths.append((rank, relative_parent_path))
+
+    if not ranked_paths:
+        return None
+    best_path = max(ranked_paths, key=lambda item: item[0])[1]
+    return best_path or None
 
 
 async def infer_follow_task_target_relative_path(
@@ -634,6 +664,7 @@ async def infer_follow_task_target_relative_path(
     inferred_target_relative_path = _infer_target_relative_path(relevant_target_entries, anchor_episode=anchor_episode)
     return {
         "preferred_target_relative_path": inferred_target_relative_path,
+        "target_path_inference_version": FOLLOW_TARGET_PATH_INFERENCE_VERSION,
         "tracked_episode": tracked_episode,
         "latest_target_episode": latest_target_episode,
         "target_dir_count": stats.target_dir_count,
@@ -1524,6 +1555,7 @@ def _build_diagnosis_summary(
         "full_entry_count": len(full_entries),
         "full_selection_group_count": len(full_selection_groups),
         "inferred_target_relative_path": inferred_target_relative_path,
+        "target_path_inference_version": FOLLOW_TARGET_PATH_INFERENCE_VERSION,
         "target_scope_relative_path": target_scope_relative_path,
         "warnings": list(stats.warnings),
         "stop_reason": stats.stop_reason,

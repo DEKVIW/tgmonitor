@@ -4593,6 +4593,8 @@ async def _handle_follow_task_origin_automation(
             "source_kind": "current",
             "sync_mode": "incremental",
             "selection_groups": list(plan.selection_groups or []),
+            "preferred_target_relative_path": preferred_target_relative_path,
+            "target_relative_path_source": target_relative_path_source,
             "reuse_existing_share_if_valid": bool(automation.get("reuse_existing_share_if_valid", True)),
             "update_publish_record": bool(automation.get("update_publish_record", True)),
             "trigger_mode": "automation",

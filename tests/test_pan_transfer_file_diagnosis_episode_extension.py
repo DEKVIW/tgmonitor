@@ -9,12 +9,94 @@ from app.services.pan_transfer.file_diagnosis import (
     _build_tracked_keys,
     _extract_episode_numbers_quick,
     _full_parse_entry,
+    _infer_target_relative_path,
     _prepare_quick_entries,
     _select_full_parse_candidates,
 )
+from app.services.pan_transfer.follow_sync import _augment_source_selection_target_relative_path
 
 
 class FileDiagnosisEpisodeExtensionTests(unittest.TestCase):
+    @staticmethod
+    def _target_entry(name: str, relative_parent_path: str, episode: int, scan_order: int) -> _FileEntry:
+        return _FileEntry(
+            side="target",
+            name=name,
+            entry_id=str(scan_order),
+            path=f"/{relative_parent_path}/{name}",
+            parent_entry_id=relative_parent_path,
+            parent_path=f"/{relative_parent_path}",
+            parent_name=relative_parent_path.rsplit("/", 1)[-1],
+            relative_parent_path=relative_parent_path,
+            updated_at=None,
+            size_bytes=None,
+            extension=".mkv",
+            scan_order=scan_order,
+            quick_episode_numbers=[episode],
+            accepted=True,
+        )
+
+    def test_target_path_follows_latest_contiguous_episode_directory(self) -> None:
+        entries = [
+            *(
+                self._target_entry(f"S05E{episode}.mkv", "内容合集/上半部", episode, episode)
+                for episode in range(1, 201)
+            ),
+            *(
+                self._target_entry(f"S05E{episode}.mkv", "内容合集", episode, episode + 300)
+                for episode in range(201, 215)
+            ),
+        ]
+
+        self.assertEqual(_infer_target_relative_path(entries, anchor_episode=214), "内容合集")
+
+    def test_target_path_uses_previous_contiguous_directory_for_arbitrary_names(self) -> None:
+        entries = [
+            self._target_entry("第200集.mkv", "第一部分", 200, 1),
+            self._target_entry("第198集.mkv", "第一部分", 198, 2),
+            self._target_entry("第199集.mkv", "第一部分", 199, 3),
+            self._target_entry("第120集.mkv", "旧合集", 120, 4),
+        ]
+
+        self.assertEqual(_infer_target_relative_path(entries, anchor_episode=200), "第一部分")
+
+    def test_target_path_returns_root_when_no_episode_evidence_exists(self) -> None:
+        entry = _FileEntry(
+            side="target",
+            name="合集文件.mkv",
+            entry_id="1",
+            path="/内容合集/合集文件.mkv",
+            parent_entry_id="内容合集",
+            parent_path="/内容合集",
+            parent_name="内容合集",
+            relative_parent_path="内容合集",
+            updated_at=None,
+            size_bytes=None,
+            extension=".mkv",
+            scan_order=1,
+        )
+
+        self.assertIsNone(_infer_target_relative_path([entry], anchor_episode=214))
+
+    def test_root_target_path_removes_stale_selection_subdirectory(self) -> None:
+        source_selection = {
+            "selection_groups": [
+                {
+                    "selected_count": 1,
+                    "target_relative_path": "内容合集/101-200",
+                }
+            ],
+            "selected_count": 1,
+        }
+
+        normalized = _augment_source_selection_target_relative_path(
+            source_selection,
+            preferred_target_relative_path=None,
+            replace_existing=True,
+        )
+
+        self.assertNotIn("target_relative_path", normalized["selection_groups"][0])
+
     def test_video_extension_digits_are_not_parsed_as_episode_numbers(self) -> None:
         for filename, episode in (("31.mp4", 31), ("42.mp4", 42), ("43.mp4", 43)):
             with self.subTest(filename=filename):

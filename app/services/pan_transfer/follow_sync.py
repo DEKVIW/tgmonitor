@@ -15,7 +15,7 @@ from app.models.models import (
 )
 from app.services.resource_identity import compare_follow_candidate, parse_resource_identity
 
-from .common import normalize_relative_path, utcnow
+from .common import FOLLOW_TARGET_PATH_INFERENCE_VERSION, normalize_relative_path, utcnow
 from .constants import (
     DEFAULT_PAN_TRANSFER_MAX_ATTEMPTS,
     DEFAULT_PAN_TRANSFER_RETRY_DELAY_SECONDS,
@@ -406,11 +406,12 @@ def _augment_source_selection_target_relative_path(
     source_selection: dict[str, Any] | None,
     *,
     preferred_target_relative_path: str | None,
+    replace_existing: bool = False,
 ) -> dict[str, Any] | None:
     if source_selection is None:
         return None
     normalized_preferred_path = _normalize_target_relative_path(preferred_target_relative_path)
-    if not normalized_preferred_path:
+    if not normalized_preferred_path and not replace_existing:
         return source_selection
 
     groups = list(source_selection.get("selection_groups") or [])
@@ -420,7 +421,12 @@ def _augment_source_selection_target_relative_path(
             continue
         normalized_group = dict(group)
         existing_path = _normalize_target_relative_path(normalized_group.get("target_relative_path"))
-        if existing_path:
+        if replace_existing:
+            if normalized_preferred_path:
+                normalized_group["target_relative_path"] = normalized_preferred_path
+            else:
+                normalized_group.pop("target_relative_path", None)
+        elif existing_path:
             normalized_group["target_relative_path"] = existing_path
         else:
             normalized_group["target_relative_path"] = normalized_preferred_path
@@ -438,11 +444,10 @@ def _remember_follow_task_target_path(
     source: str,
 ) -> None:
     normalized_path = _normalize_target_relative_path(preferred_target_relative_path)
-    if not normalized_path:
-        return
     extra_json = dict(task.extra_json or {})
     extra_json["target_path_memory"] = {
         "preferred_target_relative_path": normalized_path,
+        "target_path_inference_version": FOLLOW_TARGET_PATH_INFERENCE_VERSION,
         "source": _normalize_text(source, max_length=64) or "unknown",
         "updated_at": utcnow().isoformat() + "Z",
     }
@@ -507,6 +512,14 @@ async def resolve_follow_task_preferred_target_relative_path(
         return selection_path, "selection"
 
     extra_json = dict(task.extra_json or {})
+    if allow_scan:
+        from .file_diagnosis import infer_follow_task_target_relative_path
+
+        scan_result = await infer_follow_task_target_relative_path(session, task_id=int(task.id))
+        if "preferred_target_relative_path" in scan_result:
+            scanned_path = _normalize_target_relative_path(scan_result.get("preferred_target_relative_path"))
+            return scanned_path, "target_scan" if scanned_path else "target_scan_root"
+
     current_share_identity = dict(extra_json.get("current_share_identity") or {})
     current_share_actual_path = _normalize_target_relative_path(
         current_share_identity.get("actual_share_target_relative_path")
@@ -523,27 +536,21 @@ async def resolve_follow_task_preferred_target_relative_path(
     if _normalize_optional_bool(last_sync.get("actual_share_target_is_root")) is True:
         return None, "last_sync_actual_root"
 
-    target_path_memory = dict(extra_json.get("target_path_memory") or {})
-    remembered_path = _normalize_target_relative_path(target_path_memory.get("preferred_target_relative_path"))
-    if remembered_path:
-        return remembered_path, "memory"
-
-    last_sync_path = _normalize_target_relative_path(last_sync.get("preferred_target_relative_path"))
-    if last_sync_path:
-        return last_sync_path, "last_sync"
-
     last_file_diagnosis = dict(extra_json.get("last_file_diagnosis") or {})
-    diagnosis_path = _normalize_target_relative_path(last_file_diagnosis.get("inferred_target_relative_path"))
-    if diagnosis_path:
-        return diagnosis_path, "diagnosis"
-
-    if allow_scan:
-        from .file_diagnosis import infer_follow_task_target_relative_path
-
-        scan_result = await infer_follow_task_target_relative_path(session, task_id=int(task.id))
-        scanned_path = _normalize_target_relative_path(scan_result.get("preferred_target_relative_path"))
-        if scanned_path:
-            return scanned_path, "target_scan"
+    target_path_memory = dict(extra_json.get("target_path_memory") or {})
+    for cached_payload, source in (
+        (last_file_diagnosis, "diagnosis_cache"),
+        (target_path_memory, "memory"),
+        (last_sync, "last_sync"),
+    ):
+        cached_version = _normalize_optional_int(cached_payload.get("target_path_inference_version"))
+        if cached_version != FOLLOW_TARGET_PATH_INFERENCE_VERSION:
+            continue
+        cached_path = _normalize_target_relative_path(
+            cached_payload.get("inferred_target_relative_path")
+            or cached_payload.get("preferred_target_relative_path")
+        )
+        return cached_path, source if cached_path else f"{source}_root"
 
     return None, "resource_dir_root"
 
@@ -741,16 +748,31 @@ async def create_pan_transfer_follow_sync_batch(
     preferred_target_relative_path: str | None = None
     target_relative_path_source = "not_applicable"
     if sync_mode == "incremental":
-        preferred_target_relative_path, target_relative_path_source = await resolve_follow_task_preferred_target_relative_path(
-            session,
-            task=task,
-            sync_mode=sync_mode,
-            source_selection=source_selection,
-        )
-        source_selection = _augment_source_selection_target_relative_path(
-            source_selection,
-            preferred_target_relative_path=preferred_target_relative_path,
-        )
+        has_explicit_target_path = "preferred_target_relative_path" in (payload or {})
+        if has_explicit_target_path:
+            preferred_target_relative_path = _normalize_target_relative_path(
+                (payload or {}).get("preferred_target_relative_path")
+            )
+            target_relative_path_source = (
+                _normalize_text((payload or {}).get("target_relative_path_source"), max_length=64)
+                or "explicit"
+            )
+            source_selection = _augment_source_selection_target_relative_path(
+                source_selection,
+                preferred_target_relative_path=preferred_target_relative_path,
+                replace_existing=True,
+            )
+        else:
+            preferred_target_relative_path, target_relative_path_source = await resolve_follow_task_preferred_target_relative_path(
+                session,
+                task=task,
+                sync_mode=sync_mode,
+                source_selection=source_selection,
+            )
+            source_selection = _augment_source_selection_target_relative_path(
+                source_selection,
+                preferred_target_relative_path=preferred_target_relative_path,
+            )
     selection_groups = list((source_selection or {}).get("selection_groups") or [])
     selection_parent_path = selection_groups[0].get("parent_path") if len(selection_groups) == 1 else None
     selection_target_relative_paths = sorted(
@@ -881,6 +903,9 @@ async def create_pan_transfer_follow_sync_batch(
         "selection_group_count": len(selection_groups),
         "preferred_target_relative_path": preferred_target_relative_path,
         "target_relative_path_source": target_relative_path_source,
+        "target_path_inference_version": (
+            FOLLOW_TARGET_PATH_INFERENCE_VERSION if sync_mode == "incremental" else None
+        ),
         "selection_target_relative_paths": selection_target_relative_paths,
     }
     extra_json["last_sync"] = last_sync
@@ -1120,6 +1145,9 @@ def handle_follow_sync_item_success(
         "trigger_mode": trigger_mode,
         "preferred_target_relative_path": preferred_target_relative_path,
         "target_relative_path_source": target_relative_path_source,
+        "target_path_inference_version": (
+            FOLLOW_TARGET_PATH_INFERENCE_VERSION if sync_mode == "incremental" else None
+        ),
         "selection_target_relative_paths": selection_target_relative_paths,
         "actual_share_target_mode": effective_actual_share_target_snapshot.get("actual_share_target_mode"),
         "actual_share_target_relative_path": effective_actual_share_target_snapshot.get("actual_share_target_relative_path"),
