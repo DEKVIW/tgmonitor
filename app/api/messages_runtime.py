@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
 from app.api.dependencies_runtime_v2 import get_db, get_optional_current_user
-from app.models.models import MessageLinkRef
+from app.models.models import MessageLinkRef, engine
 from app.schemas.message import MessageListResponse, MessageResponse, TagStatsResponse
 from app.services.message_query_service import (
     get_filtered_messages,
@@ -165,12 +165,14 @@ async def get_messages(
         invalid_by_message: Dict[int, set[str]] = {}
         removed_message_ids: set[int] = set()
         if search_query and search_query.strip():
+            db.close()
             try:
                 foreground_check = await FOREGROUND_LINK_HEALTH.check_messages(messages)
-                maintenance_result = FOREGROUND_LINK_HEALTH.record_observations(
-                    db,
-                    foreground_check.network_observations,
-                )
+                with Session(engine) as observation_db:
+                    maintenance_result = FOREGROUND_LINK_HEALTH.record_observations(
+                        observation_db,
+                        foreground_check.network_observations,
+                    )
                 removed_message_ids = {
                     int(message_id)
                     for message_id in maintenance_result.get("deleted_message_ids", [])
