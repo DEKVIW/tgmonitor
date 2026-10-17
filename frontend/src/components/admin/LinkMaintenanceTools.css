@@ -20,6 +20,24 @@
   min-width: 0;
 }
 
+.maintenance-tools-candidates-panel {
+  margin-top: 16px;
+}
+
+.maintenance-tools-candidate-message {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.maintenance-tools-candidate-message .ant-typography {
+  max-width: 240px;
+}
+
+.maintenance-tools-candidates-panel .ant-table-wrapper {
+  min-width: 0;
+}
+
 .maintenance-tools-panel-copy {
   display: flex;
   flex-direction: column;

@@ -1,15 +1,21 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Alert, Button, Card, InputNumber, Popconfirm, Select, Switch, Tag, Typography, message } from 'antd'
+import { Alert, Button, Card, InputNumber, Popconfirm, Select, Switch, Table, Tag, Typography, message } from 'antd'
 import { DeleteOutlined, ReloadOutlined, SaveOutlined, SyncOutlined } from '@ant-design/icons'
 
 import {
   clearLinkCheckData,
   clearOldLinkCheckData,
   dedupLinks,
+  getForegroundLinkHealthCandidates,
   getDedupRuntimeSettings,
   updateDedupRuntimeSettings,
 } from '@/api/admin'
-import type { DedupRuntimeSettingsResponse, DedupRuntimeSettingsUpdate, MaintenanceResult } from '@/types/admin'
+import type {
+  DedupRuntimeSettingsResponse,
+  DedupRuntimeSettingsUpdate,
+  ForegroundLinkHealthCandidateItem,
+  MaintenanceResult,
+} from '@/types/admin'
 import { formatServerDateTime } from '@/utils/dateTime'
 
 import './LinkMaintenanceTools.css'
@@ -20,6 +26,7 @@ const AUTO_TIMEZONE = 'Asia/Shanghai'
 const DEFAULT_INTERVAL_HOURS = 1
 const DEFAULT_LOOKBACK_HOURS = 72
 const DEFAULT_RETENTION_HOURS = 240
+const CANDIDATE_PAGE_SIZE = 50
 
 type DedupDraft = {
   enabled: boolean
@@ -58,6 +65,10 @@ const LinkMaintenanceTools = () => {
   const [clearOldDataLoading, setClearOldDataLoading] = useState(false)
   const [clearDays, setClearDays] = useState(30)
   const [lastRunResult, setLastRunResult] = useState<MaintenanceResult | null>(null)
+  const [candidateItems, setCandidateItems] = useState<ForegroundLinkHealthCandidateItem[]>([])
+  const [candidateTotal, setCandidateTotal] = useState(0)
+  const [candidatePage, setCandidatePage] = useState(1)
+  const [candidateLoading, setCandidateLoading] = useState(false)
 
   const loadConfig = async () => {
     setLoading(true)
@@ -72,8 +83,29 @@ const LinkMaintenanceTools = () => {
     }
   }
 
+  const loadCandidates = async (page = candidatePage) => {
+    setCandidateLoading(true)
+    try {
+      const result = await getForegroundLinkHealthCandidates({
+        limit: CANDIDATE_PAGE_SIZE,
+        offset: (page - 1) * CANDIDATE_PAGE_SIZE,
+      })
+      setCandidateItems(result.items)
+      setCandidateTotal(result.total)
+      setCandidatePage(page)
+    } catch (error: any) {
+      message.error(error.response?.data?.detail || '加载前台失效候选失败')
+    } finally {
+      setCandidateLoading(false)
+    }
+  }
+
+  const loadAll = async () => {
+    await Promise.all([loadConfig(), loadCandidates(1)])
+  }
+
   useEffect(() => {
-    void loadConfig()
+    void loadAll()
   }, [])
 
   const payload = useMemo<DedupRuntimeSettingsUpdate | null>(() => {
@@ -143,13 +175,61 @@ const LinkMaintenanceTools = () => {
       } else {
         message.warning(result.error || '去重任务未执行')
       }
-      await loadConfig()
+      await Promise.all([loadConfig(), loadCandidates(candidatePage)])
     } catch (error: any) {
       message.error(error.response?.data?.detail || '执行链接去重失败')
     } finally {
       setRunning(false)
     }
   }
+
+  const candidateColumns = [
+    {
+      title: '消息',
+      key: 'message',
+      width: 260,
+      render: (_value: unknown, record: ForegroundLinkHealthCandidateItem) => (
+        <div className="maintenance-tools-candidate-message">
+          <Text ellipsis={{ tooltip: record.message_title || `消息 #${record.message_id}` }}>
+            {record.message_title || `消息 #${record.message_id}`}
+          </Text>
+          <Text type="secondary">消息 #{record.message_id}</Text>
+        </div>
+      ),
+    },
+    {
+      title: '网盘',
+      dataIndex: 'netdisk_type',
+      key: 'netdisk_type',
+      width: 120,
+      render: (value: string) => <Tag>{value}</Tag>,
+    },
+    {
+      title: '确认次数',
+      dataIndex: 'invalid_observations',
+      key: 'invalid_observations',
+      width: 110,
+      render: (value: number) => <Tag color={value >= 2 ? 'error' : 'warning'}>{value} / 2</Tag>,
+    },
+    {
+      title: '最近检测',
+      dataIndex: 'last_checked_at',
+      key: 'last_checked_at',
+      width: 150,
+      render: (value: string) => formatServerDateTime(value, 'MM-DD HH:mm'),
+    },
+    {
+      title: '链接',
+      dataIndex: 'url',
+      key: 'url',
+      ellipsis: true,
+      render: (value: string) => (
+        <Typography.Link href={value} target="_blank" rel="noreferrer" ellipsis title={value}>
+          {value}
+        </Typography.Link>
+      ),
+    },
+  ]
 
   const handleClearLinkCheckData = async () => {
     setClearDataLoading(true)
@@ -196,7 +276,7 @@ const LinkMaintenanceTools = () => {
         </div>
       }
       extra={
-        <Button icon={<ReloadOutlined />} onClick={() => void loadConfig()}>
+        <Button icon={<ReloadOutlined />} onClick={() => void loadAll()}>
           刷新
         </Button>
       }
@@ -417,6 +497,47 @@ const LinkMaintenanceTools = () => {
           </div>
         </section>
       </div>
+
+      <section className="maintenance-tools-panel maintenance-tools-candidates-panel">
+        <div className="maintenance-tools-panel-head">
+          <div className="maintenance-tools-panel-copy">
+            <div className="maintenance-tools-panel-title">前台发现的失效候选</div>
+            <Text type="secondary">
+              只记录用户搜索触发的独立网络检测，不读取后台检测历史；连续两次明确失效后才会移除链接，消息没有其他链接时才删除消息。
+            </Text>
+          </div>
+          <Button
+            icon={<ReloadOutlined />}
+            loading={candidateLoading}
+            onClick={() => void loadCandidates(candidatePage)}
+          >
+            刷新候选
+          </Button>
+        </div>
+        <Alert
+          showIcon
+          type="info"
+          message={`当前待复核 ${candidateTotal} 条`}
+          description="需要提取码、限流、网络异常和不确定结果不会进入失效候选。候选超过保留期限未再次观察会自动清理，避免候选表持续增长。"
+        />
+        <Table<ForegroundLinkHealthCandidateItem>
+          rowKey="id"
+          size="small"
+          loading={candidateLoading}
+          columns={candidateColumns}
+          dataSource={candidateItems}
+          scroll={{ x: 780 }}
+          pagination={{
+            current: candidatePage,
+            pageSize: CANDIDATE_PAGE_SIZE,
+            total: candidateTotal,
+            showSizeChanger: false,
+            hideOnSinglePage: true,
+            onChange: (page) => void loadCandidates(page),
+          }}
+          locale={{ emptyText: '暂无前台失效候选' }}
+        />
+      </section>
     </Card>
   )
 }

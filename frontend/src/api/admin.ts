@@ -51,6 +51,7 @@ import {
   LinkCheckHistoryBatchDeleteRequest,
   LinkCheckHistoryBatchDeleteResult,
   LinkCheckHistoryDeleteResult,
+  ForegroundLinkHealthCandidateList,
 } from '@/types/admin'
 
 /**
@@ -166,6 +167,23 @@ export const previewLinkCheckTask = async (
 
 export const getLinkCheckDateRange = async (): Promise<LinkCheckDateRange> => {
   const response = await apiClient.get<LinkCheckDateRange>('/admin/link-check/date-range')
+  return response.data
+}
+
+export const getForegroundLinkHealthCandidates = async (
+  params: { limit?: number; offset?: number } = {}
+): Promise<ForegroundLinkHealthCandidateList> => {
+  const search = new URLSearchParams()
+  if (params.limit !== undefined) {
+    search.set('limit', String(params.limit))
+  }
+  if (params.offset !== undefined) {
+    search.set('offset', String(params.offset))
+  }
+  const query = search.toString()
+  const response = await apiClient.get<ForegroundLinkHealthCandidateList>(
+    `/admin/link-check/foreground-candidates${query ? `?${query}` : ''}`
+  )
   return response.data
 }
 

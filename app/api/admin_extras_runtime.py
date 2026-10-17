@@ -20,6 +20,7 @@ from app.schemas.admin_models import (
     LinkCheckPreviewResponse,
     LinkCheckHistoryDeleteResult,
     LinkCheckTaskStatus,
+    ForegroundLinkHealthCandidateList,
 )
 from app.services.channel_service import fetch_channel_message_samples
 from app.services.link_check_plan_service import (
@@ -39,6 +40,7 @@ from app.services.link_check_runtime import (
     request_task_stop,
 )
 from app.services.system_config_service import get_link_check_runtime_config
+from app.services.foreground_link_health_service import FOREGROUND_LINK_HEALTH
 from app.utils.channel_utils import normalize_channel_username
 
 
@@ -116,6 +118,30 @@ async def get_link_check_date_range_api(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"获取链接检测日期范围失败: {exc}",
+        ) from exc
+
+
+@router.get(
+    "/link-check/foreground-candidates",
+    response_model=ForegroundLinkHealthCandidateList,
+    summary="获取前台发现的失效链接候选",
+)
+async def get_foreground_link_health_candidates_api(
+    limit: int = Query(100, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+    current_user: Dict[str, Any] = Depends(get_admin_user),
+) -> ForegroundLinkHealthCandidateList:
+    del current_user
+
+    try:
+        return ForegroundLinkHealthCandidateList(
+            **FOREGROUND_LINK_HEALTH.list_candidates(db, limit=limit, offset=offset)
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取前台失效候选失败: {exc}",
         ) from exc
 
 

@@ -1155,3 +1155,22 @@ class LinkCheckHistoryBatchDeleteResult(BaseModel):
     missing_check_times: List[str] = Field(default_factory=list)
 
 
+class ForegroundLinkHealthCandidateItem(BaseModel):
+    id: int
+    message_id: int
+    message_title: Optional[str] = None
+    message_timestamp: Optional[datetime] = None
+    netdisk_type: str
+    url: str
+    invalid_observations: int
+    first_invalid_at: datetime
+    last_checked_at: datetime
+    last_reason: Optional[str] = None
+    last_checker: Optional[str] = None
+
+
+class ForegroundLinkHealthCandidateList(BaseModel):
+    total: int
+    items: List[ForegroundLinkHealthCandidateItem]
+
+

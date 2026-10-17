@@ -732,3 +732,22 @@ export interface LinkCheckHistoryBatchDeleteResult {
   missing_check_times: string[]
 }
 
+export interface ForegroundLinkHealthCandidateItem {
+  id: number
+  message_id: number
+  message_title?: string | null
+  message_timestamp?: string | null
+  netdisk_type: string
+  url: string
+  invalid_observations: number
+  first_invalid_at: string
+  last_checked_at: string
+  last_reason?: string | null
+  last_checker?: string | null
+}
+
+export interface ForegroundLinkHealthCandidateList {
+  total: number
+  items: ForegroundLinkHealthCandidateItem[]
+}
+

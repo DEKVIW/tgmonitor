@@ -54,16 +54,25 @@ class _CacheEntry:
 
 
 class LinkCheckResultCache:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        cacheable_statuses: Optional[Iterable[str]] = None,
+        max_entries: Optional[int] = None,
+    ) -> None:
         self._entries: Dict[str, _CacheEntry] = {}
         self._lock = threading.RLock()
+        self._cacheable_statuses = frozenset(
+            cacheable_statuses if cacheable_statuses is not None else CACHEABLE_STATUSES
+        )
+        self._max_entries = max(1000, int(max_entries or MAX_CACHE_ENTRIES))
 
     def _prune_locked(self, now: float) -> None:
         expired_keys = [key for key, entry in self._entries.items() if entry.expires_at <= now]
         for key in expired_keys:
             self._entries.pop(key, None)
 
-        overflow = len(self._entries) - MAX_CACHE_ENTRIES
+        overflow = len(self._entries) - self._max_entries
         if overflow <= 0:
             return
 
@@ -102,7 +111,7 @@ class LinkCheckResultCache:
         *,
         ttl_seconds: Optional[int] = None,
     ) -> None:
-        if not should_cache_status(result.status):
+        if result.status not in self._cacheable_statuses:
             return
 
         unique_keys = [key for key in dict.fromkeys(keys) if key]
@@ -117,7 +126,7 @@ class LinkCheckResultCache:
         with self._lock:
             for key in unique_keys:
                 self._entries[key] = entry
-            if len(self._entries) > MAX_CACHE_ENTRIES:
+            if len(self._entries) > self._max_entries:
                 self._prune_locked(now)
 
 

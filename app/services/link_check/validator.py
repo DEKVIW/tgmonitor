@@ -30,11 +30,22 @@ class LinkCheckStopped(RuntimeError):
 
 
 class LinkValidator:
-    def __init__(self, *, timeout: float = 15.0):
+    def __init__(
+        self,
+        *,
+        timeout: float = 15.0,
+        result_cache=None,
+        use_history: bool = True,
+        enable_inflight: bool = False,
+    ):
         self.default_timeout = timeout
         self.resolver = LinkResolver()
         self.registry = CheckerRegistry(timeout=timeout)
-        self.result_cache = LINK_RESULT_CACHE
+        self.result_cache = result_cache or LINK_RESULT_CACHE
+        self.use_history = use_history
+        self.enable_inflight = enable_inflight
+        self._inflight_lock = asyncio.Lock()
+        self._inflight: Dict[str, asyncio.Future[LinkCheckResult]] = {}
         self.history_provider = LinkCheckHistoryProvider()
         self.error_counts: Dict[str, int] = {}
         self.max_errors_per_netdisk = 10
@@ -109,6 +120,9 @@ class LinkValidator:
         return None
 
     def _get_history_results(self, urls: List[str]) -> Dict[str, LinkCheckResult]:
+        if not self.use_history:
+            return {}
+
         raw_history_results = self.history_provider.get_recent_results(urls)
         history_results = {
             history_url: history_result
@@ -172,6 +186,50 @@ class LinkValidator:
 
         return last_result or checker.format_error_result(target, error="Unexpected retry state")
 
+    async def _execute_network_check(
+        self,
+        cache_key: str,
+        target: LinkTarget,
+        checker,
+        http_session: aiohttp.ClientSession,
+    ) -> Tuple[LinkCheckResult, bool]:
+        if not self.enable_inflight:
+            result = await self._execute_with_retry(target, checker, http_session)
+            self._store_result_in_cache(target, result)
+            return result, True
+
+        async with self._inflight_lock:
+            pending = self._inflight.get(cache_key)
+            if pending is None:
+                pending = asyncio.get_running_loop().create_future()
+                self._inflight[cache_key] = pending
+                is_owner = True
+            else:
+                is_owner = False
+
+        if not is_owner:
+            return await asyncio.shield(pending), False
+
+        try:
+            result = await self._execute_with_retry(target, checker, http_session)
+            self._store_result_in_cache(target, result)
+            if not pending.done():
+                pending.set_result(result)
+            return result, True
+        except asyncio.CancelledError:
+            result = checker.uncertain_result(
+                target,
+                reason=REASON_EXCEPTION,
+                error="检测任务被取消",
+            )
+            if not pending.done():
+                pending.set_result(result)
+            raise
+        finally:
+            async with self._inflight_lock:
+                if self._inflight.get(cache_key) is pending:
+                    self._inflight.pop(cache_key, None)
+
     async def check_single_link(self, url: str, timeout: int = 15) -> Dict:
         registry = self.registry if timeout == self.default_timeout else CheckerRegistry(timeout=timeout)
         normalized_url = normalize_candidate_url(url) or (url or "").strip()
@@ -180,10 +238,11 @@ class LinkValidator:
             if cached_result is not None:
                 return self._clone_result_for_url(cached_result, url=normalized_url)
 
-            history_results = self._get_history_results([normalized_url])
-            history_result = history_results.get(normalized_url)
-            if history_result is not None:
-                return self._clone_result_for_url(history_result, url=normalized_url)
+            if self.use_history:
+                history_results = self._get_history_results([normalized_url])
+                history_result = history_results.get(normalized_url)
+                if history_result is not None:
+                    return self._clone_result_for_url(history_result, url=normalized_url)
 
         async with await self._create_session(float(timeout)) as http_session:
             target = await self._prepare_target(url, http_session)
@@ -207,20 +266,21 @@ class LinkValidator:
                     netdisk_type=target.netdisk_type,
                 )
 
-            history_results = self._get_history_results(target_cache_keys)
-            history_result = None
-            for cache_key in target_cache_keys:
-                history_result = history_results.get(cache_key)
+            if self.use_history:
+                history_results = self._get_history_results(target_cache_keys)
+                history_result = None
+                for cache_key in target_cache_keys:
+                    history_result = history_results.get(cache_key)
+                    if history_result is not None:
+                        break
                 if history_result is not None:
-                    break
-            if history_result is not None:
-                self.result_cache.set(target_cache_keys, history_result)
-                return self._clone_result_for_url(
-                    history_result,
-                    url=target.original_url,
-                    resolved_url=target.resolved_url,
-                    netdisk_type=target.netdisk_type,
-                )
+                    self.result_cache.set(target_cache_keys, history_result)
+                    return self._clone_result_for_url(
+                        history_result,
+                        url=target.original_url,
+                        resolved_url=target.resolved_url,
+                        netdisk_type=target.netdisk_type,
+                    )
 
             checker = registry.get_checker(target.netdisk_type)
             result = await self._execute_with_retry(target, checker, http_session)
@@ -338,6 +398,7 @@ class LinkValidator:
                 await result_callback(
                     {
                         "checked": checked,
+                        "input_index": index,
                         "total": len(urls),
                         "source": source,
                         "url": output.get("url") or normalized_inputs[index],
@@ -476,12 +537,22 @@ class LinkValidator:
                 platform_limit = min(checker.get_concurrency_limit(), max(1, max_concurrent))
                 semaphore = asyncio.Semaphore(platform_limit)
 
-                async def check_group(group: Dict[str, object]) -> Tuple[Dict[str, object], LinkCheckResult]:
+                async def check_group(
+                    group: Dict[str, object],
+                ) -> Tuple[Dict[str, object], LinkCheckResult, bool]:
                     async with semaphore:
                         target = group["target"]
-                        result = await self._execute_with_retry(target, checker, http_session)
-                        self._store_result_in_cache(target, result)
-                        return group, result
+                        target_key = (
+                            f"{target.netdisk_type}:"
+                            f"{canonical_target_key(target.resolved_url, fallback=target.original_url)}"
+                        )
+                        result, executed_network = await self._execute_network_check(
+                            target_key,
+                            target,
+                            checker,
+                            http_session,
+                        )
+                        return group, result, executed_network
 
                 pending_groups = [group for group in groups if group.get("result") is None]
                 tasks = [asyncio.create_task(check_group(group)) for group in pending_groups]
@@ -489,11 +560,16 @@ class LinkValidator:
                     for task in asyncio.as_completed(tasks):
                         if await self._should_stop(should_stop):
                             raise LinkCheckStopped("task stop requested")
-                        group, result = await task
+                        group, result, executed_network = await task
                         for index in group["indices"]:
                             cloned_result = result.clone_for_input(normalized_inputs[index]).to_dict()
                             cloned_result["_input_index"] = index
-                            await finalize_result(index, cloned_result, source="network", target=group["target"])
+                            await finalize_result(
+                                index,
+                                cloned_result,
+                                source="network" if executed_network else "inflight",
+                                target=group["target"],
+                            )
                         self.error_counts[platform] = 0 if result.is_valid else self.error_counts.get(platform, 0) + 1
                         await report_progress()
                 except Exception:

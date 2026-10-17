@@ -723,6 +723,34 @@ class LinkCheckDetails(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class ForegroundLinkHealthCandidate(Base):
+    __tablename__ = "foreground_link_health_candidates"
+    __table_args__ = (
+        UniqueConstraint(
+            "message_id",
+            "netdisk_type",
+            "normalized_url_hash",
+            name="ux_foreground_link_health_message_target",
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    message_id = Column(Integer, ForeignKey("messages.id", ondelete="CASCADE"), nullable=False, index=True)
+    netdisk_type = Column(String(50), nullable=False, index=True)
+    url = Column(Text, nullable=False)
+    normalized_url = Column(Text, nullable=False)
+    normalized_url_hash = Column(String(64), nullable=False, index=True)
+    candidate_status = Column(String(32), nullable=False, default="pending", index=True)
+    invalid_observations = Column(Integer, nullable=False, default=0)
+    first_invalid_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    last_checked_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    last_reason = Column(String(200), nullable=True)
+    last_checker = Column(String(100), nullable=True)
+    last_response_time = Column(Float, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class LinkCheckPlan(Base):
     __tablename__ = "link_check_plans"
 
@@ -1118,6 +1146,7 @@ def ensure_runtime_storage_tables() -> None:
                 MessageLinkRef.__table__,
                 LinkClickEvent.__table__,
                 LinkTargetDailyStat.__table__,
+                ForegroundLinkHealthCandidate.__table__,
                 ChannelDailyStat.__table__,
                 ResourceCandidateProfile.__table__,
                 ResourceCandidateLog.__table__,
@@ -1309,6 +1338,10 @@ def _ensure_link_check_indexes() -> None:
         """
         CREATE INDEX IF NOT EXISTS ix_link_check_plans_enabled_next_run_priority
         ON link_check_plans (is_enabled, next_run_at, schedule_priority, id)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_foreground_link_health_candidates_status_checked
+        ON foreground_link_health_candidates (candidate_status, last_checked_at DESC)
         """,
     )
     with engine.begin() as connection:

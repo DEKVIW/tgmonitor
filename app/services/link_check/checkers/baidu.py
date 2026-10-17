@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import asyncio
+import re
 import time
 from urllib.parse import parse_qs, quote, urlparse
 
@@ -9,6 +10,10 @@ import aiohttp
 from ..constants import PLATFORM_BAIDU
 from ..result import REASON_NETWORK, REASON_TIMEOUT, LinkTarget
 from .base import BaseChecker
+
+
+_BAIDU_INVALID_ERRNOS = frozenset({-7, -8, -21, 105, 115, 117, 145})
+_BAIDU_REQUIRES_CODE_ERRNOS = frozenset({-9, -12})
 
 
 def _extract_share_id(url: str) -> tuple[str, bool]:
@@ -28,12 +33,16 @@ def _map_errno_message(errno: int, message: str) -> str:
         return "缺少提取码"
     if errno == -9:
         return "提取码错误"
+    if errno == -7:
+        return "分享不存在"
     if errno == -62:
         return "请求受限"
     if errno == -8:
         return "分享已过期"
     if errno == -21:
         return "分享已取消或不可访问"
+    if errno in {105, 115, 117, 145}:
+        return "分享不可用"
     if errno == -1:
         return "errno=-1"
     return f"errno={errno}"
@@ -43,20 +52,42 @@ def _looks_like_requires_code(message: str) -> bool:
     return "提取码" in (message or "")
 
 
-def _looks_like_invalid_share(message: str) -> bool:
-    text = message or ""
-    invalid_markers = (
-        "失效",
-        "取消",
-        "不存在",
-        "删除",
-        "过期",
-        "违规",
-        "封禁",
-        "受限",
-        "无法访问",
+def _looks_like_access_challenge(message: str) -> bool:
+    text = (message or "").strip().lower()
+    return any(
+        marker in text
+        for marker in (
+            "need verify",
+            "captcha",
+            "验证码",
+            "人机验证",
+            "安全验证",
+            "风控",
+            "请求受限",
+            "访问受限",
+        )
     )
-    return any(marker in text for marker in invalid_markers)
+
+
+def _looks_like_invalid_share(message: str) -> bool:
+    text = (message or "").strip()
+    explicit_markers = (
+        "分享的文件已经被取消",
+        "分享链接已过期",
+        "分享已过期",
+        "分享不存在",
+        "分享的文件不存在",
+        "文件已删除",
+        "分享已删除",
+        "啊哦，你来晚了",
+    )
+    if any(marker in text for marker in explicit_markers):
+        return True
+    if "此链接分享内容可能因为" in text and "无法访问" in text:
+        return True
+    return bool(
+        re.search(r"分享.*(?:违规|封禁).*(?:无法访问|失效|取消|删除)", text)
+    )
 
 
 class BaiduChecker(BaseChecker):
@@ -148,13 +179,7 @@ class BaiduChecker(BaseChecker):
                     password=password,
                 )
                 response_time = time.perf_counter() - started_at
-                if verify_errno == -9:
-                    return self.invalid_result(
-                        target,
-                        error=_map_errno_message(verify_errno, verify_message),
-                        response_time=response_time,
-                    )
-                if verify_errno == -12:
+                if verify_errno in _BAIDU_REQUIRES_CODE_ERRNOS:
                     return self.requires_code_result(
                         target,
                         error=_map_errno_message(verify_errno, verify_message),
@@ -167,16 +192,11 @@ class BaiduChecker(BaseChecker):
                         response_time=response_time,
                     )
                 if verify_errno not in {0, -1}:
-                    if verify_message:
-                        return self.invalid_result(
-                            target,
-                            error=_map_errno_message(verify_errno, verify_message),
-                            response_time=response_time,
-                        )
                     return self.uncertain_result(
                         target,
                         error=_map_errno_message(verify_errno, verify_message),
                         response_time=response_time,
+                        meta={"stage": "password_verify", "errno": verify_errno},
                     )
                 if verify_errno == -1:
                     cookie = ""
@@ -230,7 +250,9 @@ class BaiduChecker(BaseChecker):
                     response_time=response_time,
                     status_code=status_code,
                 )
-            if errno in {-8, -9, -21} or _looks_like_invalid_share(message):
+            if _looks_like_invalid_share(message) or (
+                errno in _BAIDU_INVALID_ERRNOS and not _looks_like_access_challenge(message)
+            ):
                 return self.invalid_result(
                     target,
                     error=_map_errno_message(errno, message),

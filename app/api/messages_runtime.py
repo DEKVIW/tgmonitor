@@ -18,12 +18,20 @@ from app.services.message_query_service import (
 from app.services.resource_ops import (
     build_tracked_link_payloads,
 )
+from app.services.foreground_link_health_service import (
+    FOREGROUND_LINK_HEALTH,
+    contains_any_link,
+    extract_netdisk_types,
+    filter_link_payload,
+    filter_tracked_links,
+)
 from app.services.security_service import SEARCH_CLEARANCE_HEADER, ensure_search_challenge_clearance
 from app.services.system_config_service import is_public_dashboard_enabled
 
 
 router = APIRouter(prefix="/api/messages", tags=["messages"])
 logger = logging.getLogger(__name__)
+_UNSET = object()
 
 PUBLIC_DASHBOARD_ALLOWED_TIME_RANGES = frozenset({"最近1小时", "最近24小时", "最近7天"})
 PUBLIC_DASHBOARD_MAX_AGE_DAYS = 7
@@ -57,13 +65,16 @@ def _enforce_public_dashboard_time_range(time_range: str) -> None:
 def _build_message_response(
     message: Any,
     tracked_links: Optional[List[Dict[str, Any]]] = None,
+    *,
+    links: Any = _UNSET,
+    netdisk_types: Any = _UNSET,
 ) -> MessageResponse:
     return MessageResponse(
         id=int(message.id),
         timestamp=message.timestamp,
         title=message.title,
         description=message.description,
-        links=message.links,
+        links=message.links if links is _UNSET else links,
         tracked_links=tracked_links or None,
         tags=message.tags,
         source=message.source,
@@ -71,7 +82,7 @@ def _build_message_response(
         group_name=message.group_name,
         bot=message.bot,
         created_at=message.created_at,
-        netdisk_types=message.netdisk_types,
+        netdisk_types=message.netdisk_types if netdisk_types is _UNSET else netdisk_types,
     )
 
 
@@ -151,15 +162,59 @@ async def get_messages(
             message_ids=[int(message.id) for message in messages if getattr(message, "id", None) is not None],
         )
 
+        invalid_by_message: Dict[int, set[str]] = {}
+        removed_message_ids: set[int] = set()
+        if search_query and search_query.strip():
+            try:
+                foreground_check = await FOREGROUND_LINK_HEALTH.check_messages(messages)
+                maintenance_result = FOREGROUND_LINK_HEALTH.record_observations(
+                    db,
+                    foreground_check.network_observations,
+                )
+                removed_message_ids = {
+                    int(message_id)
+                    for message_id in maintenance_result.get("deleted_message_ids", [])
+                }
+                invalid_by_message = foreground_check.invalid_by_message
+            except Exception:
+                logger.exception("foreground link health check failed; returning unfiltered search results")
+
+        visible_messages = []
+        hidden_page_message_ids: set[int] = set(removed_message_ids)
+        for message in messages:
+            message_id = int(message.id)
+            if message_id in removed_message_ids:
+                continue
+            invalid_urls = invalid_by_message.get(message_id, set())
+            filtered_links = filter_link_payload(message.links, invalid_urls)
+            if invalid_urls and not contains_any_link(filtered_links):
+                hidden_page_message_ids.add(message_id)
+                continue
+            visible_netdisk_types = (
+                extract_netdisk_types(filtered_links)
+                if invalid_urls
+                else _UNSET
+            )
+            visible_messages.append(
+                _build_message_response(
+                    message,
+                    filter_tracked_links(tracked_by_message.get(message_id), invalid_urls),
+                    links=filtered_links,
+                    netdisk_types=visible_netdisk_types,
+                )
+            )
+
+        page_message_ids = {int(message.id) for message in messages}
+        hidden_page_message_count = len(hidden_page_message_ids.intersection(page_message_ids))
+        visible_total = max(0, int(total) - hidden_page_message_count)
+        visible_max_page = max(1, (visible_total + page_size - 1) // page_size) if visible_total else 0
+
         return MessageListResponse(
-            messages=[
-                _build_message_response(message, tracked_by_message.get(int(message.id)))
-                for message in messages
-            ],
-            total=total,
+            messages=visible_messages,
+            total=visible_total,
             page=page,
             page_size=page_size,
-            max_page=max_page,
+            max_page=visible_max_page if hidden_page_message_ids.intersection(page_message_ids) else max_page,
         )
     except HTTPException:
         raise
