@@ -48,6 +48,7 @@ export interface MediaWallItem {
   link_count: number
   categories: MediaWallCategory[]
   sync_task_id?: number | null
+  last_content_updated_at?: string | null
   created_at?: string | null
   updated_at?: string | null
 }

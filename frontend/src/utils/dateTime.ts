@@ -43,3 +43,36 @@ export const formatServerDateTime = (
   }
   return parsed.format(format)
 }
+
+export const formatRelativeServerDateTime = (
+  value?: string | null,
+  targetTimezone: string = DEFAULT_DISPLAY_TIMEZONE
+) => {
+  const parsed = parseServerDateTime(value, targetTimezone)
+  if (!parsed) {
+    return ''
+  }
+
+  const now = dayjs().tz(targetTimezone)
+  const elapsedSeconds = Math.max(0, now.diff(parsed, 'second'))
+  if (elapsedSeconds < 60) {
+    return '刚刚'
+  }
+
+  const elapsedMinutes = Math.floor(elapsedSeconds / 60)
+  if (elapsedMinutes < 60) {
+    return `${elapsedMinutes}分钟前`
+  }
+
+  const elapsedHours = Math.floor(elapsedMinutes / 60)
+  if (elapsedHours < 24) {
+    return `${elapsedHours}小时前`
+  }
+
+  const elapsedDays = Math.floor(elapsedHours / 24)
+  if (elapsedDays < 7) {
+    return `${elapsedDays}天前`
+  }
+
+  return parsed.year() === now.year() ? parsed.format('M月D日') : parsed.format('YYYY年M月D日')
+}

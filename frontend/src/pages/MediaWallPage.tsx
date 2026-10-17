@@ -5,7 +5,7 @@ import { ArrowLeftOutlined, CloseOutlined, ExportOutlined, LinkOutlined, ReloadO
 
 import { getPublicMediaWall, getPublicMediaWallCategories, getPublicMediaWallItem } from '@/api/mediaWall'
 import type { MediaWallCategory, MediaWallItem } from '@/types/mediaWall'
-import { formatServerDateTime } from '@/utils/dateTime'
+import { formatRelativeServerDateTime, formatServerDateTime } from '@/utils/dateTime'
 import { sanitizeHtml } from '@/utils/safeHtml'
 
 import './MediaWallPage.css'
@@ -65,6 +65,14 @@ const MediaWallCard = ({ item, onClick }: { item: MediaWallItem; onClick: () => 
         ) : <PosterPlaceholder title={item.display_title} />}
         <div className="media-wall-card-overlay">
           <span>{item.link_count ? `${item.link_count} 个资源入口` : '暂无资源入口'}</span>
+          {item.last_content_updated_at ? (
+            <time
+              dateTime={item.last_content_updated_at}
+              title={`最后更新：${formatServerDateTime(item.last_content_updated_at, 'YYYY-MM-DD HH:mm', 'Asia/Shanghai')}`}
+            >
+              {formatRelativeServerDateTime(item.last_content_updated_at)}
+            </time>
+          ) : null}
         </div>
       </div>
       <div className="media-wall-card-body">
@@ -160,7 +168,7 @@ const MediaWallDetail = ({ item, onBack }: { item: MediaWallItem; onBack: () => 
         )}
       </section>
 
-      {item.updated_at ? <Text className="media-wall-detail-updated">条目更新于 {formatServerDateTime(item.updated_at, 'YYYY-MM-DD HH:mm', 'Asia/Shanghai')}</Text> : null}
+      {item.last_content_updated_at ? <Text className="media-wall-detail-updated">最近更新于 {formatServerDateTime(item.last_content_updated_at, 'YYYY-MM-DD HH:mm', 'Asia/Shanghai')}</Text> : null}
     </div>
   )
 }

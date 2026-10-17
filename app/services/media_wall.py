@@ -15,7 +15,7 @@ from threading import Lock
 from typing import Any, Iterable
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
-from sqlalchemy import func
+from sqlalchemy import and_, case, func, or_
 from sqlalchemy.orm import Session
 
 from app.models.models import (
@@ -148,6 +148,49 @@ def _build_progress(task: PanTransferSyncTask | None) -> dict[str, Any]:
         "share_status": task.current_share_status,
         "last_checked_at": task.last_checked_at,
     }
+
+
+def _parse_content_updated_at(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    if normalized.endswith("Z"):
+        normalized = f"{normalized[:-1]}+00:00"
+    try:
+        return datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+
+
+def _get_content_updated_at(task: PanTransferSyncTask | None) -> datetime | None:
+    """Return only the actual update time for an active, unfinished follow task."""
+    if task is None or str(task.status or "") != "active":
+        return None
+    applied_update_state = dict((task.extra_json or {}).get("applied_update_state") or {})
+    if str(applied_update_state.get("is_completed") or "").lower() == "true":
+        return None
+    return _parse_content_updated_at(applied_update_state.get("updated_at"))
+
+
+def _public_item_ordering() -> tuple[Any, ...]:
+    applied_update_state = func.jsonb_extract_path(PanTransferSyncTask.extra_json, "applied_update_state")
+    content_updated_at = func.jsonb_extract_path_text(applied_update_state, "updated_at")
+    is_completed = func.lower(func.jsonb_extract_path_text(applied_update_state, "is_completed"))
+    is_active_follow = and_(
+        PanTransferSyncTask.status == "active",
+        or_(is_completed.is_(None), is_completed != "true"),
+    )
+    has_content_update = and_(is_active_follow, content_updated_at.isnot(None))
+    return (
+        case((has_content_update, 0), else_=1).asc(),
+        case((has_content_update, content_updated_at), else_=None).desc().nullslast(),
+        MediaWallItem.sort_order.asc(),
+        MediaWallItem.id.desc(),
+    )
 
 
 def _validate_public_url(url: str) -> str:
@@ -309,6 +352,7 @@ def _serialize_item(session: Session, item: MediaWallItem, *, public: bool, incl
     categories = _get_categories_for_item(session, item.id, enabled_only=public)
     poster_url = item.custom_poster_url or metadata.get("poster_url") or None
     progress = _build_progress(task)
+    content_updated_at = _get_content_updated_at(task)
     serialized_links = [_serialize_link(link) for link in links]
     current_share_url = _canonical_link_url(task.current_share_url) if task and task.current_share_url else ""
     if current_share_url and is_http_url(current_share_url) and all(link["url"] != current_share_url for link in serialized_links):
@@ -345,6 +389,7 @@ def _serialize_item(session: Session, item: MediaWallItem, *, public: bool, incl
         "link_count": len(serialized_links),
         "categories": [_serialize_category(category) for category in categories],
         "sync_task_id": int(item.sync_task_id) if item.sync_task_id else None,
+        "last_content_updated_at": content_updated_at,
         "created_at": item.created_at,
         "updated_at": item.updated_at,
     }
@@ -395,7 +440,8 @@ def list_public_items(
     safe_page = max(1, int(page or 1))
     safe_size = min(max(1, int(page_size or 24)), 60)
     items = (
-        query.order_by(MediaWallItem.sort_order.asc(), MediaWallItem.updated_at.desc(), MediaWallItem.id.desc())
+        query.outerjoin(PanTransferSyncTask, PanTransferSyncTask.id == MediaWallItem.sync_task_id)
+        .order_by(*_public_item_ordering())
         .offset((safe_page - 1) * safe_size)
         .limit(safe_size)
         .all()

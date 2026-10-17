@@ -81,6 +81,7 @@ class MediaWallItemResponse(BaseModel):
     link_count: int
     categories: list[MediaWallCategoryResponse]
     sync_task_id: Optional[int] = None
+    last_content_updated_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
