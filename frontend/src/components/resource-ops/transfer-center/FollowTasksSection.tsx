@@ -70,6 +70,7 @@ type DirectoryTrailItem = {
 
 type FollowTaskSettingsDraft = {
   taskId: number
+  inspection_weekdays_input: string
   inspection_schedule: PanTransferFollowTaskInspectionSchedule
   candidate_policy: PanTransferFollowTaskCandidatePolicy
   automation: PanTransferFollowTaskAutomationConfig
@@ -133,6 +134,16 @@ const parseFollowScheduleTime = (value: string) => {
   const [hour, minute] = value.split(':').map(Number)
   return dayjs().hour(Number.isFinite(hour) ? hour : 0).minute(Number.isFinite(minute) ? minute : 0).second(0).millisecond(0)
 }
+
+const parseFollowWeekdaysInput = (value: string) => {
+  const tokens = value.trim() ? value.trim().split(/[,，、;；/|\s]+/).filter(Boolean) : []
+  const weekdays = [...new Set(tokens.filter((token) => /^[1-7]$/.test(token)).map(Number))].sort((left, right) => left - right)
+  return {
+    weekdays,
+    hasInvalidToken: tokens.some((token) => !/^[1-7]$/.test(token)),
+  }
+}
+
 const DEFAULT_FOLLOW_AUTOMATION_CONFIG: PanTransferFollowTaskAutomationConfig = {
   enabled: false,
   mode: 'auto_incremental',
@@ -1019,6 +1030,7 @@ const getFollowAppliedUpdateModeLabel = (state: Partial<PanTransferFollowTaskApp
 
 const buildFollowSettingsDraft = (task: PanTransferFollowTaskItem): FollowTaskSettingsDraft => ({
   taskId: task.id,
+  inspection_weekdays_input: (task.inspection_schedule?.weekdays || DEFAULT_FOLLOW_INSPECTION_SCHEDULE.weekdays).join(','),
   inspection_schedule: {
     ...DEFAULT_FOLLOW_INSPECTION_SCHEDULE,
     ...(task.inspection_schedule || {}),
@@ -1465,10 +1477,22 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
 
   const saveTaskSettings = async () => {
     if (!detailTask || !settingsDraft) return
+    const parsedWeekdays = parseFollowWeekdaysInput(settingsDraft.inspection_weekdays_input)
+    if (parsedWeekdays.hasInvalidToken) {
+      message.error('更新日只能填写 1-7，并使用逗号、顿号、空格等分隔符')
+      return
+    }
+    if (settingsDraft.inspection_schedule.enabled && parsedWeekdays.weekdays.length === 0) {
+      message.error('启用定时巡检时，请至少填写一个更新日')
+      return
+    }
     setSavingSettingsTaskId(detailTask.id)
     try {
       const response = await updatePanTransferFollowTaskSettings(detailTask.id, {
-        inspection_schedule: settingsDraft.inspection_schedule,
+        inspection_schedule: {
+          ...settingsDraft.inspection_schedule,
+          weekdays: parsedWeekdays.weekdays,
+        },
         candidate_policy: settingsDraft.candidate_policy,
         automation: settingsDraft.automation,
         applied_update_state: settingsDraft.applied_update_state,
@@ -2033,6 +2057,21 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
       }
     })
   }
+  const updateInspectionWeekdaysInput = (value: string) => {
+    if (!detailTask) return
+    const parsedWeekdays = parseFollowWeekdaysInput(value)
+    setSettingsDraft((current) => {
+      const base = current && current.taskId === detailTask.id ? current : buildFollowSettingsDraft(detailTask)
+      return {
+        ...base,
+        inspection_weekdays_input: value,
+        inspection_schedule: {
+          ...base.inspection_schedule,
+          weekdays: parsedWeekdays.weekdays,
+        },
+      }
+    })
+  }
   const updateCandidatePolicyDraft = (
     updater: (policy: PanTransferFollowTaskCandidatePolicy) => PanTransferFollowTaskCandidatePolicy
   ) => {
@@ -2411,26 +2450,15 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
                       </Checkbox>
                     </div>
                     <div className="resource-ops-follow-inspection-grid">
-                      <div className="resource-ops-follow-settings-field resource-ops-follow-settings-field--wide">
+                      <div className="resource-ops-follow-settings-field">
                         <label>更新日</label>
-                        <Checkbox.Group
-                          className="resource-ops-follow-weekday-group"
-                          options={[
-                            { label: '周一', value: 1 },
-                            { label: '周二', value: 2 },
-                            { label: '周三', value: 3 },
-                            { label: '周四', value: 4 },
-                            { label: '周五', value: 5 },
-                            { label: '周六', value: 6 },
-                            { label: '周日', value: 7 },
-                          ]}
-                          value={activeSettingsDraft.inspection_schedule.weekdays}
-                          onChange={(values) =>
-                            updateInspectionScheduleDraft((schedule) => ({
-                              ...schedule,
-                              weekdays: values.map((value) => Number(value)),
-                            }))
-                          }
+                        <Input
+                          addonBefore="周"
+                          className="resource-ops-follow-weekday-input"
+                          value={activeSettingsDraft.inspection_weekdays_input}
+                          placeholder="1,3,5"
+                          allowClear
+                          onChange={(event) => updateInspectionWeekdaysInput(event.target.value)}
                         />
                       </div>
                       <div className="resource-ops-follow-settings-field">

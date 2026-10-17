@@ -1027,15 +1027,8 @@
   align-items: center;
 }
 
-.resource-ops-follow-weekday-group {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px 10px;
-}
-
-.resource-ops-follow-weekday-group .ant-checkbox-wrapper {
-  margin-inline-start: 0;
-  white-space: nowrap;
+.resource-ops-follow-weekday-input {
+  min-width: 0;
 }
 
 .resource-ops-follow-time-range {
