@@ -78,8 +78,8 @@ _QUALITY_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("DTS", re.compile(r"\bDTS\b", re.IGNORECASE)),
     ("DDP5.1", re.compile(r"\b(?:DDP|DD)\s*5\.1\b", re.IGNORECASE)),
 )
-_SEASON_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"(?<![A-Za-z0-9])S(?:EASON\s*)?0*([1-9][0-9]?)(?=E|\b)", re.IGNORECASE),
+_SEMANTIC_SEASON_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"(?<![A-Za-z0-9])Season\s*0*([1-9][0-9]?)(?!\d)", re.IGNORECASE),
     re.compile(r"第\s*([零一二三四五六七八九十百两\d]{1,4})\s*季"),
     re.compile(r"年番\s*([0-9]{1,2})", re.IGNORECASE),
 )
@@ -282,9 +282,9 @@ def _extract_leading_quality_episode(text: str) -> tuple[bool, int | None]:
     return False, None
 
 
-def _extract_season_quick(text: str) -> int | None:
+def _extract_semantic_season_quick(text: str) -> int | None:
     normalized = _normalize_text(text, max_length=500)
-    for pattern in _SEASON_PATTERNS:
+    for pattern in _SEMANTIC_SEASON_PATTERNS:
         matched = pattern.search(normalized)
         if matched is None:
             continue
@@ -357,9 +357,17 @@ def _build_parse_title(entry: _FileEntry) -> str:
     return " / ".join([*parent_context, stem]) if parent_context else stem
 
 
+def _extract_entry_context_season(entry: _FileEntry) -> int | None:
+    for value in (entry.parent_name, entry.relative_parent_path, entry.parent_path):
+        season = _extract_semantic_season_quick(str(value or ""))
+        if season is not None:
+            return season
+    return None
+
+
 def _extract_first_season_hint(*values: Any) -> int | None:
     for raw_value in values:
-        season = _extract_season_quick(str(raw_value or ""))
+        season = _extract_semantic_season_quick(str(raw_value or ""))
         if season is not None:
             return int(season)
     return None
@@ -396,7 +404,7 @@ def _is_likely_disguised_video_entry(
     if not any(abs(int(value) - tracked_episode) <= _DISGUISED_VIDEO_MAX_EPISODE_DISTANCE for value in episode_numbers):
         return False
 
-    quick_season = _extract_season_quick(quick_parse_title)
+    quick_season = _extract_entry_context_season(entry) or _extract_semantic_season_quick(quick_parse_title)
     if tracked_season is not None and quick_season is not None and quick_season != tracked_season:
         return False
     return True
@@ -430,8 +438,8 @@ def _full_parse_entry(entry: _FileEntry, *, tracked_keys: set[str], tracked_seas
     entry.core_title = identity.core_title
     entry.confidence = float(identity.confidence or 0.0)
     entry.title_match_score = float(match_score)
-    entry.quick_season = entry.quick_season or identity.season
-    entry.season = identity.season or entry.quick_season
+    entry.quick_season = entry.quick_season or _extract_semantic_season_quick(_build_parse_title(entry))
+    entry.season = entry.quick_season
     entry.quick_episode_numbers = list(entry.quick_episode_numbers or resolved_episodes)
     entry.episode_numbers = resolved_episodes
     if not entry.quality_tags:
@@ -1078,7 +1086,7 @@ def _prepare_quick_entries(
         quick_parse_title = _build_parse_title(entry)
         entry.is_video = True
         entry.quick_episode_numbers = file_episode_numbers or _extract_episode_numbers_quick(quick_parse_title)
-        entry.quick_season = _extract_season_quick(quick_parse_title)
+        entry.quick_season = _extract_entry_context_season(entry) or _extract_semantic_season_quick(quick_parse_title)
         entry.quality_tags = _extract_quality_tags(entry.name)
         if is_disguised_video:
             entry.parse_reason = "disguised_extension"

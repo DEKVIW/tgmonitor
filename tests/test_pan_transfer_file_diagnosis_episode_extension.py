@@ -87,6 +87,70 @@ class FileDiagnosisEpisodeExtensionTests(unittest.TestCase):
         self.assertEqual(recommended_episodes, [43])
         self.assertEqual(stop_reason, "contiguous_window_hit")
 
+    def test_s01e_episode_uses_semantic_parent_directory_season(self) -> None:
+        entry = _FileEntry(
+            side="source",
+            name="凡人修仙传 S01E196 2160p.mp4",
+            entry_id="196",
+            path="/FANREN/年番4/凡人修仙传 S01E196 2160p.mp4",
+            parent_entry_id="season-4",
+            parent_path="/FANREN/年番4",
+            parent_name="年番4",
+            relative_parent_path="FANREN/年番4",
+            updated_at=None,
+            size_bytes=None,
+            extension=".mp4",
+            scan_order=1,
+        )
+        stats = _DiagnosisStats()
+        tracked_keys = _build_tracked_keys({"resource_title": "凡人修仙传"})
+
+        videos = _prepare_quick_entries(
+            [entry],
+            stats=stats,
+            tracked_keys=tracked_keys,
+            tracked_episode=195,
+            tracked_season=4,
+        )
+        _full_parse_entry(videos[0], tracked_keys=tracked_keys, tracked_season=4)
+
+        self.assertEqual(videos[0].quick_episode_numbers, [196])
+        self.assertEqual(videos[0].quick_season, 4)
+        self.assertEqual(videos[0].season, 4)
+        self.assertTrue(videos[0].accepted)
+
+    def test_s01e_episode_without_semantic_directory_has_no_season(self) -> None:
+        entry = _FileEntry(
+            side="source",
+            name="凡人修仙传 S01E196 2160p.mp4",
+            entry_id="196",
+            path="/FANREN/凡人修仙传 S01E196 2160p.mp4",
+            parent_entry_id="fanren",
+            parent_path="/FANREN",
+            parent_name="FANREN",
+            relative_parent_path="FANREN",
+            updated_at=None,
+            size_bytes=None,
+            extension=".mp4",
+            scan_order=1,
+        )
+        stats = _DiagnosisStats()
+        tracked_keys = _build_tracked_keys({"resource_title": "凡人修仙传"})
+
+        videos = _prepare_quick_entries(
+            [entry],
+            stats=stats,
+            tracked_keys=tracked_keys,
+            tracked_episode=195,
+            tracked_season=4,
+        )
+        _full_parse_entry(videos[0], tracked_keys=tracked_keys, tracked_season=4)
+
+        self.assertEqual(videos[0].quick_episode_numbers, [196])
+        self.assertIsNone(videos[0].quick_season)
+        self.assertIsNone(videos[0].season)
+        self.assertTrue(videos[0].accepted)
+
 
 if __name__ == "__main__":
     unittest.main()
