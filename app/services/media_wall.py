@@ -470,6 +470,32 @@ def list_public_categories(session: Session) -> list[dict[str, Any]]:
     ]
 
 
+def _public_link_exists_filter() -> Any:
+    current_share_invalid = exists().where(
+        PanTransferSyncTask.id == MediaWallItem.sync_task_id,
+        PanTransferSyncTask.status == "active",
+        PanTransferSyncTask.current_share_status == "invalid",
+        PanTransferSyncTask.current_share_url == MediaWallLink.url,
+    ).correlate(MediaWallItem, MediaWallLink)
+    return or_(
+        exists().where(
+            MediaWallLink.item_id == MediaWallItem.id,
+            MediaWallLink.is_enabled.is_(True),
+            MediaWallLink.last_status != "invalid",
+            ~current_share_invalid,
+        ).correlate(MediaWallItem),
+        exists().where(
+            PanTransferSyncTask.id == MediaWallItem.sync_task_id,
+            PanTransferSyncTask.status != "deleted",
+            PanTransferSyncTask.current_share_url.isnot(None),
+            or_(
+                PanTransferSyncTask.status != "active",
+                PanTransferSyncTask.current_share_status != "invalid",
+            ),
+        ).correlate(MediaWallItem),
+    )
+
+
 def list_public_items(
     session: Session,
     *,
@@ -498,29 +524,7 @@ def list_public_items(
         query = query.join(MediaWallItemCategory, MediaWallItemCategory.item_id == MediaWallItem.id).filter(
             MediaWallItemCategory.category_id == category.id
         )
-    public_link_exists = or_(
-        exists().where(
-            MediaWallLink.item_id == MediaWallItem.id,
-            MediaWallLink.is_enabled.is_(True),
-            MediaWallLink.last_status != "invalid",
-            ~exists().where(
-                PanTransferSyncTask.id == MediaWallItem.sync_task_id,
-                PanTransferSyncTask.status == "active",
-                PanTransferSyncTask.current_share_status == "invalid",
-                PanTransferSyncTask.current_share_url == MediaWallLink.url,
-            ),
-        ),
-        exists().where(
-            PanTransferSyncTask.id == MediaWallItem.sync_task_id,
-            PanTransferSyncTask.status != "deleted",
-            PanTransferSyncTask.current_share_url.isnot(None),
-            or_(
-                PanTransferSyncTask.status != "active",
-                PanTransferSyncTask.current_share_status != "invalid",
-            ),
-        ),
-    )
-    query = query.filter(public_link_exists)
+    query = query.filter(_public_link_exists_filter())
     total = int(query.count() or 0)
     safe_page = max(1, int(page or 1))
     safe_size = min(max(1, int(page_size or 24)), 60)

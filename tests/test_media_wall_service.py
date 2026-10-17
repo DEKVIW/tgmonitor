@@ -4,14 +4,17 @@ import os
 import unittest
 from datetime import datetime, timedelta
 
+from sqlalchemy import select
+from sqlalchemy.dialects import postgresql
+
 os.environ.setdefault("TELEGRAM_API_ID", "1")
 os.environ.setdefault("TELEGRAM_API_HASH", "test-hash")
 os.environ.setdefault("DATABASE_URL", "postgresql://user:password@127.0.0.1:5432/tg_monitor")
 os.environ.setdefault("DEFAULT_CHANNELS", "test")
 os.environ.setdefault("SECRET_SALT", "test-salt")
 
-from app.models.models import AiProviderConfig, MediaWallItem, MediaWallLink
-from app.services.media_wall import MEDIA_WALL_VISIBILITIES, _build_import_preview, _fingerprint_url, _normalize_title, _serialize_link_health
+from app.models.models import AiProviderConfig, MediaWallItem, MediaWallLink, PanTransferSyncTask
+from app.services.media_wall import MEDIA_WALL_VISIBILITIES, _build_import_preview, _fingerprint_url, _normalize_title, _public_link_exists_filter, _serialize_link_health
 from app.services.media_wall_link_health import _next_check_at
 
 
@@ -63,6 +66,16 @@ class MediaWallServiceTests(unittest.TestCase):
         checked_at = datetime(2026, 10, 17, 12, 0, 0)
         self.assertEqual(_next_check_at("invalid", checked_at), checked_at + timedelta(minutes=10))
         self.assertEqual(_next_check_at("valid", checked_at), checked_at + timedelta(days=1))
+
+    def test_public_link_filter_compiles_with_sync_task_join(self) -> None:
+        statement = (
+            select(MediaWallItem)
+            .outerjoin(PanTransferSyncTask, PanTransferSyncTask.id == MediaWallItem.sync_task_id)
+            .where(_public_link_exists_filter())
+        )
+        compiled = str(statement.compile(dialect=postgresql.dialect()))
+        self.assertIn("FROM media_wall_links", compiled)
+        self.assertIn("FROM pan_transfer_sync_tasks", compiled)
 
 
 if __name__ == "__main__":
