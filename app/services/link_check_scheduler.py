@@ -4,6 +4,8 @@ import logging
 import threading
 
 from app.services.link_check_plan_service import claim_due_link_check_plan_runs
+from app.services.media_wall_link_health import run_due_media_wall_link_checks
+from app.services.link_check_runtime import get_active_task_snapshot
 
 
 logger = logging.getLogger(__name__)
@@ -16,7 +18,9 @@ _scheduler_thread: threading.Thread | None = None
 def _scheduler_loop() -> None:
     while not _scheduler_stop_event.is_set():
         try:
-            claim_due_link_check_plan_runs(limit=1)
+            claimed = claim_due_link_check_plan_runs(limit=1)
+            if not claimed and get_active_task_snapshot() is None:
+                run_due_media_wall_link_checks()
         except Exception:
             logger.exception("Link check scheduler tick failed")
         _scheduler_stop_event.wait(30)

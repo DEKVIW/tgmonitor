@@ -33,6 +33,7 @@ from app.services.media_wall import (
     create_category,
     create_item,
     create_source,
+    delete_item_link,
     delete_item,
     delete_items,
     disable_category,
@@ -243,6 +244,7 @@ async def update_admin_media_wall_item(
             category_ids=payload.category_ids,
             sync_task_id=payload.sync_task_id,
             custom_poster_url=payload.custom_poster_url,
+            links=[item.model_dump() for item in payload.links] if payload.links is not None else None,
             operator=_operator(current_user),
         )
         db.commit()
@@ -335,6 +337,25 @@ async def update_admin_media_wall_link(
             is_enabled=payload.is_enabled,
             is_primary=payload.is_primary,
         )
+        db.commit()
+        return MediaWallLinkResponse(**result)
+    except LookupError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.delete("/api/admin/media-wall/links/{link_id}", response_model=MediaWallLinkResponse, summary="删除影视墙链接")
+async def delete_admin_media_wall_link(
+    link_id: int,
+    db: Session = Depends(get_db),
+    current_user: Dict[str, Any] = Depends(get_admin_user),
+) -> MediaWallLinkResponse:
+    del current_user
+    try:
+        result = delete_item_link(db, link_id=link_id)
         db.commit()
         return MediaWallLinkResponse(**result)
     except LookupError as exc:

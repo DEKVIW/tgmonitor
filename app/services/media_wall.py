@@ -10,12 +10,12 @@ import socket
 import time
 import urllib.error
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timedelta
 from threading import Lock
 from typing import Any, Iterable
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
-from sqlalchemy import and_, case, func, or_
+from sqlalchemy import and_, case, exists, func, or_
 from sqlalchemy.orm import Session
 
 from app.models.models import (
@@ -98,6 +98,37 @@ def _serialize_link(link: MediaWallLink) -> dict[str, Any]:
         "source_type": link.source_type,
         "last_checked_at": link.last_checked_at,
         "last_status": link.last_status,
+        "invalid_streak": int(link.invalid_streak or 0),
+        "next_check_at": link.next_check_at,
+        "last_error_message": link.last_error_message,
+    }
+
+
+def _serialize_link_health(links: list[dict[str, Any]]) -> dict[str, Any]:
+    total = len(links)
+    enabled = sum(1 for link in links if link.get("is_enabled"))
+    valid = sum(1 for link in links if str(link.get("last_status") or "unknown").lower() in {"valid", "healthy"})
+    invalid = sum(1 for link in links if str(link.get("last_status") or "unknown").lower() == "invalid")
+    pending = sum(1 for link in links if str(link.get("last_status") or "unknown").lower() in {"unknown", "checking"})
+    uncertain = max(0, total - valid - invalid - pending)
+    if not total:
+        status = "no_links"
+    elif valid:
+        status = "valid"
+    elif invalid == total:
+        status = "invalid"
+    elif uncertain:
+        status = "uncertain"
+    else:
+        status = "pending"
+    return {
+        "total": total,
+        "enabled": enabled,
+        "valid": valid,
+        "invalid": invalid,
+        "pending": pending,
+        "uncertain": uncertain,
+        "status": status,
     }
 
 
@@ -348,14 +379,41 @@ def _get_links_for_item(session: Session, item_id: int, *, enabled_only: bool = 
 def _serialize_item(session: Session, item: MediaWallItem, *, public: bool, include_metadata: bool) -> dict[str, Any]:
     task = session.get(PanTransferSyncTask, item.sync_task_id) if item.sync_task_id else None
     metadata = _fetch_metadata(session, item.metadata_query_title) if include_metadata else {}
-    links = _get_links_for_item(session, item.id, enabled_only=public)
+    links = _get_links_for_item(session, item.id, enabled_only=False)
     categories = _get_categories_for_item(session, item.id, enabled_only=public)
     poster_url = item.custom_poster_url or metadata.get("poster_url") or None
     progress = _build_progress(task)
     content_updated_at = _get_content_updated_at(task)
-    serialized_links = [_serialize_link(link) for link in links]
+    serialized_links: list[dict[str, Any]] = []
     current_share_url = _canonical_link_url(task.current_share_url) if task and task.current_share_url else ""
-    if current_share_url and is_http_url(current_share_url) and all(link["url"] != current_share_url for link in serialized_links):
+    task_is_active = bool(task and str(task.status or "") == "active")
+    task_share_status = str(task.current_share_status or "unknown").lower() if task else "unknown"
+    task_share_enabled = not task_is_active or task_share_status != "invalid"
+    for link in links:
+        serialized_link = _serialize_link(link)
+        if current_share_url and serialized_link["url"] == current_share_url and task and task.status != "deleted":
+            serialized_link.update(
+                {
+                    "source_type": "sync",
+                    "last_checked_at": task.last_checked_at,
+                    "last_status": task_share_status if task_is_active else "unknown",
+                    "is_enabled": task_share_enabled,
+                    "invalid_streak": 0,
+                    "next_check_at": None,
+                    "last_error_message": None,
+                }
+            )
+        if public and (not serialized_link["is_enabled"] or serialized_link["last_status"] == "invalid"):
+            continue
+        serialized_links.append(serialized_link)
+    if (
+        current_share_url
+        and is_http_url(current_share_url)
+        and task
+        and task.status != "deleted"
+        and all(link["url"] != current_share_url for link in serialized_links)
+        and (not public or task_share_enabled)
+    ):
         serialized_links.insert(
             0,
             {
@@ -367,7 +425,10 @@ def _serialize_item(session: Session, item: MediaWallItem, *, public: bool, incl
                 "is_enabled": True,
                 "source_type": "sync",
                 "last_checked_at": task.last_checked_at,
-                "last_status": task.current_share_status,
+                "last_status": task_share_status if task_is_active else "unknown",
+                "invalid_streak": 0,
+                "next_check_at": None,
+                "last_error_message": None,
             },
         )
     return {
@@ -386,6 +447,7 @@ def _serialize_item(session: Session, item: MediaWallItem, *, public: bool, incl
         "actor": metadata.get("actor"),
         "progress": progress,
         "links": serialized_links,
+        "link_health": _serialize_link_health(serialized_links),
         "link_count": len(serialized_links),
         "categories": [_serialize_category(category) for category in categories],
         "sync_task_id": int(item.sync_task_id) if item.sync_task_id else None,
@@ -436,6 +498,29 @@ def list_public_items(
         query = query.join(MediaWallItemCategory, MediaWallItemCategory.item_id == MediaWallItem.id).filter(
             MediaWallItemCategory.category_id == category.id
         )
+    public_link_exists = or_(
+        exists().where(
+            MediaWallLink.item_id == MediaWallItem.id,
+            MediaWallLink.is_enabled.is_(True),
+            MediaWallLink.last_status != "invalid",
+            ~exists().where(
+                PanTransferSyncTask.id == MediaWallItem.sync_task_id,
+                PanTransferSyncTask.status == "active",
+                PanTransferSyncTask.current_share_status == "invalid",
+                PanTransferSyncTask.current_share_url == MediaWallLink.url,
+            ),
+        ),
+        exists().where(
+            PanTransferSyncTask.id == MediaWallItem.sync_task_id,
+            PanTransferSyncTask.status != "deleted",
+            PanTransferSyncTask.current_share_url.isnot(None),
+            or_(
+                PanTransferSyncTask.status != "active",
+                PanTransferSyncTask.current_share_status != "invalid",
+            ),
+        ),
+    )
+    query = query.filter(public_link_exists)
     total = int(query.count() or 0)
     safe_page = max(1, int(page or 1))
     safe_size = min(max(1, int(page_size or 24)), 60)
@@ -459,7 +544,10 @@ def get_public_item(session: Session, item_id: int) -> dict[str, Any]:
     item = session.query(MediaWallItem).filter(MediaWallItem.id == int(item_id), MediaWallItem.visibility == MEDIA_WALL_PUBLIC).first()
     if item is None:
         raise LookupError("影视条目不存在")
-    return _serialize_item(session, item, public=True, include_metadata=True)
+    serialized = _serialize_item(session, item, public=True, include_metadata=True)
+    if not serialized["links"]:
+        raise LookupError("影视条目暂无有效网盘入口")
+    return serialized
 
 
 def list_admin_categories(session: Session) -> list[dict[str, Any]]:
@@ -610,6 +698,100 @@ def _replace_item_categories(session: Session, *, item_id: int, category_ids: It
         session.add(MediaWallItemCategory(item_id=int(item_id), category_id=category_id, is_primary=category_id == primary))
 
 
+def _replace_item_links(session: Session, *, item_id: int, link_payloads: Iterable[dict[str, Any]]) -> None:
+    item = session.get(MediaWallItem, int(item_id))
+    if item is None:
+        raise LookupError("影视条目不存在")
+
+    normalized_payloads: list[dict[str, Any]] = []
+    seen_fingerprints: set[str] = set()
+    for payload in link_payloads:
+        clean_url = _canonical_link_url(str(payload.get("url") or ""))
+        if not is_http_url(clean_url):
+            raise ValueError("网盘链接格式无效")
+        fingerprint = _fingerprint_url(clean_url)
+        if fingerprint in seen_fingerprints:
+            continue
+        seen_fingerprints.add(fingerprint)
+        normalized_payloads.append(
+            {
+                "id": int(payload["id"]) if payload.get("id") is not None and int(payload["id"]) > 0 else None,
+                "url": clean_url,
+                "fingerprint": fingerprint,
+                "label": _clean_text(payload.get("label"), max_length=120) or None,
+                "source_type": str(payload.get("source_type") or "manual"),
+                "is_enabled": bool(payload.get("is_enabled", True)),
+                "is_primary": bool(payload.get("is_primary", False)),
+            }
+        )
+
+    existing_links = _get_links_for_item(session, int(item_id), enabled_only=False)
+    by_fingerprint = {str(link.url_fingerprint): link for link in existing_links}
+    by_id = {int(link.id): link for link in existing_links}
+    task = session.get(PanTransferSyncTask, item.sync_task_id) if item.sync_task_id else None
+    protected_url = ""
+    if task and task.status != "deleted" and task.current_share_url:
+        protected_url = _canonical_link_url(task.current_share_url)
+    requested_fingerprints: set[str] = set()
+    requested_links: list[MediaWallLink] = []
+
+    for payload in normalized_payloads:
+        requested_fingerprints.add(payload["fingerprint"])
+        if protected_url and payload["url"] == protected_url:
+            protected_link = by_fingerprint.get(payload["fingerprint"])
+            if protected_link is not None:
+                requested_links.append(protected_link)
+            continue
+
+        link = by_id.get(payload["id"]) if payload["id"] is not None else None
+        if link is not None and str(link.url_fingerprint) != payload["fingerprint"]:
+            link = None
+        if link is None:
+            link = by_fingerprint.get(payload["fingerprint"])
+        if link is None:
+            link = MediaWallLink(
+                item_id=int(item_id),
+                platform=detect_platform_from_url(payload["url"]),
+                url=payload["url"],
+                url_fingerprint=payload["fingerprint"],
+                label=payload["label"],
+                is_primary=payload["is_primary"],
+                is_enabled=payload["is_enabled"],
+                source_type=payload["source_type"] if payload["source_type"] in {"manual", "import"} else "manual",
+                last_status="unknown",
+            )
+            session.add(link)
+            session.flush()
+            by_fingerprint[payload["fingerprint"]] = link
+        else:
+            link.label = payload["label"]
+            link.is_enabled = payload["is_enabled"]
+            if link.source_type != "sync":
+                link.is_primary = payload["is_primary"]
+        requested_links.append(link)
+
+    for link in existing_links:
+        if link.source_type == "sync":
+            if protected_url and link.url == protected_url:
+                continue
+            session.delete(link)
+            continue
+        if protected_url and link.url == protected_url:
+            continue
+        if str(link.url_fingerprint) not in requested_fingerprints:
+            session.delete(link)
+
+    primary_link = next((link for link in requested_links if link.is_primary), None)
+    if primary_link is None:
+        primary_link = next((link for link in requested_links if link.is_enabled), None)
+    if primary_link is not None:
+        session.query(MediaWallLink).filter(
+            MediaWallLink.item_id == int(item_id),
+            MediaWallLink.id != primary_link.id,
+        ).update({MediaWallLink.is_primary: False}, synchronize_session=False)
+        primary_link.is_primary = True
+
+
 def _upsert_link(session: Session, *, item_id: int, url: str, label: str | None, source_type: str, is_primary: bool = False) -> MediaWallLink | None:
     clean_url = _canonical_link_url(url)
     if not is_http_url(clean_url):
@@ -628,13 +810,20 @@ def _upsert_link(session: Session, *, item_id: int, url: str, label: str | None,
             url_fingerprint=fingerprint,
             label=_clean_text(label, max_length=120) or None,
             is_primary=bool(is_primary),
-            source_type=source_type,
+            source_type=source_type if source_type in {"manual", "import"} else "manual",
         )
         session.add(link)
     else:
         link.is_enabled = True
+        link.invalid_streak = 0
+        link.next_check_at = None
+        link.last_checked_at = None
+        link.last_status = "unknown"
+        link.last_error_message = None
         if label:
             link.label = _clean_text(label, max_length=120)
+        if link.source_type != "sync" and source_type in {"manual", "import"}:
+            link.source_type = source_type
         if is_primary:
             link.is_primary = True
     session.flush()
@@ -679,7 +868,7 @@ def create_item(session: Session, *, display_title: str, metadata_query_title: s
     return _serialize_item(session, item, public=False, include_metadata=False)
 
 
-def update_item(session: Session, *, item_id: int, display_title: str, metadata_query_title: str | None, visibility: str, sort_order: int, category_ids: list[int], sync_task_id: int | None, custom_poster_url: str | None, operator: str) -> dict[str, Any]:
+def update_item(session: Session, *, item_id: int, display_title: str, metadata_query_title: str | None, visibility: str, sort_order: int, category_ids: list[int], sync_task_id: int | None, custom_poster_url: str | None, links: list[dict[str, Any]] | None, operator: str) -> dict[str, Any]:
     item = session.get(MediaWallItem, int(item_id))
     if item is None:
         raise LookupError("影视条目不存在")
@@ -698,6 +887,8 @@ def update_item(session: Session, *, item_id: int, display_title: str, metadata_
     item.custom_poster_url = _clean_text(custom_poster_url, max_length=1000) or None
     item.updated_by = operator
     _replace_item_categories(session, item_id=item.id, category_ids=category_ids)
+    if links is not None:
+        _replace_item_links(session, item_id=item.id, link_payloads=links)
     session.flush()
     return _serialize_item(session, item, public=False, include_metadata=False)
 
@@ -705,6 +896,8 @@ def update_item(session: Session, *, item_id: int, display_title: str, metadata_
 def add_item_link(session: Session, *, item_id: int, url: str, label: str | None, source_type: str, is_primary: bool) -> dict[str, Any]:
     if session.get(MediaWallItem, int(item_id)) is None:
         raise LookupError("影视条目不存在")
+    if source_type == "sync":
+        raise ValueError("追更同步链接由追更任务自动管理")
     link = _upsert_link(session, item_id=item_id, url=url, label=label, source_type=source_type, is_primary=is_primary)
     if link is None:
         raise ValueError("网盘链接格式无效")
@@ -715,21 +908,50 @@ def update_item_link(session: Session, *, link_id: int, url: str, label: str | N
     link = session.get(MediaWallLink, int(link_id))
     if link is None:
         raise LookupError("网盘链接不存在")
+    if link.source_type == "sync":
+        raise ValueError("追更同步链接由追更任务自动管理")
     clean_url = _canonical_link_url(url)
     if not is_http_url(clean_url):
         raise ValueError("网盘链接格式无效")
+    new_fingerprint = _fingerprint_url(clean_url)
+    conflict = session.query(MediaWallLink).filter(
+        MediaWallLink.item_id == link.item_id,
+        MediaWallLink.url_fingerprint == new_fingerprint,
+        MediaWallLink.id != link.id,
+    ).first()
+    if conflict is not None:
+        raise ValueError("该影视条目已经存在相同链接")
+    url_changed = link.url_fingerprint != new_fingerprint
     link.url = clean_url
     link.platform = detect_platform_from_url(clean_url)
-    link.url_fingerprint = _fingerprint_url(clean_url)
+    link.url_fingerprint = new_fingerprint
     link.label = _clean_text(label, max_length=120) or None
     link.is_enabled = bool(is_enabled)
     link.is_primary = bool(is_primary)
+    if url_changed:
+        link.last_checked_at = None
+        link.last_status = "unknown"
+        link.invalid_streak = 0
+        link.next_check_at = None
+        link.last_error_message = None
     if is_primary:
         session.query(MediaWallLink).filter(MediaWallLink.item_id == link.item_id, MediaWallLink.id != link.id).update(
             {MediaWallLink.is_primary: False}, synchronize_session=False
         )
     session.flush()
     return _serialize_link(link)
+
+
+def delete_item_link(session: Session, *, link_id: int) -> dict[str, Any]:
+    link = session.get(MediaWallLink, int(link_id))
+    if link is None:
+        raise LookupError("网盘链接不存在")
+    if link.source_type == "sync":
+        raise ValueError("追更同步链接由追更任务自动管理")
+    result = _serialize_link(link)
+    session.delete(link)
+    session.flush()
+    return result
 
 
 def list_sync_tasks(session: Session) -> list[dict[str, Any]]:
@@ -904,6 +1126,10 @@ def _parse_import_file(filename: str, content: bytes) -> dict[str, Any]:
 
 def preview_import(session: Session, *, filename: str, content: bytes, operator: str) -> dict[str, Any]:
     ensure_runtime_storage_tables()
+    session.query(MediaWallImportJob).filter(
+        MediaWallImportJob.status == "preview",
+        MediaWallImportJob.created_at < _now() - timedelta(hours=24),
+    ).delete(synchronize_session=False)
     preview = _parse_import_file(filename, content)
     file_hash = hashlib.sha256(content).hexdigest()
     job = MediaWallImportJob(
@@ -975,5 +1201,8 @@ def confirm_import(session: Session, *, job_id: int, category_ids: list[int], vi
         "updated_count": updated_count,
         "link_count": link_count,
     }
+    job_id = int(job.id)
+    summary = dict(job.summary_json)
+    session.delete(job)
     session.flush()
-    return {"job_id": int(job.id), "status": job.status, **job.summary_json}
+    return {"job_id": job_id, "status": "imported", **summary}

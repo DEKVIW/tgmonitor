@@ -98,6 +98,11 @@ export const updateMediaWallLink = async (linkId: number, payload: { url: string
   return response.data
 }
 
+export const deleteMediaWallLink = async (linkId: number): Promise<MediaWallLink> => {
+  const response = await apiClient.delete<MediaWallLink>(`/admin/media-wall/links/${linkId}`)
+  return response.data
+}
+
 export const getMediaWallSyncTasks = async (): Promise<MediaWallSyncTask[]> => {
   const response = await apiClient.get<MediaWallSyncTask[]>('/admin/media-wall/sync-tasks')
   return response.data

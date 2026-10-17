@@ -1,10 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Alert, Button, Card, Empty, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Switch, Table, Tabs, Tag, Upload, message } from 'antd'
 import type { UploadProps } from 'antd'
-import { DeleteOutlined, EditOutlined, PlusOutlined, ReloadOutlined, SafetyOutlined, UploadOutlined } from '@ant-design/icons'
+import { DeleteOutlined, EditOutlined, PlusOutlined, ReloadOutlined, SafetyOutlined, SearchOutlined, UploadOutlined } from '@ant-design/icons'
 
 import {
-  addMediaWallLink,
   confirmMediaWallImport,
   createMediaWallCategory,
   createMediaWallItem,
@@ -86,17 +85,18 @@ const MediaWallAdminPanel = () => {
   const [importCategoryIds, setImportCategoryIds] = useState<number[]>([])
   const [importVisibility, setImportVisibility] = useState('public')
   const [itemCategoryFilter, setItemCategoryFilter] = useState<number | undefined>()
+  const [itemSearch, setItemSearch] = useState('')
   const [selectedItemKeys, setSelectedItemKeys] = useState<number[]>([])
   const [itemForm] = Form.useForm<ItemFormValues>()
   const [categoryForm] = Form.useForm<CategoryFormValues>()
   const [sourceForm] = Form.useForm<SourceFormValues>()
 
-  const loadData = async (categoryId = itemCategoryFilter) => {
+  const loadData = async (categoryId = itemCategoryFilter, search = itemSearch) => {
     setLoading(true)
     try {
       const [categoryData, itemData, sourceData, taskData] = await Promise.all([
         getMediaWallCategories(),
-        getMediaWallItems({ category_id: categoryId }),
+        getMediaWallItems({ category_id: categoryId, search: search.trim() || undefined }),
         getMediaWallSources(),
         getMediaWallSyncTasks(),
       ])
@@ -135,6 +135,15 @@ const MediaWallAdminPanel = () => {
     setItemModalOpen(true)
   }
 
+  const removeLinkFromForm = (url: string) => {
+    const currentText = String(itemForm.getFieldValue('links_text') || '')
+    const nextText = currentText
+      .split(/\r?\n/)
+      .filter((line) => line.trim().split(/\t+|\s+\|\s+/, 1)[0] !== url)
+      .join('\n')
+    itemForm.setFieldValue('links_text', nextText)
+  }
+
   const submitItem = async (values: ItemFormValues) => {
     const payload = {
       display_title: values.display_title,
@@ -146,11 +155,9 @@ const MediaWallAdminPanel = () => {
       custom_poster_url: values.custom_poster_url || null,
     }
     try {
-      const item = editingItem ? await updateMediaWallItem(editingItem.id, payload) : await createMediaWallItem({ ...payload, links: parseLinks(values.links_text) })
-      if (editingItem) {
-        const newLinks = parseLinks(values.links_text).filter((link) => !editingItem.links.some((existing) => existing.url === link.url))
-        for (const link of newLinks) await addMediaWallLink(item.id, link)
-      }
+      const links = parseLinks(values.links_text)
+      if (editingItem) await updateMediaWallItem(editingItem.id, { ...payload, links })
+      else await createMediaWallItem({ ...payload, links })
       message.success(editingItem ? '影视条目已更新' : '影视条目已创建')
       setItemModalOpen(false)
       await loadData()
@@ -229,7 +236,20 @@ const MediaWallAdminPanel = () => {
   const itemColumns = [
     { title: '影视名称', dataIndex: 'display_title', render: (value: string, item: MediaWallItem) => <div><strong>{value}</strong><div className="media-wall-admin-subtitle">{item.progress.label}</div></div> },
     { title: '分类', dataIndex: 'categories', render: (value: MediaWallCategory[]) => <Space wrap>{value.map((category) => <Tag key={category.id}>{category.name}</Tag>)}</Space> },
-    { title: '链接', dataIndex: 'link_count', width: 80, render: (value: number) => `${value} 个` },
+    {
+      title: '链接有效性',
+      key: 'link_health',
+      width: 190,
+      render: (_: unknown, item: MediaWallItem) => (
+        <Space wrap size={[4, 4]}>
+          <Tag color={item.link_health.valid > 0 ? 'green' : undefined}>有效 {item.link_health.valid}</Tag>
+          {item.link_health.invalid > 0 ? <Tag color="red">失效 {item.link_health.invalid}</Tag> : null}
+          {item.link_health.pending > 0 ? <Tag>待检测 {item.link_health.pending}</Tag> : null}
+          {item.link_health.uncertain > 0 ? <Tag color="orange">待复核 {item.link_health.uncertain}</Tag> : null}
+          {!item.link_health.total ? <Tag>无链接</Tag> : null}
+        </Space>
+      ),
+    },
     { title: '状态', dataIndex: 'visibility', width: 90, render: (value: string) => <Tag color={value === 'public' ? 'green' : 'default'}>{value === 'public' ? '公开' : '隐藏'}</Tag> },
     {
       title: '操作',
@@ -284,6 +304,19 @@ const MediaWallAdminPanel = () => {
                 className="resource-ops-panel-card media-wall-admin-card"
                 extra={
                   <Space wrap>
+                    <Input.Search
+                      allowClear
+                      placeholder="按影视名称搜索"
+                      value={itemSearch}
+                      onChange={(event) => {
+                        const value = event.target.value
+                        setItemSearch(value)
+                        if (!value) void loadData(itemCategoryFilter, '')
+                      }}
+                      onSearch={(value) => void loadData(itemCategoryFilter, value)}
+                      enterButton={<SearchOutlined />}
+                      style={{ width: 220 }}
+                    />
                     <Select
                       allowClear
                       placeholder="按分类筛选"
@@ -292,7 +325,7 @@ const MediaWallAdminPanel = () => {
                       onChange={(value) => {
                         setItemCategoryFilter(value)
                         setSelectedItemKeys([])
-                        void loadData(value)
+                        void loadData(value, itemSearch)
                       }}
                       style={{ minWidth: 160 }}
                     />
@@ -337,7 +370,8 @@ const MediaWallAdminPanel = () => {
           <div className="media-wall-form-grid"><Form.Item name="visibility" label="公开状态"><Select options={[{ label: '公开', value: 'public' }, { label: '隐藏', value: 'hidden' }]} /></Form.Item><Form.Item name="sort_order" label="排序"><InputNumber className="media-wall-full-width" /></Form.Item></div>
           <div className="media-wall-form-grid"><Form.Item name="category_ids" label="分类"><Select mode="multiple" options={categoryOptions} /></Form.Item><Form.Item name="sync_task_id" label="绑定追更任务"><Select allowClear showSearch optionFilterProp="label" options={syncTaskOptions} /></Form.Item></div>
           <Form.Item name="custom_poster_url" label="人工海报地址"><Input placeholder="可选，优先于采集源海报" /></Form.Item>
-          <Form.Item name="links_text" label="网盘链接"><Input.TextArea rows={4} placeholder="每行一个链接；可用 Tab 或 | 添加备注" /></Form.Item>
+          <Form.Item name="links_text" label="网盘链接"><Input.TextArea rows={4} placeholder="每行一个链接；可用 Tab 或 | 添加备注；保存会同步删除已移除的手动/导入链接" /></Form.Item>
+          {editingItem?.links.length ? <Space wrap size={[6, 6]} className="media-wall-link-health-list">{editingItem.links.map((link) => <Space.Compact key={link.id}><Tag color={link.last_status === 'valid' ? 'green' : link.last_status === 'invalid' ? 'red' : 'orange'}>{link.source_type === 'sync' ? '追更自动' : link.platform} · {link.last_status === 'valid' ? '有效' : link.last_status === 'invalid' ? '失效' : '待检测'}</Tag><Button type="text" danger icon={<DeleteOutlined />} title="移除链接" aria-label="移除链接" disabled={link.source_type === 'sync'} onClick={() => removeLinkFromForm(link.url)} /></Space.Compact>)}</Space> : null}
         </Form>
       </Modal>
       <Modal open={categoryModalOpen} title={editingCategory ? '编辑分类' : '添加分类'} okText="保存" cancelText="取消" onOk={() => categoryForm.submit()} onCancel={() => setCategoryModalOpen(false)} destroyOnClose>

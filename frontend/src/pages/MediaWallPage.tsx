@@ -31,8 +31,24 @@ const getPlatformLabel = (platform: string) => {
     uc: 'UC 网盘',
     xunlei: '迅雷云盘',
     unknown: '其他网盘',
+    '夸克网盘': '夸克网盘',
+    '百度网盘': '百度网盘',
+    '阿里云盘': '阿里云盘',
+    '115网盘': '115 网盘',
+    '123云盘': '123 云盘',
+    '天翼云盘': '天翼云盘',
+    'UC网盘': 'UC 网盘',
+    '迅雷网盘': '迅雷网盘',
   }
   return labels[platform] || platform || '其他网盘'
+}
+
+const getLinkStatus = (status: string) => {
+  const normalized = status.toLowerCase()
+  if (normalized === 'valid' || normalized === 'healthy') return { label: '有效', color: 'green' as const }
+  if (normalized === 'requires_code') return { label: '需提取码', color: 'orange' as const }
+  if (normalized === 'rate_limited' || normalized === 'uncertain' || normalized === 'unknown') return { label: '待复核', color: 'orange' as const }
+  return { label: '待检测', color: 'default' as const }
 }
 
 const PosterPlaceholder = ({ title }: { title: string }) => (
@@ -84,7 +100,7 @@ const MediaWallCard = ({ item, onClick }: { item: MediaWallItem; onClick: () => 
 }
 
 const MediaWallDetail = ({ item, onBack }: { item: MediaWallItem; onBack: () => void }) => {
-  const enabledLinks = item.links.filter((link) => link.is_enabled)
+  const enabledLinks = item.links.filter((link) => link.is_enabled && link.last_status !== 'invalid')
   const progressLabel = item.progress.label.replace(/\s+/g, '')
   const showRemarks = item.remarks && !isProgressRemark(item.remarks, item.progress.episode)
   const metadataRows: Array<[string, string | null | undefined]> = [
@@ -148,10 +164,11 @@ const MediaWallDetail = ({ item, onBack }: { item: MediaWallItem; onBack: () => 
             {enabledLinks.map((link) => (
               <div key={link.id} className="media-wall-link-row">
                 <div>
-                  <strong>{getPlatformLabel(link.platform)}</strong>
+                  <div className="media-wall-link-title"><strong>{getPlatformLabel(link.platform)}</strong><Tag color={getLinkStatus(link.last_status).color}>{getLinkStatus(link.last_status).label}</Tag></div>
                   {link.source_type === 'sync' ? null : (
                     <span>{link.label || (link.is_primary ? '主链接' : '备用链接')}</span>
                   )}
+                  {link.source_type === 'sync' ? <span>追更任务自动管理</span> : null}
                 </div>
                 <Button
                   type="primary"

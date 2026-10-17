@@ -46,6 +46,19 @@ class MediaWallLinkResponse(BaseModel):
     source_type: str
     last_checked_at: Optional[datetime] = None
     last_status: str
+    invalid_streak: int = 0
+    next_check_at: Optional[datetime] = None
+    last_error_message: Optional[str] = None
+
+
+class MediaWallLinkHealthResponse(BaseModel):
+    total: int = 0
+    enabled: int = 0
+    valid: int = 0
+    invalid: int = 0
+    pending: int = 0
+    uncertain: int = 0
+    status: str = "no_links"
 
 
 class MediaWallLinkCreateRequest(BaseModel):
@@ -60,6 +73,11 @@ class MediaWallLinkUpdateRequest(BaseModel):
     label: Optional[str] = Field(default=None, max_length=120)
     is_enabled: bool = True
     is_primary: bool = False
+
+
+class MediaWallLinkSyncRequest(MediaWallLinkUpdateRequest):
+    id: Optional[int] = None
+    source_type: str = Field(default="manual", max_length=32)
 
 
 class MediaWallItemResponse(BaseModel):
@@ -78,6 +96,7 @@ class MediaWallItemResponse(BaseModel):
     actor: Optional[str] = None
     progress: MediaWallProgressResponse
     links: list[MediaWallLinkResponse]
+    link_health: MediaWallLinkHealthResponse
     link_count: int
     categories: list[MediaWallCategoryResponse]
     sync_task_id: Optional[int] = None
@@ -112,6 +131,7 @@ class MediaWallItemUpdateRequest(BaseModel):
     category_ids: list[int] = Field(default_factory=list)
     sync_task_id: Optional[int] = None
     custom_poster_url: Optional[str] = Field(default=None, max_length=1000)
+    links: Optional[list[MediaWallLinkSyncRequest]] = None
 
 
 class MediaWallItemBulkDeleteRequest(BaseModel):

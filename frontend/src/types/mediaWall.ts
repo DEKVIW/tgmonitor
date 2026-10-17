@@ -27,6 +27,19 @@ export interface MediaWallLink {
   source_type: string
   last_checked_at?: string | null
   last_status: string
+  invalid_streak: number
+  next_check_at?: string | null
+  last_error_message?: string | null
+}
+
+export interface MediaWallLinkHealth {
+  total: number
+  enabled: number
+  valid: number
+  invalid: number
+  pending: number
+  uncertain: number
+  status: string
 }
 
 export interface MediaWallItem {
@@ -45,6 +58,7 @@ export interface MediaWallItem {
   actor?: string | null
   progress: MediaWallProgress
   links: MediaWallLink[]
+  link_health: MediaWallLinkHealth
   link_count: number
   categories: MediaWallCategory[]
   sync_task_id?: number | null
@@ -61,9 +75,11 @@ export interface MediaWallListResponse {
 }
 
 export interface MediaWallItemLinkInput {
+  id?: number
   url: string
   label?: string
   source_type?: string
+  is_enabled?: boolean
   is_primary?: boolean
 }
 

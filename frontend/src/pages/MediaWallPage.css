@@ -352,6 +352,17 @@
   gap: 3px;
 }
 
+.media-wall-link-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.media-wall-link-title .ant-tag {
+  margin-inline-end: 0;
+}
+
 .media-wall-link-row > div > span {
   color: var(--text-muted);
   font-size: 12px;

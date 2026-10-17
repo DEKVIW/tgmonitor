@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import unittest
+from datetime import datetime, timedelta
 
 os.environ.setdefault("TELEGRAM_API_ID", "1")
 os.environ.setdefault("TELEGRAM_API_HASH", "test-hash")
@@ -9,8 +10,9 @@ os.environ.setdefault("DATABASE_URL", "postgresql://user:password@127.0.0.1:5432
 os.environ.setdefault("DEFAULT_CHANNELS", "test")
 os.environ.setdefault("SECRET_SALT", "test-salt")
 
-from app.models.models import AiProviderConfig, MediaWallItem
-from app.services.media_wall import MEDIA_WALL_VISIBILITIES, _build_import_preview, _fingerprint_url, _normalize_title
+from app.models.models import AiProviderConfig, MediaWallItem, MediaWallLink
+from app.services.media_wall import MEDIA_WALL_VISIBILITIES, _build_import_preview, _fingerprint_url, _normalize_title, _serialize_link_health
+from app.services.media_wall_link_health import _next_check_at
 
 
 class MediaWallServiceTests(unittest.TestCase):
@@ -38,6 +40,29 @@ class MediaWallServiceTests(unittest.TestCase):
             _fingerprint_url("https://pan.quark.cn/s/example#fragment"),
             _fingerprint_url("https://pan.quark.cn/s/example"),
         )
+
+    def test_media_wall_link_health_distinguishes_statuses(self) -> None:
+        health = _serialize_link_health([
+            {"is_enabled": True, "last_status": "valid"},
+            {"is_enabled": False, "last_status": "invalid"},
+            {"is_enabled": True, "last_status": "unknown"},
+        ])
+
+        self.assertEqual(health["total"], 3)
+        self.assertEqual(health["enabled"], 2)
+        self.assertEqual(health["valid"], 1)
+        self.assertEqual(health["invalid"], 1)
+        self.assertEqual(health["pending"], 1)
+        self.assertEqual(health["status"], "valid")
+
+    def test_media_wall_link_health_has_recheck_fields_and_intervals(self) -> None:
+        self.assertIn("invalid_streak", MediaWallLink.__table__.c)
+        self.assertIn("next_check_at", MediaWallLink.__table__.c)
+        self.assertIn("last_error_message", MediaWallLink.__table__.c)
+
+        checked_at = datetime(2026, 10, 17, 12, 0, 0)
+        self.assertEqual(_next_check_at("invalid", checked_at), checked_at + timedelta(minutes=10))
+        self.assertEqual(_next_check_at("valid", checked_at), checked_at + timedelta(days=1))
 
 
 if __name__ == "__main__":

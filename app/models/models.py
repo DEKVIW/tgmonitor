@@ -550,6 +550,9 @@ class MediaWallLink(Base):
     source_type = Column(String(32), nullable=False, default="manual", index=True)
     last_checked_at = Column(DateTime, nullable=True)
     last_status = Column(String(32), nullable=False, default="unknown", index=True)
+    invalid_streak = Column(Integer, nullable=False, default=0)
+    next_check_at = Column(DateTime, nullable=True, index=True)
+    last_error_message = Column(Text, nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -1189,6 +1192,7 @@ def ensure_runtime_storage_tables() -> None:
         _ensure_pan_transfer_columns()
         _ensure_ai_center_columns()
         _ensure_media_wall_visibility()
+        _ensure_media_wall_link_columns()
         _ensure_pan_transfer_indexes()
         _runtime_storage_checked = True
 
@@ -1272,6 +1276,28 @@ def _ensure_media_wall_visibility() -> None:
         )
 
 
+def _ensure_media_wall_link_columns() -> None:
+    inspector = inspect(engine)
+    try:
+        columns = {column["name"] for column in inspector.get_columns("media_wall_links")}
+    except Exception:
+        columns = set()
+
+    if not columns:
+        return
+
+    pending_alters = {
+        "invalid_streak": "ALTER TABLE media_wall_links ADD COLUMN invalid_streak INTEGER NOT NULL DEFAULT 0",
+        "next_check_at": "ALTER TABLE media_wall_links ADD COLUMN next_check_at TIMESTAMP",
+        "last_error_message": "ALTER TABLE media_wall_links ADD COLUMN last_error_message TEXT",
+    }
+    with engine.begin() as connection:
+        for column_name, sql in pending_alters.items():
+            if column_name in columns:
+                continue
+            connection.execute(text(sql))
+
+
 def _ensure_link_check_columns() -> None:
     inspector = inspect(engine)
     try:
@@ -1344,6 +1370,10 @@ def _ensure_link_check_indexes() -> None:
         """
         CREATE INDEX IF NOT EXISTS ix_foreground_link_health_candidates_status_checked
         ON foreground_link_health_candidates (candidate_status, last_checked_at DESC)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_media_wall_links_due_check
+        ON media_wall_links (next_check_at, source_type, is_enabled)
         """,
     )
     with engine.begin() as connection:
