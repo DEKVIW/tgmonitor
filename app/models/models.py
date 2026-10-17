@@ -1185,7 +1185,6 @@ def ensure_runtime_storage_tables() -> None:
         _ensure_link_check_columns()
         _ensure_backup_target_columns()
         _ensure_backup_management_indexes()
-        _ensure_link_check_indexes()
         _ensure_message_monitor_indexes()
         _ensure_channel_daily_stats_indexes()
         _ensure_resource_ops_indexes()
@@ -1194,6 +1193,7 @@ def ensure_runtime_storage_tables() -> None:
         _ensure_media_wall_visibility()
         _ensure_media_wall_link_columns()
         _ensure_pan_transfer_indexes()
+        _ensure_link_check_indexes()
         _runtime_storage_checked = True
 
 
