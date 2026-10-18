@@ -71,9 +71,6 @@ async def get_daily_trend_api(
 ) -> DailyTrendResponse:
     _ensure_public_access_allowed(current_user)
 
-    if _is_public_guest(current_user):
-        days = min(days, 1)
-
     try:
         trend_data = get_daily_trend(db, days=days)
         return DailyTrendResponse(days=[DailyTrendItem(**item) for item in trend_data])
