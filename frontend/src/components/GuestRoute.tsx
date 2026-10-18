@@ -11,6 +11,7 @@ import { getPublicConfig } from '@/api/admin'
 import { useAuthStore } from '@/store/authStore'
 import { LOGIN_PATH } from '@/utils/routes'
 import { applySiteBranding } from '@/utils/siteBranding'
+import Layout from './layout/Layout'
 import GuestLayout from './layout/GuestLayout'
 
 interface GuestRouteProps {
@@ -56,7 +57,7 @@ const GuestRoute = ({ children, redirectAuthenticated = true }: GuestRouteProps)
   }
 
   if (isAuthenticated && token && !redirectAuthenticated) {
-    return <GuestLayout>{children}</GuestLayout>
+    return <Layout>{children}</Layout>
   }
 
   // 如果游客模式未启用，重定向到登录页

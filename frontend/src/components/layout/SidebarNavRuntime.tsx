@@ -4,6 +4,7 @@ import type { MenuProps } from 'antd'
 import { useLocation, useNavigate } from 'react-router-dom'
 import {
   BarChartOutlined,
+  AppstoreOutlined,
   CloudUploadOutlined,
   DashboardOutlined,
   LineChartOutlined,
@@ -12,26 +13,26 @@ import {
   ThunderboltOutlined,
 } from '@ant-design/icons'
 import { useAuthStore } from '@/store/authStore'
-import UserAccountMenu from './UserAccountMenu'
 import './Sidebar.css'
 
 interface SidebarProps {
   collapsed: boolean
   onNavigate?: () => void
-  showAccountEntry?: boolean
 }
 
 const renderMenuIcon = (icon: ReactNode) => <span className="sidebar-icon-shell">{icon}</span>
 
-const SidebarNavRuntime = ({ collapsed, onNavigate, showAccountEntry = false }: SidebarProps) => {
+const SidebarNavRuntime = ({ collapsed, onNavigate }: SidebarProps) => {
   const navigate = useNavigate()
   const location = useLocation()
-  const { user } = useAuthStore()
+  const { user, isAuthenticated, token } = useAuthStore()
+  const isGuest = !isAuthenticated || !token
   const isAdmin = user?.role === 'admin'
+  const messagePath = isGuest ? '/' : '/dashboard'
 
   const menuItems: MenuProps['items'] = [
     {
-      key: '/dashboard',
+      key: messagePath,
       icon: renderMenuIcon(<DashboardOutlined />),
       label: '消息列表',
     },
@@ -40,7 +41,12 @@ const SidebarNavRuntime = ({ collapsed, onNavigate, showAccountEntry = false }: 
       icon: renderMenuIcon(<BarChartOutlined />),
       label: '统计信息',
     },
-    ...(isAdmin
+    {
+      key: '/popular',
+      icon: renderMenuIcon(<AppstoreOutlined />),
+      label: '影视墙',
+    },
+    ...(!isGuest && isAdmin
       ? [
           {
             key: '/analytics',
@@ -92,11 +98,6 @@ const SidebarNavRuntime = ({ collapsed, onNavigate, showAccountEntry = false }: 
         className="sidebar-menu"
         inlineCollapsed={collapsed}
       />
-      {showAccountEntry ? (
-        <div className="sidebar-account-section">
-          <UserAccountMenu variant="sidebar" collapsed={collapsed} />
-        </div>
-      ) : null}
     </div>
   )
 }

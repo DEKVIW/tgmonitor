@@ -2,13 +2,14 @@
  * 顶部导航栏
  */
 
-import { Button } from 'antd'
-import { MenuFoldOutlined, MenuUnfoldOutlined } from '@ant-design/icons'
+import { Button, Tooltip } from 'antd'
+import { MenuFoldOutlined, MenuUnfoldOutlined, UserOutlined } from '@ant-design/icons'
 import { useNavigate, useLocation } from 'react-router-dom'
 import GlobalSearch from './GlobalSearch'
-import PublicNavigation from './PublicNavigation'
 import SiteBrand from './SiteBrand'
 import UserAccountMenu from './UserAccountMenu'
+import { useAuthStore } from '@/store/authStore'
+import { LOGIN_PATH } from '@/utils/routes'
 import './Header.css'
 
 interface HeaderProps {
@@ -19,10 +20,12 @@ interface HeaderProps {
 const Header = ({ collapsed, onToggle }: HeaderProps) => {
   const navigate = useNavigate()
   const location = useLocation()
+  const { isAuthenticated, token } = useAuthStore()
+  const isGuest = !isAuthenticated || !token
   const handleTitleClick = () => {
-    // 如果当前不在 dashboard，则跳转
-    if (location.pathname !== '/dashboard') {
-      navigate('/dashboard', { replace: false })
+    const homePath = isGuest ? '/' : '/dashboard'
+    if (location.pathname !== homePath) {
+      navigate(homePath, { replace: false })
     }
   }
 
@@ -31,15 +34,29 @@ const Header = ({ collapsed, onToggle }: HeaderProps) => {
       <div className="header-left">
         <Button
           type="text"
+          className="header-toggle-button"
           icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+          aria-label={collapsed ? '展开侧边栏' : '收起侧边栏'}
+          aria-expanded={!collapsed}
           onClick={onToggle}
         />
         <SiteBrand className="header-site-brand" onClick={handleTitleClick} />
       </div>
-      <PublicNavigation messagePath="/dashboard" />
       <div className="header-right">
         <GlobalSearch />
-        <UserAccountMenu variant="header" />
+        {isGuest ? (
+          <Tooltip title="登录" placement="bottomRight">
+            <Button
+              type="text"
+              icon={<UserOutlined />}
+              className="guest-login-button"
+              aria-label="登录"
+              onClick={() => navigate(LOGIN_PATH)}
+            />
+          </Tooltip>
+        ) : (
+          <UserAccountMenu variant="header" />
+        )}
       </div>
     </div>
   )

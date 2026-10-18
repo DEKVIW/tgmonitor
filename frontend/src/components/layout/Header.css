@@ -1,10 +1,10 @@
 .app-header {
   display: flex;
-  justify-content: flex-start;
   align-items: center;
-  gap: 16px;
-  padding: 0 24px;
+  gap: 12px;
+  padding: 0 clamp(14px, 2.4vw, 32px);
   height: 64px;
+  min-height: 64px;
   background: rgba(255, 255, 255, 0.8);
   border-bottom: 1px solid rgba(216, 227, 238, 0.82);
   box-shadow: 0 10px 28px rgba(25, 52, 79, 0.08);
@@ -17,9 +17,25 @@
 .header-left {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   flex: 0 0 auto;
   min-width: 0;
+}
+
+.header-toggle-button {
+  width: 40px;
+  min-width: 40px;
+  height: 40px;
+  padding: 0;
+  border-radius: 12px;
+  color: var(--text-base);
+  font-size: 18px;
+}
+
+.header-toggle-button.ant-btn-text:not(:disabled):hover,
+.header-toggle-button.ant-btn-text:not(:disabled):focus-visible {
+  color: var(--primary-strong);
+  background: var(--primary-soft);
 }
 
 .site-brand {
@@ -71,58 +87,36 @@
   text-overflow: ellipsis;
 }
 
-.public-primary-nav {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  position: absolute;
-  left: 50%;
-  flex: 0 0 auto;
-  min-width: 0;
-  margin-left: 0;
-  transform: translateX(-50%);
-}
-
-.public-nav-link {
-  display: inline-flex;
-  min-height: 36px;
-  align-items: center;
-  gap: 7px;
-  padding: 0 14px;
-  border-radius: 8px;
-  color: var(--text-muted);
-  font-size: 14px;
-  font-weight: 600;
-  text-decoration: none;
-  white-space: nowrap;
-  transition: color var(--transition-base), background var(--transition-base);
-}
-
-.public-nav-link:hover,
-.public-nav-link.is-active {
-  background: var(--primary-soft);
-  color: var(--primary-strong);
-}
-
-.public-nav-link > .anticon {
-  font-size: 16px;
-}
-
 .header-right {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   flex: 0 0 auto;
   margin-left: auto;
 }
 
+.header-account-button {
+  min-height: 40px;
+  padding-inline: 10px !important;
+  border-radius: 12px;
+  color: var(--text-base);
+}
+
+.header-account-button.ant-btn-text:not(:disabled):hover,
+.header-account-button.ant-btn-text:not(:disabled):focus-visible {
+  color: var(--primary-strong);
+  background: var(--primary-soft);
+}
+
 .public-search-button,
 .guest-login-button {
-  width: 36px;
-  min-width: 36px;
-  height: 36px;
-  border-radius: 50%;
+  width: 40px;
+  min-width: 40px;
+  height: 40px;
+  padding: 0;
+  border-radius: 12px;
   color: rgba(22, 50, 74, 0.76);
+  font-size: 18px;
 }
 
 .public-search-button.ant-btn-text:not(:disabled):hover,
@@ -226,45 +220,36 @@
   margin-left: 8px;
 }
 
-.sidebar-account-button {
-  width: 100%;
-  min-height: 48px;
-  border-radius: 16px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: flex-start;
-  padding-inline: 14px !important;
-  color: var(--text-base);
-}
-
-.sidebar-account-button.is-collapsed {
-  justify-content: center;
-  padding-inline: 0 !important;
-}
-
-.sidebar-account-text {
-  margin-left: 10px;
-  font-weight: 600;
-}
-
 @media (max-width: 768px) {
+  :root {
+    --header-height: 58px;
+  }
+
   .app-header {
-    padding: 0 14px;
-    gap: 10px;
+    height: 58px;
+    min-height: 58px;
+    gap: 8px;
+    padding: 0 12px;
   }
 
-  .public-primary-nav {
-    position: static;
-    flex: 1 1 auto;
-    min-width: 0;
-    margin-left: 0;
-    overflow-x: auto;
-    scrollbar-width: none;
-    transform: none;
+  .header-left {
+    gap: 8px;
   }
 
-  .public-primary-nav::-webkit-scrollbar {
-    display: none;
+  .header-toggle-button,
+  .public-search-button,
+  .guest-login-button {
+    width: 38px;
+    min-width: 38px;
+    height: 38px;
+    min-height: 38px;
+  }
+
+  .header-account-button {
+    min-width: 38px;
+    height: 38px;
+    min-height: 38px;
+    padding-inline: 10px !important;
   }
 }
 
@@ -290,39 +275,23 @@
     display: none;
   }
 
-  .public-nav-link {
-    gap: 5px;
-    padding-inline: 8px;
-    font-size: 13px;
+  .header-account-button {
+    width: 38px;
+    min-width: 38px;
+    padding-inline: 0 !important;
+    justify-content: center;
   }
 }
 
 @media (orientation: landscape) and (max-height: 500px) {
+  :root {
+    --header-height: 52px;
+  }
+
   .app-header {
     height: 52px;
     padding-inline: 12px;
     gap: 8px;
-  }
-
-  .public-primary-nav {
-    position: static;
-    flex: 1 1 auto;
-    min-width: 0;
-    margin-left: 0;
-    overflow-x: auto;
-    scrollbar-width: none;
-    transform: none;
-  }
-
-  .public-primary-nav::-webkit-scrollbar {
-    display: none;
-  }
-
-  .public-nav-link {
-    min-height: 34px;
-    gap: 5px;
-    padding-inline: 8px;
-    font-size: 13px;
   }
 
   .site-brand-name {

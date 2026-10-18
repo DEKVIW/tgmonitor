@@ -29,11 +29,6 @@
   min-height: 100vh;
 }
 
-.guest-content-wrapper {
-  padding: 0 !important;
-  margin: 0 !important;
-}
-
 .sidebar-backdrop {
   position: fixed;
   inset: var(--header-height) 0 0 0;

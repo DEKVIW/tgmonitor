@@ -30,12 +30,6 @@
   background: transparent;
 }
 
-.sidebar-account-section {
-  flex: 0 0 auto;
-  padding: 0 12px 16px;
-  border-top: 1px solid rgba(216, 227, 238, 0.76);
-}
-
 .sidebar-menu.ant-menu-light,
 .sidebar-menu.ant-menu-inline {
   background: transparent;
@@ -162,7 +156,4 @@
     width: 216px;
   }
 
-  .sidebar-account-section {
-    padding-bottom: 14px;
-  }
 }

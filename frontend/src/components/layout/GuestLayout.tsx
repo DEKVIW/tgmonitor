@@ -1,58 +1,12 @@
 import { ReactNode } from 'react'
-import { Button, Layout as AntLayout, Tooltip } from 'antd'
-import { UserOutlined } from '@ant-design/icons'
-import { useNavigate } from 'react-router-dom'
-
-import { LOGIN_PATH } from '@/utils/routes'
-import { useAuthStore } from '@/store/authStore'
-
-import BackToTopButton from './BackToTopButton'
-import GlobalSearch from './GlobalSearch'
-import PublicNavigation from './PublicNavigation'
-import SiteBrand from './SiteBrand'
-import SiteFooter from './SiteFooter'
-import UserAccountMenu from './UserAccountMenu'
-import './Layout.css'
-import './Header.css'
-import './GuestLayout.css'
-
-const { Content } = AntLayout
+import AppShell from './AppShell'
 
 interface GuestLayoutProps {
   children: ReactNode
 }
 
 const GuestLayout = ({ children }: GuestLayoutProps) => {
-  const navigate = useNavigate()
-  const { isAuthenticated, token } = useAuthStore()
-
-  return (
-    <AntLayout className="app-layout guest-layout">
-      <header className="app-header guest-header">
-        <SiteBrand className="guest-brand" />
-        <PublicNavigation messagePath="/" />
-        <div className="guest-header-actions">
-          <GlobalSearch />
-          {isAuthenticated && token ? (
-            <UserAccountMenu variant="header" />
-          ) : (
-            <Tooltip title="登录" placement="bottomRight">
-              <Button
-                type="text"
-                icon={<UserOutlined />}
-                className="guest-login-button"
-                aria-label="登录"
-                onClick={() => navigate(LOGIN_PATH)}
-              />
-            </Tooltip>
-          )}
-        </div>
-      </header>
-      <Content className="content-wrapper guest-content-wrapper">{children}</Content>
-      <SiteFooter />
-      <BackToTopButton />
-    </AntLayout>
-  )
+  return <AppShell publicShell>{children}</AppShell>
 }
 
 export default GuestLayout

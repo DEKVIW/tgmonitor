@@ -62,6 +62,14 @@ function App() {
             </GuestRoute>
           }
         />
+        <Route
+          path="/statistics"
+          element={
+            <GuestRoute redirectAuthenticated={false}>
+              <Statistics />
+            </GuestRoute>
+          }
+        />
         {/* 登录用户的dashboard路径 */}
         <Route
           element={
@@ -73,7 +81,6 @@ function App() {
           }
         >
           <Route path="/dashboard" element={<Dashboard />} />
-          <Route path="/statistics" element={<Statistics />} />
           <Route
             path="/analytics"
             element={
