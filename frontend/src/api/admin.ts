@@ -56,6 +56,8 @@ import {
   ForegroundLinkHealthCandidateList,
 } from '@/types/admin'
 
+let publicConfigPromise: Promise<PublicSystemConfigResponse> | null = null
+
 /**
  * 获取API凭据列表
  */
@@ -314,6 +316,7 @@ export const getSystemConfig = async (): Promise<SystemConfigResponse> => {
  */
 export const updateSystemConfig = async (data: SystemConfigUpdate): Promise<SystemConfigResponse> => {
   const response = await apiClient.put<SystemConfigResponse>('/admin/config', data)
+  publicConfigPromise = Promise.resolve(response.data)
   return response.data
 }
 
@@ -321,8 +324,20 @@ export const updateSystemConfig = async (data: SystemConfigUpdate): Promise<Syst
  * 获取公开系统配置（无需认证）
  */
 export const getPublicConfig = async (): Promise<PublicSystemConfigResponse> => {
-  const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || '/api'}/config/public`)
-  return response.json() as Promise<PublicSystemConfigResponse>
+  if (!publicConfigPromise) {
+    publicConfigPromise = apiClient
+      .get<PublicSystemConfigResponse>('/config/public', {
+        timeout: 8000,
+        suppressErrorToast: true,
+      })
+      .then((response) => response.data)
+      .catch((error) => {
+        publicConfigPromise = null
+        throw error
+      })
+  }
+
+  return publicConfigPromise
 }
 
 export const getAccounts = async (params: AccountListQuery = {}): Promise<AccountListResponse> => {

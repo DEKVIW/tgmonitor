@@ -338,7 +338,15 @@ class ForegroundLinkHealthService:
                                     db.add(candidate)
                                     db.flush()
                                 created = True
-                            except IntegrityError:
+                            except IntegrityError as exc:
+                                original_error = getattr(exc, "orig", None)
+                                constraint_name = getattr(
+                                    getattr(original_error, "diag", None),
+                                    "constraint_name",
+                                    None,
+                                )
+                                if constraint_name == "foreground_link_health_candidates_message_id_fkey":
+                                    continue
                                 candidate = query.with_for_update().first()
                                 if candidate is None:
                                     raise

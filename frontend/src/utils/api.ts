@@ -2,10 +2,16 @@
  * API客户端配置
  */
 
-import axios, { AxiosInstance, AxiosError, InternalAxiosRequestConfig } from 'axios'
+import axios, { AxiosInstance, AxiosError, AxiosRequestConfig, InternalAxiosRequestConfig } from 'axios'
 import { API_BASE_URL, TOKEN_KEY } from './constants'
 import { LOGIN_PATH, isPathMatch } from './routes'
 import { message } from 'antd'
+
+declare module 'axios' {
+  interface AxiosRequestConfig {
+    suppressErrorToast?: boolean
+  }
+}
 
 const isLinkCheckTaskPoll404 = (error: AxiosError): boolean => {
   const status = error.response?.status
@@ -56,6 +62,15 @@ apiClient.interceptors.response.use(
     }
 
     if (isLinkCheckTaskPoll404(error)) {
+      return Promise.reject(error)
+    }
+
+    const requestConfig = error.config as (AxiosRequestConfig & { suppressErrorToast?: boolean }) | undefined
+    if (requestConfig?.suppressErrorToast && error.response?.status !== 401) {
+      return Promise.reject(error)
+    }
+
+    if (!error.response && error.config?.method?.toLowerCase() === 'get') {
       return Promise.reject(error)
     }
 

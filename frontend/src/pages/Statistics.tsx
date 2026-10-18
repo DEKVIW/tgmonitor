@@ -47,6 +47,7 @@ const Statistics = () => {
 
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [partialError, setPartialError] = useState<string | null>(null)
   const [overview, setOverview] = useState<StatisticsOverviewType | null>(null)
   const [dailyTrend, setDailyTrend] = useState<DailyTrendResponse | null>(null)
   const [dedupStats, setDedupStats] = useState<DedupStatsResponse | null>(null)
@@ -62,8 +63,9 @@ const Statistics = () => {
   const loadStatistics = async () => {
     setLoading(true)
     setError(null)
+    setPartialError(null)
     try {
-      const [overviewData, trendData, dedupData, netdiskData, heatmapData] = await Promise.all([
+      const results = await Promise.allSettled([
         getStatisticsOverview(),
         getDailyTrend(10),
         getDedupStats(10),
@@ -71,13 +73,19 @@ const Statistics = () => {
         getActivityHeatmap(7),
       ])
 
-      setOverview(overviewData)
-      setDailyTrend(trendData)
-      setDedupStats(dedupData)
-      setNetdiskDist(netdiskData)
-      setActivityHeatmap(heatmapData)
-    } catch (err: any) {
-      setError(err.response?.data?.detail || '加载统计信息失败')
+      const [overviewResult, trendResult, dedupResult, netdiskResult, heatmapResult] = results
+      if (overviewResult.status === 'fulfilled') setOverview(overviewResult.value)
+      if (trendResult.status === 'fulfilled') setDailyTrend(trendResult.value)
+      if (dedupResult.status === 'fulfilled') setDedupStats(dedupResult.value)
+      if (netdiskResult.status === 'fulfilled') setNetdiskDist(netdiskResult.value)
+      if (heatmapResult.status === 'fulfilled') setActivityHeatmap(heatmapResult.value)
+
+      const failedCount = results.filter((result) => result.status === 'rejected').length
+      if (failedCount === results.length) {
+        setError('统计信息暂时无法加载，请稍后重试')
+      } else if (failedCount > 0) {
+        setPartialError(`有 ${failedCount} 项统计暂时不可用，其余数据已正常显示`)
+      }
     } finally {
       setLoading(false)
     }
@@ -143,6 +151,18 @@ const Statistics = () => {
 
   const overviewContent = (
     <>
+      {partialError ? (
+        <Alert
+          className="statistics-admin-alert"
+          message="部分统计暂时不可用"
+          description={partialError}
+          type="warning"
+          showIcon
+          closable
+          onClose={() => setPartialError(null)}
+        />
+      ) : null}
+
       {/* 总体统计 */}
       {overview && <StatisticsOverview data={overview} />}
 

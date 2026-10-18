@@ -133,7 +133,7 @@ def _load_tracked_links_for_message_ids(
 
 
 @router.get("", response_model=MessageListResponse, summary="获取消息列表")
-async def get_messages(
+def get_messages(
     request: Request,
     background_tasks: BackgroundTasks,
     sort_mode: Literal["relevance", "newest"] = Query("newest", description="search result sort mode"),
@@ -214,7 +214,7 @@ async def get_messages(
 
 
 @router.get("/{message_id}", response_model=MessageResponse, summary="获取单条消息详情")
-async def get_message(
+def get_message(
     message_id: int,
     db: Session = Depends(get_db),
     current_user: Optional[Dict[str, Any]] = Depends(get_optional_current_user),
@@ -243,7 +243,7 @@ async def get_message(
 
 
 @router.get("/tags/stats", response_model=List[TagStatsResponse], summary="获取标签统计")
-async def get_tags_stats(
+def get_tags_stats(
     limit: int = Query(50, ge=1, le=100, description="返回的标签数量限制"),
     db: Session = Depends(get_db),
     current_user: Optional[Dict[str, Any]] = Depends(get_optional_current_user),

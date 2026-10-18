@@ -95,7 +95,7 @@ async def health_check():
 
 
 @app.get("/api/config/public", response_model=PublicSystemConfigResponse, summary="获取公开系统配置")
-async def get_public_config():
+def get_public_config():
     """
     获取公开的系统配置（无需认证）
     

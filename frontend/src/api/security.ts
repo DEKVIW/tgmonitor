@@ -8,9 +8,23 @@ import {
   SecurityConfigUpdate,
 } from '@/types/security'
 
+let publicSecurityConfigPromise: Promise<PublicSecurityConfigResponse> | null = null
+
 export const getPublicSecurityConfig = async (): Promise<PublicSecurityConfigResponse> => {
-  const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || '/api'}/security/public`)
-  return response.json() as Promise<PublicSecurityConfigResponse>
+  if (!publicSecurityConfigPromise) {
+    publicSecurityConfigPromise = apiClient
+      .get<PublicSecurityConfigResponse>('/security/public', {
+        timeout: 8000,
+        suppressErrorToast: true,
+      })
+      .then((response) => response.data)
+      .catch((error) => {
+        publicSecurityConfigPromise = null
+        throw error
+      })
+  }
+
+  return publicSecurityConfigPromise
 }
 
 export const verifySearchTurnstile = async (

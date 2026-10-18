@@ -43,7 +43,7 @@ def _is_public_guest(current_user: Optional[Dict[str, Any]]) -> bool:
 
 
 @router.get("/overview", response_model=StatisticsOverview, summary="获取总体统计")
-async def get_overview(
+def get_overview(
     db: Session = Depends(get_db),
     current_user: Optional[Dict[str, Any]] = Depends(get_optional_current_user),
 ) -> StatisticsOverview:
@@ -64,7 +64,7 @@ async def get_overview(
 
 
 @router.get("/daily-trend", response_model=DailyTrendResponse, summary="获取最近趋势")
-async def get_daily_trend_api(
+def get_daily_trend_api(
     days: int = Query(10, ge=1, le=30, description="天数（1-30）"),
     db: Session = Depends(get_db),
     current_user: Optional[Dict[str, Any]] = Depends(get_optional_current_user),
@@ -82,7 +82,7 @@ async def get_daily_trend_api(
 
 
 @router.get("/dedup-stats", response_model=DedupStatsResponse, summary="获取去重统计")
-async def get_dedup_stats_api(
+def get_dedup_stats_api(
     hours: int = Query(10, ge=1, le=24, description="小时数（1-24）"),
     db: Session = Depends(get_db),
     current_user: Optional[Dict[str, Any]] = Depends(get_optional_current_user),
@@ -103,7 +103,7 @@ async def get_dedup_stats_api(
 
 
 @router.get("/netdisk-distribution", response_model=NetdiskDistributionResponse, summary="获取网盘分布")
-async def get_netdisk_distribution_api(
+def get_netdisk_distribution_api(
     hours: int = Query(24, ge=1, le=168, description="小时数（1-168）"),
     db: Session = Depends(get_db),
     current_user: Optional[Dict[str, Any]] = Depends(get_optional_current_user),
@@ -126,7 +126,7 @@ async def get_netdisk_distribution_api(
 
 
 @router.get("/activity-heatmap", response_model=ActivityHeatmapResponse, summary="获取活跃热力图")
-async def get_activity_heatmap_api(
+def get_activity_heatmap_api(
     days: int = Query(7, ge=3, le=14, description="天数（3-14）"),
     db: Session = Depends(get_db),
     current_user: Optional[Dict[str, Any]] = Depends(get_optional_current_user),

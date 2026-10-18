@@ -8,6 +8,9 @@ import { MessageFilters } from '@/types/message'
 import { useAuthStore } from '@/store/authStore'
 import { readSearchChallengeClearance } from '@/utils/securityConfig'
 
+let tagStatsCache: { items: TagStatsResponse[]; expiresAt: number } | null = null
+let tagStatsRequest: Promise<TagStatsResponse[]> | null = null
+
 /**
  * 获取消息列表
  */
@@ -32,6 +35,7 @@ export const getMessages = async (filters: MessageFilters, signal?: AbortSignal)
   const response = await apiClient.get<MessageListResponse>(`/messages?${params.toString()}`, {
     headers: clearance ? { 'X-TG-Search-Challenge': clearance.clearance_token } : undefined,
     signal,
+    suppressErrorToast: true,
   })
   return response.data
 }
@@ -48,7 +52,26 @@ export const getMessageById = async (id: number): Promise<MessageResponse> => {
  * 获取标签统计
  */
 export const getTagStats = async (limit: number = 50): Promise<TagStatsResponse[]> => {
-  const response = await apiClient.get<TagStatsResponse[]>(`/messages/tags/stats?limit=${limit}`)
-  return response.data
-}
+  const normalizedLimit = Math.max(1, Math.min(limit, 100))
+  const now = Date.now()
+  if (tagStatsCache && tagStatsCache.expiresAt > now && tagStatsCache.items.length >= normalizedLimit) {
+    return tagStatsCache.items.slice(0, normalizedLimit)
+  }
 
+  if (!tagStatsRequest) {
+    tagStatsRequest = apiClient
+      .get<TagStatsResponse[]>(`/messages/tags/stats?limit=${normalizedLimit}`, {
+        suppressErrorToast: true,
+      })
+      .then((response) => {
+        tagStatsCache = { items: response.data, expiresAt: Date.now() + 60_000 }
+        return response.data
+      })
+      .finally(() => {
+        tagStatsRequest = null
+      })
+  }
+
+  const items = await tagStatsRequest
+  return items.slice(0, normalizedLimit)
+}

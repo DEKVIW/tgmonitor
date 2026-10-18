@@ -15,7 +15,7 @@ router = APIRouter(prefix="/api/admin/statistics", tags=["admin-statistics"])
     response_model=AdminChannelMatrixResponse,
     summary="Get admin channel message matrix",
 )
-async def get_admin_channel_matrix_api(
+def get_admin_channel_matrix_api(
     days: int = Query(7, ge=7, le=30, description="Lookback days"),
     _: dict = Depends(get_admin_user),
     db: Session = Depends(get_db),

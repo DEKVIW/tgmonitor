@@ -39,12 +39,10 @@ def get_statistics_overview(db: Session) -> Dict[str, int]:
         ).scalar() or 0
         
         # 总链接数（使用SQL聚合，不加载数据）
-        # 优化：使用 jsonb_object_keys 函数计算JSONB对象的键数量
         try:
-            # 方法1：使用 jsonb_object_keys 计算每个消息的链接数，然后求和
             total_links_result = db.execute(sql_text("""
                 SELECT COALESCE(SUM(
-                    (SELECT COUNT(*) FROM jsonb_object_keys(links::jsonb))
+                    jsonb_array_length(jsonb_path_query_array(links::jsonb, '$.*'))
                 ), 0) as total
                 FROM messages
                 WHERE links IS NOT NULL
@@ -55,7 +53,6 @@ def get_statistics_overview(db: Session) -> Dict[str, int]:
         except Exception:
             # 如果上面的方法失败，使用更兼容的方法
             try:
-                # 方法2：使用子查询
                 total_links_result = db.execute(sql_text("""
                     SELECT COALESCE(SUM(
                         jsonb_array_length(jsonb_object_keys(links::jsonb)::text[])
@@ -112,7 +109,7 @@ def get_daily_trend(db: Session, days: int = 10) -> List[Dict[str, Any]]:
                 COALESCE(SUM(
                     CASE 
                         WHEN links IS NOT NULL AND jsonb_typeof(links::jsonb) = 'object'
-                            THEN (SELECT COUNT(*) FROM jsonb_object_keys(links::jsonb))
+                            THEN jsonb_array_length(jsonb_path_query_array(links::jsonb, '$.*'))
                         ELSE 0
                     END
                 ), 0) as link_count
@@ -280,7 +277,7 @@ def get_netdisk_distribution(db: Session, hours: int = 24) -> List[Dict[str, Any
                 SELECT 
                     jsonb_array_elements_text(netdisk_types) as netdisk_name
                 FROM messages 
-                WHERE timestamp >= NOW() - INTERVAL ':hours hours'
+                WHERE timestamp >= NOW() - (:hours * INTERVAL '1 hour')
                   AND netdisk_types IS NOT NULL
             ) t
             GROUP BY netdisk_name

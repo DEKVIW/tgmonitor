@@ -16,7 +16,7 @@ import {
  * 获取总体统计
  */
 export const getStatisticsOverview = async (): Promise<StatisticsOverview> => {
-  const response = await apiClient.get<StatisticsOverview>('/statistics/overview')
+  const response = await apiClient.get<StatisticsOverview>('/statistics/overview', { suppressErrorToast: true })
   return response.data
 }
 
@@ -24,7 +24,7 @@ export const getStatisticsOverview = async (): Promise<StatisticsOverview> => {
  * 获取每日趋势
  */
 export const getDailyTrend = async (days: number = 10): Promise<DailyTrendResponse> => {
-  const response = await apiClient.get<DailyTrendResponse>(`/statistics/daily-trend?days=${days}`)
+  const response = await apiClient.get<DailyTrendResponse>(`/statistics/daily-trend?days=${days}`, { suppressErrorToast: true })
   return response.data
 }
 
@@ -32,7 +32,7 @@ export const getDailyTrend = async (days: number = 10): Promise<DailyTrendRespon
  * 获取去重统计
  */
 export const getDedupStats = async (hours: number = 10): Promise<DedupStatsResponse> => {
-  const response = await apiClient.get<DedupStatsResponse>(`/statistics/dedup-stats?hours=${hours}`)
+  const response = await apiClient.get<DedupStatsResponse>(`/statistics/dedup-stats?hours=${hours}`, { suppressErrorToast: true })
   return response.data
 }
 
@@ -40,7 +40,7 @@ export const getDedupStats = async (hours: number = 10): Promise<DedupStatsRespo
  * 获取网盘分布
  */
 export const getNetdiskDistribution = async (hours: number = 24): Promise<NetdiskDistributionResponse> => {
-  const response = await apiClient.get<NetdiskDistributionResponse>(`/statistics/netdisk-distribution?hours=${hours}`)
+  const response = await apiClient.get<NetdiskDistributionResponse>(`/statistics/netdisk-distribution?hours=${hours}`, { suppressErrorToast: true })
   return response.data
 }
 
@@ -48,12 +48,12 @@ export const getNetdiskDistribution = async (hours: number = 24): Promise<Netdis
  * 获取活跃热力图
  */
 export const getActivityHeatmap = async (days: number = 7): Promise<ActivityHeatmapResponse> => {
-  const response = await apiClient.get<ActivityHeatmapResponse>(`/statistics/activity-heatmap?days=${days}`)
+  const response = await apiClient.get<ActivityHeatmapResponse>(`/statistics/activity-heatmap?days=${days}`, { suppressErrorToast: true })
   return response.data
 }
 
 export const getAdminChannelMatrix = async (days: number = 7): Promise<AdminChannelMatrixResponse> => {
-  const response = await apiClient.get<AdminChannelMatrixResponse>(`/admin/statistics/channel-matrix?days=${days}`)
+  const response = await apiClient.get<AdminChannelMatrixResponse>(`/admin/statistics/channel-matrix?days=${days}`, { suppressErrorToast: true })
   return response.data
 }
 

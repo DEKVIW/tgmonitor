@@ -1,6 +1,8 @@
 ﻿from __future__ import annotations
 
 import logging
+import threading
+import time
 from typing import Any
 
 from sqlalchemy.exc import IntegrityError
@@ -20,6 +22,11 @@ MAX_FOOTER_SECTION_ID_LENGTH = 128
 MAX_FOOTER_SECTION_TITLE_LENGTH = 255
 MAX_FOOTER_SECTION_HTML_LENGTH = 20000
 MAX_FOOTER_BOTTOM_HTML_LENGTH = 20000
+PUBLIC_CONFIG_CACHE_TTL_SECONDS = 5.0
+
+_public_config_cache_lock = threading.RLock()
+_public_config_cache: dict[str, Any] | None = None
+_public_config_cache_expires_at = 0.0
 
 SYSTEM_SETTINGS_FIELDS: tuple[str, ...] = (
     'site_name',
@@ -412,11 +419,20 @@ def get_system_config_values() -> dict[str, Any]:
 
 
 def get_public_system_config_values() -> dict[str, Any]:
-    values = get_system_config_values()
-    public_values = {field: values[field] for field in PUBLIC_SYSTEM_SETTINGS_FIELDS}
-    for field in FOOTER_BUILDER_FIELDS:
-        public_values[field] = values[field]
-    return public_values
+    global _public_config_cache, _public_config_cache_expires_at
+
+    now = time.monotonic()
+    with _public_config_cache_lock:
+        if _public_config_cache is not None and _public_config_cache_expires_at > now:
+            return dict(_public_config_cache)
+
+        values = get_system_config_values()
+        public_values = {field: values[field] for field in PUBLIC_SYSTEM_SETTINGS_FIELDS}
+        for field in FOOTER_BUILDER_FIELDS:
+            public_values[field] = values[field]
+        _public_config_cache = public_values
+        _public_config_cache_expires_at = time.monotonic() + PUBLIC_CONFIG_CACHE_TTL_SECONDS
+        return dict(public_values)
 
 
 def get_backup_settings_values() -> dict[str, Any]:
@@ -436,6 +452,8 @@ def get_backup_settings_values() -> dict[str, Any]:
 
 
 def apply_system_config(values: dict[str, Any], updated_by: str | None = None) -> dict[str, Any]:
+    global _public_config_cache, _public_config_cache_expires_at
+
     normalized_values = _normalize_system_config_values(values)
     ensure_runtime_configuration_seeded()
     with Session(engine) as session:
@@ -458,6 +476,9 @@ def apply_system_config(values: dict[str, Any], updated_by: str | None = None) -
 
         updated_values = _model_to_dict(record, SYSTEM_SETTINGS_FIELDS)
         footer_values = _extract_footer_builder_config(record.extra_json)
+        with _public_config_cache_lock:
+            _public_config_cache = None
+            _public_config_cache_expires_at = 0.0
         return _normalize_system_config_values(updated_values, footer_values=footer_values)
 
 
@@ -480,7 +501,7 @@ def apply_backup_settings(values: dict[str, Any], updated_by: str | None = None)
 
 
 def is_public_dashboard_enabled() -> bool:
-    return bool(get_system_config_values()['public_dashboard_enabled'])
+    return bool(get_public_system_config_values()['public_dashboard_enabled'])
 
 
 def get_monitor_runtime_config() -> dict[str, Any]:
