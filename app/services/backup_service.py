@@ -13,6 +13,7 @@ import ssl
 import subprocess
 import tempfile
 import threading
+import time
 import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -158,6 +159,13 @@ def _build_file_name(target: BackupTarget | dict[str, Any]) -> tuple[str, str]:
         return file_name, "xlsx"
     file_name = f"{FULL_BACKUP_PREFIX}-{slug}-{timestamp}.zip"
     return file_name, "zip"
+
+
+def _backup_file_prefix(target: BackupTarget | dict[str, Any]) -> str:
+    target_name = target.name if isinstance(target, BackupTarget) else str(target.get("name") or "target")
+    backup_mode = target.backup_mode if isinstance(target, BackupTarget) else str(target.get("backup_mode") or "full")
+    prefix = EXPORT_BACKUP_PREFIX if backup_mode == "media_export" else FULL_BACKUP_PREFIX
+    return f"{prefix}-{_slugify(target_name)}-"
 
 
 def _parse_backup_file_name(file_name: str, *, target: BackupTarget | dict[str, Any]) -> dict[str, Any]:
@@ -1106,6 +1114,8 @@ def _upload_file_to_webdav(target: BackupTarget, local_path: Path, remote_path: 
     headers = _build_webdav_headers(target)
     headers["Content-Length"] = str(local_path.stat().st_size)
     headers["Content-Type"] = "application/octet-stream"
+    status_code: int | None = None
+    upload_error: Exception | None = None
 
     try:
         with local_path.open("rb") as file_handle:
@@ -1113,10 +1123,33 @@ def _upload_file_to_webdav(target: BackupTarget, local_path: Path, remote_path: 
             response = connection.getresponse()
             status_code = response.status
             response.read()
+    except Exception as exc:
+        upload_error = exc
     finally:
-        connection.close()
+        try:
+            connection.close()
+        except Exception as exc:
+            if upload_error is None:
+                upload_error = exc
+
+    if upload_error is not None:
+        if _confirm_webdav_upload(target, local_path, remote_path):
+            logger.warning(
+                "WebDAV upload response failed but remote file was confirmed: %s (%s)",
+                remote_path,
+                upload_error,
+            )
+            return _sanitize_url(target_url)
+        raise upload_error
 
     if status_code not in {200, 201, 204}:
+        if _confirm_webdav_upload(target, local_path, remote_path):
+            logger.warning(
+                "WebDAV upload returned HTTP %s but remote file was confirmed: %s",
+                status_code,
+                remote_path,
+            )
+            return _sanitize_url(target_url)
         raise RuntimeError(f"WebDAV upload failed: HTTP {status_code}")
 
     return _sanitize_url(target_url)
@@ -1159,6 +1192,82 @@ def _serialize_remote_file(
         "range_label": parsed_meta["range_label"],
         "file_format": parsed_meta["file_format"],
     }
+
+
+def _is_target_backup_file(target: BackupTarget, remote_file: dict[str, Any]) -> bool:
+    file_name = str(remote_file.get("name") or Path(str(remote_file.get("remote_path") or "")).name)
+    prefix = _backup_file_prefix(target)
+    extension = ".xlsx" if target.backup_mode == "media_export" else ".zip"
+    return file_name.startswith(prefix) and file_name.endswith(extension)
+
+
+def _sort_remote_backup_files(remote_files: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return sorted(
+        remote_files,
+        key=lambda item: (
+            item.get("backup_time") or "",
+            item.get("modified_at") or "",
+            item.get("name") or "",
+        ),
+        reverse=True,
+    )
+
+
+def _retained_remote_paths(
+    remote_files: list[dict[str, Any]],
+    retention_count: int,
+    current_remote_path: str | None,
+) -> set[str]:
+    paths = [str(item.get("remote_path") or "") for item in _sort_remote_backup_files(remote_files)]
+    paths = [path for path in paths if path]
+    if retention_count <= 0 or len(paths) <= retention_count:
+        return set(paths)
+
+    retained = paths[:retention_count]
+    if current_remote_path and current_remote_path in paths and current_remote_path not in retained:
+        retained[-1] = current_remote_path
+    return set(retained)
+
+
+def _confirm_webdav_upload(target: BackupTarget, local_path: Path, remote_path: str) -> bool:
+    expected_size = local_path.stat().st_size
+    probe_target = _clone_target(target)
+    probe_target.webdav_timeout_seconds = min(max(int(target.webdav_timeout_seconds or 10), 5), 15)
+    delays = (0, 1, 3)
+
+    for attempt, delay in enumerate(delays, start=1):
+        if delay:
+            time.sleep(delay)
+        try:
+            remote_files = _list_webdav_files(probe_target)
+        except Exception:
+            logger.warning(
+                "Unable to verify WebDAV upload on attempt %s: %s",
+                attempt,
+                remote_path,
+                exc_info=True,
+            )
+            continue
+
+        remote_file = next(
+            (item for item in remote_files if item.get("remote_path") == remote_path),
+            None,
+        )
+        if remote_file is None:
+            continue
+
+        remote_size = remote_file.get("size_bytes")
+        if remote_size is not None and int(remote_size) == expected_size:
+            return True
+
+        logger.warning(
+            "WebDAV upload verification found a size mismatch for %s: expected=%s actual=%s",
+            remote_path,
+            expected_size,
+            remote_size,
+        )
+
+    return False
 
 
 def _list_webdav_files(target: BackupTarget) -> list[dict[str, Any]]:
@@ -1286,6 +1395,74 @@ def _apply_retention(target_id: int, *, current_run_id: int) -> dict[str, Any]:
             .all()
         )
 
+        if target.target_kind == "webdav":
+            remote_files = [
+                item
+                for item in _list_webdav_files(_clone_target(target))
+                if _is_target_backup_file(target, item)
+            ]
+            remote_paths = {
+                str(item.get("remote_path"))
+                for item in remote_files
+                if item.get("remote_path")
+            }
+
+            all_target_runs = session.query(BackupRun).filter(BackupRun.target_id == target_id).all()
+            runs_by_remote_path: dict[str, list[BackupRun]] = {}
+            for run in all_target_runs:
+                if run.remote_path:
+                    runs_by_remote_path.setdefault(run.remote_path, []).append(run)
+                    if run.remote_path not in remote_paths:
+                        run.remote_path = None
+                        run.remote_url = None
+                        run.result_json = {
+                            **(run.result_json or {}),
+                            "remote_file_missing": True,
+                        }
+                        session.add(run)
+
+            current_run = session.get(BackupRun, current_run_id)
+            current_remote_path = current_run.remote_path if current_run else None
+            retained_paths = _retained_remote_paths(
+                remote_files,
+                target.retention_count,
+                current_remote_path,
+            )
+
+            for remote_file in remote_files:
+                remote_path = str(remote_file.get("remote_path") or "")
+                if not remote_path or remote_path in retained_paths:
+                    continue
+
+                try:
+                    deleted = _delete_webdav_file(target, remote_path)
+                except Exception:
+                    logger.warning("Failed to delete remote backup file: %s", remote_path, exc_info=True)
+                    continue
+
+                if not deleted:
+                    continue
+
+                deleted_remote += 1
+                for run in runs_by_remote_path.get(remote_path, []):
+                    run.remote_path = None
+                    run.remote_url = None
+                    run.result_json = {
+                        **(run.result_json or {}),
+                        "artifact_pruned": True,
+                    }
+                    session.add(run)
+                    removed_run_ids.append(run.id)
+
+            session.commit()
+            return {
+                "deleted_local_files": 0,
+                "deleted_remote_files": deleted_remote,
+                "removed_run_ids": sorted(set(removed_run_ids)),
+            }
+
+        runs = [run for run in runs if run.local_path]
+
         for index, run in enumerate(runs):
             if run.id == current_run_id:
                 continue
@@ -1329,8 +1506,14 @@ def _apply_retention(target_id: int, *, current_run_id: int) -> dict[str, Any]:
     }
 
 
-def _perform_backup(target: BackupTarget) -> dict[str, Any]:
-    file_name, file_format = _build_file_name(target)
+def _perform_backup(
+    target: BackupTarget,
+    *,
+    file_name: str | None = None,
+    file_format: str | None = None,
+) -> dict[str, Any]:
+    if not file_name or not file_format:
+        file_name, file_format = _build_file_name(target)
 
     if target.target_kind == "local":
         temp_output_path = _resolve_local_output_path(target, file_name)
@@ -1439,7 +1622,35 @@ def _execute_backup_run(run_id: int) -> None:
                 raise LookupError("Backup target not found")
             target_snapshot = _clone_target(target)
 
-        result = _perform_backup(target_snapshot)
+        expected_file_name, expected_file_format = _build_file_name(target_snapshot)
+        expected_local_path = None
+        expected_remote_path = None
+        expected_remote_url = None
+        if target_snapshot.target_kind == "local":
+            expected_local_path = str(_resolve_local_output_path(target_snapshot, expected_file_name))
+        else:
+            expected_remote_path = _build_remote_file_path(target_snapshot, expected_file_name)
+            expected_remote_url = _sanitize_url(
+                _build_webdav_url(target_snapshot.webdav_base_url, expected_remote_path)
+            )
+
+        with Session(engine) as session:
+            run = session.get(BackupRun, run_id)
+            if run is None:
+                raise LookupError("Backup run not found")
+            run.file_name = expected_file_name
+            run.file_format = expected_file_format
+            run.local_path = expected_local_path
+            run.remote_path = expected_remote_path
+            run.remote_url = expected_remote_url
+            session.add(run)
+            session.commit()
+
+        result = _perform_backup(
+            target_snapshot,
+            file_name=expected_file_name,
+            file_format=expected_file_format,
+        )
         finished_at = _utc_now()
         duration = max(0.0, (finished_at - started_at).total_seconds())
 
