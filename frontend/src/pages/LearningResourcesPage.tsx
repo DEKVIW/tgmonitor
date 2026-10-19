@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Alert, Button, Empty, Input, List, Modal, Popconfirm, Select, Space, Spin, Switch, Table, Tag, Typography, Upload, message } from 'antd'
-import { ArrowLeftOutlined, BookOutlined, CheckOutlined, CloseOutlined, DeleteOutlined, EditOutlined, ExportOutlined, FolderOpenOutlined, ReloadOutlined, SaveOutlined, UploadOutlined } from '@ant-design/icons'
+import { Alert, Button, Input, List, Modal, Popconfirm, Select, Space, Switch, Table, Tag, Typography, Upload, message } from 'antd'
+import { ArrowLeftOutlined, BookOutlined, DeleteOutlined, FolderOpenOutlined, ReloadOutlined, SaveOutlined, UploadOutlined } from '@ant-design/icons'
 import { useAuthStore } from '@/store/authStore'
-import { formatServerDateTime } from '@/utils/dateTime'
 import {
   deleteAllImportedLearningResources,
   deleteLearningResource,
@@ -24,6 +23,8 @@ import type {
   LearningImportPreview,
   LearningResource,
 } from '@/types/learningResources'
+import LearningResourceSheet from '@/components/learning/LearningResourceSheet'
+import { cleanLearningSheetText } from '@/utils/learningResources'
 
 import './LearningResourcesPage.css'
 
@@ -238,10 +239,10 @@ const LearningResourcesPage = () => {
   const startEditing = (item: LearningResource) => {
     setEditingId(item.id)
     setEditDraft({
-      display_title: item.display_title,
-      category: item.category?.name || '待分类',
-      tags: item.tags.join('、'),
-      share_url: item.share_url || '',
+      display_title: cleanLearningSheetText(item.display_title),
+      category: cleanLearningSheetText(item.category?.name || '待分类'),
+      tags: item.tags.map(cleanLearningSheetText).filter(Boolean).join('、'),
+      share_url: cleanLearningSheetText(item.share_url || ''),
     })
   }
 
@@ -318,99 +319,6 @@ const LearningResourcesPage = () => {
       label: category.name + ' ' + category.resource_count,
     })),
   ]
-
-  const columns = [
-    {
-      title: '#',
-      key: 'row-number',
-      width: 58,
-      fixed: 'left' as const,
-      render: (_value: unknown, _row: LearningResource, index: number) => (page - 1) * pageSize + index + 1,
-    },
-    {
-      title: '资源标题',
-      dataIndex: 'display_title',
-      key: 'title',
-      render: (title: string, row: LearningResource) => (
-        editingId === row.id ? (
-          <Input value={editDraft.display_title} onChange={(event) => setEditDraft((draft) => ({ ...draft, display_title: event.target.value }))} />
-        ) : (
-          <div className="learning-title-cell" onDoubleClick={() => isAdmin && startEditing(row)}>
-            <strong>{title}</strong>
-            {row.tags.length > 0 ? <span>{row.tags.slice(0, 3).join(' · ')}</span> : null}
-          </div>
-        )
-      ),
-    },
-    {
-      title: '分类',
-      key: 'category',
-      width: 150,
-      render: (_value: unknown, row: LearningResource) => editingId === row.id ? (
-        <Input
-          value={editDraft.category || '待分类'}
-          onChange={(event) => setEditDraft((draft) => ({ ...draft, category: event.target.value }))}
-        />
-      ) : row.category?.name || '待分类',
-    },
-    {
-      title: '标签',
-      key: 'tags',
-      width: 180,
-      render: (_value: unknown, row: LearningResource) => editingId === row.id ? (
-        <Input value={editDraft.tags} onChange={(event) => setEditDraft((draft) => ({ ...draft, tags: event.target.value }))} />
-      ) : row.tags.join('、') || '-',
-    },
-    {
-      title: '网盘资源',
-      key: 'share',
-      width: 240,
-      render: (_value: unknown, row: LearningResource) => editingId === row.id ? (
-        <Input value={editDraft.share_url} onChange={(event) => setEditDraft((draft) => ({ ...draft, share_url: event.target.value }))} />
-      ) : row.share_url ? (
-        <Button type="link" icon={<ExportOutlined />} onClick={() => window.open(row.share_url, '_blank', 'noopener,noreferrer')}>
-          打开分享
-        </Button>
-      ) : <Tag color="orange">暂无链接</Tag>,
-    },
-    {
-      title: '更新时间',
-      key: 'updated',
-      width: 180,
-      render: (_value: unknown, row: LearningResource) => row.updated_at
-        ? formatServerDateTime(row.updated_at, 'YYYY-MM-DD HH:mm', 'Asia/Shanghai')
-        : '-',
-    },
-  ]
-  if (isAdmin) {
-    columns.push({
-      title: '状态',
-      key: 'status',
-      width: 100,
-      render: (_value: unknown, row: LearningResource) => (
-        <Tag color={row.status === 'published' ? 'green' : row.status === 'failed' ? 'red' : 'default'}>{row.status || 'pending'}</Tag>
-      ),
-    })
-    columns.push({
-      title: '操作',
-      key: 'action',
-      width: 190,
-      render: (_value: unknown, row: LearningResource) => editingId === row.id ? (
-        <Space size={4}>
-          <Button size="small" type="primary" icon={<CheckOutlined />} loading={maintenanceBusyId === row.id} onClick={() => void handleSaveEditing(row)}>保存</Button>
-          <Button size="small" icon={<CloseOutlined />} onClick={cancelEditing}>取消</Button>
-        </Space>
-      ) : (
-        <Space size={4}>
-          <Button size="small" icon={<EditOutlined />} onClick={() => startEditing(row)}>编辑</Button>
-          {row.status === 'failed' ? <Button size="small" loading={maintenanceBusyId === row.id} onClick={() => void handleRetry(row)}>重试</Button> : null}
-          <Popconfirm title="确认删除这条资源？" description="只删除本项目中的学习资料记录，不删除网盘远端文件。" okText="删除" cancelText="取消" onConfirm={() => void handleDeleteRow(row)}>
-            <Button size="small" danger icon={<DeleteOutlined />} loading={maintenanceBusyId === row.id}>删除</Button>
-          </Popconfirm>
-        </Space>
-      ),
-    })
-  }
 
   return (
     <div className="learning-resources-page">
@@ -568,23 +476,24 @@ const LearningResourcesPage = () => {
             ) : null}
           </Space>
         </div>
-        {loading ? <div className="learning-state"><Spin /></div> : resources.length === 0 ? <Empty description="暂无已发布学习资料" /> : (
-          <Table<LearningResource>
-            rowKey="id"
-            columns={columns}
-            dataSource={resources}
-            pagination={{
-              current: page,
-              pageSize,
-              total: resourceTotal,
-              showSizeChanger: false,
-              showTotal: (total) => `共 ${total} 条`,
-              onChange: (nextPage) => setPage(nextPage),
-            }}
-            size="middle"
-            scroll={{ x: 1160 }}
-          />
-        )}
+        <LearningResourceSheet
+          resources={resources}
+          total={resourceTotal}
+          page={page}
+          pageSize={pageSize}
+          isAdmin={isAdmin}
+          loading={loading}
+          editingId={editingId}
+          editDraft={editDraft}
+          maintenanceBusyId={maintenanceBusyId}
+          onPageChange={setPage}
+          onStartEditing={startEditing}
+          onCancelEditing={cancelEditing}
+          onEditDraftChange={(field, value) => setEditDraft((draft) => ({ ...draft, [field]: value }))}
+          onSaveEditing={(resource) => void handleSaveEditing(resource)}
+          onDeleteRow={(resource) => void handleDeleteRow(resource)}
+          onRetry={(resource) => void handleRetry(resource)}
+        />
       </section>
 
       <Modal

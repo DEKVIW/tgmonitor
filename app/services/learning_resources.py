@@ -71,8 +71,22 @@ def _display_title(message: Message) -> str:
     return (description.splitlines()[0].strip() if description else "未命名资源")[:255]
 
 
+def _strip_wrapping_quotes(value: Any) -> str:
+    text = str(value or "").replace("\ufeff", "").strip()
+    quote_pairs = (("\"", "\""), ("'", "'"), ("“", "”"), ("「", "」"), ("『", "』"))
+    changed = True
+    while len(text) >= 2 and changed:
+        changed = False
+        for opening, closing in quote_pairs:
+            if text.startswith(opening) and text.endswith(closing):
+                text = text[len(opening):len(text) - len(closing)].strip()
+                changed = True
+                break
+    return text
+
+
 def _clean_tag(value: Any) -> str:
-    return str(value or "").strip().lstrip("#").strip()[:120]
+    return _strip_wrapping_quotes(value).lstrip("#").strip()[:120]
 
 
 def classify_learning_message(message: Message) -> dict[str, Any]:
@@ -109,14 +123,15 @@ def classify_learning_message(message: Message) -> dict[str, Any]:
 
 
 def _clean_import_text(value: Any, *, max_length: int = 255) -> str:
-    return " ".join(str(value or "").replace("\u200b", " ").split())[:max_length].strip()
+    text = " ".join(str(value or "").replace("\u200b", " ").split())
+    return _strip_wrapping_quotes(text)[:max_length].strip()
 
 
 def _split_import_values(value: Any) -> list[str]:
     return [
-        part.strip().lstrip("#")
+        tag
         for part in re.split(r"[、,，|;；]+", str(value or ""))
-        if part.strip()
+        if (tag := _clean_tag(part))
     ]
 
 
@@ -1457,7 +1472,7 @@ def list_public_learning_categories(session: Session) -> list[dict[str, Any]]:
     return [
         {
             "id": int(row.id),
-            "name": str(row.name or ""),
+            "name": _clean_import_text(row.name, max_length=120),
             "slug": str(row.slug or ""),
             "sort_order": int(row.sort_order or 0),
             "resource_count": int(
@@ -1512,18 +1527,18 @@ def list_public_learning_resources(
     return [
         {
             "id": int(item.id),
-            "display_title": str(item.display_title or ""),
+            "display_title": _clean_import_text(item.display_title, max_length=255),
             "category": {
                 "id": int(category.id),
-                "name": str(category.name or ""),
+                "name": _clean_import_text(category.name, max_length=120),
                 "slug": str(category.slug or ""),
             }
             if category is not None
             else None,
             "tags": [
-                str(tag).strip()
-                for tag in list((message.tags if message is not None else None) or item.tags or [])
-                if str(tag).strip()
+                tag
+                for raw_tag in list((message.tags if message is not None else None) or item.tags or [])
+                if (tag := _clean_tag(raw_tag))
             ],
             "share_url": str(link.share_url or ""),
             "platform": str(link.platform or PLATFORM_QUARK),
@@ -1572,13 +1587,13 @@ def _serialize_admin_learning_item(
 ) -> dict[str, Any]:
     return {
         "id": int(item.id),
-        "display_title": str(item.display_title or ""),
+        "display_title": _clean_import_text(item.display_title, max_length=255),
         "status": str(item.status or ""),
-        "category": {"id": int(category.id), "name": str(category.name or ""), "slug": str(category.slug or "")} if category else None,
+            "category": {"id": int(category.id), "name": _clean_import_text(category.name, max_length=120), "slug": str(category.slug or "")} if category else None,
         "tags": [
-            str(tag).strip()
-            for tag in list((message.tags if message is not None else None) or item.tags or [])
-            if str(tag).strip()
+            tag
+            for raw_tag in list((message.tags if message is not None else None) or item.tags or [])
+            if (tag := _clean_tag(raw_tag))
         ],
         "share_url": str(link.share_url or "") if link else None,
         "platform": str(link.platform or PLATFORM_QUARK) if link else "",
@@ -1706,7 +1721,7 @@ def list_learning_admin_overview(session: Session) -> dict[str, Any]:
     categories = [
         {
             "id": int(row.id),
-            "name": str(row.name or ""),
+            "name": _clean_import_text(row.name, max_length=120),
             "slug": str(row.slug or ""),
             "directory_name": str(row.directory_name or ""),
             "is_enabled": bool(row.is_enabled),

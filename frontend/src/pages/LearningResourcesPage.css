@@ -32,9 +32,8 @@
 .learning-import-panel {
   margin-top: 22px;
   border: 1px solid var(--surface-border);
-  border-radius: 8px;
+  border-radius: 6px;
   background: var(--surface-bg);
-  box-shadow: var(--shadow-soft);
 }
 
 .learning-config-panel {
@@ -63,6 +62,7 @@
 
 .learning-sheet {
   overflow: hidden;
+  background: #ffffff;
 }
 
 .learning-sheet-toolbar {
@@ -70,7 +70,8 @@
   align-items: flex-end;
   justify-content: space-between;
   gap: 16px;
-  padding: 0 16px;
+  padding: 0 14px;
+  background: #ffffff;
   border-bottom: 1px solid var(--surface-border);
 }
 
@@ -104,28 +105,187 @@
   color: var(--color-primary);
 }
 
-.learning-sheet > .ant-table-wrapper {
-  padding: 0 10px 8px;
+.learning-sheet-grid-wrap {
+  background: #ffffff;
 }
 
-.learning-title-cell {
-  display: flex;
-  min-width: 240px;
-  flex-direction: column;
-  gap: 4px;
+.learning-sheet-grid-scroll {
+  max-height: min(68vh, 760px);
+  overflow: auto;
 }
 
-.learning-title-cell strong {
-  color: var(--text-strong);
+.learning-sheet-grid {
+  min-width: 1110px;
+  background: #ffffff;
+}
+
+.learning-sheet-row {
+  display: grid;
+  grid-template-columns: var(--learning-sheet-columns);
+  min-height: 42px;
+  background: #ffffff;
+}
+
+.learning-sheet-row:not(.learning-sheet-header):hover {
+  background: #f7fbff;
+}
+
+.learning-sheet-header {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  min-height: 38px;
+  background: #f5f8fb;
+  color: #53687b;
+  font-size: 12px;
   font-weight: 600;
 }
 
-.learning-title-cell span {
-  overflow: hidden;
-  color: var(--text-muted);
+.learning-sheet-cell {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  padding: 0 12px;
+  border-right: 1px solid #e5ebf0;
+  border-bottom: 1px solid #e5ebf0;
+  color: var(--text-strong);
+  font-size: 13px;
+}
+
+.learning-sheet-row-number {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  justify-content: flex-end;
+  padding: 0 10px;
+  background: #f9fbfc;
+  color: #8b9bab;
+  font-variant-numeric: tabular-nums;
   font-size: 12px;
+}
+
+.learning-sheet-header .learning-sheet-row-number {
+  z-index: 4;
+  background: #eef3f7;
+}
+
+.learning-sheet-row:hover .learning-sheet-row-number {
+  background: #eef7ff;
+}
+
+.learning-sheet-cell-text {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.learning-sheet-title {
+  font-weight: 600;
+}
+
+.learning-sheet-link {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  color: var(--color-primary);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.learning-sheet-link:hover {
+  text-decoration: underline;
+}
+
+.learning-sheet-muted {
+  color: #9aa8b5;
+}
+
+.learning-sheet-input {
+  width: 100%;
+  min-width: 0;
+  height: 28px;
+  padding: 3px 7px;
+  border: 1px solid #78aee0;
+  border-radius: 3px;
+  outline: none;
+  background: #ffffff;
+  color: var(--text-strong);
+  font: inherit;
+  box-shadow: 0 0 0 2px rgba(11, 107, 203, 0.12);
+}
+
+.learning-sheet-input:focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px rgba(11, 107, 203, 0.2);
+}
+
+.learning-sheet-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 7px;
+  border-radius: 3px;
+  background: #f0f3f6;
+  color: #607385;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.learning-sheet-status-published {
+  background: #eaf7ef;
+  color: #237a42;
+}
+
+.learning-sheet-status-failed {
+  background: #fff0f0;
+  color: #b52e2e;
+}
+
+.learning-sheet-actions {
+  padding: 0 8px;
+}
+
+.learning-sheet-icon-button.ant-btn {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 3px;
+  color: #627688;
+}
+
+.learning-sheet-icon-button.ant-btn:hover {
+  background: #eaf3fb;
+  color: var(--color-primary);
+}
+
+.learning-sheet-icon-button-primary.ant-btn {
+  color: #237a42;
+}
+
+.learning-sheet-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 42px;
+  padding: 0 12px;
+  color: #718396;
+  font-size: 12px;
+}
+
+.learning-sheet-page-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.learning-sheet-state {
+  display: grid;
+  min-height: 280px;
+  place-items: center;
+  color: #7c8d9d;
 }
 
 .learning-admin-sheet {
@@ -204,5 +364,13 @@
   .learning-sheet-tabs {
     margin: 0 -12px;
     padding: 0 8px;
+  }
+
+  .learning-sheet-grid-scroll {
+    max-height: 62vh;
+  }
+
+  .learning-sheet-footer {
+    min-height: 40px;
   }
 }
