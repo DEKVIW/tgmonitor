@@ -6,7 +6,7 @@ from typing import Iterable
 from sqlalchemy import and_, case, func, or_
 from sqlalchemy.orm import Session
 
-from app.models.models import PanTransferBatch, PanTransferBatchItem, ensure_runtime_storage_tables
+from app.models.models import LearningChannelConfig, LearningResourceTransferJob, PanTransferBatch, PanTransferBatchItem, ensure_runtime_storage_tables
 
 from .common import dedupe_ints, utcnow
 from .constants import (
@@ -153,31 +153,57 @@ def claim_next_pan_transfer_batch_item(session: Session, *, worker_name: str) ->
     ensure_runtime_storage_tables()
     recycle_stale_pan_transfer_locks(session)
     now = utcnow()
-    candidate = (
-        session.query(PanTransferBatchItem)
-        .join(PanTransferBatch, PanTransferBatch.id == PanTransferBatchItem.batch_id)
-        .filter(
-            PanTransferBatch.status == PAN_TRANSFER_BATCH_STATUS_RUNNING,
-            or_(
-                PanTransferBatchItem.transfer_status == PAN_TRANSFER_ITEM_STATUS_QUEUED,
-                and_(
-                    PanTransferBatchItem.transfer_status == PAN_TRANSFER_ITEM_STATUS_RETRY_WAIT,
-                    PanTransferBatchItem.next_retry_at.isnot(None),
-                    PanTransferBatchItem.next_retry_at <= now,
+    while True:
+        candidate = (
+            session.query(PanTransferBatchItem)
+            .join(PanTransferBatch, PanTransferBatch.id == PanTransferBatchItem.batch_id)
+            .filter(
+                PanTransferBatch.status == PAN_TRANSFER_BATCH_STATUS_RUNNING,
+                or_(
+                    PanTransferBatchItem.transfer_status == PAN_TRANSFER_ITEM_STATUS_QUEUED,
+                    and_(
+                        PanTransferBatchItem.transfer_status == PAN_TRANSFER_ITEM_STATUS_RETRY_WAIT,
+                        PanTransferBatchItem.next_retry_at.isnot(None),
+                        PanTransferBatchItem.next_retry_at <= now,
+                    ),
                 ),
-            ),
+            )
+            .order_by(
+                case((PanTransferBatchItem.transfer_status == PAN_TRANSFER_ITEM_STATUS_QUEUED, 0), else_=1),
+                PanTransferBatch.created_at.asc(),
+                PanTransferBatchItem.created_at.asc(),
+                PanTransferBatchItem.id.asc(),
+            )
+            .with_for_update(skip_locked=True)
+            .first()
         )
-        .order_by(
-            case((PanTransferBatchItem.transfer_status == PAN_TRANSFER_ITEM_STATUS_QUEUED, 0), else_=1),
-            PanTransferBatch.created_at.asc(),
-            PanTransferBatchItem.created_at.asc(),
-            PanTransferBatchItem.id.asc(),
+        if candidate is None:
+            return None
+        extra_json = dict(candidate.extra_json or {})
+        channel_key = str(extra_json.get("learning_channel_key") or "").strip()
+        if not channel_key:
+            break
+        config = (
+            session.query(LearningChannelConfig)
+            .filter(LearningChannelConfig.channel_key == channel_key)
+            .first()
         )
-        .with_for_update(skip_locked=True)
-        .first()
-    )
-    if candidate is None:
-        return None
+        if config is not None and bool(config.is_enabled):
+            break
+        candidate.transfer_status = "paused"
+        candidate.next_retry_at = None
+        candidate.locked_by = None
+        candidate.locked_at = None
+        candidate.started_at = None
+        session.add(candidate)
+        job_id = extra_json.get("learning_resource_job_id")
+        if job_id:
+            job = session.get(LearningResourceTransferJob, int(job_id))
+            if job is not None:
+                job.status = "paused"
+                session.add(job)
+        session.flush()
+        refresh_pan_transfer_batch_summary(session, batch_id=int(candidate.batch_id))
 
     candidate.transfer_status = PAN_TRANSFER_ITEM_STATUS_PROCESSING
     candidate.locked_by = str(worker_name or "tg-worker")[:128]
@@ -186,6 +212,12 @@ def claim_next_pan_transfer_batch_item(session: Session, *, worker_name: str) ->
     candidate.finished_at = None
     candidate.error_message = None
     session.add(candidate)
+    learning_job_id = dict(candidate.extra_json or {}).get("learning_resource_job_id")
+    if learning_job_id:
+        learning_job = session.get(LearningResourceTransferJob, int(learning_job_id))
+        if learning_job is not None:
+            learning_job.status = "transferring"
+            session.add(learning_job)
     session.flush()
     refresh_pan_transfer_batch_summary(session, batch_id=int(candidate.batch_id))
     return candidate

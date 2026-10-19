@@ -1,0 +1,182 @@
+.learning-resources-page {
+  width: min(100%, var(--page-max-width));
+  margin: 0 auto;
+  padding: 28px clamp(16px, 2.2vw, 32px) 48px;
+}
+
+.learning-resources-heading,
+.learning-config-heading,
+.learning-admin-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.learning-resources-heading h2 {
+  margin: 8px 0 4px;
+}
+
+.learning-eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--color-primary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.learning-config-panel,
+.learning-sheet,
+.learning-admin-sheet {
+  margin-top: 22px;
+  border: 1px solid var(--surface-border);
+  border-radius: 8px;
+  background: var(--surface-bg);
+  box-shadow: var(--shadow-soft);
+}
+
+.learning-config-panel {
+  padding: 18px 20px;
+}
+
+.learning-config-heading {
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+.learning-config-heading > div,
+.learning-admin-heading > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.learning-config-controls {
+  width: 100%;
+}
+
+.learning-config-error {
+  margin-top: 14px;
+}
+
+.learning-sheet {
+  overflow: hidden;
+}
+
+.learning-sheet-toolbar {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--surface-border);
+}
+
+.learning-sheet-tabs {
+  display: flex;
+  min-width: 0;
+  gap: 4px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.learning-sheet-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.learning-sheet-tabs button {
+  flex: 0 0 auto;
+  padding: 13px 14px 11px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.learning-sheet-tabs button:hover,
+.learning-sheet-tabs button.active {
+  border-bottom-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+.learning-sheet > .ant-table-wrapper {
+  padding: 0 10px 8px;
+}
+
+.learning-title-cell {
+  display: flex;
+  min-width: 240px;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.learning-title-cell strong {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+.learning-title-cell span {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.learning-admin-sheet {
+  padding: 18px 20px 10px;
+}
+
+.learning-admin-heading {
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+.learning-alert {
+  margin-top: 18px;
+}
+
+.learning-state {
+  display: grid;
+  min-height: 280px;
+  place-items: center;
+}
+
+@media (max-width: 768px) {
+  .learning-resources-page {
+    padding: 16px 12px 30px;
+  }
+
+  .learning-resources-heading {
+    align-items: stretch;
+  }
+
+  .learning-resources-heading > .ant-btn {
+    flex: 0 0 auto;
+  }
+
+  .learning-config-panel,
+  .learning-admin-sheet {
+    padding: 14px;
+  }
+
+  .learning-sheet-toolbar {
+    align-items: stretch;
+    flex-direction: column-reverse;
+    padding: 0 12px;
+  }
+
+  .learning-sheet-toolbar .ant-input-search {
+    width: 100% !important;
+    margin-top: 12px;
+  }
+
+  .learning-sheet-tabs {
+    margin: 0 -12px;
+    padding: 0 8px;
+  }
+}

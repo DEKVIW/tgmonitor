@@ -15,6 +15,7 @@ const Login = lazy(() => import('./pages/LoginRuntime'))
 const LoginLinuxDoCallback = lazy(() => import('./pages/LoginLinuxDoCallback'))
 const Dashboard = lazy(() => import('./pages/Dashboard'))
 const MediaWallPage = lazy(() => import('./pages/MediaWallPage'))
+const LearningResourcesPage = lazy(() => import('./pages/LearningResourcesPage'))
 const Statistics = lazy(() => import('./pages/Statistics'))
 const Analytics = lazy(() => import('./pages/AnalyticsDashboardModern'))
 const Admin = lazy(() => import('./pages/AdminRuntime'))
@@ -70,6 +71,14 @@ function App() {
             element={
               <GuestRoute redirectAuthenticated={false}>
                 <Statistics />
+              </GuestRoute>
+            }
+          />
+          <Route
+            path="/learning-resources"
+            element={
+              <GuestRoute redirectAuthenticated={false}>
+                <LearningResourcesPage />
               </GuestRoute>
             }
           />

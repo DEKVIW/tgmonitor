@@ -5,7 +5,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.models.models import LinkTarget, PanTransferAccount, PanTransferBatch, PanTransferBatchItem, ensure_runtime_storage_tables
+from app.models.models import LearningChannelConfig, LearningResourceTransferJob, LinkTarget, PanTransferAccount, PanTransferBatch, PanTransferBatchItem, ensure_runtime_storage_tables
 
 from .common import (
     DEFAULT_SHARE_TARGET_MODE,
@@ -31,7 +31,7 @@ from .constants import (
 from .execution_logs import append_pan_transfer_execution_log
 from .providers import decrypt_account_credential, get_pan_transfer_provider
 from .providers.base import PanTransferProviderError
-from .queue import claim_next_pan_transfer_batch_item, mark_pan_transfer_item_error, mark_pan_transfer_item_success
+from .queue import claim_next_pan_transfer_batch_item, mark_pan_transfer_item_error, mark_pan_transfer_item_success, refresh_pan_transfer_batch_summary
 from .replacement import replace_pan_transfer_links
 from .validation import validate_share_url
 
@@ -53,6 +53,35 @@ def _build_staging_name(item: PanTransferBatchItem) -> str:
     if next_attempt <= 1:
         return base_name
     return f"{base_name}-r{next_attempt}"
+
+
+def _pause_learning_item_if_disabled(session: Session, *, item: PanTransferBatchItem) -> bool:
+    extra_json = dict(item.extra_json or {})
+    channel_key = str(extra_json.get("learning_channel_key") or "").strip()
+    if not channel_key:
+        return False
+    config = (
+        session.query(LearningChannelConfig)
+        .filter(LearningChannelConfig.channel_key == channel_key)
+        .first()
+    )
+    if config is not None and bool(config.is_enabled):
+        return False
+    item.transfer_status = "paused"
+    item.next_retry_at = None
+    item.locked_by = None
+    item.locked_at = None
+    item.started_at = None
+    session.add(item)
+    job_id = extra_json.get("learning_resource_job_id")
+    if job_id:
+        job = session.get(LearningResourceTransferJob, int(job_id))
+        if job is not None:
+            job.status = "paused"
+            session.add(job)
+    session.flush()
+    refresh_pan_transfer_batch_summary(session, batch_id=int(item.batch_id))
+    return True
 
 
 def _normalize_share_target_mode(value: Any) -> str:
@@ -714,7 +743,8 @@ async def _process_pan_transfer_item_async(
             payload=dict(validation_result),
         )
 
-    if str(item.replacement_status or "") != PAN_TRANSFER_REPLACEMENT_STATUS_REPLACED:
+    skip_link_replacement = bool(dict(item.extra_json or {}).get("skip_link_replacement"))
+    if not skip_link_replacement and str(item.replacement_status or "") != PAN_TRANSFER_REPLACEMENT_STATUS_REPLACED:
         item.replacement_status = PAN_TRANSFER_REPLACEMENT_STATUS_PENDING
         session.add(item)
         session.flush()
@@ -766,12 +796,28 @@ def process_next_pan_transfer_item(session: Session, *, worker_name: str) -> boo
     item = claim_next_pan_transfer_batch_item(session, worker_name=worker_name)
     if item is None:
         return False
+    if _pause_learning_item_if_disabled(session, item=item):
+        return True
 
     previous_expire_on_commit = session.expire_on_commit
     session.expire_on_commit = False
     try:
         asyncio.run(_process_pan_transfer_item_async(session, item=item, worker_name=worker_name))
         mark_pan_transfer_item_success(session, item=item)
+        try:
+            from app.services.learning_resources import sync_learning_resource_after_transfer
+
+            with session.begin_nested():
+                sync_learning_resource_after_transfer(session, item=item, success=True)
+        except Exception as exc:
+            append_pan_transfer_execution_log(
+                session,
+                item=item,
+                stage="learning_resource",
+                level="warning",
+                message=f"Learning resource post-processing failed: {_describe_exception(exc)}",
+                payload=_extract_error_payload(exc),
+            )
         try:
             from .follow_sync import handle_follow_sync_item_success
 
@@ -834,6 +880,25 @@ def process_next_pan_transfer_item(session: Session, *, worker_name: str) -> boo
             error_message=error_detail,
             retryable=retryable,
         )
+        try:
+            from app.services.learning_resources import sync_learning_resource_after_transfer
+
+            with session.begin_nested():
+                sync_learning_resource_after_transfer(
+                    session,
+                    item=item,
+                    success=False,
+                    error_message=error_detail,
+                )
+        except Exception as learning_exc:
+            append_pan_transfer_execution_log(
+                session,
+                item=item,
+                stage="learning_resource",
+                level="warning",
+                message=f"Learning resource failure hook failed: {_describe_exception(learning_exc)}",
+                payload=_extract_error_payload(learning_exc),
+            )
         try:
             from .follow_sync import handle_follow_sync_item_failure
 
