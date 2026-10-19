@@ -12,6 +12,7 @@ from app.services.resource_ops.workbench import (
     _build_workbench_candidate_target_ids,
     _load_workbench_candidate_rows,
 )
+from app.services.resource_ops.analytics import get_resource_ops_trend
 
 
 class ResourceOpsWorkbenchQueryScopeTests(unittest.TestCase):
@@ -77,6 +78,50 @@ class ResourceOpsWorkbenchQueryScopeTests(unittest.TestCase):
         self.assertGreaterEqual(sql.count("workbench_candidate_target_ids"), 7)
         self.assertGreaterEqual(sql.count("workbench_candidate_urls"), 3)
         session.close()
+        engine.dispose()
+
+    def test_trend_reads_daily_stats_after_click_events_are_removed(self) -> None:
+        engine = create_engine("sqlite://")
+        previous_day = date.today() - timedelta(days=1)
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "CREATE TABLE link_target_daily_stats ("
+                    "stat_date DATE NOT NULL, "
+                    "link_target_id INTEGER NOT NULL, "
+                    "click_count INTEGER NOT NULL, "
+                    "unique_sessions INTEGER NOT NULL)"
+                )
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO link_target_daily_stats "
+                    "(stat_date, link_target_id, click_count, unique_sessions) "
+                    "VALUES (:stat_date, :link_target_id, :click_count, :unique_sessions)"
+                ),
+                [
+                    {
+                        "stat_date": previous_day,
+                        "link_target_id": 1,
+                        "click_count": 14,
+                        "unique_sessions": 13,
+                    },
+                    {
+                        "stat_date": previous_day,
+                        "link_target_id": 2,
+                        "click_count": 9,
+                        "unique_sessions": 8,
+                    },
+                ],
+            )
+
+        with Session(engine) as session:
+            payload = get_resource_ops_trend(session, days=3)
+
+        previous_point = next(item for item in payload["days"] if item["date"] == previous_day.isoformat())
+        self.assertEqual(previous_point["click_count"], 23)
+        self.assertEqual(previous_point["unique_sessions"], 21)
+        self.assertEqual(previous_point["clicked_targets"], 2)
         engine.dispose()
 
 

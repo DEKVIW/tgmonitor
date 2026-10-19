@@ -297,14 +297,14 @@ def get_resource_ops_trend(session: Session, *, days: int = DEFAULT_LOOKBACK_DAY
 
     rows = (
         session.query(
-            LinkClickEvent.stat_date.label("stat_date"),
-            func.count(LinkClickEvent.id).label("click_count"),
-            func.count(distinct(_build_session_identity_expr())).label("unique_sessions"),
-            func.count(distinct(LinkClickEvent.link_target_id)).label("clicked_targets"),
+            LinkTargetDailyStat.stat_date.label("stat_date"),
+            func.sum(LinkTargetDailyStat.click_count).label("click_count"),
+            func.sum(LinkTargetDailyStat.unique_sessions).label("unique_sessions"),
+            func.count(distinct(LinkTargetDailyStat.link_target_id)).label("clicked_targets"),
         )
-        .filter(LinkClickEvent.stat_date >= start)
-        .group_by(LinkClickEvent.stat_date)
-        .order_by(LinkClickEvent.stat_date.asc())
+        .filter(LinkTargetDailyStat.stat_date >= start)
+        .group_by(LinkTargetDailyStat.stat_date)
+        .order_by(LinkTargetDailyStat.stat_date.asc())
         .all()
     )
     row_map = {
