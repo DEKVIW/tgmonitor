@@ -6,7 +6,7 @@ import re
 import unicodedata
 from typing import Any, Iterable
 
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.models.models import (
@@ -24,6 +24,11 @@ from app.models.models import (
     PanTransferAccount,
     PanTransferBatch,
     PanTransferBatchItem,
+    PanTransferExecutionLog,
+    PanTransferPublishRecord,
+    PanTransferReplacementLog,
+    PanTransferSyncTask,
+    PanTransferSyncTaskLog,
     ensure_runtime_storage_tables,
 )
 from app.services.pan_transfer.common import normalize_relative_path, sanitize_path_segment, utcnow
@@ -1068,6 +1073,320 @@ def retry_learning_resource(session: Session, resource_id: int) -> dict[str, Any
     return {"resource_id": int(resource.id), "job_id": int(job.id), "status": str(job.status)}
 
 
+def _normalize_learning_tags(values: Iterable[Any]) -> list[str]:
+    result: list[str] = []
+    for value in values:
+        tag = _clean_tag(value)
+        if tag and tag not in result:
+            result.append(tag)
+    return result[:50]
+
+
+def update_learning_resource(
+    session: Session,
+    *,
+    resource_id: int,
+    display_title: str,
+    category_name: str,
+    tags: Iterable[Any],
+    share_url: str,
+    operator: str,
+) -> dict[str, Any]:
+    ensure_runtime_storage_tables()
+    resource = session.get(LearningResourceItem, int(resource_id))
+    if resource is None:
+        raise LookupError("学习资料不存在")
+
+    title = _clean_import_text(display_title, max_length=255)
+    if not title:
+        raise ValueError("资源标题不能为空")
+    normalized_title = normalize_learning_title(title)
+    duplicate = (
+        session.query(LearningResourceItem.id)
+        .filter(
+            LearningResourceItem.source_channel_key == resource.source_channel_key,
+            LearningResourceItem.normalized_title == normalized_title,
+            LearningResourceItem.id != int(resource.id),
+        )
+        .first()
+    )
+    if duplicate is not None:
+        raise ValueError("同一来源已经存在相同标题的资源")
+
+    category = _get_or_create_category(
+        session,
+        name=_clean_import_text(category_name, max_length=120) or "待分类",
+        operator=operator,
+    )
+    resource.display_title = title
+    resource.normalized_title = normalized_title
+    resource.primary_category_id = int(category.id)
+    resource.tags = _normalize_learning_tags(tags)
+    resource.updated_by = operator
+    session.add(resource)
+    session.query(LearningResourceItemCategory).filter(
+        LearningResourceItemCategory.resource_id == int(resource.id),
+    ).delete(synchronize_session=False)
+    _resource_category_link(session, resource_id=int(resource.id), category_id=int(category.id))
+
+    normalized_share_url = normalize_candidate_url(str(share_url or ""))
+    if normalized_share_url and not is_http_url(normalized_share_url):
+        raise ValueError("网盘链接必须是有效的 http 或 https 地址")
+    link = (
+        session.query(LearningResourceLink)
+        .filter(
+            LearningResourceLink.resource_id == int(resource.id),
+            LearningResourceLink.is_primary.is_(True),
+        )
+        .order_by(LearningResourceLink.id.desc())
+        .first()
+    )
+    if normalized_share_url:
+        share_fingerprint = hashlib.sha256(normalized_share_url.encode("utf-8")).hexdigest()
+        matching_link = (
+            session.query(LearningResourceLink)
+            .filter(
+                LearningResourceLink.resource_id == int(resource.id),
+                LearningResourceLink.url_fingerprint == share_fingerprint,
+            )
+            .order_by(LearningResourceLink.id.desc())
+            .first()
+        )
+        if matching_link is not None:
+            link = matching_link
+        if link is None:
+            link = LearningResourceLink(
+                resource_id=int(resource.id),
+                platform=detect_platform_from_url(normalized_share_url),
+                source_url=normalized_share_url,
+                url_fingerprint=share_fingerprint,
+                share_url=normalized_share_url,
+                is_primary=True,
+                is_enabled=True,
+                status="published",
+            )
+            session.add(link)
+            session.flush()
+        else:
+            link.platform = detect_platform_from_url(normalized_share_url)
+            link.source_url = normalized_share_url
+            link.url_fingerprint = share_fingerprint
+            link.share_url = normalized_share_url
+            link.is_primary = True
+            link.is_enabled = True
+            link.status = "published"
+            link.last_error_message = None
+            session.add(link)
+        session.query(LearningResourceLink).filter(
+            LearningResourceLink.resource_id == int(resource.id),
+            LearningResourceLink.id != int(link.id) if link.id is not None else True,
+        ).update({"is_primary": False}, synchronize_session=False)
+        resource.status = LEARNING_STATUS_PUBLISHED
+        resource.last_published_at = utcnow()
+    elif link is not None:
+        link.is_primary = False
+        link.is_enabled = False
+        link.status = "pending"
+        link.last_error_message = "管理员清空了分享链接"
+        session.add(link)
+        resource.status = LEARNING_STATUS_PENDING
+    else:
+        resource.status = LEARNING_STATUS_PENDING
+    session.add(resource)
+    session.flush()
+    result = get_admin_learning_item(session, int(resource.id))
+    if result is None:
+        raise LookupError("学习资料更新后无法读取")
+    return result
+
+
+def _delete_transfer_batch_records(
+    session: Session,
+    *,
+    batch_item_ids: set[int],
+    batch_ids: set[int],
+    delete_batches: bool,
+) -> dict[str, int]:
+    if batch_ids:
+        batch_item_ids.update(
+            int(item_id)
+            for (item_id,) in session.query(PanTransferBatchItem.id)
+            .filter(PanTransferBatchItem.batch_id.in_(sorted(batch_ids)))
+            .all()
+        )
+    if not batch_item_ids and not (delete_batches and batch_ids):
+        return {"deleted_batches": 0}
+
+    batch_scope_filters = []
+    if batch_item_ids:
+        batch_scope_filters.append(PanTransferSyncTask.source_batch_item_id.in_(sorted(batch_item_ids)))
+    if batch_ids:
+        batch_scope_filters.append(PanTransferSyncTask.source_batch_id.in_(sorted(batch_ids)))
+    sync_task_ids = {
+        int(task_id)
+        for (task_id,) in session.query(PanTransferSyncTask.id)
+        .filter(or_(*batch_scope_filters))
+        .all()
+    } if batch_scope_filters else set()
+    if sync_task_ids:
+        session.query(PanTransferSyncTaskLog).filter(PanTransferSyncTaskLog.task_id.in_(sorted(sync_task_ids))).delete(
+            synchronize_session=False,
+        )
+        session.query(PanTransferSyncTask).filter(PanTransferSyncTask.id.in_(sorted(sync_task_ids))).delete(
+            synchronize_session=False,
+        )
+    publish_scope_filters = []
+    if batch_item_ids:
+        publish_scope_filters.append(PanTransferPublishRecord.source_batch_item_id.in_(sorted(batch_item_ids)))
+    if batch_ids:
+        publish_scope_filters.append(PanTransferPublishRecord.source_batch_id.in_(sorted(batch_ids)))
+    if publish_scope_filters:
+        session.query(PanTransferPublishRecord).filter(or_(*publish_scope_filters)).delete(synchronize_session=False)
+    if batch_item_ids:
+        session.query(PanTransferReplacementLog).filter(
+            PanTransferReplacementLog.batch_item_id.in_(sorted(batch_item_ids)),
+        ).delete(synchronize_session=False)
+        session.query(PanTransferExecutionLog).filter(
+            PanTransferExecutionLog.batch_item_id.in_(sorted(batch_item_ids)),
+        ).delete(synchronize_session=False)
+        session.query(PanTransferBatchItem).filter(
+            PanTransferBatchItem.id.in_(sorted(batch_item_ids)),
+        ).delete(synchronize_session=False)
+
+    deleted_batches = 0
+    if delete_batches and batch_ids:
+        deleted_batches = int(
+            session.query(PanTransferBatch)
+            .filter(PanTransferBatch.id.in_(sorted(batch_ids)))
+            .delete(synchronize_session=False)
+        )
+    return {"deleted_batches": deleted_batches}
+
+
+def _delete_learning_resources_by_ids(session: Session, resource_ids: Iterable[int]) -> dict[str, int]:
+    normalized_ids = {int(resource_id) for resource_id in resource_ids if int(resource_id) > 0}
+    if not normalized_ids:
+        return {
+            "deleted_resources": 0,
+            "deleted_links": 0,
+            "deleted_transfer_jobs": 0,
+            "deleted_batches": 0,
+            "deleted_categories": 0,
+        }
+    jobs = session.query(LearningResourceTransferJob).filter(
+        LearningResourceTransferJob.resource_id.in_(sorted(normalized_ids)),
+    ).all()
+    batch_item_ids = {int(job.batch_item_id) for job in jobs if job.batch_item_id}
+    batch_ids = {int(job.batch_id) for job in jobs if job.batch_id}
+    batch_stats = _delete_transfer_batch_records(
+        session,
+        batch_item_ids=batch_item_ids,
+        batch_ids=set(),
+        delete_batches=False,
+    )
+    deleted_jobs = int(
+        session.query(LearningResourceTransferJob)
+        .filter(LearningResourceTransferJob.resource_id.in_(sorted(normalized_ids)))
+        .delete(synchronize_session=False)
+    )
+    deleted_links = int(
+        session.query(LearningResourceLink)
+        .filter(LearningResourceLink.resource_id.in_(sorted(normalized_ids)))
+        .delete(synchronize_session=False)
+    )
+    session.query(LearningResourceItemCategory).filter(
+        LearningResourceItemCategory.resource_id.in_(sorted(normalized_ids)),
+    ).delete(synchronize_session=False)
+    deleted_resources = int(
+        session.query(LearningResourceItem)
+        .filter(LearningResourceItem.id.in_(sorted(normalized_ids)))
+        .delete(synchronize_session=False)
+    )
+
+    empty_batch_ids = {
+        int(batch_id)
+        for (batch_id,) in session.query(PanTransferBatch.id)
+        .filter(PanTransferBatch.id.in_(sorted(batch_ids)))
+        .filter(~session.query(PanTransferBatchItem.id).filter(PanTransferBatchItem.batch_id == PanTransferBatch.id).exists())
+        .all()
+    }
+    if empty_batch_ids:
+        batch_stats["deleted_batches"] += _delete_transfer_batch_records(
+            session,
+            batch_item_ids=set(),
+            batch_ids=empty_batch_ids,
+            delete_batches=True,
+        )["deleted_batches"]
+
+    deleted_categories = 0
+    for category in session.query(LearningResourceCategory).all():
+        item_used = session.query(LearningResourceItemCategory.id).filter(
+            LearningResourceItemCategory.category_id == int(category.id),
+        ).first()
+        primary_item_used = session.query(LearningResourceItem.id).filter(
+            LearningResourceItem.primary_category_id == int(category.id),
+        ).first()
+        transfer_used = session.query(LearningResourceTransferJob.id).filter(
+            LearningResourceTransferJob.category_id == int(category.id),
+        ).first()
+        config_used = session.query(LearningChannelConfig.id).filter(
+            LearningChannelConfig.default_category_id == int(category.id),
+        ).first()
+        if item_used is None and primary_item_used is None and transfer_used is None and config_used is None:
+            session.delete(category)
+            deleted_categories += 1
+    return {
+        "deleted_resources": deleted_resources,
+        "deleted_links": deleted_links,
+        "deleted_transfer_jobs": deleted_jobs,
+        "deleted_batches": int(batch_stats["deleted_batches"]),
+        "deleted_categories": deleted_categories,
+    }
+
+
+def delete_learning_resource(session: Session, *, resource_id: int) -> dict[str, int]:
+    ensure_runtime_storage_tables()
+    resource = session.get(LearningResourceItem, int(resource_id))
+    if resource is None:
+        raise LookupError("学习资料不存在")
+    result = _delete_learning_resources_by_ids(session, [int(resource.id)])
+    session.flush()
+    return result
+
+
+def delete_all_imported_learning_resources(session: Session) -> dict[str, int]:
+    ensure_runtime_storage_tables()
+    resource_ids = [
+        int(resource_id)
+        for (resource_id,) in session.query(LearningResourceItem.id)
+        .filter(LearningResourceItem.source_channel_key == "manual-import")
+        .all()
+    ]
+    result = _delete_learning_resources_by_ids(session, resource_ids)
+    import_batches = [
+        batch
+        for batch in session.query(PanTransferBatch)
+        .filter(
+            PanTransferBatch.batch_type == "learning_resources",
+            PanTransferBatch.source_scope == "learning_import",
+        )
+        .all()
+    ]
+    import_batch_ids = {int(batch.id) for batch in import_batches}
+    if import_batch_ids:
+        result["deleted_batches"] += _delete_transfer_batch_records(
+            session,
+            batch_item_ids=set(),
+            batch_ids=import_batch_ids,
+            delete_batches=True,
+        )["deleted_batches"]
+    result["deleted_import_jobs"] = int(
+        session.query(LearningResourceImportJob).delete(synchronize_session=False)
+    )
+    session.flush()
+    return result
+
+
 def pause_learning_channel_tasks(session: Session, channel_key: str) -> int:
     normalized = normalize_channel_username(channel_key)
     resource_ids = [
@@ -1160,7 +1479,8 @@ def list_public_learning_resources(
     *,
     category_slug: str | None = None,
     search: str | None = None,
-    limit: int = 200,
+    offset: int = 0,
+    limit: int = 50,
 ) -> list[dict[str, Any]]:
     ensure_runtime_storage_tables()
     query = (
@@ -1188,7 +1508,7 @@ def list_public_learning_resources(
         LearningResourceItem.latest_source_at.desc().nullslast(),
         LearningResourceItem.updated_at.desc(),
         LearningResourceItem.id.desc(),
-    ).limit(max(1, min(int(limit or 200), 500))).all()
+    ).offset(max(0, int(offset or 0))).limit(max(1, min(int(limit or 50), 100))).all()
     return [
         {
             "id": int(item.id),
@@ -1214,37 +1534,136 @@ def list_public_learning_resources(
     ]
 
 
-def list_admin_learning_items(session: Session, *, search: str | None = None, limit: int = 300) -> list[dict[str, Any]]:
+def count_public_learning_resources(
+    session: Session,
+    *,
+    category_slug: str | None = None,
+    search: str | None = None,
+) -> int:
     ensure_runtime_storage_tables()
-    query = session.query(LearningResourceItem).order_by(
+    query = (
+        session.query(LearningResourceItem.id)
+        .join(LearningResourceCategory, LearningResourceCategory.id == LearningResourceItem.primary_category_id, isouter=True)
+        .join(
+            LearningResourceLink,
+            (LearningResourceLink.resource_id == LearningResourceItem.id)
+            & LearningResourceLink.is_primary.is_(True)
+            & LearningResourceLink.is_enabled.is_(True)
+            & (LearningResourceLink.status == "published")
+            & LearningResourceLink.share_url.isnot(None),
+        )
+        .filter(LearningResourceItem.status == LEARNING_STATUS_PUBLISHED)
+    )
+    if category_slug and category_slug not in {"all", ""}:
+        query = query.filter(LearningResourceCategory.slug == str(category_slug).strip())
+    if search and search.strip():
+        keyword = f"%{search.strip()}%"
+        query = query.filter(
+            or_(LearningResourceItem.display_title.ilike(keyword), LearningResourceItem.normalized_title.ilike(keyword))
+        )
+    return int(query.count())
+
+
+def _serialize_admin_learning_item(
+    item: LearningResourceItem,
+    category: LearningResourceCategory | None,
+    link: LearningResourceLink | None,
+    message: Message | None,
+) -> dict[str, Any]:
+    return {
+        "id": int(item.id),
+        "display_title": str(item.display_title or ""),
+        "status": str(item.status or ""),
+        "category": {"id": int(category.id), "name": str(category.name or ""), "slug": str(category.slug or "")} if category else None,
+        "tags": [
+            str(tag).strip()
+            for tag in list((message.tags if message is not None else None) or item.tags or [])
+            if str(tag).strip()
+        ],
+        "share_url": str(link.share_url or "") if link else None,
+        "platform": str(link.platform or PLATFORM_QUARK) if link else "",
+        "source_channel_key": str(item.source_channel_key or ""),
+        "latest_source_at": item.latest_source_at,
+        "updated_at": item.updated_at,
+    }
+
+
+def list_admin_learning_items(
+    session: Session,
+    *,
+    search: str | None = None,
+    category_slug: str | None = None,
+    offset: int = 0,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    ensure_runtime_storage_tables()
+    query = session.query(LearningResourceItem, LearningResourceCategory, LearningResourceLink, Message).join(
+        LearningResourceCategory,
+        LearningResourceCategory.id == LearningResourceItem.primary_category_id,
+        isouter=True,
+    ).join(
+        LearningResourceLink,
+        (LearningResourceLink.resource_id == LearningResourceItem.id)
+        & LearningResourceLink.is_primary.is_(True),
+        isouter=True,
+    ).join(
+        Message,
+        Message.id == LearningResourceItem.latest_source_message_id,
+        isouter=True,
+    ).order_by(
         LearningResourceItem.latest_source_at.desc().nullslast(),
         LearningResourceItem.id.desc(),
     )
     if search and search.strip():
-        query = query.filter(LearningResourceItem.display_title.ilike(f"%{search.strip()}%"))
-    rows = query.limit(max(1, min(int(limit or 300), 500))).all()
-    result: list[dict[str, Any]] = []
-    for row in rows:
-        category = session.get(LearningResourceCategory, row.primary_category_id) if row.primary_category_id else None
-        link = (
-            session.query(LearningResourceLink)
-            .filter(
-                LearningResourceLink.resource_id == int(row.id),
-                LearningResourceLink.is_primary.is_(True),
-            )
-            .order_by(LearningResourceLink.id.desc())
-            .first()
+        keyword = f"%{search.strip()}%"
+        query = query.filter(
+            or_(LearningResourceItem.display_title.ilike(keyword), LearningResourceItem.normalized_title.ilike(keyword))
         )
-        result.append({
-            "id": int(row.id),
-            "display_title": str(row.display_title or ""),
-            "status": str(row.status or ""),
-            "category": {"id": int(category.id), "name": str(category.name or ""), "slug": str(category.slug or "")} if category else None,
-            "share_url": str(link.share_url or "") if link else None,
-            "latest_source_at": row.latest_source_at,
-            "updated_at": row.updated_at,
-        })
-    return result
+    if category_slug and category_slug not in {"all", ""}:
+        query = query.filter(LearningResourceCategory.slug == str(category_slug).strip())
+    rows = query.offset(max(0, int(offset or 0))).limit(max(1, min(int(limit or 50), 100))).all()
+    return [_serialize_admin_learning_item(item, category, link, message) for item, category, link, message in rows]
+
+
+def count_admin_learning_items(
+    session: Session,
+    *,
+    search: str | None = None,
+    category_slug: str | None = None,
+) -> int:
+    ensure_runtime_storage_tables()
+    query = session.query(LearningResourceItem.id).join(
+        LearningResourceCategory,
+        LearningResourceCategory.id == LearningResourceItem.primary_category_id,
+        isouter=True,
+    )
+    if search and search.strip():
+        keyword = f"%{search.strip()}%"
+        query = query.filter(
+            or_(LearningResourceItem.display_title.ilike(keyword), LearningResourceItem.normalized_title.ilike(keyword))
+        )
+    if category_slug and category_slug not in {"all", ""}:
+        query = query.filter(LearningResourceCategory.slug == str(category_slug).strip())
+    return int(query.count())
+
+
+def get_admin_learning_item(session: Session, resource_id: int) -> dict[str, Any] | None:
+    row = (
+        session.query(LearningResourceItem, LearningResourceCategory, LearningResourceLink, Message)
+        .join(LearningResourceCategory, LearningResourceCategory.id == LearningResourceItem.primary_category_id, isouter=True)
+        .join(
+            LearningResourceLink,
+            (LearningResourceLink.resource_id == LearningResourceItem.id)
+            & LearningResourceLink.is_primary.is_(True),
+            isouter=True,
+        )
+        .join(Message, Message.id == LearningResourceItem.latest_source_message_id, isouter=True)
+        .filter(LearningResourceItem.id == int(resource_id))
+        .first()
+    )
+    if row is None:
+        return None
+    return _serialize_admin_learning_item(*row)
 
 
 def list_learning_admin_overview(session: Session) -> dict[str, Any]:
@@ -1293,6 +1712,11 @@ def list_learning_admin_overview(session: Session) -> dict[str, Any]:
             "is_enabled": bool(row.is_enabled),
             "show_in_tabs": bool(row.show_in_tabs),
             "sort_order": int(row.sort_order or 0),
+            "resource_count": int(
+                session.query(LearningResourceItemCategory)
+                .filter(LearningResourceItemCategory.category_id == int(row.id))
+                .count()
+            ),
         }
         for row in session.query(LearningResourceCategory)
         .order_by(LearningResourceCategory.sort_order.asc(), LearningResourceCategory.id.asc())
@@ -1362,8 +1786,13 @@ def update_learning_channel_config(
 
 __all__ = [
     "classify_learning_message",
+    "count_admin_learning_items",
+    "count_public_learning_resources",
     "confirm_learning_import",
+    "delete_all_imported_learning_resources",
+    "delete_learning_resource",
     "enqueue_learning_resources_for_message_ids",
+    "get_admin_learning_item",
     "get_learning_channel_config",
     "is_learning_channel_enabled",
     "list_admin_learning_items",
@@ -1376,5 +1805,6 @@ __all__ = [
     "resume_learning_channel_tasks",
     "retry_learning_resource",
     "sync_learning_resource_after_transfer",
+    "update_learning_resource",
     "update_learning_channel_config",
 ]

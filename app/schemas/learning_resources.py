@@ -28,6 +28,8 @@ class LearningResourceResponse(BaseModel):
 class LearningResourceListResponse(BaseModel):
     items: list[LearningResourceResponse]
     total: int
+    page: int = 1
+    page_size: int = 50
 
 
 class LearningChannelAdminResponse(BaseModel):
@@ -59,6 +61,7 @@ class LearningCategoryAdminResponse(BaseModel):
     is_enabled: bool
     show_in_tabs: bool
     sort_order: int
+    resource_count: int = 0
 
 
 class LearningAdminOverviewResponse(BaseModel):
@@ -88,7 +91,10 @@ class LearningResourceAdminResponse(BaseModel):
     display_title: str
     status: str
     category: dict[str, Any] | None = None
+    tags: list[str] = Field(default_factory=list)
     share_url: str | None = None
+    platform: str = ""
+    source_channel_key: str = ""
     latest_source_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -96,10 +102,28 @@ class LearningResourceAdminResponse(BaseModel):
 class LearningResourceAdminListResponse(BaseModel):
     items: list[LearningResourceAdminResponse]
     total: int
+    page: int = 1
+    page_size: int = 50
 
 
 class LearningResourceVisibilityRequest(BaseModel):
     visible: bool
+
+
+class LearningResourceUpdateRequest(BaseModel):
+    display_title: str = Field(min_length=1, max_length=255)
+    category: str = Field(default="待分类", max_length=120)
+    tags: list[str] = Field(default_factory=list)
+    share_url: str = Field(default="", max_length=2048)
+
+
+class LearningResourceDeleteResponse(BaseModel):
+    deleted_resources: int = 0
+    deleted_links: int = 0
+    deleted_transfer_jobs: int = 0
+    deleted_import_jobs: int = 0
+    deleted_batches: int = 0
+    deleted_categories: int = 0
 
 
 class LearningDirectoryResponse(BaseModel):

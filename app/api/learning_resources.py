@@ -17,11 +17,19 @@ from app.schemas.learning_resources import (
     LearningImportPreviewResponse,
     LearningResourceAdminListResponse,
     LearningResourceAdminResponse,
+    LearningResourceDeleteResponse,
     LearningResourceListResponse,
     LearningResourceResponse,
+    LearningResourceUpdateRequest,
     LearningResourceVisibilityRequest,
 )
 from app.services.learning_resources import (
+    count_admin_learning_items,
+    count_public_learning_resources,
+    delete_all_imported_learning_resources,
+    delete_learning_resource,
+    get_admin_learning_item,
+    update_learning_resource,
     list_admin_learning_items,
     list_learning_admin_overview,
     list_public_learning_categories,
@@ -73,14 +81,25 @@ def get_public_learning_categories(
 def get_public_learning_resources(
     category: str | None = Query(default=None, max_length=160),
     search: str | None = Query(default=None, max_length=120),
+    page: int = Query(default=1, ge=1, le=100000),
+    page_size: int = Query(default=50, ge=1, le=100),
     db: Session = Depends(get_db),
     current_user: dict[str, Any] | None = Depends(get_optional_current_user),
 ) -> LearningResourceListResponse:
     _ensure_public_access(current_user)
-    items = list_public_learning_resources(db, category_slug=category, search=search)
+    total = count_public_learning_resources(db, category_slug=category, search=search)
+    items = list_public_learning_resources(
+        db,
+        category_slug=category,
+        search=search,
+        offset=(page - 1) * page_size,
+        limit=page_size,
+    )
     return LearningResourceListResponse(
         items=[LearningResourceResponse(**item) for item in items],
-        total=len(items),
+        total=total,
+        page=page,
+        page_size=page_size,
     )
 
 
@@ -104,15 +123,97 @@ def get_learning_admin_overview(
 )
 def get_learning_admin_items(
     search: str | None = Query(default=None, max_length=120),
+    category: str | None = Query(default=None, max_length=160),
+    page: int = Query(default=1, ge=1, le=100000),
+    page_size: int = Query(default=50, ge=1, le=100),
     db: Session = Depends(get_db),
     current_user: dict[str, Any] = Depends(get_admin_user),
 ) -> LearningResourceAdminListResponse:
     del current_user
-    items = list_admin_learning_items(db, search=search)
+    total = count_admin_learning_items(db, search=search, category_slug=category)
+    items = list_admin_learning_items(
+        db,
+        search=search,
+        category_slug=category,
+        offset=(page - 1) * page_size,
+        limit=page_size,
+    )
     return LearningResourceAdminListResponse(
         items=[LearningResourceAdminResponse(**item) for item in items],
-        total=len(items),
+        total=total,
+        page=page,
+        page_size=page_size,
     )
+
+
+@router.patch(
+    "/api/admin/learning-resources/items/{resource_id}",
+    response_model=LearningResourceAdminResponse,
+    summary="编辑学习资料表格行",
+)
+def update_learning_resource_item(
+    resource_id: int,
+    payload: LearningResourceUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: dict[str, Any] = Depends(get_admin_user),
+) -> LearningResourceAdminResponse:
+    try:
+        result = update_learning_resource(
+            db,
+            resource_id=int(resource_id),
+            display_title=payload.display_title,
+            category_name=payload.category,
+            tags=payload.tags,
+            share_url=payload.share_url,
+            operator=_operator(current_user),
+        )
+        db.commit()
+        return LearningResourceAdminResponse(**result)
+    except LookupError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.delete(
+    "/api/admin/learning-resources/items/{resource_id}",
+    response_model=LearningResourceDeleteResponse,
+    summary="删除单条学习资料",
+)
+def delete_learning_resource_item(
+    resource_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict[str, Any] = Depends(get_admin_user),
+) -> LearningResourceDeleteResponse:
+    del current_user
+    try:
+        result = delete_learning_resource(db, resource_id=int(resource_id))
+        db.commit()
+        return LearningResourceDeleteResponse(**result)
+    except LookupError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.delete(
+    "/api/admin/learning-resources/imported",
+    response_model=LearningResourceDeleteResponse,
+    summary="删除全部手动导入学习资料",
+)
+def delete_all_imported_learning_resource_data(
+    db: Session = Depends(get_db),
+    current_user: dict[str, Any] = Depends(get_admin_user),
+) -> LearningResourceDeleteResponse:
+    del current_user
+    try:
+        result = delete_all_imported_learning_resources(db)
+        db.commit()
+        return LearningResourceDeleteResponse(**result)
+    except Exception:
+        db.rollback()
+        raise
 
 
 @router.get(

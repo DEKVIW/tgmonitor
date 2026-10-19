@@ -1,6 +1,7 @@
 import apiClient from '@/utils/api'
 import type {
   LearningAdminItem,
+  LearningAdminListResponse,
   LearningAdminOverview,
   LearningCategory,
   LearningChannelUpdateResponse,
@@ -18,10 +19,14 @@ export const getPublicLearningCategories = async (): Promise<LearningCategory[]>
 export const getPublicLearningResources = async (params: {
   category?: string
   search?: string
+  page?: number
+  page_size?: number
 } = {}): Promise<LearningResourceListResponse> => {
   const query = new URLSearchParams()
   if (params.category) query.set('category', params.category)
   if (params.search) query.set('search', params.search)
+  if (params.page) query.set('page', String(params.page))
+  if (params.page_size) query.set('page_size', String(params.page_size))
   const suffix = query.toString() ? `?${query.toString()}` : ''
   const response = await apiClient.get<LearningResourceListResponse>(`/public/learning-resources${suffix}`)
   return response.data
@@ -32,10 +37,20 @@ export const getLearningAdminOverview = async (): Promise<LearningAdminOverview>
   return response.data
 }
 
-export const getLearningAdminItems = async (search?: string): Promise<LearningAdminItem[]> => {
-  const suffix = search ? `?search=${encodeURIComponent(search)}` : ''
-  const response = await apiClient.get<{ items: LearningAdminItem[] }>(`/admin/learning-resources/items${suffix}`)
-  return response.data.items
+export const getLearningAdminItems = async (params: {
+  search?: string
+  category?: string
+  page?: number
+  page_size?: number
+} = {}): Promise<LearningAdminListResponse> => {
+  const query = new URLSearchParams()
+  if (params.search) query.set('search', params.search)
+  if (params.category) query.set('category', params.category)
+  if (params.page) query.set('page', String(params.page))
+  if (params.page_size) query.set('page_size', String(params.page_size))
+  const suffix = query.toString() ? `?${query.toString()}` : ''
+  const response = await apiClient.get<LearningAdminListResponse>(`/admin/learning-resources/items${suffix}`)
+  return response.data
 }
 
 export const updateLearningChannel = async (
@@ -58,6 +73,30 @@ export const updateLearningVisibility = async (resourceId: number, visible: bool
 
 export const retryLearningResource = async (resourceId: number): Promise<LearningAdminItem> => {
   const response = await apiClient.post<LearningAdminItem>(`/admin/learning-resources/items/${resourceId}/retry`)
+  return response.data
+}
+
+export const updateLearningResource = async (
+  resourceId: number,
+  payload: { display_title: string; category: string; tags: string[]; share_url: string },
+): Promise<LearningAdminItem> => {
+  const response = await apiClient.patch<LearningAdminItem>(`/admin/learning-resources/items/${resourceId}`, payload)
+  return response.data
+}
+
+export const deleteLearningResource = async (resourceId: number): Promise<void> => {
+  await apiClient.delete(`/admin/learning-resources/items/${resourceId}`)
+}
+
+export const deleteAllImportedLearningResources = async (): Promise<{
+  deleted_resources: number
+  deleted_links: number
+  deleted_transfer_jobs: number
+  deleted_import_jobs: number
+  deleted_batches: number
+  deleted_categories: number
+}> => {
+  const response = await apiClient.delete('/admin/learning-resources/imported')
   return response.data
 }
 

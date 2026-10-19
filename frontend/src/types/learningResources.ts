@@ -9,10 +9,12 @@ export interface LearningCategory {
 export interface LearningResource {
   id: number
   display_title: string
+  status?: string
   category?: { id: number; name: string; slug: string } | null
   tags: string[]
   share_url: string
   platform: string
+  source_channel_key?: string
   updated_at?: string | null
   created_at?: string | null
 }
@@ -20,6 +22,8 @@ export interface LearningResource {
 export interface LearningResourceListResponse {
   items: LearningResource[]
   total: number
+  page: number
+  page_size: number
 }
 
 export interface LearningChannelConfig {
@@ -55,6 +59,11 @@ export interface LearningAccount {
 export interface LearningAdminOverview {
   channels: LearningChannelConfig[]
   accounts: LearningAccount[]
+  categories: Array<LearningCategory & {
+    directory_name: string
+    is_enabled: boolean
+    show_in_tabs: boolean
+  }>
 }
 
 export interface LearningAdminItem {
@@ -62,9 +71,19 @@ export interface LearningAdminItem {
   display_title: string
   status: string
   category?: { id: number; name: string; slug: string } | null
+  tags: string[]
   share_url?: string | null
+  platform: string
+  source_channel_key: string
   latest_source_at?: string | null
   updated_at?: string | null
+}
+
+export interface LearningAdminListResponse {
+  items: LearningAdminItem[]
+  total: number
+  page: number
+  page_size: number
 }
 
 export interface LearningDirectory {

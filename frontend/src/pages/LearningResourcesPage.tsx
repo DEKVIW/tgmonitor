@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Alert, Button, Empty, Input, List, Modal, Select, Space, Spin, Switch, Table, Tag, Typography, Upload, message } from 'antd'
-import { ArrowLeftOutlined, BookOutlined, ExportOutlined, FolderOpenOutlined, ReloadOutlined, SaveOutlined, UploadOutlined } from '@ant-design/icons'
+import { Alert, Button, Empty, Input, List, Modal, Popconfirm, Select, Space, Spin, Switch, Table, Tag, Typography, Upload, message } from 'antd'
+import { ArrowLeftOutlined, BookOutlined, CheckOutlined, CloseOutlined, DeleteOutlined, EditOutlined, ExportOutlined, FolderOpenOutlined, ReloadOutlined, SaveOutlined, UploadOutlined } from '@ant-design/icons'
 import { useAuthStore } from '@/store/authStore'
 import { formatServerDateTime } from '@/utils/dateTime'
 import {
+  deleteAllImportedLearningResources,
+  deleteLearningResource,
   getLearningAdminItems,
   getLearningAdminOverview,
   getLearningDirectories,
@@ -12,11 +14,10 @@ import {
   confirmLearningImport,
   previewLearningImport,
   retryLearningResource,
+  updateLearningResource,
   updateLearningChannel,
-  updateLearningVisibility,
 } from '@/api/learningResources'
 import type {
-  LearningAdminItem,
   LearningAdminOverview,
   LearningCategory,
   LearningDirectory,
@@ -41,7 +42,9 @@ const LearningResourcesPage = () => {
   const isAdmin = user?.role === 'admin'
   const [categories, setCategories] = useState<LearningCategory[]>([])
   const [resources, setResources] = useState<LearningResource[]>([])
-  const [adminItems, setAdminItems] = useState<LearningAdminItem[]>([])
+  const [resourceTotal, setResourceTotal] = useState(0)
+  const [page, setPage] = useState(1)
+  const pageSize = 50
   const [overview, setOverview] = useState<LearningAdminOverview | null>(null)
   const [activeCategory, setActiveCategory] = useState('all')
   const [search, setSearch] = useState('')
@@ -55,6 +58,9 @@ const LearningResourcesPage = () => {
   })
   const [savingConfig, setSavingConfig] = useState(false)
   const [maintenanceBusyId, setMaintenanceBusyId] = useState<number | null>(null)
+  const [editingId, setEditingId] = useState<number | null>(null)
+  const [editDraft, setEditDraft] = useState({ display_title: '', category: '', tags: '', share_url: '' })
+  const [deletingAll, setDeletingAll] = useState(false)
   const [importPreview, setImportPreview] = useState<LearningImportPreview | null>(null)
   const [importMode, setImportMode] = useState<'direct' | 'transfer' | 'collect'>('direct')
   const [importAccountId, setImportAccountId] = useState<number | undefined>(undefined)
@@ -76,32 +82,49 @@ const LearningResourcesPage = () => {
     setLoading(true)
     setError('')
     try {
-      const [categoryData, resourceData] = await Promise.all([
-        getPublicLearningCategories(),
-        getPublicLearningResources({
-          category: activeCategory === 'all' ? undefined : activeCategory,
-          search: search.trim() || undefined,
-        }),
-      ])
-      setCategories(categoryData)
-      setResources(resourceData.items)
       if (isAdmin) {
         const [overviewData, adminData] = await Promise.all([
           getLearningAdminOverview(),
-          getLearningAdminItems(search.trim() || undefined),
+          getLearningAdminItems({
+            category: activeCategory === 'all' ? undefined : activeCategory,
+            search: search.trim() || undefined,
+            page,
+            page_size: pageSize,
+          }),
         ])
         setOverview(overviewData)
-        setAdminItems(adminData)
+        setCategories(overviewData.categories.map((category) => ({
+          id: category.id,
+          name: category.name,
+          slug: category.slug,
+          sort_order: category.sort_order,
+          resource_count: category.resource_count,
+        })))
+        setResources(adminData.items.map((item) => ({ ...item, share_url: item.share_url || '', platform: item.platform || '' })))
+        setResourceTotal(adminData.total)
         if (selectedChannelId === null && overviewData.channels.length > 0) {
           setSelectedChannelId(overviewData.channels[0].channel_id)
         }
+      } else {
+        const [categoryData, resourceData] = await Promise.all([
+          getPublicLearningCategories(),
+          getPublicLearningResources({
+            category: activeCategory === 'all' ? undefined : activeCategory,
+            search: search.trim() || undefined,
+            page,
+            page_size: pageSize,
+          }),
+        ])
+        setCategories(categoryData)
+        setResources(resourceData.items)
+        setResourceTotal(resourceData.total)
       }
     } catch (loadError: unknown) {
       setError(getRequestErrorMessage(loadError, '学习资料加载失败，请稍后重试'))
     } finally {
       setLoading(false)
     }
-  }, [activeCategory, isAdmin, search, selectedChannelId])
+  }, [activeCategory, isAdmin, page, search, selectedChannelId])
 
   useEffect(() => {
     void load()
@@ -212,21 +235,70 @@ const LearningResourcesPage = () => {
     }
   }
 
-  const handleVisibility = async (item: LearningAdminItem) => {
-    const visible = item.status !== 'published'
+  const startEditing = (item: LearningResource) => {
+    setEditingId(item.id)
+    setEditDraft({
+      display_title: item.display_title,
+      category: item.category?.name || '待分类',
+      tags: item.tags.join('、'),
+      share_url: item.share_url || '',
+    })
+  }
+
+  const cancelEditing = () => {
+    setEditingId(null)
+    setEditDraft({ display_title: '', category: '', tags: '', share_url: '' })
+  }
+
+  const handleSaveEditing = async (item: LearningResource) => {
     setMaintenanceBusyId(item.id)
     try {
-      await updateLearningVisibility(item.id, visible)
-      message.success(visible ? '资源已恢复公开' : '资源已隐藏')
-      await load()
-    } catch (visibilityError: unknown) {
-      message.error(getRequestErrorMessage(visibilityError, '更新资源状态失败'))
+      const updated = await updateLearningResource(item.id, {
+        display_title: editDraft.display_title.trim(),
+        category: editDraft.category.trim() || '待分类',
+        tags: editDraft.tags.split(/[、,，|]/).map((tag) => tag.trim()).filter(Boolean),
+        share_url: editDraft.share_url.trim(),
+      })
+      message.success('资源已保存')
+      cancelEditing()
+      setResources((current) => current.map((row) => row.id === item.id ? { ...row, ...updated, share_url: updated.share_url || '' } : row))
+    } catch (editError: unknown) {
+      message.error(getRequestErrorMessage(editError, '保存资源失败'))
     } finally {
       setMaintenanceBusyId(null)
     }
   }
 
-  const handleRetry = async (item: LearningAdminItem) => {
+  const handleDeleteRow = async (item: LearningResource) => {
+    setMaintenanceBusyId(item.id)
+    try {
+      await deleteLearningResource(item.id)
+      message.success('资源及其学习资料记录已删除')
+      if (resources.length === 1 && page > 1) setPage((current) => current - 1)
+      else await load()
+    } catch (deleteError: unknown) {
+      message.error(getRequestErrorMessage(deleteError, '删除资源失败'))
+    } finally {
+      setMaintenanceBusyId(null)
+    }
+  }
+
+  const handleDeleteAllImported = async () => {
+    setDeletingAll(true)
+    try {
+      const result = await deleteAllImportedLearningResources()
+      message.success(`已删除 ${result.deleted_resources} 条手动导入资料及其关联记录`)
+      setPage(1)
+      cancelEditing()
+      if (page === 1) await load()
+    } catch (deleteError: unknown) {
+      message.error(getRequestErrorMessage(deleteError, '删除手动导入资料失败'))
+    } finally {
+      setDeletingAll(false)
+    }
+  }
+
+  const handleRetry = async (item: LearningResource) => {
     setMaintenanceBusyId(item.id)
     try {
       await retryLearningResource(item.id)
@@ -240,7 +312,7 @@ const LearningResourcesPage = () => {
   }
 
   const tabs = [
-    { key: 'all', label: '全部 ' + resources.length },
+    { key: 'all', label: '全部 ' + resourceTotal },
     ...categories.map((category) => ({
       key: category.slug,
       label: category.name + ' ' + category.resource_count,
@@ -249,31 +321,57 @@ const LearningResourcesPage = () => {
 
   const columns = [
     {
+      title: '#',
+      key: 'row-number',
+      width: 58,
+      fixed: 'left' as const,
+      render: (_value: unknown, _row: LearningResource, index: number) => (page - 1) * pageSize + index + 1,
+    },
+    {
       title: '资源标题',
       dataIndex: 'display_title',
       key: 'title',
       render: (title: string, row: LearningResource) => (
-        <div className="learning-title-cell">
-          <strong>{title}</strong>
-          {row.tags.length > 0 ? <span>{row.tags.slice(0, 3).join(' · ')}</span> : null}
-        </div>
+        editingId === row.id ? (
+          <Input value={editDraft.display_title} onChange={(event) => setEditDraft((draft) => ({ ...draft, display_title: event.target.value }))} />
+        ) : (
+          <div className="learning-title-cell" onDoubleClick={() => isAdmin && startEditing(row)}>
+            <strong>{title}</strong>
+            {row.tags.length > 0 ? <span>{row.tags.slice(0, 3).join(' · ')}</span> : null}
+          </div>
+        )
       ),
     },
     {
       title: '分类',
       key: 'category',
       width: 150,
-      render: (_value: unknown, row: LearningResource) => row.category?.name || '待分类',
+      render: (_value: unknown, row: LearningResource) => editingId === row.id ? (
+        <Input
+          value={editDraft.category || '待分类'}
+          onChange={(event) => setEditDraft((draft) => ({ ...draft, category: event.target.value }))}
+        />
+      ) : row.category?.name || '待分类',
+    },
+    {
+      title: '标签',
+      key: 'tags',
+      width: 180,
+      render: (_value: unknown, row: LearningResource) => editingId === row.id ? (
+        <Input value={editDraft.tags} onChange={(event) => setEditDraft((draft) => ({ ...draft, tags: event.target.value }))} />
+      ) : row.tags.join('、') || '-',
     },
     {
       title: '网盘资源',
       key: 'share',
-      width: 160,
-      render: (_value: unknown, row: LearningResource) => (
+      width: 240,
+      render: (_value: unknown, row: LearningResource) => editingId === row.id ? (
+        <Input value={editDraft.share_url} onChange={(event) => setEditDraft((draft) => ({ ...draft, share_url: event.target.value }))} />
+      ) : row.share_url ? (
         <Button type="link" icon={<ExportOutlined />} onClick={() => window.open(row.share_url, '_blank', 'noopener,noreferrer')}>
           打开分享
         </Button>
-      ),
+      ) : <Tag color="orange">暂无链接</Tag>,
     },
     {
       title: '更新时间',
@@ -284,30 +382,35 @@ const LearningResourcesPage = () => {
         : '-',
     },
   ]
-
-  const adminColumns = [
-    { title: '资源标题', dataIndex: 'display_title', key: 'title' },
-    { title: '分类', key: 'category', render: (_value: unknown, row: LearningAdminItem) => row.category?.name || '待分类' },
-    {
+  if (isAdmin) {
+    columns.push({
       title: '状态',
-      dataIndex: 'status',
       key: 'status',
-      width: 110,
-      render: (value: string) => <Tag color={value === 'published' ? 'green' : value === 'failed' ? 'red' : 'default'}>{value}</Tag>,
-    },
-    {
+      width: 100,
+      render: (_value: unknown, row: LearningResource) => (
+        <Tag color={row.status === 'published' ? 'green' : row.status === 'failed' ? 'red' : 'default'}>{row.status || 'pending'}</Tag>
+      ),
+    })
+    columns.push({
       title: '操作',
       key: 'action',
-      width: 100,
-      render: (_value: unknown, row: LearningAdminItem) => row.status === 'failed' ? (
-        <Button size="small" loading={maintenanceBusyId === row.id} onClick={() => void handleRetry(row)}>重试</Button>
+      width: 190,
+      render: (_value: unknown, row: LearningResource) => editingId === row.id ? (
+        <Space size={4}>
+          <Button size="small" type="primary" icon={<CheckOutlined />} loading={maintenanceBusyId === row.id} onClick={() => void handleSaveEditing(row)}>保存</Button>
+          <Button size="small" icon={<CloseOutlined />} onClick={cancelEditing}>取消</Button>
+        </Space>
       ) : (
-        <Button size="small" loading={maintenanceBusyId === row.id} onClick={() => void handleVisibility(row)}>
-          {row.status === 'published' ? '隐藏' : '恢复'}
-        </Button>
+        <Space size={4}>
+          <Button size="small" icon={<EditOutlined />} onClick={() => startEditing(row)}>编辑</Button>
+          {row.status === 'failed' ? <Button size="small" loading={maintenanceBusyId === row.id} onClick={() => void handleRetry(row)}>重试</Button> : null}
+          <Popconfirm title="确认删除这条资源？" description="只删除本项目中的学习资料记录，不删除网盘远端文件。" okText="删除" cancelText="取消" onConfirm={() => void handleDeleteRow(row)}>
+            <Button size="small" danger icon={<DeleteOutlined />} loading={maintenanceBusyId === row.id}>删除</Button>
+          </Popconfirm>
+        </Space>
       ),
-    },
-  ]
+    })
+  }
 
   return (
     <div className="learning-resources-page">
@@ -444,29 +547,45 @@ const LearningResourcesPage = () => {
         <div className="learning-sheet-toolbar">
           <div className="learning-sheet-tabs">
             {tabs.map((tab) => (
-              <button key={tab.key} type="button" className={activeCategory === tab.key ? 'active' : ''} onClick={() => setActiveCategory(tab.key)}>
+              <button key={tab.key} type="button" className={activeCategory === tab.key ? 'active' : ''} onClick={() => { setActiveCategory(tab.key); setPage(1) }}>
                 {tab.label}
               </button>
             ))}
           </div>
-          <Input.Search value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索资源标题" allowClear style={{ width: 250 }} />
+          <Space>
+            <Input.Search value={search} onChange={(event) => { setSearch(event.target.value); setPage(1) }} placeholder="搜索资源标题" allowClear style={{ width: 250 }} />
+            {isAdmin ? (
+              <Popconfirm
+                title="删除全部手动导入资料？"
+                description="将永久删除项目中的手动导入记录、链接、转存任务和导入记录，不删除 Telegram 原消息或网盘远端文件。"
+                okText="确认删除"
+                cancelText="取消"
+                okButtonProps={{ danger: true }}
+                onConfirm={() => void handleDeleteAllImported()}
+              >
+                <Button danger loading={deletingAll} icon={<DeleteOutlined />}>删除全部导入</Button>
+              </Popconfirm>
+            ) : null}
+          </Space>
         </div>
         {loading ? <div className="learning-state"><Spin /></div> : resources.length === 0 ? <Empty description="暂无已发布学习资料" /> : (
-          <Table<LearningResource> rowKey="id" columns={columns} dataSource={resources} pagination={false} size="middle" scroll={{ x: 720 }} />
+          <Table<LearningResource>
+            rowKey="id"
+            columns={columns}
+            dataSource={resources}
+            pagination={{
+              current: page,
+              pageSize,
+              total: resourceTotal,
+              showSizeChanger: false,
+              showTotal: (total) => `共 ${total} 条`,
+              onChange: (nextPage) => setPage(nextPage),
+            }}
+            size="middle"
+            scroll={{ x: 1160 }}
+          />
         )}
       </section>
-
-      {isAdmin ? (
-        <section className="learning-admin-sheet">
-          <div className="learning-admin-heading">
-            <div>
-              <Text strong>管理员维护</Text>
-              <Text type="secondary">隐藏操作只影响前台展示，不删除原始消息或网盘文件。</Text>
-            </div>
-          </div>
-          <Table<LearningAdminItem> rowKey="id" columns={adminColumns} dataSource={adminItems} pagination={{ pageSize: 10 }} size="small" />
-        </section>
-      ) : null}
 
       <Modal
         open={directoryModalOpen}
