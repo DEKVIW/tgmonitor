@@ -26,6 +26,7 @@ from app.services.resource_ops import (
 from app.services.channel_daily_stats_service import (
     accumulate_channel_daily_stats_for_message_ids,
 )
+from app.services.monitor_runtime import write_monitor_runtime_state
 from app.services.system_config_service import get_monitor_runtime_config
 
 warnings.filterwarnings(
@@ -36,6 +37,9 @@ warnings.filterwarnings(
 logging.basicConfig(level=getattr(logging, settings.LOG_LEVEL, "INFO"))
 logger = logging.getLogger(__name__)
 monitor_metrics = MonitorMetrics(logger)
+monitor_started_at = datetime.datetime.now(datetime.timezone.utc)
+last_message_at: datetime.datetime | None = None
+last_message_channel: str | None = None
 
 FAILED_MESSAGES_LOG = Path("data/failed_messages.log")
 ERROR_MESSAGES_LOG = Path("data/error_messages.log")
@@ -121,6 +125,7 @@ async def refresh_channel_mapping(force: bool = False) -> bool:
     channel_id_to_name.clear()
     channel_id_to_name.update({item["id"]: channel for channel, item in info.items()})
     channel_signature = latest_signature
+    publish_monitor_runtime_state()
 
     monitor_metrics.record_refresh(
         configured=len(latest_channels),
@@ -155,6 +160,27 @@ channel_ids: List[int] = []
 channel_info: Dict[str, Dict[str, Any]] = {}
 channel_id_to_name: Dict[int, str] = {}
 channel_signature = tuple(sorted(channel_usernames))
+
+
+def publish_monitor_runtime_state(status: str = "running", error: str | None = None) -> None:
+    try:
+        write_monitor_runtime_state(
+            status=status,
+            configured_channels=channel_usernames,
+            channel_info=channel_info,
+            started_at=monitor_started_at,
+            last_message_at=last_message_at,
+            last_message_channel=last_message_channel,
+            error=error,
+        )
+    except Exception as state_error:
+        logger.warning("Failed to publish monitor runtime state: %s", state_error)
+
+
+async def monitor_heartbeat_loop() -> None:
+    while True:
+        publish_monitor_runtime_state()
+        await asyncio.sleep(10)
 
 
 async def parse_message(
@@ -205,6 +231,7 @@ def _append_local_log(path: Path, content: str) -> None:
 
 @client.on(events.NewMessage())
 async def handler(event: Any) -> None:
+    global last_message_at, last_message_channel
     try:
         incoming_chat_id = get_event_channel_id(event)
         if incoming_chat_id is None or incoming_chat_id not in channel_ids:
@@ -220,6 +247,10 @@ async def handler(event: Any) -> None:
                 monitor_metrics.record_failure("channel_lookup", chat_id=incoming_chat_id)
                 print(f"[DEBUG] 无法获取频道名称，ID: {incoming_chat_id}")
                 return
+
+        last_message_at = datetime.datetime.now(datetime.timezone.utc)
+        last_message_channel = channel_name
+        publish_monitor_runtime_state()
 
         message_text = event.raw_text or ""
         telegram_local_time = _to_local_telegram_time(event.date)
@@ -423,6 +454,7 @@ async def connection_handler(event: Any) -> None:
 
 if __name__ == "__main__":
     try:
+        publish_monitor_runtime_state(status="starting")
         client.start()
         print(f"[{datetime.datetime.now()}] ✅ 监控服务启动成功")
 
@@ -430,10 +462,12 @@ if __name__ == "__main__":
         print("🔍 正在构建频道ID映射...")
         loop.run_until_complete(refresh_channel_mapping(force=True))
         loop.create_task(channel_refresh_loop())
+        loop.create_task(monitor_heartbeat_loop())
         print(f"✅ 频道ID映射构建完成: {len(channel_ids)} 个频道")
 
         client.run_until_disconnected()
     except Exception as exc:
+        publish_monitor_runtime_state(status="error", error=str(exc))
         print(f"[{datetime.datetime.now()}] ❌ 启动失败: {exc}")
         print("请先手动运行一次程序进行登录：python -m app.core.monitor")
         sys.exit(1)

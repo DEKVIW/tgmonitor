@@ -10,7 +10,6 @@ import asyncio
 import time
 import signal
 import os
-from telethon import TelegramClient
 from app.models.config import settings
 import re
 
@@ -27,72 +26,10 @@ except ImportError:
         print("⚠️  警告: link_validator.py 未找到，链接检测功能不可用")
 
 def ensure_session_file(session_name):
-    """确保指定的 session 文件存在，如果不存在则自动复制"""
-    import os
-    
-    # 显示调试信息
-    current_dir = os.getcwd()
-    print(f"🔍 调试信息:")
-    print(f"   - 当前工作目录: {current_dir}")
-    
-    # 使用绝对路径
-    main_session = os.path.join(current_dir, 'tg_monitor_session.session')
-    target_session = os.path.join(current_dir, f'{session_name}.session')
-    
-    print(f"   - 主 session 文件: {main_session}")
-    print(f"   - 目标 session 文件: {target_session}")
-    
-    # 检查目标 session 是否存在
-    if os.path.exists(target_session):
-        target_size = os.path.getsize(target_session)
-        print(f"   - 目标 session 已存在: ✅ (大小: {target_size} 字节)")
-        return True
-    
-    # 检查主 session 是否存在
-    if not os.path.exists(main_session):
-        print(f"   - 主 session 不存在: ❌")
-        print(f"❌ 主 session 文件 {main_session} 不存在")
-        print("💡 请先运行监控服务或手动登录 Telegram")
-        return False
-    
-    # 获取主session文件信息
-    main_size = os.path.getsize(main_session)
-    print(f"   - 主 session 存在: ✅ (大小: {main_size} 字节)")
-    
-    # 检查磁盘空间
-    import shutil
-    disk_usage = shutil.disk_usage(current_dir)
-    free_space = disk_usage.free
-    print(f"   - 可用磁盘空间: {free_space} 字节")
-    
-    if free_space < main_size * 2:  # 需要至少2倍空间用于复制
-        print(f"❌ 磁盘空间不足，需要至少 {main_size * 2} 字节")
-        return False
-    
-    # 自动复制 session 文件
-    try:
-        print(f"   - 开始复制文件...")
-        shutil.copy2(main_session, target_session)
-        
-        # 验证复制结果
-        if os.path.exists(target_session):
-            target_size = os.path.getsize(target_session)
-            if target_size == main_size:
-                print(f"✅ 已成功复制 session 文件: {target_session}")
-                print(f"   - 复制后大小: {target_size} 字节")
-                return True
-            else:
-                print(f"❌ 复制后文件大小不匹配: 期望 {main_size} 字节，实际 {target_size} 字节")
-                # 删除错误的文件
-                os.remove(target_session)
-                return False
-        else:
-            print(f"❌ 复制后目标文件不存在")
-            return False
-            
-    except Exception as e:
-        print(f"❌ 复制 session 文件失败: {e}")
-        return False
+    """Legacy compatibility guard; auxiliary Telegram sessions are no longer created."""
+    print(f"❌ 不再创建辅助 Telegram Session: {session_name}")
+    print("请使用主监听进程提供的运行状态。")
+    return False
 
 # 全局变量用于中断处理
 current_check_session = None
@@ -191,6 +128,25 @@ signal.signal(signal.SIGTERM, signal_handler)  # 终止信号
 
 async def list_channels_detailed():
     """显示当前监听频道列表，包含详细信息（异步版本）"""
+    from app.services.monitor_runtime import get_fresh_monitor_runtime_state
+
+    runtime_state = get_fresh_monitor_runtime_state()
+    if runtime_state is None:
+        print("主监听运行状态不可用，显示数据库中的简化频道列表。")
+        list_channels_simple()
+        return
+
+    channels = runtime_state.get("configured_channels") or []
+    channel_info = runtime_state.get("channel_info") or {}
+    print(f"📡 当前监听频道列表：总数 {len(channels)} 个频道")
+    for channel in channels:
+        info = channel_info.get(channel) or {}
+        if info.get("id"):
+            print(f"  ✅ {channel} -> {info.get('title') or '未知'} (ID: {info['id']})")
+        else:
+            print(f"  ❌ {channel} -> 主监听进程尚未解析")
+    return
+
     # 确保 session 文件存在
     if not ensure_session_file('tg_monitor_session_list'):
         print("显示简化版本...")
@@ -509,7 +465,17 @@ def is_invite_link_hash(channel_name):
 
 async def diagnose_channels():
     """诊断每个频道是否可以正常访问"""
-    
+    from app.services.channel_service import diagnose_channels as diagnose_runtime_channels
+
+    valid_channels, invalid_channels = await diagnose_runtime_channels()
+    print(f"✅ 当前主监听缓存中的有效频道: {len(valid_channels)} 个")
+    for channel in valid_channels:
+        print(f"  - {channel.get('username')} ({channel.get('title')}) - ID: {channel.get('id')}")
+    print(f"❌ 当前未解析或不可用的频道: {len(invalid_channels)} 个")
+    for channel in invalid_channels:
+        print(f"  - {channel.get('username')}: {channel.get('error')}")
+    return valid_channels, invalid_channels
+
     # 确保 session 文件存在
     if not ensure_session_file('tg_monitor_session_diagnose'):
         print("❌ 无法进行频道诊断，缺少必要的 session 文件")
@@ -662,6 +628,15 @@ def clean_invalid_channels(invalid_channels):
 
 async def test_event_handler():
     """测试修复后的事件处理器"""
+    from app.services.channel_service import test_monitor
+
+    result = await test_monitor()
+    if result.get("success"):
+        print(f"✅ {result.get('message')}")
+    else:
+        print(f"❌ 测试失败: {result.get('error') or result.get('message')}")
+    return
+
     # 确保 session 文件存在
     if not ensure_session_file('tg_monitor_session_test'):
         print("❌ 无法进行测试，缺少必要的 session 文件")
