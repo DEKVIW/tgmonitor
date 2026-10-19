@@ -66,3 +66,40 @@ export interface LearningAdminItem {
   latest_source_at?: string | null
   updated_at?: string | null
 }
+
+export interface LearningDirectory {
+  id: string
+  name: string
+  is_dir: boolean
+}
+
+export interface LearningImportRecord {
+  display_title: string
+  category: string
+  tags: string[]
+  links: Array<{ url: string; platform: string }>
+}
+
+export interface LearningImportPreview {
+  id: number
+  filename: string
+  status: string
+  records: LearningImportRecord[]
+  invalid_rows: Array<{ row: number; title?: string; reason: string }>
+  row_count: number
+  valid_count: number
+  total_records: number
+  total_links: number
+  duplicate_count: number
+  invalid_count: number
+}
+
+export interface LearningImportConfirmResult {
+  job_id: number
+  status: string
+  mode: string
+  created_count: number
+  link_count: number
+  queued_count: number
+  batch_id?: number | null
+}

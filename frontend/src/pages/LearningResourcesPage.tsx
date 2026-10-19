@@ -1,18 +1,28 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Alert, Button, Empty, Input, Select, Space, Spin, Switch, Table, Tag, Typography, message } from 'antd'
-import { BookOutlined, ExportOutlined, ReloadOutlined, SaveOutlined } from '@ant-design/icons'
+import { Alert, Button, Empty, Input, List, Modal, Select, Space, Spin, Switch, Table, Tag, Typography, Upload, message } from 'antd'
+import { ArrowLeftOutlined, BookOutlined, ExportOutlined, FolderOpenOutlined, ReloadOutlined, SaveOutlined, UploadOutlined } from '@ant-design/icons'
 import { useAuthStore } from '@/store/authStore'
 import { formatServerDateTime } from '@/utils/dateTime'
 import {
   getLearningAdminItems,
   getLearningAdminOverview,
+  getLearningDirectories,
   getPublicLearningCategories,
   getPublicLearningResources,
+  confirmLearningImport,
+  previewLearningImport,
   retryLearningResource,
   updateLearningChannel,
   updateLearningVisibility,
 } from '@/api/learningResources'
-import type { LearningAdminItem, LearningAdminOverview, LearningCategory, LearningResource } from '@/types/learningResources'
+import type {
+  LearningAdminItem,
+  LearningAdminOverview,
+  LearningCategory,
+  LearningDirectory,
+  LearningImportPreview,
+  LearningResource,
+} from '@/types/learningResources'
 
 import './LearningResourcesPage.css'
 
@@ -45,6 +55,17 @@ const LearningResourcesPage = () => {
   })
   const [savingConfig, setSavingConfig] = useState(false)
   const [maintenanceBusyId, setMaintenanceBusyId] = useState<number | null>(null)
+  const [importPreview, setImportPreview] = useState<LearningImportPreview | null>(null)
+  const [importMode, setImportMode] = useState<'direct' | 'transfer' | 'collect'>('direct')
+  const [importAccountId, setImportAccountId] = useState<number | undefined>(undefined)
+  const [importRoot, setImportRoot] = useState('')
+  const [importConfirming, setImportConfirming] = useState(false)
+  const [directoryModalOpen, setDirectoryModalOpen] = useState(false)
+  const [directoryTarget, setDirectoryTarget] = useState<'channel' | 'import'>('channel')
+  const [directoryAccountId, setDirectoryAccountId] = useState<number | undefined>(undefined)
+  const [directoryLoading, setDirectoryLoading] = useState(false)
+  const [directoryItems, setDirectoryItems] = useState<LearningDirectory[]>([])
+  const [directoryStack, setDirectoryStack] = useState<Array<{ id: string; name: string; path: string }>>([])
 
   const selectedChannel = useMemo(
     () => overview?.channels.find((channel) => channel.channel_id === selectedChannelId) ?? null,
@@ -106,6 +127,88 @@ const LearningResourcesPage = () => {
       message.error(getRequestErrorMessage(saveError, '保存学习资料配置失败'))
     } finally {
       setSavingConfig(false)
+    }
+  }
+
+  const loadDirectories = async (accountId: number, parentId: string) => {
+    setDirectoryLoading(true)
+    try {
+      setDirectoryItems(await getLearningDirectories(accountId, parentId))
+    } catch (directoryError: unknown) {
+      message.error(getRequestErrorMessage(directoryError, '读取网盘目录失败'))
+      setDirectoryItems([])
+    } finally {
+      setDirectoryLoading(false)
+    }
+  }
+
+  const openDirectoryPicker = async (target: 'channel' | 'import') => {
+    const accountId = target === 'channel' ? channelDraft.target_account_id : importAccountId
+    if (!accountId) {
+      message.warning('请先选择已配置的夸克账号')
+      return
+    }
+    setDirectoryTarget(target)
+    setDirectoryAccountId(accountId)
+    setDirectoryStack([{ id: '0', name: '网盘根目录', path: '' }])
+    setDirectoryModalOpen(true)
+    await loadDirectories(accountId, '0')
+  }
+
+  const enterDirectory = async (directory: LearningDirectory) => {
+    if (!directoryAccountId) return
+    const currentPath = directoryStack[directoryStack.length - 1]?.path || ''
+    const path = [currentPath, directory.name].filter(Boolean).join('/')
+    setDirectoryStack((current) => [...current, { id: directory.id, name: directory.name, path }])
+    await loadDirectories(directoryAccountId, directory.id)
+  }
+
+  const handleDirectoryBack = async () => {
+    if (!directoryAccountId || directoryStack.length <= 1) return
+    const nextStack = directoryStack.slice(0, -1)
+    setDirectoryStack(nextStack)
+    await loadDirectories(directoryAccountId, nextStack[nextStack.length - 1].id)
+  }
+
+  const handleDirectorySelect = () => {
+    const currentPath = directoryStack[directoryStack.length - 1]?.path || ''
+    if (directoryTarget === 'channel') {
+      setChannelDraft((draft) => ({ ...draft, save_root: currentPath }))
+    } else {
+      setImportRoot(currentPath)
+    }
+    setDirectoryModalOpen(false)
+  }
+
+  const handlePreviewImport = async (file: File) => {
+    try {
+      setImportPreview(await previewLearningImport(file))
+      setImportMode('direct')
+    } catch (importError: unknown) {
+      message.error(getRequestErrorMessage(importError, '解析学习资料文件失败'))
+    }
+  }
+
+  const handleConfirmImport = async () => {
+    if (!importPreview) return
+    if (importMode === 'transfer' && (!importAccountId || !importRoot.trim())) {
+      message.warning('提交转存前请选择夸克账号和资料根目录')
+      return
+    }
+    setImportConfirming(true)
+    try {
+      const result = await confirmLearningImport(importPreview.id, {
+        mode: importMode,
+        target_account_id: importMode === 'transfer' ? importAccountId : undefined,
+        save_root: importMode === 'transfer' ? importRoot.trim() : undefined,
+      })
+      message.success(result.queued_count > 0 ? `已导入并排队 ${result.queued_count} 个转存任务` : '学习资料已导入')
+      setImportPreview(null)
+      await load()
+    } catch (importError: unknown) {
+      message.error(getRequestErrorMessage(importError, '确认学习资料导入失败'))
+    } finally {
+      setImportConfirming(false)
     }
   }
 
@@ -245,8 +348,15 @@ const LearningResourcesPage = () => {
               value={channelDraft.save_root}
               placeholder="学习资料根目录（可留空使用账号默认目录）"
               onChange={(event) => setChannelDraft((draft) => ({ ...draft, save_root: event.target.value }))}
-              style={{ width: 280 }}
+              style={{ width: 220 }}
             />
+            <Button
+              icon={<FolderOpenOutlined />}
+              onClick={() => void openDirectoryPicker('channel')}
+              disabled={!channelDraft.target_account_id}
+            >
+              选择目录
+            </Button>
             <Space size={6}>
               <Switch checked={channelDraft.is_enabled} onChange={(checked) => setChannelDraft((draft) => ({ ...draft, is_enabled: checked }))} />
               <Text>启用自动流程</Text>
@@ -254,6 +364,77 @@ const LearningResourcesPage = () => {
             <Button type="primary" icon={<SaveOutlined />} loading={savingConfig} onClick={() => void handleSaveConfig()}>保存配置</Button>
           </Space>
           {selectedChannel?.last_error_message ? <Alert className="learning-config-error" type="warning" showIcon message={selectedChannel.last_error_message} /> : null}
+        </section>
+      ) : null}
+
+      {isAdmin && overview ? (
+        <section className="learning-import-panel">
+          <div className="learning-admin-heading">
+            <div>
+              <Text strong>批量导入学习资料</Text>
+              <Text type="secondary">支持 TXT / XLSX；先预览，确认后再入库或排队转存。</Text>
+            </div>
+            <Upload
+              accept=".txt,.xlsx,.xlsm"
+              showUploadList={false}
+              beforeUpload={(file) => {
+                void handlePreviewImport(file)
+                return false
+              }}
+            >
+              <Button icon={<UploadOutlined />}>选择文件</Button>
+            </Upload>
+          </div>
+          {importPreview ? (
+            <div className="learning-import-preview">
+              <Alert
+                type="info"
+                showIcon
+                message={`已解析 ${importPreview.total_records} 个资源、${importPreview.total_links} 个链接，${importPreview.invalid_count} 行异常`}
+              />
+              <Space wrap className="learning-import-controls">
+                <Select
+                  value={importMode}
+                  options={[
+                    { value: 'direct', label: '直接入库（已有自有分享）' },
+                    { value: 'transfer', label: '提交夸克转存' },
+                    { value: 'collect', label: '仅收集，暂不公开' },
+                  ]}
+                  onChange={setImportMode}
+                  style={{ minWidth: 220 }}
+                />
+                {importMode === 'transfer' ? (
+                  <>
+                    <Select
+                      value={importAccountId}
+                      placeholder="选择夸克账号"
+                      options={overview.accounts.filter((account) => account.is_enabled).map((account) => ({ value: account.id, label: account.account_name }))}
+                      onChange={(value) => setImportAccountId(value)}
+                      style={{ minWidth: 180 }}
+                    />
+                    <Input value={importRoot} placeholder="选择资料根目录" readOnly style={{ width: 220 }} />
+                    <Button icon={<FolderOpenOutlined />} onClick={() => void openDirectoryPicker('import')} disabled={!importAccountId}>
+                      选择目录
+                    </Button>
+                  </>
+                ) : null}
+                <Button type="primary" loading={importConfirming} onClick={() => void handleConfirmImport()}>确认导入</Button>
+                <Button onClick={() => setImportPreview(null)}>取消</Button>
+              </Space>
+              <Table
+                rowKey={(record) => `${record.display_title}-${record.category}`}
+                size="small"
+                pagination={{ pageSize: 8 }}
+                dataSource={importPreview.records}
+                columns={[
+                  { title: '资源标题', dataIndex: 'display_title' },
+                  { title: '分类', dataIndex: 'category', width: 120 },
+                  { title: '标签', dataIndex: 'tags', render: (tags: string[]) => tags.join('、') || '-' },
+                  { title: '链接数', dataIndex: 'links', render: (links: unknown[]) => links.length, width: 80 },
+                ]}
+              />
+            </div>
+          ) : null}
         </section>
       ) : null}
 
@@ -286,6 +467,35 @@ const LearningResourcesPage = () => {
           <Table<LearningAdminItem> rowKey="id" columns={adminColumns} dataSource={adminItems} pagination={{ pageSize: 10 }} size="small" />
         </section>
       ) : null}
+
+      <Modal
+        open={directoryModalOpen}
+        title="选择网盘资料根目录"
+        onCancel={() => setDirectoryModalOpen(false)}
+        onOk={handleDirectorySelect}
+        okText="选择当前目录"
+        cancelText="取消"
+      >
+        <div className="learning-directory-path">当前路径：{directoryStack[directoryStack.length - 1]?.path || '网盘根目录'}</div>
+        <Space style={{ marginBottom: 12 }}>
+          <Button icon={<ArrowLeftOutlined />} onClick={() => void handleDirectoryBack()} disabled={directoryStack.length <= 1}>
+            返回上级
+          </Button>
+        </Space>
+        <List
+          loading={directoryLoading}
+          bordered
+          dataSource={directoryItems}
+          locale={{ emptyText: '当前目录没有子目录' }}
+          renderItem={(directory) => (
+            <List.Item
+              actions={[<Button key={directory.id} type="link" onClick={() => void enterDirectory(directory)}>打开</Button>]}
+            >
+              <Space><FolderOpenOutlined />{directory.name}</Space>
+            </List.Item>
+          )}
+        />
+      </Modal>
     </div>
   )
 }

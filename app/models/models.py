@@ -351,6 +351,7 @@ class LearningResourceItem(Base):
     latest_source_message_id = Column(Integer, ForeignKey("messages.id"), nullable=True, index=True)
     latest_source_at = Column(DateTime, nullable=True, index=True)
     last_published_at = Column(DateTime, nullable=True, index=True)
+    tags = Column(ARRAY(String), nullable=False, default=list)
     classification_source = Column(String(32), nullable=False, default="rule", index=True)
     classification_confidence = Column(String(32), nullable=False, default="medium")
     created_by = Column(String(128), nullable=True)
@@ -406,7 +407,7 @@ class LearningResourceTransferJob(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     resource_id = Column(Integer, ForeignKey("learning_resource_items.id", ondelete="CASCADE"), nullable=False, index=True)
-    source_message_id = Column(Integer, ForeignKey("messages.id"), nullable=False, index=True)
+    source_message_id = Column(Integer, ForeignKey("messages.id"), nullable=True, index=True)
     source_link_target_id = Column(Integer, ForeignKey("link_targets.id"), nullable=False, index=True)
     target_account_id = Column(Integer, ForeignKey("pan_transfer_accounts.id"), nullable=False, index=True)
     batch_id = Column(Integer, ForeignKey("pan_transfer_batches.id"), nullable=True, index=True)
@@ -416,6 +417,25 @@ class LearningResourceTransferJob(Base):
     attempt_count = Column(Integer, nullable=False, default=0)
     next_retry_at = Column(DateTime, nullable=True, index=True)
     last_error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class LearningResourceImportJob(Base):
+    __tablename__ = "learning_resource_import_jobs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    filename = Column(String(255), nullable=False)
+    file_hash = Column(String(64), nullable=False, index=True)
+    status = Column(String(32), nullable=False, default="preview", index=True)
+    preview_json = Column(JSONB, nullable=False, default=dict)
+    summary_json = Column(JSONB, nullable=False, default=dict)
+    row_count = Column(Integer, nullable=False, default=0)
+    valid_count = Column(Integer, nullable=False, default=0)
+    duplicate_count = Column(Integer, nullable=False, default=0)
+    error_count = Column(Integer, nullable=False, default=0)
+    created_by = Column(String(128), nullable=True)
+    confirmed_by = Column(String(128), nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -1302,6 +1322,7 @@ def ensure_runtime_storage_tables() -> None:
                 LearningResourceItemCategory.__table__,
                 LearningResourceLink.__table__,
                 LearningResourceTransferJob.__table__,
+                LearningResourceImportJob.__table__,
                 PanTransferBatch.__table__,
                 PanTransferBatchItem.__table__,
                 PanTransferReplacementLog.__table__,
@@ -1331,12 +1352,38 @@ def ensure_runtime_storage_tables() -> None:
         _ensure_channel_daily_stats_indexes()
         _ensure_resource_ops_indexes()
         _ensure_pan_transfer_columns()
+        _ensure_learning_resource_columns()
         _ensure_ai_center_columns()
         _ensure_media_wall_visibility()
         _ensure_media_wall_link_columns()
         _ensure_pan_transfer_indexes()
         _ensure_link_check_indexes()
         _runtime_storage_checked = True
+
+
+def _ensure_learning_resource_columns() -> None:
+    inspector = inspect(engine)
+    try:
+        item_columns = {column["name"] for column in inspector.get_columns("learning_resource_items")}
+    except Exception:
+        item_columns = set()
+    try:
+        transfer_job_columns = {column["name"] for column in inspector.get_columns("learning_resource_transfer_jobs")}
+    except Exception:
+        transfer_job_columns = set()
+
+    if not item_columns and not transfer_job_columns:
+        return
+
+    with engine.begin() as connection:
+        if "tags" not in item_columns:
+            connection.execute(
+                text("ALTER TABLE learning_resource_items ADD COLUMN tags TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[]")
+            )
+        if "source_message_id" in transfer_job_columns:
+            connection.execute(
+                text("ALTER TABLE learning_resource_transfer_jobs ALTER COLUMN source_message_id DROP NOT NULL")
+            )
 
 
 def _ensure_system_settings_columns() -> None:

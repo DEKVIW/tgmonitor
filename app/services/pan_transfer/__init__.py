@@ -6,6 +6,7 @@ from .accounts import (
     update_pan_transfer_account,
 )
 from .directory_preview import preview_pan_transfer_link_directory
+from .directory_browser import list_pan_transfer_directories
 from .file_diagnosis import diagnose_pan_transfer_follow_task_files
 from .batches import (
     cancel_pan_transfer_batch,
@@ -62,6 +63,7 @@ __all__ = [
     "process_next_pan_transfer_follow_task",
     "process_next_pan_transfer_publish_rule",
     "preview_pan_transfer_link_directory",
+    "list_pan_transfer_directories",
     "preview_manual_pan_transfer_selection",
     "bind_follow_task_publish_record",
     "create_pan_transfer_follow_sync_batch",

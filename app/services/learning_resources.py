@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import re
 import unicodedata
 from typing import Any, Iterable
@@ -12,6 +13,7 @@ from app.models.models import (
     Channel,
     LearningChannelConfig,
     LearningResourceCategory,
+    LearningResourceImportJob,
     LearningResourceItem,
     LearningResourceItemCategory,
     LearningResourceLink,
@@ -26,6 +28,8 @@ from app.models.models import (
 )
 from app.services.pan_transfer.common import normalize_relative_path, sanitize_path_segment, utcnow
 from app.services.pan_transfer.constants import normalize_transfer_platform
+from app.services.link_check.constants import PLATFORM_QUARK
+from app.services.link_check.parser import detect_platform_from_url, is_http_url, normalize_candidate_url
 from app.services.pan_transfer.queue import refresh_pan_transfer_batch_summary
 from app.utils.channel_utils import normalize_channel_username
 
@@ -39,6 +43,8 @@ LEARNING_JOB_TRANSFERRING = "transferring"
 LEARNING_JOB_PUBLISHED = "published"
 LEARNING_JOB_FAILED = "failed"
 LEARNING_JOB_PAUSED = "paused"
+LEARNING_IMPORT_MODES = {"direct", "transfer", "collect"}
+MAX_IMPORT_ROWS = 5000
 
 _URL_TAG_RE = re.compile(r"^(?:https?://|www\.|https?$)", re.IGNORECASE)
 _SPACE_RE = re.compile(r"\s+")
@@ -97,6 +103,455 @@ def classify_learning_message(message: Message) -> dict[str, Any]:
     return {"name": "待分类", "source": "fallback", "confidence": "low"}
 
 
+def _clean_import_text(value: Any, *, max_length: int = 255) -> str:
+    return " ".join(str(value or "").replace("\u200b", " ").split())[:max_length].strip()
+
+
+def _split_import_values(value: Any) -> list[str]:
+    return [
+        part.strip().lstrip("#")
+        for part in re.split(r"[、,，|;；]+", str(value or ""))
+        if part.strip()
+    ]
+
+
+def _is_import_header(row: list[Any]) -> bool:
+    first = _clean_import_text(row[0] if row else "").lower()
+    return first in {"资源标题", "标题", "名称", "title", "name"}
+
+
+def _parse_learning_import_rows(rows: Iterable[list[Any]]) -> dict[str, Any]:
+    materialized = [list(row) for row in rows]
+    if materialized and _is_import_header(materialized[0]):
+        headers = [_clean_import_text(value).lower() for value in materialized.pop(0)]
+    else:
+        headers = []
+
+    category_index = next(
+        (index for index, value in enumerate(headers) if value in {"分类", "类别", "category"}),
+        1,
+    )
+    tags_index = next(
+        (index for index, value in enumerate(headers) if value in {"标签", "tags", "tag"}),
+        2,
+    )
+    reserved_indexes = {0, category_index, tags_index}
+    if headers:
+        link_indexes = [index for index, value in enumerate(headers) if index not in reserved_indexes and ("链接" in value or "link" in value or "url" in value)]
+        if not link_indexes:
+            link_indexes = [index for index in range(len(headers)) if index not in reserved_indexes]
+    else:
+        link_indexes = []
+
+    records: list[dict[str, Any]] = []
+    invalid_rows: list[dict[str, Any]] = []
+    seen: dict[tuple[str, str], dict[str, Any]] = {}
+    row_count = 0
+    for row_number, row in enumerate(materialized, start=2 if headers else 1):
+        if row_number > MAX_IMPORT_ROWS + (1 if headers else 0):
+            invalid_rows.append({"row": row_number, "reason": f"超过 {MAX_IMPORT_ROWS} 行限制"})
+            break
+        if not any(_clean_import_text(value) for value in row):
+            continue
+        row_count += 1
+        title = _clean_import_text(row[0] if row else "", max_length=255)
+        category = _clean_import_text(row[category_index] if len(row) > category_index else "待分类", max_length=120) or "待分类"
+        tags = _split_import_values(row[tags_index] if len(row) > tags_index else "")
+        candidate_values = (
+            [row[index] for index in link_indexes if index < len(row)]
+            if headers
+            else row[3:] if len(row) > 3 else row[1:]
+        )
+        links: list[dict[str, str]] = []
+        for raw_link in candidate_values:
+            normalized = normalize_candidate_url(str(raw_link or "").strip())
+            if not normalized or not is_http_url(normalized):
+                continue
+            links.append({
+                "url": normalized,
+                "platform": detect_platform_from_url(normalized),
+            })
+        if not title or not links:
+            invalid_rows.append({"row": row_number, "title": title, "reason": "资源标题或有效网盘链接为空"})
+            continue
+
+        key = (normalize_learning_title(title), _category_slug(category))
+        record = seen.get(key)
+        if record is None:
+            record = {
+                "display_title": title,
+                "category": category,
+                "tags": tags,
+                "links": [],
+            }
+            seen[key] = record
+            records.append(record)
+        record["tags"] = list(dict.fromkeys([*record.get("tags", []), *tags]))
+        record["links"].extend(links)
+
+    duplicate_count = 0
+    for record in records:
+        unique_links: dict[str, dict[str, str]] = {}
+        for link in record["links"]:
+            fingerprint = hashlib.sha256(str(link["url"]).encode("utf-8")).hexdigest()
+            if fingerprint in unique_links:
+                duplicate_count += 1
+                continue
+            unique_links[fingerprint] = link
+        record["links"] = list(unique_links.values())
+    return {
+        "records": records,
+        "invalid_rows": invalid_rows,
+        "row_count": row_count,
+        "valid_count": len(records),
+        "total_records": len(records),
+        "total_links": sum(len(record["links"]) for record in records),
+        "duplicate_count": duplicate_count,
+        "invalid_count": len(invalid_rows),
+    }
+
+
+def parse_learning_import_file(*, filename: str, content: bytes) -> dict[str, Any]:
+    lower_name = str(filename or "").lower()
+    if lower_name.endswith((".xlsx", ".xlsm")):
+        try:
+            from openpyxl import load_workbook
+        except ImportError as exc:
+            raise ValueError("服务器未安装 openpyxl，无法解析 Excel 文件") from exc
+        workbook = load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+        worksheet = workbook.active
+        return _parse_learning_import_rows(worksheet.iter_rows(values_only=True))
+    if not lower_name.endswith(".txt"):
+        raise ValueError("只支持 TXT、XLSX 或 XLSM 文件")
+    rows: list[list[str]] = []
+    for line in content.decode("utf-8-sig", errors="replace").splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        delimiter = "\t" if "\t" in line else "|"
+        rows.append(line.split(delimiter))
+    return _parse_learning_import_rows(rows)
+
+
+def preview_learning_import(
+    session: Session,
+    *,
+    filename: str,
+    content: bytes,
+    operator: str,
+) -> dict[str, Any]:
+    ensure_runtime_storage_tables()
+    preview = parse_learning_import_file(filename=filename, content=content)
+    file_hash = hashlib.sha256(content).hexdigest()
+    job = LearningResourceImportJob(
+        filename=_clean_import_text(filename, max_length=255) or "learning-resource-import",
+        file_hash=file_hash,
+        status="preview",
+        preview_json=preview,
+        summary_json={key: preview.get(key, 0) for key in ("total_records", "total_links", "invalid_count", "duplicate_count")},
+        row_count=int(preview.get("row_count") or 0),
+        valid_count=int(preview.get("valid_count") or 0),
+        duplicate_count=int(preview.get("duplicate_count") or 0),
+        error_count=int(preview.get("invalid_count") or 0),
+        created_by=operator,
+    )
+    session.add(job)
+    session.flush()
+    return {"id": int(job.id), "filename": job.filename, "status": job.status, **preview}
+
+
+def _get_learning_quark_account(session: Session, account_id: int | None) -> PanTransferAccount:
+    account = session.get(PanTransferAccount, int(account_id)) if account_id else None
+    if account is None:
+        account = (
+            session.query(PanTransferAccount)
+            .filter(PanTransferAccount.platform == PLATFORM_QUARK, PanTransferAccount.is_enabled.is_(True))
+            .order_by(PanTransferAccount.is_default.desc(), PanTransferAccount.id.asc())
+            .first()
+        )
+    if account is None or not bool(account.is_enabled) or str(account.platform or "") != PLATFORM_QUARK:
+        raise ValueError("必须选择已启用的夸克网盘账号")
+    return account
+
+
+def _get_or_create_import_target(session: Session, *, url: str, platform: str) -> LinkTarget:
+    normalized = normalize_candidate_url(url)
+    fingerprint = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+    target = (
+        session.query(LinkTarget)
+        .filter(LinkTarget.platform == platform, LinkTarget.normalized_url_hash == fingerprint)
+        .first()
+    )
+    if target is None:
+        target = LinkTarget(
+            platform=platform,
+            original_url=normalized,
+            normalized_url=normalized,
+            normalized_url_hash=fingerprint,
+            first_seen_at=utcnow(),
+            last_seen_at=utcnow(),
+        )
+        session.add(target)
+        session.flush()
+    else:
+        target.last_seen_at = utcnow()
+        target.original_url = normalized
+        session.add(target)
+    return target
+
+
+def _upsert_learning_import_resource(
+    session: Session,
+    *,
+    record: dict[str, Any],
+    mode: str,
+    operator: str,
+) -> tuple[LearningResourceItem, LearningResourceCategory, list[tuple[LearningResourceLink, LinkTarget | None]]]:
+    title = _clean_import_text(record.get("display_title"), max_length=255) or "未命名资源"
+    category_name = _clean_import_text(record.get("category"), max_length=120) or "待分类"
+    category = _get_or_create_category(session, name=category_name, operator=operator)
+    normalized_title = normalize_learning_title(title)
+    resource = (
+        session.query(LearningResourceItem)
+        .filter(
+            LearningResourceItem.source_channel_key == "manual-import",
+            LearningResourceItem.normalized_title == normalized_title,
+        )
+        .first()
+    )
+    if resource is None:
+        resource = LearningResourceItem(
+            display_title=title,
+            normalized_title=normalized_title,
+            status=LEARNING_STATUS_PENDING,
+            primary_category_id=int(category.id),
+            source_channel_key="manual-import",
+            latest_source_at=utcnow(),
+            classification_source="import",
+            classification_confidence="high",
+            tags=list(record.get("tags") or []),
+            created_by=operator,
+            updated_by=operator,
+        )
+        session.add(resource)
+        session.flush()
+    else:
+        resource.display_title = title
+        resource.primary_category_id = int(category.id)
+        resource.latest_source_at = utcnow()
+        resource.tags = list(record.get("tags") or resource.tags or [])
+        resource.updated_by = operator
+        session.add(resource)
+    _resource_category_link(session, resource_id=int(resource.id), category_id=int(category.id))
+
+    links: list[tuple[LearningResourceLink, LinkTarget | None]] = []
+    for raw_link in list(record.get("links") or []):
+        url = normalize_candidate_url(str(raw_link.get("url") or ""))
+        platform = detect_platform_from_url(url)
+        if not url or not is_http_url(url):
+            continue
+        fingerprint = hashlib.sha256(url.encode("utf-8")).hexdigest()
+        link = (
+            session.query(LearningResourceLink)
+            .filter(
+                LearningResourceLink.resource_id == int(resource.id),
+                LearningResourceLink.url_fingerprint == fingerprint,
+            )
+            .first()
+        )
+        if link is None:
+            link = LearningResourceLink(
+                resource_id=int(resource.id),
+                platform=platform,
+                source_url=url,
+                url_fingerprint=fingerprint,
+                is_primary=False,
+                is_enabled=True,
+                status="pending",
+            )
+            session.add(link)
+            session.flush()
+        target = None
+        if mode == "transfer":
+            if platform != PLATFORM_QUARK:
+                raise ValueError("提交转存目前只支持夸克网盘链接")
+            target = _get_or_create_import_target(session, url=url, platform=platform)
+            link.source_link_target_id = int(target.id)
+        if mode == "direct":
+            link.share_url = url
+            link.status = "published"
+            link.is_enabled = True
+        elif mode == "collect":
+            link.status = "pending"
+            link.is_enabled = False
+        else:
+            link.status = "pending"
+            link.is_enabled = True
+        session.add(link)
+        links.append((link, target))
+
+    published_link = next((link for link, _ in links if link.status == "published" and link.share_url), None)
+    if published_link is not None:
+        session.query(LearningResourceLink).filter(
+            LearningResourceLink.resource_id == int(resource.id),
+            LearningResourceLink.id != int(published_link.id),
+        ).update({"is_primary": False}, synchronize_session=False)
+        published_link.is_primary = True
+        resource.status = LEARNING_STATUS_PUBLISHED
+        resource.last_published_at = utcnow()
+    elif mode == "collect":
+        resource.status = LEARNING_STATUS_PENDING
+    else:
+        resource.status = LEARNING_STATUS_TRANSFERRING
+    session.add(resource)
+    session.flush()
+    return resource, category, links
+
+
+def confirm_learning_import(
+    session: Session,
+    *,
+    job_id: int,
+    mode: str,
+    target_account_id: int | None,
+    save_root: str | None,
+    operator: str,
+) -> dict[str, Any]:
+    ensure_runtime_storage_tables()
+    normalized_mode = str(mode or "").strip().lower()
+    if normalized_mode not in LEARNING_IMPORT_MODES:
+        raise ValueError("无效的导入处理模式")
+    job = session.get(LearningResourceImportJob, int(job_id))
+    if job is None:
+        raise LookupError("导入任务不存在")
+    if job.status != "preview":
+        raise ValueError("该导入任务已经确认或不可用")
+    account = _get_learning_quark_account(session, target_account_id) if normalized_mode == "transfer" else None
+    root = normalize_relative_path(str(save_root or (account.default_save_root if account else "") or ""))
+    if normalized_mode == "transfer" and not root:
+        raise ValueError("提交转存前必须选择资料根目录")
+    preview = dict(job.preview_json or {})
+    records = preview.get("records") if isinstance(preview.get("records"), list) else []
+    queued: list[tuple[LearningResourceTransferJob, LearningResourceItem, LearningResourceCategory, PanTransferAccount, LinkTarget]] = []
+    created_count = 0
+    link_count = 0
+    for record in records:
+        resource_before = session.query(LearningResourceItem).filter(
+            LearningResourceItem.source_channel_key == "manual-import",
+            LearningResourceItem.normalized_title == normalize_learning_title(record.get("display_title")),
+        ).first()
+        resource, category, links = _upsert_learning_import_resource(
+            session,
+            record=record,
+            mode=normalized_mode,
+            operator=operator,
+        )
+        if resource_before is None:
+            created_count += 1
+        link_count += len(links)
+        if normalized_mode != "transfer" or account is None:
+            continue
+        for link, target in links:
+            if target is None:
+                continue
+            transfer_job = (
+                session.query(LearningResourceTransferJob)
+                .filter(
+                    LearningResourceTransferJob.resource_id == int(resource.id),
+                    LearningResourceTransferJob.source_link_target_id == int(target.id),
+                )
+                .first()
+            )
+            if transfer_job is not None and transfer_job.status in {LEARNING_JOB_QUEUED, LEARNING_JOB_TRANSFERRING}:
+                continue
+            if transfer_job is None:
+                transfer_job = LearningResourceTransferJob(
+                    resource_id=int(resource.id),
+                    source_message_id=None,
+                    source_link_target_id=int(target.id),
+                    target_account_id=int(account.id),
+                    category_id=int(category.id),
+                    status=LEARNING_JOB_QUEUED,
+                )
+                session.add(transfer_job)
+                session.flush()
+            else:
+                transfer_job.target_account_id = int(account.id)
+                transfer_job.category_id = int(category.id)
+                transfer_job.status = LEARNING_JOB_QUEUED
+                transfer_job.last_error_message = None
+                session.add(transfer_job)
+            queued.append((transfer_job, resource, category, account, target))
+
+    batch_id = None
+    if queued:
+        batch = PanTransferBatch(
+            batch_type="learning_resources",
+            source_scope="learning_import",
+            status="running",
+            created_by=operator,
+            total_message_count=0,
+            total_link_target_count=len(queued),
+            started_at=utcnow(),
+            request_json={"import_job_id": int(job.id), "target_account_id": int(account.id), "save_root": root},
+            result_json={},
+        )
+        session.add(batch)
+        session.flush()
+        batch_id = int(batch.id)
+        for transfer_job, resource, category, target_account, target in queued:
+            item = PanTransferBatchItem(
+                batch_id=int(batch.id),
+                link_target_id=int(target.id),
+                target_account_id=int(target_account.id),
+                platform=PLATFORM_QUARK,
+                short_title=resource.display_title,
+                original_url=str(target.original_url or ""),
+                source_message_count=0,
+                source_ref_count=0,
+                latest_message_title=resource.display_title,
+                latest_message_time=resource.latest_source_at,
+                latest_link_health="unknown",
+                transfer_status="queued",
+                share_status="pending",
+                validation_status="pending",
+                replacement_status="replaced",
+                max_attempts=3,
+                extra_json={
+                    "learning_resource_job_id": int(transfer_job.id),
+                    "skip_link_replacement": True,
+                    "resolved_paths": {
+                        "staging_root": normalize_relative_path("/".join(part for part in (root, category.directory_name) if part)),
+                        "staging_folder_name": sanitize_path_segment(resource.display_title, fallback="未命名资源", max_length=96),
+                        "resolved_path": normalize_relative_path("/".join(part for part in (root, category.directory_name, resource.display_title) if part)),
+                        "transfer_layout": "independent",
+                        "share_target_mode": "resource_dir",
+                    },
+                    "path_strategy": {"item_folder_mode": "original", "share_target_mode": "resource_dir"},
+                },
+            )
+            session.add(item)
+            session.flush()
+            transfer_job.batch_id = int(batch.id)
+            transfer_job.batch_item_id = int(item.id)
+            resource.status = LEARNING_STATUS_TRANSFERRING
+            session.add_all([transfer_job, resource])
+        session.flush()
+        refresh_pan_transfer_batch_summary(session, batch_id=int(batch.id))
+
+    job.status = "queued" if queued else "completed"
+    job.confirmed_by = operator
+    job.summary_json = {
+        "mode": normalized_mode,
+        "created_count": created_count,
+        "link_count": link_count,
+        "queued_count": len(queued),
+        "batch_id": batch_id,
+    }
+    session.add(job)
+    session.flush()
+    return {"job_id": int(job.id), "status": str(job.status), **job.summary_json}
+
+
 def _category_slug(name: str) -> str:
     slug = re.sub(r"[^\w\u4e00-\u9fff]+", "-", name.strip().lower()).strip("-")
     return (slug or "uncategorized")[:160]
@@ -148,7 +603,7 @@ def _resolve_learning_account(
         account = (
             session.query(PanTransferAccount)
             .filter(
-                PanTransferAccount.platform == "quark",
+                PanTransferAccount.platform == PLATFORM_QUARK,
                 PanTransferAccount.is_enabled.is_(True),
             )
             .order_by(PanTransferAccount.is_default.desc(), PanTransferAccount.id.asc())
@@ -157,7 +612,7 @@ def _resolve_learning_account(
     if account is None or not bool(account.is_enabled):
         return None
     try:
-        return account if normalize_transfer_platform(str(account.platform or "")) == "quark" else None
+        return account if normalize_transfer_platform(str(account.platform or "")) == PLATFORM_QUARK else None
     except ValueError:
         return None
 
@@ -225,7 +680,7 @@ def _find_quark_refs(session: Session, message_id: int) -> list[tuple[MessageLin
     result: list[tuple[MessageLinkRef, LinkTarget]] = []
     for ref, target in rows:
         try:
-            if normalize_transfer_platform(str(target.platform or ref.provider_label or "")) != "quark":
+            if normalize_transfer_platform(str(target.platform or ref.provider_label or "")) != PLATFORM_QUARK:
                 continue
         except ValueError:
             continue
@@ -263,7 +718,7 @@ def _create_learning_batch(
             batch_id=int(batch.id),
             link_target_id=int(target.id),
             target_account_id=int(account.id),
-            platform="quark",
+            platform=PLATFORM_QUARK,
             short_title=resource.display_title,
             original_url=str(target.original_url or ""),
             source_message_count=1,
@@ -383,6 +838,7 @@ def enqueue_learning_resources_for_message_ids(
                 first_source_message_id=int(message.id),
                 latest_source_message_id=int(message.id),
                 latest_source_at=source_at,
+                tags=[_clean_tag(tag) for tag in list(message.tags or []) if _clean_tag(tag)],
                 classification_source=str(classification["source"]),
                 classification_confidence=str(classification["confidence"]),
                 created_by=operator,
@@ -397,6 +853,7 @@ def enqueue_learning_resources_for_message_ids(
             resource.primary_category_id = int(category.id)
             resource.classification_source = str(classification["source"])
             resource.classification_confidence = str(classification["confidence"])
+            resource.tags = [_clean_tag(tag) for tag in list(message.tags or []) if _clean_tag(tag)]
             resource.updated_by = operator
             session.add(resource)
         _resource_category_link(
@@ -431,7 +888,7 @@ def enqueue_learning_resources_for_message_ids(
             if link is None:
                 link = LearningResourceLink(
                     resource_id=int(resource.id),
-                    platform="quark",
+                    platform=PLATFORM_QUARK,
                     source_url=str(target.original_url or ref.target_url or ""),
                     url_fingerprint=fingerprint,
                     target_account_id=int(account.id),
@@ -743,9 +1200,13 @@ def list_public_learning_resources(
             }
             if category is not None
             else None,
-            "tags": [str(tag).strip() for tag in list(message.tags or []) if str(tag).strip()] if message else [],
+            "tags": [
+                str(tag).strip()
+                for tag in list((message.tags if message is not None else None) or item.tags or [])
+                if str(tag).strip()
+            ],
             "share_url": str(link.share_url or ""),
-            "platform": str(link.platform or "quark"),
+            "platform": str(link.platform or PLATFORM_QUARK),
             "updated_at": item.latest_source_at or item.updated_at,
             "created_at": item.created_at,
         }
@@ -819,7 +1280,7 @@ def list_learning_admin_overview(session: Session) -> dict[str, Any]:
             "is_enabled": bool(row.is_enabled),
         }
         for row in session.query(PanTransferAccount)
-        .filter(PanTransferAccount.platform == "quark")
+        .filter(PanTransferAccount.platform == PLATFORM_QUARK)
         .order_by(PanTransferAccount.is_default.desc(), PanTransferAccount.id.asc())
         .all()
     ]
@@ -860,7 +1321,7 @@ def update_learning_channel_config(
     account_id = payload.get("target_account_id")
     if account_id is not None:
         account = session.get(PanTransferAccount, int(account_id))
-        if account is None or not bool(account.is_enabled) or str(account.platform or "") != "quark":
+        if account is None or not bool(account.is_enabled) or str(account.platform or "") != PLATFORM_QUARK:
             raise ValueError("必须选择已启用的夸克网盘账号")
         config.target_account_id = int(account.id)
     elif config.target_account_id is None:
@@ -901,6 +1362,7 @@ def update_learning_channel_config(
 
 __all__ = [
     "classify_learning_message",
+    "confirm_learning_import",
     "enqueue_learning_resources_for_message_ids",
     "get_learning_channel_config",
     "is_learning_channel_enabled",
@@ -909,6 +1371,8 @@ __all__ = [
     "list_public_learning_categories",
     "list_public_learning_resources",
     "pause_learning_channel_tasks",
+    "parse_learning_import_file",
+    "preview_learning_import",
     "resume_learning_channel_tasks",
     "retry_learning_resource",
     "sync_learning_resource_after_transfer",

@@ -28,7 +28,8 @@
 
 .learning-config-panel,
 .learning-sheet,
-.learning-admin-sheet {
+.learning-admin-sheet,
+.learning-import-panel {
   margin-top: 22px;
   border: 1px solid var(--surface-border);
   border-radius: 8px;
@@ -131,6 +132,30 @@
   padding: 18px 20px 10px;
 }
 
+.learning-import-panel {
+  padding: 18px 20px 10px;
+}
+
+.learning-import-preview {
+  display: grid;
+  gap: 14px;
+  margin-top: 16px;
+}
+
+.learning-import-controls {
+  align-items: center;
+}
+
+.learning-directory-path {
+  margin-bottom: 14px;
+  padding: 9px 10px;
+  border: 1px solid var(--surface-border);
+  border-radius: 6px;
+  color: var(--text-muted);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
 .learning-admin-heading {
   align-items: center;
   margin-bottom: 14px;
@@ -160,7 +185,8 @@
   }
 
   .learning-config-panel,
-  .learning-admin-sheet {
+  .learning-admin-sheet,
+  .learning-import-panel {
     padding: 14px;
   }
 

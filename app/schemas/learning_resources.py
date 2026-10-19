@@ -100,3 +100,45 @@ class LearningResourceAdminListResponse(BaseModel):
 
 class LearningResourceVisibilityRequest(BaseModel):
     visible: bool
+
+
+class LearningDirectoryResponse(BaseModel):
+    id: str
+    name: str
+    is_dir: bool = True
+
+
+class LearningDirectoryListResponse(BaseModel):
+    account_id: int
+    parent_id: str
+    items: list[LearningDirectoryResponse]
+
+
+class LearningImportPreviewResponse(BaseModel):
+    id: int
+    filename: str
+    status: str
+    records: list[dict[str, Any]] = Field(default_factory=list)
+    invalid_rows: list[dict[str, Any]] = Field(default_factory=list)
+    row_count: int = 0
+    valid_count: int = 0
+    total_records: int = 0
+    total_links: int = 0
+    duplicate_count: int = 0
+    invalid_count: int = 0
+
+
+class LearningImportConfirmRequest(BaseModel):
+    mode: str = Field(default="direct", min_length=1, max_length=32)
+    target_account_id: int | None = Field(default=None, ge=1)
+    save_root: str | None = Field(default=None, max_length=255)
+
+
+class LearningImportConfirmResponse(BaseModel):
+    job_id: int
+    status: str
+    mode: str
+    created_count: int = 0
+    link_count: int = 0
+    queued_count: int = 0
+    batch_id: int | None = None
