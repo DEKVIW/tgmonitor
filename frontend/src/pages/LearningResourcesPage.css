@@ -4,26 +4,12 @@
   padding: 28px clamp(16px, 2.2vw, 32px) 48px;
 }
 
-.learning-resources-heading,
 .learning-config-heading,
 .learning-admin-heading {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 20px;
-}
-
-.learning-resources-heading h2 {
-  margin: 8px 0 4px;
-}
-
-.learning-eyebrow {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--color-primary);
-  font-size: 12px;
-  font-weight: 600;
 }
 
 .learning-config-panel,
@@ -67,7 +53,7 @@
 
 .learning-sheet-toolbar {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   justify-content: space-between;
   gap: 16px;
   padding: 0 14px;
@@ -128,6 +114,11 @@
 
 .learning-sheet-row:not(.learning-sheet-header):hover {
   background: #f7fbff;
+}
+
+.learning-sheet-row:not(.learning-sheet-header) {
+  content-visibility: auto;
+  contain-intrinsic-size: 42px;
 }
 
 .learning-sheet-header {
@@ -275,12 +266,6 @@
   font-size: 12px;
 }
 
-.learning-sheet-page-controls {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
 .learning-sheet-state {
   display: grid;
   min-height: 280px;
@@ -334,14 +319,6 @@
 @media (max-width: 768px) {
   .learning-resources-page {
     padding: 16px 12px 30px;
-  }
-
-  .learning-resources-heading {
-    align-items: stretch;
-  }
-
-  .learning-resources-heading > .ant-btn {
-    flex: 0 0 auto;
   }
 
   .learning-config-panel,

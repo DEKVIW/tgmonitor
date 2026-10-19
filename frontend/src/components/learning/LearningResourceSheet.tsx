@@ -1,4 +1,4 @@
-import { CheckOutlined, CloseOutlined, DeleteOutlined, EditOutlined, ExportOutlined, LeftOutlined, ReloadOutlined, RightOutlined } from '@ant-design/icons'
+import { CheckOutlined, CloseOutlined, DeleteOutlined, EditOutlined, ExportOutlined, ReloadOutlined } from '@ant-design/icons'
 import { Button, Popconfirm, Space, Tooltip } from 'antd'
 import type { CSSProperties } from 'react'
 import { formatServerDateTime } from '@/utils/dateTime'
@@ -15,14 +15,13 @@ export interface LearningResourceEditDraft {
 interface LearningResourceSheetProps {
   resources: LearningResource[]
   total: number
-  page: number
-  pageSize: number
+  hasMore: boolean
   isAdmin: boolean
   loading: boolean
   editingId: number | null
   editDraft: LearningResourceEditDraft
   maintenanceBusyId: number | null
-  onPageChange: (page: number) => void
+  onLoadMore: () => void
   onStartEditing: (resource: LearningResource) => void
   onCancelEditing: () => void
   onEditDraftChange: (field: keyof LearningResourceEditDraft, value: string) => void
@@ -53,14 +52,13 @@ const SheetInput = ({
 const LearningResourceSheet = ({
   resources,
   total,
-  page,
-  pageSize,
+  hasMore,
   isAdmin,
   loading,
   editingId,
   editDraft,
   maintenanceBusyId,
-  onPageChange,
+  onLoadMore,
   onStartEditing,
   onCancelEditing,
   onEditDraftChange,
@@ -68,13 +66,12 @@ const LearningResourceSheet = ({
   onDeleteRow,
   onRetry,
 }: LearningResourceSheetProps) => {
-  const totalPages = Math.max(1, Math.ceil(total / pageSize))
   const columnTemplate = isAdmin
     ? '48px minmax(360px, 1fr) 150px 240px minmax(220px, 260px) 160px 100px 180px'
     : '48px minmax(360px, 1fr) 150px 240px minmax(220px, 260px) 160px'
   const gridStyle = { '--learning-sheet-columns': columnTemplate } as CSSProperties
 
-  if (loading) {
+  if (loading && resources.length === 0) {
     return <div className="learning-sheet-state">正在加载资料…</div>
   }
 
@@ -84,7 +81,15 @@ const LearningResourceSheet = ({
 
   return (
     <div className="learning-sheet-grid-wrap">
-      <div className="learning-sheet-grid-scroll">
+      <div
+        className="learning-sheet-grid-scroll"
+        onScroll={(event) => {
+          const target = event.currentTarget
+          if (hasMore && !loading && target.scrollHeight - target.scrollTop - target.clientHeight < 480) {
+            onLoadMore()
+          }
+        }}
+      >
         <div className="learning-sheet-grid" style={gridStyle}>
         <div className="learning-sheet-row learning-sheet-header" role="row">
           <div className="learning-sheet-cell learning-sheet-row-number" role="columnheader">#</div>
@@ -99,7 +104,7 @@ const LearningResourceSheet = ({
 
         {resources.map((resource, index) => {
           const isEditing = editingId === resource.id
-          const rowNumber = (page - 1) * pageSize + index + 1
+          const rowNumber = index + 1
           const title = cleanLearningSheetText(resource.display_title)
           const category = cleanLearningSheetText(resource.category?.name || '待分类')
           const tags = cleanTags(resource.tags)
@@ -235,32 +240,8 @@ const LearningResourceSheet = ({
       </div>
 
       <div className="learning-sheet-footer">
-        <span>{total} 条资料</span>
-        <div className="learning-sheet-page-controls">
-          <Tooltip title="上一页">
-            <Button
-              type="text"
-              size="small"
-              className="learning-sheet-icon-button"
-              icon={<LeftOutlined />}
-              disabled={page <= 1}
-              aria-label="上一页"
-              onClick={() => onPageChange(page - 1)}
-            />
-          </Tooltip>
-          <span>第 {page} / {totalPages} 页</span>
-          <Tooltip title="下一页">
-            <Button
-              type="text"
-              size="small"
-              className="learning-sheet-icon-button"
-              icon={<RightOutlined />}
-              disabled={page >= totalPages}
-              aria-label="下一页"
-              onClick={() => onPageChange(page + 1)}
-            />
-          </Tooltip>
-        </div>
+        <span>已显示 {resources.length} / {total} 条资料</span>
+        <span>{loading ? '正在加载下一批…' : hasMore ? '下滑加载更多' : '已全部加载'}</span>
       </div>
     </div>
   )

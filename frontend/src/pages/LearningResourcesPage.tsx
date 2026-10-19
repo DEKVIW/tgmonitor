@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Alert, Button, Input, List, Modal, Popconfirm, Select, Space, Switch, Table, Tag, Typography, Upload, message } from 'antd'
-import { ArrowLeftOutlined, BookOutlined, DeleteOutlined, FolderOpenOutlined, ReloadOutlined, SaveOutlined, UploadOutlined } from '@ant-design/icons'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Alert, Button, Input, List, Modal, Popconfirm, Select, Space, Switch, Table, Tag, Tooltip, Typography, Upload, message } from 'antd'
+import { ArrowLeftOutlined, DeleteOutlined, FolderOpenOutlined, ReloadOutlined, SaveOutlined, UploadOutlined } from '@ant-design/icons'
 import { useAuthStore } from '@/store/authStore'
 import {
   deleteAllImportedLearningResources,
@@ -28,7 +28,7 @@ import { cleanLearningSheetText } from '@/utils/learningResources'
 
 import './LearningResourcesPage.css'
 
-const { Text, Title } = Typography
+const { Text } = Typography
 
 const getRequestErrorMessage = (error: unknown, fallback: string) => {
   if (typeof error === 'object' && error !== null && 'response' in error) {
@@ -45,7 +45,7 @@ const LearningResourcesPage = () => {
   const [resources, setResources] = useState<LearningResource[]>([])
   const [resourceTotal, setResourceTotal] = useState(0)
   const [page, setPage] = useState(1)
-  const pageSize = 50
+  const pageSize = 100
   const [overview, setOverview] = useState<LearningAdminOverview | null>(null)
   const [activeCategory, setActiveCategory] = useState('all')
   const [search, setSearch] = useState('')
@@ -73,63 +73,108 @@ const LearningResourcesPage = () => {
   const [directoryLoading, setDirectoryLoading] = useState(false)
   const [directoryItems, setDirectoryItems] = useState<LearningDirectory[]>([])
   const [directoryStack, setDirectoryStack] = useState<Array<{ id: string; name: string; path: string }>>([])
+  const requestSequenceRef = useRef(0)
+  const loadMoreRequestedRef = useRef(false)
 
   const selectedChannel = useMemo(
     () => overview?.channels.find((channel) => channel.channel_id === selectedChannelId) ?? null,
     [overview, selectedChannelId],
   )
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (targetPage: number) => {
+    const requestId = requestSequenceRef.current + 1
+    requestSequenceRef.current = requestId
+    if (targetPage === 1) loadMoreRequestedRef.current = false
     setLoading(true)
     setError('')
     try {
       if (isAdmin) {
-        const [overviewData, adminData] = await Promise.all([
-          getLearningAdminOverview(),
-          getLearningAdminItems({
-            category: activeCategory === 'all' ? undefined : activeCategory,
-            search: search.trim() || undefined,
-            page,
-            page_size: pageSize,
-          }),
-        ])
-        setOverview(overviewData)
-        setCategories(overviewData.categories.map((category) => ({
-          id: category.id,
-          name: category.name,
-          slug: category.slug,
-          sort_order: category.sort_order,
-          resource_count: category.resource_count,
-        })))
-        setResources(adminData.items.map((item) => ({ ...item, share_url: item.share_url || '', platform: item.platform || '' })))
-        setResourceTotal(adminData.total)
-        if (selectedChannelId === null && overviewData.channels.length > 0) {
-          setSelectedChannelId(overviewData.channels[0].channel_id)
+        const adminDataRequest = getLearningAdminItems({
+          category: activeCategory === 'all' ? undefined : activeCategory,
+          search: search.trim() || undefined,
+          page: targetPage,
+          page_size: pageSize,
+        })
+        if (targetPage === 1) {
+          const [overviewData, adminData] = await Promise.all([getLearningAdminOverview(), adminDataRequest])
+          if (requestId !== requestSequenceRef.current) return
+          setOverview(overviewData)
+          setCategories(overviewData.categories.map((category) => ({
+            id: category.id,
+            name: category.name,
+            slug: category.slug,
+            sort_order: category.sort_order,
+            resource_count: category.resource_count,
+          })))
+          const items = adminData.items.map((item) => ({ ...item, share_url: item.share_url || '', platform: item.platform || '' }))
+          setResources(items)
+          setResourceTotal(adminData.total)
+          if (overviewData.channels.length > 0) {
+            setSelectedChannelId((current) => current ?? overviewData.channels[0].channel_id)
+          }
+        } else {
+          const adminData = await adminDataRequest
+          if (requestId !== requestSequenceRef.current) return
+          const items = adminData.items.map((item) => ({ ...item, share_url: item.share_url || '', platform: item.platform || '' }))
+          setResources((current) => {
+            const existingIds = new Set(current.map((item) => item.id))
+            return [...current, ...items.filter((item) => !existingIds.has(item.id))]
+          })
+          setResourceTotal(adminData.total)
         }
       } else {
-        const [categoryData, resourceData] = await Promise.all([
-          getPublicLearningCategories(),
-          getPublicLearningResources({
-            category: activeCategory === 'all' ? undefined : activeCategory,
-            search: search.trim() || undefined,
-            page,
-            page_size: pageSize,
-          }),
-        ])
-        setCategories(categoryData)
-        setResources(resourceData.items)
-        setResourceTotal(resourceData.total)
+        const resourceDataRequest = getPublicLearningResources({
+          category: activeCategory === 'all' ? undefined : activeCategory,
+          search: search.trim() || undefined,
+          page: targetPage,
+          page_size: pageSize,
+        })
+        if (targetPage === 1) {
+          const [categoryData, resourceData] = await Promise.all([getPublicLearningCategories(), resourceDataRequest])
+          if (requestId !== requestSequenceRef.current) return
+          setCategories(categoryData)
+          setResources(resourceData.items)
+          setResourceTotal(resourceData.total)
+        } else {
+          const resourceData = await resourceDataRequest
+          if (requestId !== requestSequenceRef.current) return
+          setResources((current) => {
+            const existingIds = new Set(current.map((item) => item.id))
+            return [...current, ...resourceData.items.filter((item) => !existingIds.has(item.id))]
+          })
+          setResourceTotal(resourceData.total)
+        }
       }
     } catch (loadError: unknown) {
-      setError(getRequestErrorMessage(loadError, '学习资料加载失败，请稍后重试'))
+      if (requestId === requestSequenceRef.current) {
+        setError(getRequestErrorMessage(loadError, '学习资料加载失败，请稍后重试'))
+      }
     } finally {
-      setLoading(false)
+      if (requestId === requestSequenceRef.current) {
+        loadMoreRequestedRef.current = false
+        setLoading(false)
+      }
     }
-  }, [activeCategory, isAdmin, page, search, selectedChannelId])
+  }, [activeCategory, isAdmin, search])
 
   useEffect(() => {
-    void load()
-  }, [load])
+    void load(page)
+  }, [load, page])
+
+  const refreshFirstPage = useCallback(async () => {
+    if (page === 1) {
+      await load(1)
+      return
+    }
+    loadMoreRequestedRef.current = false
+    setPage(1)
+  }, [load, page])
+
+  const handleLoadMore = useCallback(() => {
+    if (loading || loadMoreRequestedRef.current || resources.length >= resourceTotal) return
+    loadMoreRequestedRef.current = true
+    setPage((current) => current + 1)
+  }, [loading, resources.length, resourceTotal])
 
   useEffect(() => {
     if (!selectedChannel) return
@@ -146,7 +191,7 @@ const LearningResourcesPage = () => {
     try {
       await updateLearningChannel(selectedChannel.channel_id, channelDraft)
       message.success(channelDraft.is_enabled ? '自动监听与转存已开启' : '自动监听与转存已暂停')
-      await load()
+      await refreshFirstPage()
     } catch (saveError: unknown) {
       message.error(getRequestErrorMessage(saveError, '保存学习资料配置失败'))
     } finally {
@@ -228,7 +273,7 @@ const LearningResourcesPage = () => {
       })
       message.success(result.queued_count > 0 ? `已导入并排队 ${result.queued_count} 个转存任务` : '学习资料已导入')
       setImportPreview(null)
-      await load()
+      await refreshFirstPage()
     } catch (importError: unknown) {
       message.error(getRequestErrorMessage(importError, '确认学习资料导入失败'))
     } finally {
@@ -254,7 +299,7 @@ const LearningResourcesPage = () => {
   const handleSaveEditing = async (item: LearningResource) => {
     setMaintenanceBusyId(item.id)
     try {
-      const updated = await updateLearningResource(item.id, {
+      await updateLearningResource(item.id, {
         display_title: editDraft.display_title.trim(),
         category: editDraft.category.trim() || '待分类',
         tags: editDraft.tags.split(/[、,，|]/).map((tag) => tag.trim()).filter(Boolean),
@@ -262,7 +307,7 @@ const LearningResourcesPage = () => {
       })
       message.success('资源已保存')
       cancelEditing()
-      setResources((current) => current.map((row) => row.id === item.id ? { ...row, ...updated, share_url: updated.share_url || '' } : row))
+      await refreshFirstPage()
     } catch (editError: unknown) {
       message.error(getRequestErrorMessage(editError, '保存资源失败'))
     } finally {
@@ -275,8 +320,7 @@ const LearningResourcesPage = () => {
     try {
       await deleteLearningResource(item.id)
       message.success('资源及其学习资料记录已删除')
-      if (resources.length === 1 && page > 1) setPage((current) => current - 1)
-      else await load()
+      await refreshFirstPage()
     } catch (deleteError: unknown) {
       message.error(getRequestErrorMessage(deleteError, '删除资源失败'))
     } finally {
@@ -289,9 +333,8 @@ const LearningResourcesPage = () => {
     try {
       const result = await deleteAllImportedLearningResources()
       message.success(`已删除 ${result.deleted_resources} 条手动导入资料及其关联记录`)
-      setPage(1)
       cancelEditing()
-      if (page === 1) await load()
+      await refreshFirstPage()
     } catch (deleteError: unknown) {
       message.error(getRequestErrorMessage(deleteError, '删除手动导入资料失败'))
     } finally {
@@ -304,7 +347,7 @@ const LearningResourcesPage = () => {
     try {
       await retryLearningResource(item.id)
       message.success('已重新加入转存队列')
-      await load()
+      await refreshFirstPage()
     } catch (retryError: unknown) {
       message.error(getRequestErrorMessage(retryError, '重试转存失败'))
     } finally {
@@ -322,15 +365,6 @@ const LearningResourcesPage = () => {
 
   return (
     <div className="learning-resources-page">
-      <div className="learning-resources-heading">
-        <div>
-          <Text className="learning-eyebrow"><BookOutlined /> 学习资料库</Text>
-          <Title level={2}>资料入口</Title>
-          <Text type="secondary">按分类整理的公开学习资料，按最近入库时间优先展示。</Text>
-        </div>
-        <Button icon={<ReloadOutlined />} onClick={() => void load()} loading={loading}>刷新</Button>
-      </div>
-
       {isAdmin && overview ? (
         <section className="learning-config-panel">
           <div className="learning-config-heading">
@@ -449,7 +483,7 @@ const LearningResourcesPage = () => {
         </section>
       ) : null}
 
-      {error ? <Alert className="learning-alert" type="error" showIcon message={error} action={<Button onClick={() => void load()}>重试</Button>} /> : null}
+      {error ? <Alert className="learning-alert" type="error" showIcon message={error} action={<Button onClick={() => void refreshFirstPage()}>重试</Button>} /> : null}
 
       <section className="learning-sheet">
         <div className="learning-sheet-toolbar">
@@ -462,6 +496,15 @@ const LearningResourcesPage = () => {
           </div>
           <Space>
             <Input.Search value={search} onChange={(event) => { setSearch(event.target.value); setPage(1) }} placeholder="搜索资源标题" allowClear style={{ width: 250 }} />
+            <Tooltip title="刷新资料">
+              <Button
+                type="text"
+                icon={<ReloadOutlined />}
+                loading={loading}
+                aria-label="刷新资料"
+                onClick={() => void refreshFirstPage()}
+              />
+            </Tooltip>
             {isAdmin ? (
               <Popconfirm
                 title="删除全部手动导入资料？"
@@ -479,14 +522,13 @@ const LearningResourcesPage = () => {
         <LearningResourceSheet
           resources={resources}
           total={resourceTotal}
-          page={page}
-          pageSize={pageSize}
+          hasMore={resources.length < resourceTotal}
           isAdmin={isAdmin}
           loading={loading}
           editingId={editingId}
           editDraft={editDraft}
           maintenanceBusyId={maintenanceBusyId}
-          onPageChange={setPage}
+          onLoadMore={handleLoadMore}
           onStartEditing={startEditing}
           onCancelEditing={cancelEditing}
           onEditDraftChange={(field, value) => setEditDraft((draft) => ({ ...draft, [field]: value }))}
