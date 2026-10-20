@@ -37,7 +37,11 @@ const AppShell = ({ children, publicShell = false }: AppShellProps) => {
   const { token, setUser } = useAuthStore()
   const [collapsed, setCollapsed] = useState(getInitialCollapsedState)
   const [isMobile, setIsMobile] = useState(getIsMobileViewport)
-  const showDashboardFooter = location.pathname === '/dashboard' || location.pathname.startsWith('/dashboard/')
+  const showDashboardFooter =
+    location.pathname === '/dashboard' ||
+    location.pathname.startsWith('/dashboard/') ||
+    location.pathname === '/messages' ||
+    location.pathname.startsWith('/messages/')
 
   useEffect(() => {
     const handleResize = () => {

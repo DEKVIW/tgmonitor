@@ -33,11 +33,12 @@ function App() {
         <Routes>
           <Route path={LOGIN_PATH} element={<Login />} />
           <Route path={LOGIN_LINUXDO_CALLBACK_PATH} element={<LoginLinuxDoCallback />} />
-          {/* 根路径：根据系统配置决定是否允许游客访问 */}
+          {/* 根路径统一进入影视推荐，访问权限由影视推荐公开路由处理。 */}
+          <Route path="/" element={<Navigate to="/popular" replace />} />
           <Route
-            path="/"
+            path="/messages"
             element={
-              <GuestRoute>
+              <GuestRoute redirectAuthenticated={false}>
                 <Dashboard />
               </GuestRoute>
             }

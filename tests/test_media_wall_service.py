@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 import unittest
 from datetime import datetime, timedelta
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from sqlalchemy import select
 from sqlalchemy.dialects import postgresql
@@ -14,7 +16,18 @@ os.environ.setdefault("DEFAULT_CHANNELS", "test")
 os.environ.setdefault("SECRET_SALT", "test-salt")
 
 from app.models.models import AiProviderConfig, MediaWallItem, MediaWallLink, PanTransferSyncTask
-from app.services.media_wall import MEDIA_WALL_VISIBILITIES, _build_import_preview, _fingerprint_url, _normalize_title, _public_link_exists_filter, _serialize_link_health
+from app.services.media_wall import (
+    MEDIA_WALL_METADATA_NOT_SYNCED,
+    MEDIA_WALL_VISIBILITIES,
+    _build_import_preview,
+    _fingerprint_url,
+    _invalidate_metadata_cache,
+    _metadata_cache,
+    _normalize_title,
+    _public_link_exists_filter,
+    _serialize_item,
+    _serialize_link_health,
+)
 from app.services.media_wall_link_health import _next_check_at
 
 
@@ -22,7 +35,60 @@ class MediaWallServiceTests(unittest.TestCase):
     def test_media_wall_has_no_draft_state_and_ai_provider_tracks_operator(self) -> None:
         self.assertEqual(MEDIA_WALL_VISIBILITIES, {"public", "hidden"})
         self.assertEqual(MediaWallItem.__table__.c.visibility.default.arg, "public")
+        self.assertEqual(MediaWallItem.__table__.c.metadata_status.default.arg, MEDIA_WALL_METADATA_NOT_SYNCED)
+        self.assertIn("metadata_json", MediaWallItem.__table__.c)
+        self.assertIn("metadata_last_synced_at", MediaWallItem.__table__.c)
+        self.assertIn("metadata_last_error", MediaWallItem.__table__.c)
         self.assertTrue(hasattr(AiProviderConfig, "updated_by"))
+
+    def test_serializing_public_item_uses_stored_metadata_without_external_fetch(self) -> None:
+        class EmptyQuery:
+            def join(self, *args, **kwargs):
+                return self
+
+            def filter(self, *args, **kwargs):
+                return self
+
+            def order_by(self, *args, **kwargs):
+                return self
+
+            def all(self):
+                return []
+
+        class EmptySession:
+            def get(self, model, item_id):
+                return None
+
+            def query(self, model):
+                return EmptyQuery()
+
+        item = SimpleNamespace(
+            id=1,
+            display_title="黑岛监狱",
+            metadata_query_title="黑岛监狱",
+            visibility="public",
+            sort_order=0,
+            custom_poster_url=None,
+            metadata_json={"poster_url": "https://img.example/poster.jpg", "year": "2026"},
+            metadata_status="ready",
+            metadata_last_synced_at=None,
+            metadata_last_error=None,
+            sync_task_id=None,
+            updated_at=None,
+            created_at=None,
+        )
+
+        with patch("app.services.media_wall._fetch_metadata", side_effect=AssertionError("should not fetch")):
+            result = _serialize_item(EmptySession(), item, public=True, include_metadata=True)
+
+        self.assertEqual(result["poster_url"], "https://img.example/poster.jpg")
+        self.assertEqual(result["year"], "2026")
+        self.assertEqual(result["metadata_status"], "ready")
+
+    def test_metadata_cache_can_be_invalidated_for_a_retry(self) -> None:
+        _metadata_cache["黑岛监狱"] = (0.0, {})
+        _invalidate_metadata_cache("黑岛监狱")
+        self.assertNotIn("黑岛监狱", _metadata_cache)
 
     def test_import_preview_groups_duplicate_titles_and_links(self) -> None:
         preview = _build_import_preview([

@@ -18,6 +18,7 @@ from app.schemas.media_wall_models import (
     MediaWallItemBulkDeleteResponse,
     MediaWallItemListResponse,
     MediaWallItemResponse,
+    MediaWallMetadataSyncResponse,
     MediaWallItemUpdateRequest,
     MediaWallLinkCreateRequest,
     MediaWallLinkResponse,
@@ -42,6 +43,7 @@ from app.services.media_wall import (
     list_admin_items,
     list_public_categories,
     list_public_items,
+    queue_media_wall_metadata_sync,
     list_sources,
     list_sync_tasks,
     preview_import,
@@ -198,6 +200,17 @@ async def get_admin_media_wall_items(
         MediaWallItemResponse(**item)
         for item in list_admin_items(db, search=search, visibility=visibility, category_id=category_id)
     ]
+
+
+@router.post("/api/admin/media-wall/metadata/sync", response_model=MediaWallMetadataSyncResponse, summary="补齐影视封面与资料")
+async def sync_admin_media_wall_metadata(
+    db: Session = Depends(get_db),
+    current_user: Dict[str, Any] = Depends(get_admin_user),
+) -> MediaWallMetadataSyncResponse:
+    del current_user
+    result = queue_media_wall_metadata_sync(db)
+    db.commit()
+    return MediaWallMetadataSyncResponse(**result)
 
 
 @router.post("/api/admin/media-wall/items", response_model=MediaWallItemResponse, summary="创建影视墙条目")

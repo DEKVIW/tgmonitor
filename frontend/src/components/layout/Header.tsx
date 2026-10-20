@@ -23,10 +23,8 @@ const Header = ({ collapsed, onToggle }: HeaderProps) => {
   const { isAuthenticated, token } = useAuthStore()
   const isGuest = !isAuthenticated || !token
   const handleTitleClick = () => {
-    const homePath = isGuest ? '/' : '/dashboard'
-    if (location.pathname !== homePath) {
-      navigate(homePath, { replace: false })
-    }
+    const homePath = '/popular'
+    navigate(homePath, { replace: location.pathname === homePath })
   }
 
   return (

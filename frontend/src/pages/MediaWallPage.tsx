@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Alert, Button, Empty, Image, Skeleton, Spin, Tabs, Tag, Typography } from 'antd'
-import { ArrowLeftOutlined, CloseOutlined, ExportOutlined, LinkOutlined, ReloadOutlined } from '@ant-design/icons'
+import { ArrowLeftOutlined, ArrowRightOutlined, CloseOutlined, ExportOutlined, LinkOutlined, ReloadOutlined } from '@ant-design/icons'
 
 import { getPublicMediaWall, getPublicMediaWallCategories, getPublicMediaWallItem } from '@/api/mediaWall'
 import type { MediaWallCategory, MediaWallItem } from '@/types/mediaWall'
@@ -65,7 +65,7 @@ const isProgressRemark = (remark: string | null | undefined, episode: number | n
   return episodeNumbers.some((value) => Number(value) === episode)
 }
 
-const MediaWallCard = ({ item, onClick }: { item: MediaWallItem; onClick: () => void }) => {
+const MediaWallCard = ({ item, onClick, imageLoading }: { item: MediaWallItem; onClick: () => void; imageLoading: 'eager' | 'lazy' }) => {
   const [imageError, setImageError] = useState(false)
 
   return (
@@ -76,6 +76,7 @@ const MediaWallCard = ({ item, onClick }: { item: MediaWallItem; onClick: () => 
             src={item.poster_url}
             preview={false}
             alt={item.display_title}
+            loading={imageLoading}
             onError={() => setImageError(true)}
           />
         ) : <PosterPlaceholder title={item.display_title} />}
@@ -213,13 +214,18 @@ const MediaWallPage = () => {
         getPublicMediaWall({ category: selectedCategory, search: searchQuery || undefined }),
       ])
       setCategories(categoryData)
+      if (searchQuery.trim() && listData.items.length === 0) {
+        const fallbackParams = new URLSearchParams({ search: searchQuery.trim() })
+        navigate(`/messages?${fallbackParams.toString()}`, { replace: true })
+        return
+      }
       setItems(listData.items)
     } catch (loadError: unknown) {
-      setError(getRequestErrorMessage(loadError, '影视墙加载失败，请稍后重试'))
+      setError(getRequestErrorMessage(loadError, '影视推荐加载失败，请稍后重试'))
     } finally {
       setLoading(false)
     }
-  }, [searchQuery, selectedCategory])
+  }, [navigate, searchQuery, selectedCategory])
 
   useEffect(() => {
     if (!itemId) {
@@ -252,6 +258,11 @@ const MediaWallPage = () => {
     navigate(`/popular/category/${encodeURIComponent(category)}${nextParams.toString() ? `?${nextParams.toString()}` : ''}`)
   }
 
+  const handleMoreResources = () => {
+    const query = searchQuery.trim()
+    navigate(`/messages${query ? `?search=${encodeURIComponent(query)}` : ''}`)
+  }
+
   if (itemId) {
     if (detailLoading) {
       return <div className="media-wall-state"><Spin size="large" /></div>
@@ -265,22 +276,36 @@ const MediaWallPage = () => {
   return (
     <div className="media-wall-page">
       <div className="media-wall-tabs-header">
-        <div className="media-wall-tabs-wrap">
-          <Tabs
-            activeKey={selectedCategory}
-            onChange={handleCategoryChange}
-            items={tabItems}
-            className="media-wall-tabs"
-            destroyInactiveTabPane={false}
+        <div className="media-wall-tabs-row">
+          <div className="media-wall-tabs-wrap">
+            <Tabs
+              activeKey={selectedCategory}
+              onChange={handleCategoryChange}
+              items={tabItems}
+              className="media-wall-tabs"
+              destroyInactiveTabPane={false}
+            />
+          </div>
+        </div>
+        <div className="media-wall-actions">
+          <Button
+            type="link"
+            size="small"
+            icon={<ArrowRightOutlined />}
+            onClick={handleMoreResources}
+            className="media-wall-more-button"
+          >
+            查看更多资源
+          </Button>
+          <Button
+            type="text"
+            icon={<ReloadOutlined />}
+            onClick={() => void loadList()}
+            loading={loading}
+            aria-label="刷新影视推荐"
+            className="media-wall-refresh-button"
           />
         </div>
-        <Button
-          type="text"
-          icon={<ReloadOutlined />}
-          onClick={() => void loadList()}
-          loading={loading}
-          aria-label="刷新影视墙"
-        />
       </div>
 
       {error ? <Alert type="error" showIcon message={error} className="media-wall-alert" /> : null}
@@ -290,10 +315,10 @@ const MediaWallPage = () => {
         </div>
       ) : items.length ? (
         <div className="media-wall-grid">
-          {items.map((item) => <MediaWallCard key={item.id} item={item} onClick={() => navigate(`/popular/item/${item.id}`)} />)}
+          {items.map((item, index) => <MediaWallCard key={item.id} item={item} imageLoading={index < 6 ? 'eager' : 'lazy'} onClick={() => navigate(`/popular/item/${item.id}`)} />)}
         </div>
       ) : (
-        <div className="media-wall-empty"><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={searchQuery ? '没有找到匹配的影视' : '当前分类暂无公开影视'} /></div>
+        <div className="media-wall-empty"><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={searchQuery ? '没有找到匹配的影视推荐' : '当前分类暂无公开影视推荐'} /></div>
       )}
     </div>
   )

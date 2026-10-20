@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.models.models import engine, ensure_runtime_storage_tables
 from app.services.link_check_scheduler import start_link_check_scheduler, stop_link_check_scheduler
+from app.services.media_wall import process_next_media_wall_metadata_sync
 from app.services.pan_transfer import (
     process_next_pan_transfer_follow_task,
     process_next_pan_transfer_item,
@@ -82,6 +83,7 @@ def main() -> None:
                     processed_transfer = False
                     processed_follow_task = False
                     processed_publish_rule = False
+                    processed_media_wall_metadata = False
                     with Session(engine) as session:
                         try:
                             run_resource_ops_maintenance_if_due(session, worker_name=WORKER_NAME)
@@ -129,7 +131,22 @@ def main() -> None:
                             logger.exception("pan transfer publish-rule worker iteration failed")
                             processed_publish_rule = False
 
-                    processed = bool(processed_recognition or processed_transfer or processed_follow_task or processed_publish_rule)
+                    with Session(engine) as session:
+                        try:
+                            processed_media_wall_metadata = process_next_media_wall_metadata_sync(session, worker_name=WORKER_NAME)
+                            session.commit()
+                        except Exception:
+                            session.rollback()
+                            logger.exception("media wall metadata worker iteration failed")
+                            processed_media_wall_metadata = False
+
+                    processed = bool(
+                        processed_recognition
+                        or processed_transfer
+                        or processed_follow_task
+                        or processed_publish_rule
+                        or processed_media_wall_metadata
+                    )
 
                     if _stop_event.wait(BUSY_SLEEP_SECONDS if processed else IDLE_SLEEP_SECONDS):
                         break

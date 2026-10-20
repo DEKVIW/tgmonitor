@@ -100,6 +100,9 @@ class MediaWallItemResponse(BaseModel):
     link_count: int
     categories: list[MediaWallCategoryResponse]
     sync_task_id: Optional[int] = None
+    metadata_status: str = "not_synced"
+    metadata_last_synced_at: Optional[datetime] = None
+    metadata_last_error: Optional[str] = None
     last_content_updated_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
@@ -141,6 +144,12 @@ class MediaWallItemBulkDeleteRequest(BaseModel):
 class MediaWallItemBulkDeleteResponse(BaseModel):
     deleted_ids: list[int]
     deleted_count: int
+
+
+class MediaWallMetadataSyncResponse(BaseModel):
+    status: str
+    queued_count: int
+    skipped_count: int
 
 
 class MediaWallSourceResponse(BaseModel):
