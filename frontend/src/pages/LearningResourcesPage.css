@@ -116,11 +116,6 @@
   background: #f7fbff;
 }
 
-.learning-sheet-row:not(.learning-sheet-header) {
-  content-visibility: auto;
-  contain-intrinsic-size: 42px;
-}
-
 .learning-sheet-header {
   position: sticky;
   top: 0;
