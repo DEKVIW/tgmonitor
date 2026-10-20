@@ -215,7 +215,9 @@
 
 .learning-sheet-status {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
+  max-width: 100%;
   min-height: 22px;
   padding: 0 7px;
   border-radius: 3px;
@@ -236,7 +238,35 @@
 }
 
 .learning-sheet-actions {
+  justify-content: flex-start;
+  overflow: visible;
   padding: 0 8px;
+}
+
+.learning-sheet-actions-content {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  white-space: nowrap;
+}
+
+.learning-sheet-action-button.ant-btn {
+  flex: 0 0 auto;
+  height: 28px;
+  padding: 0 5px;
+  border-radius: 3px;
+  color: #627688;
+  font-size: 12px;
+}
+
+.learning-sheet-action-button.ant-btn:hover {
+  background: #eaf3fb;
+  color: var(--color-primary);
+}
+
+.learning-sheet-action-button.ant-btn-dangerous,
+.learning-sheet-action-button.ant-btn-dangerous:hover {
+  color: #b52e2e;
 }
 
 .learning-sheet-icon-button.ant-btn {

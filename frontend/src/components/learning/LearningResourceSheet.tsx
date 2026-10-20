@@ -32,6 +32,19 @@ interface LearningResourceSheetProps {
 
 const cleanTags = (tags: string[]) => tags.map(cleanLearningSheetText).filter(Boolean)
 
+const LEARNING_STATUS_META: Record<string, { label: string; tone: string }> = {
+  pending: { label: '待处理', tone: 'pending' },
+  transferring: { label: '转存中', tone: 'transferring' },
+  published: { label: '已发布', tone: 'published' },
+  failed: { label: '失败', tone: 'failed' },
+  hidden: { label: '已隐藏', tone: 'hidden' },
+}
+
+const getLearningStatusMeta = (status?: string | null) => {
+  const normalized = String(status || 'pending').trim().toLowerCase() || 'pending'
+  return LEARNING_STATUS_META[normalized] || { label: status || '待处理', tone: 'default' }
+}
+
 const SheetInput = ({
   value,
   onChange,
@@ -67,7 +80,7 @@ const LearningResourceSheet = ({
   onRetry,
 }: LearningResourceSheetProps) => {
   const columnTemplate = isAdmin
-    ? '48px minmax(360px, 1fr) 150px 240px minmax(220px, 260px) 160px 100px 180px'
+    ? '48px minmax(360px, 1fr) 150px 240px minmax(220px, 260px) 160px 112px 204px'
     : '48px minmax(360px, 1fr) 150px 240px minmax(220px, 260px) 160px'
   const gridStyle = { '--learning-sheet-columns': columnTemplate } as CSSProperties
 
@@ -108,6 +121,7 @@ const LearningResourceSheet = ({
           const title = cleanLearningSheetText(resource.display_title)
           const category = cleanLearningSheetText(resource.category?.name || '待分类')
           const tags = cleanTags(resource.tags)
+          const statusMeta = getLearningStatusMeta(resource.status)
           const updatedAt = resource.updated_at
             ? formatServerDateTime(resource.updated_at, 'YYYY-MM-DD HH:mm', 'Asia/Shanghai')
             : '-'
@@ -153,15 +167,18 @@ const LearningResourceSheet = ({
               </div>
               {isAdmin ? (
                 <div className="learning-sheet-cell" role="cell">
-                  <span className={`learning-sheet-status learning-sheet-status-${resource.status || 'pending'}`}>
-                    {resource.status || 'pending'}
+                  <span
+                    className={`learning-sheet-status learning-sheet-status-${statusMeta.tone}`}
+                    title={resource.status || 'pending'}
+                  >
+                    {statusMeta.label}
                   </span>
                 </div>
               ) : null}
               {isAdmin ? (
                 <div className="learning-sheet-cell learning-sheet-actions" role="cell">
                   {isEditing ? (
-                    <Space size={2}>
+                    <Space className="learning-sheet-actions-content" size={2}>
                       <Tooltip title="保存">
                         <Button
                           type="text"
@@ -185,28 +202,32 @@ const LearningResourceSheet = ({
                       </Tooltip>
                     </Space>
                   ) : (
-                    <Space size={2}>
+                    <Space className="learning-sheet-actions-content" size={2}>
                       <Tooltip title="编辑">
                         <Button
                           type="text"
                           size="small"
-                          className="learning-sheet-icon-button"
+                          className="learning-sheet-action-button"
                           icon={<EditOutlined />}
                           aria-label="编辑资源"
                           onClick={() => onStartEditing(resource)}
-                        />
+                        >
+                          编辑
+                        </Button>
                       </Tooltip>
                       {resource.status === 'failed' ? (
                         <Tooltip title="重试转存">
                           <Button
                             type="text"
                             size="small"
-                            className="learning-sheet-icon-button"
+                            className="learning-sheet-action-button"
                             icon={<ReloadOutlined />}
                             loading={maintenanceBusyId === resource.id}
                             aria-label="重试转存"
                             onClick={() => void onRetry(resource)}
-                          />
+                          >
+                            重试
+                          </Button>
                         </Tooltip>
                       ) : null}
                       <Popconfirm
@@ -222,11 +243,13 @@ const LearningResourceSheet = ({
                             type="text"
                             danger
                             size="small"
-                            className="learning-sheet-icon-button"
+                            className="learning-sheet-action-button"
                             icon={<DeleteOutlined />}
                             loading={maintenanceBusyId === resource.id}
                             aria-label="删除资源"
-                          />
+                          >
+                            删除
+                          </Button>
                         </Tooltip>
                       </Popconfirm>
                     </Space>
