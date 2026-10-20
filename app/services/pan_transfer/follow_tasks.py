@@ -67,6 +67,9 @@ PAN_TRANSFER_FOLLOW_INSPECTION_MAX_TRIGGERS = 12
 PAN_TRANSFER_FOLLOW_INSPECTION_TIMEZONE = ZoneInfo("Asia/Shanghai")
 PAN_TRANSFER_FOLLOW_INSPECTION_SCHEDULE_KEY = "inspection_schedule"
 PAN_TRANSFER_FOLLOW_INSPECTION_RUNTIME_KEY = "inspection_runtime"
+PAN_TRANSFER_FOLLOW_SOURCE_READINESS_RETRY_KEY = "source_readiness_retry"
+PAN_TRANSFER_FOLLOW_SOURCE_READINESS_RETRY_DELAY_MINUTES = 5
+PAN_TRANSFER_FOLLOW_SOURCE_READINESS_MAX_RETRIES = 3
 PAN_TRANSFER_SYNC_CANDIDATE_LOOKBACK_DAYS = 3
 PAN_TRANSFER_SYNC_MIN_CANDIDATE_LOOKBACK_DAYS = 1
 PAN_TRANSFER_SYNC_MAX_CANDIDATE_LOOKBACK_DAYS = 90
@@ -498,6 +501,68 @@ def _set_task_extra_section(task: PanTransferSyncTask, key: str, value: dict[str
     else:
         extra_json.pop(key, None)
     task.extra_json = extra_json
+
+
+def _get_follow_source_readiness_retry(task: PanTransferSyncTask) -> dict[str, Any]:
+    raw = _get_task_extra_section(task, PAN_TRANSFER_FOLLOW_SOURCE_READINESS_RETRY_KEY)
+    try:
+        attempt_count = max(0, int(raw.get("attempt_count") or 0))
+    except (TypeError, ValueError):
+        attempt_count = 0
+    return {
+        "candidate_link_target_id": _normalize_optional_int(raw.get("candidate_link_target_id")),
+        "candidate_url": _normalize_text(raw.get("candidate_url"), max_length=2048) or None,
+        "attempt_count": attempt_count,
+        "next_retry_at": _parse_datetime(raw.get("next_retry_at")),
+        "last_stop_reason": _normalize_text(raw.get("last_stop_reason"), max_length=64) or None,
+    }
+
+
+def _clear_follow_source_readiness_retry(task: PanTransferSyncTask) -> None:
+    _set_task_extra_section(task, PAN_TRANSFER_FOLLOW_SOURCE_READINESS_RETRY_KEY, None)
+
+
+def _source_readiness_retry_matches_candidate(task: PanTransferSyncTask, retry: dict[str, Any]) -> bool:
+    candidate_link_target_id = _normalize_optional_int(task.last_candidate_link_target_id)
+    retry_link_target_id = _normalize_optional_int(retry.get("candidate_link_target_id"))
+    if candidate_link_target_id is not None and retry_link_target_id is not None:
+        return candidate_link_target_id == retry_link_target_id
+    return bool(
+        _normalize_text(task.last_candidate_url)
+        and _normalize_text(task.last_candidate_url) == _normalize_text(retry.get("candidate_url"))
+    )
+
+
+def _get_follow_source_readiness_retry_at(task: PanTransferSyncTask) -> datetime | None:
+    retry = _get_follow_source_readiness_retry(task)
+    retry_at = retry.get("next_retry_at")
+    if not isinstance(retry_at, datetime) or not _source_readiness_retry_matches_candidate(task, retry):
+        return None
+    return retry_at
+
+
+def _schedule_follow_source_readiness_retry(
+    task: PanTransferSyncTask,
+    *,
+    stop_reason: str,
+    now: datetime,
+) -> dict[str, Any] | None:
+    retry = _get_follow_source_readiness_retry(task)
+    attempt_count = retry["attempt_count"] if _source_readiness_retry_matches_candidate(task, retry) else 0
+    next_attempt = int(attempt_count) + 1
+    if next_attempt > PAN_TRANSFER_FOLLOW_SOURCE_READINESS_MAX_RETRIES:
+        _clear_follow_source_readiness_retry(task)
+        return None
+    next_retry_at = now + timedelta(minutes=PAN_TRANSFER_FOLLOW_SOURCE_READINESS_RETRY_DELAY_MINUTES)
+    payload = {
+        "candidate_link_target_id": _normalize_optional_int(task.last_candidate_link_target_id),
+        "candidate_url": _normalize_text(task.last_candidate_url, max_length=2048) or None,
+        "attempt_count": next_attempt,
+        "next_retry_at": next_retry_at,
+        "last_stop_reason": _normalize_text(stop_reason, max_length=64) or None,
+    }
+    _set_task_extra_section(task, PAN_TRANSFER_FOLLOW_SOURCE_READINESS_RETRY_KEY, payload)
+    return payload
 
 
 def _normalize_source_message_snapshot(value: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -1416,6 +1481,10 @@ def _schedule_follow_task_next_check(
         return None
 
     now_utc = now or utcnow()
+    source_readiness_retry_at = _get_follow_source_readiness_retry_at(task)
+    if source_readiness_retry_at is not None and source_readiness_retry_at > now_utc:
+        task.next_check_at = source_readiness_retry_at
+        return task.next_check_at
     inspection_schedule = _get_follow_inspection_schedule(task)
     if inspection_schedule["enabled"]:
         local_now = _to_inspection_local(now_utc)
@@ -4000,6 +4069,7 @@ def _clear_follow_task_candidate_fields(task: PanTransferSyncTask) -> None:
     task.last_candidate_message_time = None
     _set_task_extra_section(task, "candidate_assessment", None)
     _set_task_extra_section(task, "candidate_recall", None)
+    _clear_follow_source_readiness_retry(task)
 
 
 def _store_follow_task_candidate(
@@ -4015,6 +4085,7 @@ def _store_follow_task_candidate(
     normalized_candidate = dict(candidate or {})
     normalized_assessment = dict(assessment or {}) if assessment else None
     normalized_recall = dict(candidate_recall or {})
+    _clear_follow_source_readiness_retry(task)
     _set_follow_candidate_recall_selection(
         normalized_recall,
         candidate=normalized_candidate,
@@ -4773,6 +4844,43 @@ async def _handle_follow_task_automation(
         operator=worker_name,
     )
     summary = dict(diagnosis.get("summary") or {})
+    stop_reason = _normalize_text(summary.get("stop_reason"), max_length=64).lower()
+    if source_kind == "candidate" and stop_reason == "no_source_video":
+        retry_payload = _schedule_follow_source_readiness_retry(
+            task,
+            stop_reason=stop_reason,
+            now=now,
+        )
+        if retry_payload is not None:
+            _set_follow_task_automation_state(
+                task,
+                enabled=True,
+                cooldown_until=None,
+                last_auto_check_at=now,
+                last_auto_source_kind=source_kind,
+                last_auto_sync_mode=sync_mode,
+                last_auto_result="source_not_ready_retry",
+                last_auto_batch_id=None,
+            )
+            session.add(task)
+            session.flush()
+            _append_follow_task_log(
+                session,
+                task=task,
+                stage="automation",
+                level="warning",
+                message="Candidate source files are not ready; deferred automatic diagnosis retry",
+                payload={
+                    "mode": mode,
+                    "source_kind": source_kind,
+                    "stop_reason": stop_reason,
+                    "retry_attempt": retry_payload["attempt_count"],
+                    "max_retries": PAN_TRANSFER_FOLLOW_SOURCE_READINESS_MAX_RETRIES,
+                    "next_retry_at": retry_payload["next_retry_at"],
+                },
+            )
+            return
+    _clear_follow_source_readiness_retry(task)
 
     if mode == PAN_TRANSFER_FOLLOW_AUTOMATION_MODE_AUTO_REPLACE_ALL:
         selection_groups = list(diagnosis.get("full_selection_groups") or [])
@@ -5519,6 +5627,8 @@ def process_next_pan_transfer_follow_task(session: Session, *, worker_name: str)
         return False
     task_id = int(task.id)
     forced_check = str(task.task_state or "") == PAN_TRANSFER_SYNC_STATE_QUEUED
+    source_readiness_retry_at = _get_follow_source_readiness_retry_at(task)
+    source_readiness_retry_due = source_readiness_retry_at is not None and source_readiness_retry_at <= now
 
     task.task_state = PAN_TRANSFER_SYNC_STATE_CHECKING
     task.locked_by = worker_name[:128]
@@ -5535,7 +5645,11 @@ def process_next_pan_transfer_follow_task(session: Session, *, worker_name: str)
         task.locked_by = None
         task.locked_at = None
         task.last_checked_at = utcnow()
-        _record_follow_inspection_attempt(task, now=task.last_checked_at, consume_trigger=not forced_check)
+        _record_follow_inspection_attempt(
+            task,
+            now=task.last_checked_at,
+            consume_trigger=not forced_check and not source_readiness_retry_due,
+        )
         _schedule_follow_task_next_check(task, now=task.last_checked_at)
         task.last_error_message = None
         session.add(task)
@@ -5560,7 +5674,11 @@ def process_next_pan_transfer_follow_task(session: Session, *, worker_name: str)
         task.locked_at = None
         task.last_checked_at = utcnow()
         task.last_error_message = error_message
-        _record_follow_inspection_attempt(task, now=task.last_checked_at, consume_trigger=not forced_check)
+        _record_follow_inspection_attempt(
+            task,
+            now=task.last_checked_at,
+            consume_trigger=not forced_check and not source_readiness_retry_due,
+        )
         _schedule_follow_task_next_check(task, now=task.last_checked_at)
         session.add(task)
         session.flush()
