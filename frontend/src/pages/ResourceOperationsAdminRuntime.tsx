@@ -794,7 +794,7 @@ const ResourceOperationsAdminRuntime = () => {
           },
           {
             key: 'media-wall',
-            label: '影视墙',
+            label: '影视推荐',
             children: (
               <div className="resource-ops-tab-stack">
                 <MediaWallAdminPanel />

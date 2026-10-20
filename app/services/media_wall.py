@@ -40,9 +40,17 @@ MEDIA_WALL_VISIBILITIES = {MEDIA_WALL_PUBLIC, MEDIA_WALL_HIDDEN}
 MAX_IMPORT_ROWS = 5000
 MAX_SOURCE_RESPONSE_BYTES = 2 * 1024 * 1024
 METADATA_CACHE_TTL_SECONDS = 6 * 60 * 60
+SOURCE_ENDPOINT_CACHE_TTL_SECONDS = 10 * 60
+MEDIA_WALL_METADATA_NOT_SYNCED = "not_synced"
+MEDIA_WALL_METADATA_PENDING = "pending"
+MEDIA_WALL_METADATA_PROCESSING = "processing"
+MEDIA_WALL_METADATA_READY = "ready"
+MEDIA_WALL_METADATA_FAILED = "failed"
 
 _metadata_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _metadata_cache_lock = Lock()
+_source_endpoint_cache: dict[str, tuple[float, list[str]]] = {}
+_source_endpoint_cache_lock = Lock()
 
 
 def _clean_text(value: Any, *, max_length: int = 255) -> str:
@@ -260,12 +268,32 @@ def _fetch_json(url: str, *, timeout_seconds: int) -> Any:
 
 
 def _source_endpoints(source: MediaWallSourceConfig) -> list[str]:
+    cache_key = ":".join(
+        (
+            str(source.id),
+            str(source.source_type or ""),
+            str(source.source_url or ""),
+            source.updated_at.isoformat() if source.updated_at else "",
+        )
+    )
+    now = time.monotonic()
+    with _source_endpoint_cache_lock:
+        cached = _source_endpoint_cache.get(cache_key)
+        if cached and now - cached[0] < SOURCE_ENDPOINT_CACHE_TTL_SECONDS:
+            return list(cached[1])
+
     if source.source_type in {"apple-cms", "api"}:
-        return [_validate_public_url(source.source_url)]
+        endpoints = [_validate_public_url(source.source_url)]
+        with _source_endpoint_cache_lock:
+            _source_endpoint_cache[cache_key] = (now, endpoints)
+        return endpoints
 
     payload = _fetch_json(source.source_url, timeout_seconds=source.timeout_seconds)
     if isinstance(payload, dict) and isinstance(payload.get("list"), list):
-        return [_validate_public_url(source.source_url)]
+        endpoints = [_validate_public_url(source.source_url)]
+        with _source_endpoint_cache_lock:
+            _source_endpoint_cache[cache_key] = (now, endpoints)
+        return endpoints
     entries: Any = []
     if isinstance(payload, dict):
         entries = payload.get("sources") or payload.get("sites") or payload.get("data") or []
@@ -284,7 +312,10 @@ def _source_endpoints(source: MediaWallSourceConfig) -> list[str]:
                 endpoints.append(_validate_public_url(candidate))
             except ValueError:
                 continue
-    return endpoints[:20]
+    endpoints = endpoints[:20]
+    with _source_endpoint_cache_lock:
+        _source_endpoint_cache[cache_key] = (now, endpoints)
+    return endpoints
 
 
 def _query_endpoint(endpoint: str, title: str, *, timeout_seconds: int) -> dict[str, Any]:
@@ -357,6 +388,25 @@ def _fetch_metadata(session: Session, query_title: str) -> dict[str, Any]:
     return {}
 
 
+def _invalidate_metadata_cache(query_title: str | None = None) -> None:
+    with _metadata_cache_lock:
+        if query_title:
+            _metadata_cache.pop(_normalize_title(query_title), None)
+        else:
+            _metadata_cache.clear()
+
+
+def _invalidate_source_endpoint_cache(source_id: int | None = None) -> None:
+    with _source_endpoint_cache_lock:
+        if source_id is None:
+            _source_endpoint_cache.clear()
+            return
+        prefix = f"{int(source_id)}:"
+        for cache_key in list(_source_endpoint_cache):
+            if cache_key.startswith(prefix):
+                _source_endpoint_cache.pop(cache_key, None)
+
+
 def _get_categories_for_item(session: Session, item_id: int, *, enabled_only: bool = False) -> list[MediaWallCategory]:
     query = (
         session.query(MediaWallCategory)
@@ -376,11 +426,68 @@ def _get_links_for_item(session: Session, item_id: int, *, enabled_only: bool = 
     return query.order_by(MediaWallLink.is_primary.desc(), MediaWallLink.id.asc()).all()
 
 
-def _serialize_item(session: Session, item: MediaWallItem, *, public: bool, include_metadata: bool) -> dict[str, Any]:
-    task = session.get(PanTransferSyncTask, item.sync_task_id) if item.sync_task_id else None
-    metadata = _fetch_metadata(session, item.metadata_query_title) if include_metadata else {}
-    links = _get_links_for_item(session, item.id, enabled_only=False)
-    categories = _get_categories_for_item(session, item.id, enabled_only=public)
+def _build_item_serialization_context(
+    session: Session,
+    items: Iterable[MediaWallItem],
+    *,
+    public: bool,
+) -> tuple[dict[int, PanTransferSyncTask], dict[int, list[MediaWallLink]], dict[int, list[MediaWallCategory]]]:
+    item_list = list(items)
+    item_ids = [int(item.id) for item in item_list]
+    if not item_ids:
+        return {}, {}, {}
+
+    sync_task_ids = {int(item.sync_task_id) for item in item_list if item.sync_task_id}
+    tasks = (
+        {
+            int(task.id): task
+            for task in session.query(PanTransferSyncTask).filter(PanTransferSyncTask.id.in_(sync_task_ids)).all()
+        }
+        if sync_task_ids
+        else {}
+    )
+    links_by_item: dict[int, list[MediaWallLink]] = {}
+    for link in (
+        session.query(MediaWallLink)
+        .filter(MediaWallLink.item_id.in_(item_ids))
+        .order_by(MediaWallLink.item_id.asc(), MediaWallLink.is_primary.desc(), MediaWallLink.id.asc())
+        .all()
+    ):
+        links_by_item.setdefault(int(link.item_id), []).append(link)
+
+    category_query = (
+        session.query(MediaWallItemCategory.item_id, MediaWallCategory)
+        .join(MediaWallCategory, MediaWallItemCategory.category_id == MediaWallCategory.id)
+        .filter(MediaWallItemCategory.item_id.in_(item_ids))
+    )
+    if public:
+        category_query = category_query.filter(MediaWallCategory.is_enabled.is_(True))
+    categories_by_item: dict[int, list[MediaWallCategory]] = {}
+    for item_id, category in category_query.order_by(
+        MediaWallItemCategory.item_id.asc(), MediaWallCategory.sort_order.asc(), MediaWallCategory.id.asc()
+    ).all():
+        categories_by_item.setdefault(int(item_id), []).append(category)
+    return tasks, links_by_item, categories_by_item
+
+
+def _serialize_item(
+    session: Session,
+    item: MediaWallItem,
+    *,
+    public: bool,
+    include_metadata: bool,
+    tasks: dict[int, PanTransferSyncTask] | None = None,
+    links_by_item: dict[int, list[MediaWallLink]] | None = None,
+    categories_by_item: dict[int, list[MediaWallCategory]] | None = None,
+) -> dict[str, Any]:
+    if tasks is None:
+        task = session.get(PanTransferSyncTask, item.sync_task_id) if item.sync_task_id else None
+    else:
+        task = tasks.get(int(item.sync_task_id)) if item.sync_task_id else None
+    stored_metadata = item.metadata_json if isinstance(item.metadata_json, dict) else {}
+    metadata = dict(stored_metadata) if include_metadata else {}
+    links = links_by_item.get(int(item.id), []) if links_by_item is not None else _get_links_for_item(session, item.id, enabled_only=False)
+    categories = categories_by_item.get(int(item.id), []) if categories_by_item is not None else _get_categories_for_item(session, item.id, enabled_only=public)
     poster_url = item.custom_poster_url or metadata.get("poster_url") or None
     progress = _build_progress(task)
     content_updated_at = _get_content_updated_at(task)
@@ -451,6 +558,9 @@ def _serialize_item(session: Session, item: MediaWallItem, *, public: bool, incl
         "link_count": len(serialized_links),
         "categories": [_serialize_category(category) for category in categories],
         "sync_task_id": int(item.sync_task_id) if item.sync_task_id else None,
+        "metadata_status": str(item.metadata_status or MEDIA_WALL_METADATA_NOT_SYNCED),
+        "metadata_last_synced_at": item.metadata_last_synced_at,
+        "metadata_last_error": item.metadata_last_error if not public else None,
         "last_content_updated_at": content_updated_at,
         "created_at": item.created_at,
         "updated_at": item.updated_at,
@@ -535,12 +645,83 @@ def list_public_items(
         .limit(safe_size)
         .all()
     )
+    serialization_context = _build_item_serialization_context(session, items, public=True)
     return {
-        "items": [_serialize_item(session, item, public=True, include_metadata=True) for item in items],
+        "items": [
+            _serialize_item(
+                session,
+                item,
+                public=True,
+                include_metadata=True,
+                tasks=serialization_context[0],
+                links_by_item=serialization_context[1],
+                categories_by_item=serialization_context[2],
+            )
+            for item in items
+        ],
         "total": total,
         "page": safe_page,
         "page_size": safe_size,
     }
+
+
+def queue_media_wall_metadata_sync(session: Session) -> dict[str, int | str]:
+    ensure_runtime_storage_tables()
+    items = session.query(MediaWallItem).order_by(MediaWallItem.id.asc()).all()
+    queued_count = 0
+    skipped_count = 0
+    for item in items:
+        current_status = str(item.metadata_status or MEDIA_WALL_METADATA_NOT_SYNCED)
+        if current_status == MEDIA_WALL_METADATA_READY:
+            skipped_count += 1
+            continue
+        if current_status in {MEDIA_WALL_METADATA_PENDING, MEDIA_WALL_METADATA_PROCESSING}:
+            skipped_count += 1
+            continue
+        _invalidate_metadata_cache(item.metadata_query_title)
+        item.metadata_status = MEDIA_WALL_METADATA_PENDING
+        item.metadata_last_error = None
+        queued_count += 1
+    session.flush()
+    return {
+        "status": "queued" if queued_count else "up_to_date",
+        "queued_count": queued_count,
+        "skipped_count": skipped_count,
+    }
+
+
+def process_next_media_wall_metadata_sync(session: Session, *, worker_name: str) -> bool:
+    ensure_runtime_storage_tables()
+    item = (
+        session.query(MediaWallItem)
+        .filter(MediaWallItem.metadata_status == MEDIA_WALL_METADATA_PENDING)
+        .order_by(MediaWallItem.id.asc())
+        .with_for_update(skip_locked=True)
+        .first()
+    )
+    if item is None:
+        return False
+
+    item.metadata_status = MEDIA_WALL_METADATA_PROCESSING
+    item.metadata_last_error = None
+    session.flush()
+    try:
+        metadata = _fetch_metadata(session, item.metadata_query_title)
+        if not metadata:
+            item.metadata_status = MEDIA_WALL_METADATA_FAILED
+            item.metadata_last_error = "未从影视采集源获取到资料"
+        else:
+            item.metadata_json = metadata
+            item.metadata_status = MEDIA_WALL_METADATA_READY
+            item.metadata_last_synced_at = _now()
+            item.metadata_last_error = None
+    except Exception as exc:
+        item.metadata_status = MEDIA_WALL_METADATA_FAILED
+        item.metadata_last_error = _clean_text(exc, max_length=2000) or type(exc).__name__
+        logger.exception("media wall metadata sync failed: item_id=%s", item.id)
+    item.updated_by = worker_name
+    session.flush()
+    return True
 
 
 def get_public_item(session: Session, item_id: int) -> dict[str, Any]:
@@ -635,9 +816,19 @@ def list_admin_items(
         query = query.join(MediaWallItemCategory, MediaWallItemCategory.item_id == MediaWallItem.id).filter(
             MediaWallItemCategory.category_id == int(category_id)
         )
+    items = query.order_by(MediaWallItem.sort_order.asc(), MediaWallItem.updated_at.desc(), MediaWallItem.id.desc()).all()
+    serialization_context = _build_item_serialization_context(session, items, public=False)
     return [
-        _serialize_item(session, item, public=False, include_metadata=False)
-        for item in query.order_by(MediaWallItem.sort_order.asc(), MediaWallItem.updated_at.desc(), MediaWallItem.id.desc()).all()
+        _serialize_item(
+            session,
+            item,
+            public=False,
+            include_metadata=False,
+            tasks=serialization_context[0],
+            links_by_item=serialization_context[1],
+            categories_by_item=serialization_context[2],
+        )
+        for item in items
     ]
 
 
@@ -846,13 +1037,16 @@ def create_item(session: Session, *, display_title: str, metadata_query_title: s
         raise ValueError("无效的影视公开状态")
     if sync_task_id is not None and session.get(PanTransferSyncTask, int(sync_task_id)) is None:
         raise ValueError("追更任务不存在")
+    clean_metadata_query_title = _clean_text(metadata_query_title or title, max_length=255) or title
+    _invalidate_metadata_cache(clean_metadata_query_title)
     item = MediaWallItem(
         display_title=title,
-        metadata_query_title=_clean_text(metadata_query_title or title, max_length=255) or title,
+        metadata_query_title=clean_metadata_query_title,
         visibility=visibility,
         sort_order=int(sort_order or 0),
         sync_task_id=int(sync_task_id) if sync_task_id else None,
         custom_poster_url=_clean_text(custom_poster_url, max_length=1000) or None,
+        metadata_status=MEDIA_WALL_METADATA_PENDING,
         created_by=operator,
         updated_by=operator,
     )
@@ -883,12 +1077,26 @@ def update_item(session: Session, *, item_id: int, display_title: str, metadata_
         raise ValueError("无效的影视公开状态")
     if sync_task_id is not None and session.get(PanTransferSyncTask, int(sync_task_id)) is None:
         raise ValueError("追更任务不存在")
+    next_metadata_query_title = _clean_text(metadata_query_title or title, max_length=255) or title
+    metadata_query_changed = item.metadata_query_title != next_metadata_query_title
+    previous_metadata_query_title = item.metadata_query_title
     item.display_title = title
-    item.metadata_query_title = _clean_text(metadata_query_title or title, max_length=255) or title
+    item.metadata_query_title = next_metadata_query_title
     item.visibility = visibility
     item.sort_order = int(sort_order or 0)
     item.sync_task_id = int(sync_task_id) if sync_task_id else None
     item.custom_poster_url = _clean_text(custom_poster_url, max_length=1000) or None
+    if metadata_query_changed:
+        _invalidate_metadata_cache(previous_metadata_query_title)
+        _invalidate_metadata_cache(next_metadata_query_title)
+        item.metadata_json = {}
+        item.metadata_last_synced_at = None
+        item.metadata_status = MEDIA_WALL_METADATA_PENDING
+        item.metadata_last_error = None
+    elif str(item.metadata_status or MEDIA_WALL_METADATA_NOT_SYNCED) in {MEDIA_WALL_METADATA_NOT_SYNCED, MEDIA_WALL_METADATA_FAILED}:
+        _invalidate_metadata_cache(next_metadata_query_title)
+        item.metadata_status = MEDIA_WALL_METADATA_PENDING
+        item.metadata_last_error = None
     item.updated_by = operator
     _replace_item_categories(session, item_id=item.id, category_ids=category_ids)
     if links is not None:
@@ -1007,6 +1215,8 @@ def _serialize_source(source: MediaWallSourceConfig) -> dict[str, Any]:
 
 def create_source(session: Session, *, name: str, source_url: str, source_type: str, is_enabled: bool, priority: int, timeout_seconds: int) -> dict[str, Any]:
     clean_url = _validate_public_url(source_url)
+    _invalidate_source_endpoint_cache()
+    _invalidate_metadata_cache()
     source = MediaWallSourceConfig(
         name=_clean_text(name, max_length=120) or "影视采集源",
         source_url=clean_url,
@@ -1024,6 +1234,8 @@ def update_source(session: Session, *, source_id: int, name: str, source_url: st
     source = session.get(MediaWallSourceConfig, int(source_id))
     if source is None:
         raise LookupError("采集源不存在")
+    _invalidate_source_endpoint_cache(source.id)
+    _invalidate_metadata_cache()
     source.name = _clean_text(name, max_length=120) or "影视采集源"
     source.source_url = _validate_public_url(source_url)
     source.source_type = _clean_text(source_type, max_length=32) or "source-list"
@@ -1178,11 +1390,13 @@ def confirm_import(session: Session, *, job_id: int, category_ids: list[int], vi
         normalized_title = _normalize_title(title)
         item = items_by_title.get(normalized_title)
         if item is None:
+            _invalidate_metadata_cache(title)
             item = MediaWallItem(
                 display_title=title,
                 metadata_query_title=title,
                 visibility=visibility,
                 sort_order=0,
+                metadata_status=MEDIA_WALL_METADATA_PENDING,
                 created_by=operator,
                 updated_by=operator,
             )
@@ -1192,6 +1406,10 @@ def confirm_import(session: Session, *, job_id: int, category_ids: list[int], vi
             created_count += 1
         else:
             updated_count += 1
+            if str(item.metadata_status or MEDIA_WALL_METADATA_NOT_SYNCED) in {MEDIA_WALL_METADATA_NOT_SYNCED, MEDIA_WALL_METADATA_FAILED}:
+                _invalidate_metadata_cache(item.metadata_query_title)
+                item.metadata_status = MEDIA_WALL_METADATA_PENDING
+                item.metadata_last_error = None
         if validated_categories:
             existing_ids = [int(category.id) for category in _get_categories_for_item(session, item.id)]
             _replace_item_categories(session, item_id=item.id, category_ids=[*existing_ids, *validated_categories])

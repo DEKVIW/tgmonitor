@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Alert, Button, Card, Empty, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Switch, Table, Tabs, Tag, Upload, message } from 'antd'
 import type { UploadProps } from 'antd'
-import { DeleteOutlined, EditOutlined, PlusOutlined, ReloadOutlined, SafetyOutlined, SearchOutlined, UploadOutlined } from '@ant-design/icons'
+import { DeleteOutlined, EditOutlined, PlusOutlined, ReloadOutlined, SafetyOutlined, SearchOutlined, SyncOutlined, UploadOutlined } from '@ant-design/icons'
 
 import {
   confirmMediaWallImport,
@@ -16,6 +16,7 @@ import {
   getMediaWallSources,
   getMediaWallSyncTasks,
   previewMediaWallImport,
+  syncMediaWallMetadata,
   testMediaWallSource,
   updateMediaWallCategory,
   updateMediaWallItem,
@@ -75,6 +76,7 @@ const MediaWallAdminPanel = () => {
   const [sources, setSources] = useState<MediaWallSource[]>([])
   const [syncTasks, setSyncTasks] = useState<MediaWallSyncTask[]>([])
   const [loading, setLoading] = useState(false)
+  const [metadataSyncLoading, setMetadataSyncLoading] = useState(false)
   const [itemModalOpen, setItemModalOpen] = useState(false)
   const [categoryModalOpen, setCategoryModalOpen] = useState(false)
   const [sourceModalOpen, setSourceModalOpen] = useState(false)
@@ -106,7 +108,7 @@ const MediaWallAdminPanel = () => {
       setSyncTasks(taskData)
       setSelectedItemKeys((current) => current.filter((itemId) => itemData.some((item) => item.id === itemId)))
     } catch (error: unknown) {
-      message.error(getRequestErrorMessage(error, '影视墙数据加载失败'))
+      message.error(getRequestErrorMessage(error, '影视推荐数据加载失败'))
     } finally {
       setLoading(false)
     }
@@ -201,6 +203,23 @@ const MediaWallAdminPanel = () => {
     }
   }
 
+  const handleMetadataSync = async () => {
+    setMetadataSyncLoading(true)
+    try {
+      const result = await syncMediaWallMetadata()
+      if (result.queued_count > 0) {
+        message.success(`已加入 ${result.queued_count} 个影视的封面与资料同步队列，后台会逐个处理`)
+      } else {
+        message.info('现有影视的封面与资料已同步，无需重复处理')
+      }
+      await loadData()
+    } catch (error: unknown) {
+      message.error(getRequestErrorMessage(error, '同步影视封面与资料失败'))
+    } finally {
+      setMetadataSyncLoading(false)
+    }
+  }
+
   const openSourceModal = (source?: MediaWallSource) => {
     setEditingSource(source || null)
     sourceForm.setFieldsValue(source || { name: '', source_url: '', source_type: 'source-list', is_enabled: true, priority: 100, timeout_seconds: 8 })
@@ -250,6 +269,22 @@ const MediaWallAdminPanel = () => {
         </Space>
       ),
     },
+    {
+      title: '资料状态',
+      dataIndex: 'metadata_status',
+      width: 105,
+      render: (value?: string) => {
+        const labels: Record<string, { label: string; color?: string }> = {
+          not_synced: { label: '未同步' },
+          pending: { label: '排队中', color: 'blue' },
+          processing: { label: '处理中', color: 'processing' },
+          ready: { label: '已同步', color: 'green' },
+          failed: { label: '失败', color: 'red' },
+        }
+        const status = labels[value || 'not_synced'] || { label: value || '未同步' }
+        return <Tag color={status.color}>{status.label}</Tag>
+      },
+    },
     { title: '状态', dataIndex: 'visibility', width: 90, render: (value: string) => <Tag color={value === 'public' ? 'green' : 'default'}>{value === 'public' ? '公开' : '隐藏'}</Tag> },
     {
       title: '操作',
@@ -260,7 +295,7 @@ const MediaWallAdminPanel = () => {
           <Button type="text" icon={<EditOutlined />} onClick={() => openItemModal(item)}>编辑</Button>
           <Popconfirm
             title="确认删除这个影视条目吗？"
-            description="删除后会同时移除分类关联和网盘入口，影视墙将不再显示。"
+            description="删除后会同时移除分类关联和网盘入口，影视推荐将不再显示。"
             okText="删除"
             cancelText="取消"
             okButtonProps={{ danger: true }}
@@ -331,7 +366,7 @@ const MediaWallAdminPanel = () => {
                     />
                     <Popconfirm
                       title={`确认删除已选的 ${selectedItemKeys.length} 个影视条目吗？`}
-                      description="删除后会同时移除分类关联和网盘入口，影视墙将不再显示。"
+                      description="删除后会同时移除分类关联和网盘入口，影视推荐将不再显示。"
                       okText="批量删除"
                       cancelText="取消"
                       okButtonProps={{ danger: true }}
@@ -342,6 +377,14 @@ const MediaWallAdminPanel = () => {
                         批量删除{selectedItemKeys.length > 0 ? ` (${selectedItemKeys.length})` : ''}
                       </Button>
                     </Popconfirm>
+                    <Button
+                      icon={<SyncOutlined />}
+                      loading={metadataSyncLoading}
+                      onClick={() => void handleMetadataSync()}
+                      title="把未同步或失败的影视资料加入后台队列"
+                    >
+                      同步封面与资料
+                    </Button>
                     <Button type="primary" icon={<PlusOutlined />} onClick={() => openItemModal()}>添加影视</Button>
                   </Space>
                 }
@@ -360,7 +403,7 @@ const MediaWallAdminPanel = () => {
           },
           { key: 'categories', label: '分类管理', children: <Card className="resource-ops-panel-card media-wall-admin-card" extra={<Button type="primary" icon={<PlusOutlined />} onClick={() => openCategoryModal()}>添加分类</Button>}><Table rowKey="id" loading={loading} columns={categoryColumns} dataSource={categories} pagination={false} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无分类" /> }} /></Card> },
           { key: 'sources', label: '采集源', children: <Card className="resource-ops-panel-card media-wall-admin-card" extra={<Button type="primary" icon={<PlusOutlined />} onClick={() => openSourceModal()}>添加采集源</Button>}><Table rowKey="id" loading={loading} columns={sourceColumns} dataSource={sources} pagination={false} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无采集源" /> }} /></Card> },
-          { key: 'import', label: '批量导入', children: <Card className="resource-ops-panel-card media-wall-admin-card"><Upload {...uploadProps}><Button icon={<UploadOutlined />}>选择 TXT / XLSX 文件</Button></Upload>{importPreview ? <div className="media-wall-import-preview"><Alert type="info" showIcon message={`解析 ${importPreview.total_records} 条影视，${importPreview.total_links} 个链接，${importPreview.invalid_count} 行异常`} /><div className="media-wall-import-toolbar"><Select mode="multiple" allowClear placeholder="导入到分类" value={importCategoryIds} options={categoryOptions} onChange={setImportCategoryIds} /><Select value={importVisibility} options={[{ label: '直接公开', value: 'public' }, { label: '隐藏', value: 'hidden' }]} onChange={setImportVisibility} /><Button type="primary" onClick={() => void confirmMediaWallImport(importPreview.id, { category_ids: importCategoryIds, visibility: importVisibility }).then(() => { message.success('导入已确认'); setImportPreview(null); void loadData() }).catch((error: unknown) => message.error(getRequestErrorMessage(error, '确认导入失败')))}>确认导入</Button></div><Table rowKey="display_title" size="small" pagination={{ pageSize: 8 }} dataSource={importPreview.records} columns={[{ title: '影视名称', dataIndex: 'display_title' }, { title: '链接', dataIndex: 'links', render: (links: Array<{ platform: string }>) => links.map((link) => <Tag key={link.platform}>{link.platform}</Tag>) }]} /></div> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="选择文件后先预览，再确认写入影视墙" />}</Card> },
+          { key: 'import', label: '批量导入', children: <Card className="resource-ops-panel-card media-wall-admin-card"><Upload {...uploadProps}><Button icon={<UploadOutlined />}>选择 TXT / XLSX 文件</Button></Upload>{importPreview ? <div className="media-wall-import-preview"><Alert type="info" showIcon message={`解析 ${importPreview.total_records} 条影视，${importPreview.total_links} 个链接，${importPreview.invalid_count} 行异常`} /><div className="media-wall-import-toolbar"><Select mode="multiple" allowClear placeholder="导入到分类" value={importCategoryIds} options={categoryOptions} onChange={setImportCategoryIds} /><Select value={importVisibility} options={[{ label: '直接公开', value: 'public' }, { label: '隐藏', value: 'hidden' }]} onChange={setImportVisibility} /><Button type="primary" onClick={() => void confirmMediaWallImport(importPreview.id, { category_ids: importCategoryIds, visibility: importVisibility }).then(() => { message.success('导入已确认'); setImportPreview(null); void loadData() }).catch((error: unknown) => message.error(getRequestErrorMessage(error, '确认导入失败')))}>确认导入</Button></div><Table rowKey="display_title" size="small" pagination={{ pageSize: 8 }} dataSource={importPreview.records} columns={[{ title: '影视名称', dataIndex: 'display_title' }, { title: '链接', dataIndex: 'links', render: (links: Array<{ platform: string }>) => links.map((link) => <Tag key={link.platform}>{link.platform}</Tag>) }]} /></div> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="选择文件后先预览，再确认写入影视推荐" />}</Card> },
         ]}
       />
 

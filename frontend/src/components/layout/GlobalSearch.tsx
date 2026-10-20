@@ -75,7 +75,7 @@ const MediaWallSearch = () => {
 const GlobalSearch = () => {
   const location = useLocation()
   const { isAuthenticated } = useAuthStore()
-  const isMediaWall = location.pathname.startsWith('/popular')
+  const isMediaWall = location.pathname === '/' || location.pathname.startsWith('/popular')
 
   if (isMediaWall) {
     return <MediaWallSearch />

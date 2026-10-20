@@ -66,6 +66,11 @@ export const getMediaWallItems = async (params: { search?: string; visibility?: 
   return response.data
 }
 
+export const syncMediaWallMetadata = async (): Promise<{ status: string; queued_count: number; skipped_count: number }> => {
+  const response = await apiClient.post<{ status: string; queued_count: number; skipped_count: number }>('/admin/media-wall/metadata/sync')
+  return response.data
+}
+
 export const createMediaWallItem = async (payload: MediaWallItemInput): Promise<MediaWallItem> => {
   const response = await apiClient.post<MediaWallItem>('/admin/media-wall/items', payload)
   return response.data

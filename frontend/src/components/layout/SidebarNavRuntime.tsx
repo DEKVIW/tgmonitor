@@ -29,28 +29,33 @@ const SidebarNavRuntime = ({ collapsed, onNavigate }: SidebarProps) => {
   const { user, isAuthenticated, token } = useAuthStore()
   const isGuest = !isAuthenticated || !token
   const isAdmin = user?.role === 'admin'
-  const messagePath = isGuest ? '/' : '/dashboard'
+  const messagePath = '/messages'
+  const isMessageRoute =
+    location.pathname === '/messages' ||
+    location.pathname.startsWith('/messages/') ||
+    location.pathname === '/dashboard' ||
+    location.pathname.startsWith('/dashboard/')
 
   const menuItems: MenuProps['items'] = [
     {
-      key: messagePath,
-      icon: renderMenuIcon(<DashboardOutlined />),
-      label: '消息列表',
-    },
-    {
-      key: '/statistics',
-      icon: renderMenuIcon(<BarChartOutlined />),
-      label: '统计信息',
-    },
-    {
       key: '/popular',
       icon: renderMenuIcon(<AppstoreOutlined />),
-      label: '影视墙',
+      label: '影视推荐',
+    },
+    {
+      key: messagePath,
+      icon: renderMenuIcon(<DashboardOutlined />),
+      label: '资源动态',
     },
     {
       key: '/learning-resources',
       icon: renderMenuIcon(<ReadOutlined />),
       label: '学习资料',
+    },
+    {
+      key: '/statistics',
+      icon: renderMenuIcon(<BarChartOutlined />),
+      label: '数据概览',
     },
     ...(!isGuest && isAdmin
       ? [
@@ -87,7 +92,8 @@ const SidebarNavRuntime = ({ collapsed, onNavigate }: SidebarProps) => {
     menuItems
       .map((item) => String(item?.key ?? ''))
       .sort((left, right) => right.length - left.length)
-      .find((key) => location.pathname === key || location.pathname.startsWith(`${key}/`)) ?? ''
+      .find((key) => location.pathname === key || location.pathname.startsWith(`${key}/`)) ??
+    (isMessageRoute ? messagePath : '')
 
   const handleMenuClick = ({ key }: { key: string }) => {
     navigate(key)

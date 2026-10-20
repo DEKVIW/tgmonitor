@@ -670,6 +670,10 @@ class MediaWallItem(Base):
     sort_order = Column(Integer, nullable=False, default=0, index=True)
     sync_task_id = Column(Integer, ForeignKey("pan_transfer_sync_tasks.id"), nullable=True, index=True)
     custom_poster_url = Column(Text, nullable=True)
+    metadata_json = Column(JSONB, nullable=False, default=dict)
+    metadata_status = Column(String(32), nullable=False, default="not_synced", index=True)
+    metadata_last_synced_at = Column(DateTime, nullable=True)
+    metadata_last_error = Column(Text, nullable=True)
     created_by = Column(String(128), nullable=True, index=True)
     updated_by = Column(String(128), nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
@@ -1355,6 +1359,7 @@ def ensure_runtime_storage_tables() -> None:
         _ensure_learning_resource_columns()
         _ensure_ai_center_columns()
         _ensure_media_wall_visibility()
+        _ensure_media_wall_metadata_columns()
         _ensure_media_wall_link_columns()
         _ensure_pan_transfer_indexes()
         _ensure_link_check_indexes()
@@ -1462,6 +1467,31 @@ def _ensure_media_wall_visibility() -> None:
         )
         connection.execute(
             text("ALTER TABLE media_wall_items ALTER COLUMN visibility SET DEFAULT 'public'")
+        )
+
+
+def _ensure_media_wall_metadata_columns() -> None:
+    inspector = inspect(engine)
+    try:
+        columns = {column["name"] for column in inspector.get_columns("media_wall_items")}
+    except Exception:
+        columns = set()
+
+    if not columns:
+        return
+
+    pending_alters = {
+        "metadata_json": "ALTER TABLE media_wall_items ADD COLUMN metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb",
+        "metadata_status": "ALTER TABLE media_wall_items ADD COLUMN metadata_status VARCHAR(32) NOT NULL DEFAULT 'not_synced'",
+        "metadata_last_synced_at": "ALTER TABLE media_wall_items ADD COLUMN metadata_last_synced_at TIMESTAMP",
+        "metadata_last_error": "ALTER TABLE media_wall_items ADD COLUMN metadata_last_error TEXT",
+    }
+    with engine.begin() as connection:
+        for column_name, sql in pending_alters.items():
+            if column_name not in columns:
+                connection.execute(text(sql))
+        connection.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_media_wall_items_metadata_status ON media_wall_items (metadata_status)")
         )
 
 
