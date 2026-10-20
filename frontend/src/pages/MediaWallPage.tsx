@@ -276,14 +276,16 @@ const MediaWallPage = () => {
   return (
     <div className="media-wall-page">
       <div className="media-wall-tabs-header">
-        <div className="media-wall-tabs-wrap">
-          <Tabs
-            activeKey={selectedCategory}
-            onChange={handleCategoryChange}
-            items={tabItems}
-            className="media-wall-tabs"
-            destroyInactiveTabPane={false}
-          />
+        <div className="media-wall-tabs-row">
+          <div className="media-wall-tabs-wrap">
+            <Tabs
+              activeKey={selectedCategory}
+              onChange={handleCategoryChange}
+              items={tabItems}
+              className="media-wall-tabs"
+              destroyInactiveTabPane={false}
+            />
+          </div>
         </div>
         <div className="media-wall-actions">
           <Button
@@ -301,6 +303,7 @@ const MediaWallPage = () => {
             onClick={() => void loadList()}
             loading={loading}
             aria-label="刷新影视推荐"
+            className="media-wall-refresh-button"
           />
         </div>
       </div>

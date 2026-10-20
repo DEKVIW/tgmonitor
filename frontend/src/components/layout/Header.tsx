@@ -24,9 +24,7 @@ const Header = ({ collapsed, onToggle }: HeaderProps) => {
   const isGuest = !isAuthenticated || !token
   const handleTitleClick = () => {
     const homePath = '/popular'
-    if (location.pathname !== homePath) {
-      navigate(homePath, { replace: false })
-    }
+    navigate(homePath, { replace: location.pathname === homePath })
   }
 
   return (

@@ -18,9 +18,13 @@
   gap: 8px;
 }
 
-.media-wall-tabs-wrap {
+.media-wall-tabs-row {
   min-width: 0;
   flex: 1 1 auto;
+}
+
+.media-wall-tabs-wrap {
+  min-width: 0;
   margin: 0 0 20px;
   overflow-x: auto;
   border-bottom: 1px solid var(--surface-border);
@@ -403,8 +407,24 @@
     align-items: flex-start;
   }
 
+  .media-wall-tabs-header {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 0;
+  }
+
+  .media-wall-tabs-wrap {
+    margin-bottom: 0;
+  }
+
   .media-wall-actions {
+    justify-content: flex-end;
     margin-bottom: 16px;
+    margin-top: 4px;
+  }
+
+  .media-wall-refresh-button {
+    display: none;
   }
 
   .media-wall-grid {
