@@ -26,6 +26,7 @@ from app.services.resource_ops import (
 from app.services.channel_daily_stats_service import (
     accumulate_channel_daily_stats_for_message_ids,
 )
+from app.services.learning_resources import enqueue_learning_resources_for_message_ids
 from app.services.monitor_runtime import write_monitor_runtime_state
 from app.services.system_config_service import get_monitor_runtime_config
 
@@ -389,6 +390,36 @@ async def handler(event: Any) -> None:
                                 print(
                                     f"[{monitor_time}] channel_daily_stats 鍚屾澶辫触锛屼絾涓嶄細褰卞搷娑堟伅鍏ュ簱: "
                                     f"{channel_daily_stats_error}"
+                                )
+                        if new_message_ids:
+                            try:
+                                async with session.begin_nested():
+                                    learning_result = await session.run_sync(
+                                        lambda sync_session: enqueue_learning_resources_for_message_ids(
+                                            sync_session,
+                                            new_message_ids,
+                                        )
+                                    )
+                                if learning_result.get("jobs"):
+                                    log_monitor_event(
+                                        logger,
+                                        "learning_resources_enqueued",
+                                        channel=channel_name,
+                                        jobs=learning_result.get("jobs"),
+                                        resources=learning_result.get("resources"),
+                                    )
+                            except Exception as learning_enqueue_error:
+                                log_monitor_event(
+                                    logger,
+                                    "learning_resources_enqueue_failed",
+                                    level=logging.WARNING,
+                                    channel=channel_name,
+                                    error=str(learning_enqueue_error),
+                                    affected_messages=len(new_message_ids),
+                                )
+                                print(
+                                    f"[{monitor_time}] 学习资料自动转存入队失败，但不影响消息入库: "
+                                    f"{learning_enqueue_error}"
                                 )
                         await session.commit()
                     except Exception:

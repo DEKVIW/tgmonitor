@@ -62,6 +62,14 @@ class PanTransferDeleteResult:
 class PanTransferProvider:
     platform: str = ""
 
+    async def list_directories(
+        self,
+        *,
+        credential_value: str,
+        parent_id: str = "0",
+    ) -> list[dict[str, Any]]:
+        raise NotImplementedError
+
     async def validate_account(self, *, credential_value: str, account_name: str) -> PanTransferAccountValidationResult:
         raise NotImplementedError
 

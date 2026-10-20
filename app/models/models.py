@@ -284,6 +284,162 @@ class PanTransferAccount(Base):
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class LearningChannelConfig(Base):
+    __tablename__ = "learning_channel_configs"
+    __table_args__ = (
+        UniqueConstraint("channel_key", name="ux_learning_channel_configs_key"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    channel_key = Column(String(255), nullable=False, index=True)
+    channel_title = Column(String(255), nullable=True)
+    is_enabled = Column(Boolean, nullable=False, default=False, index=True)
+    target_account_id = Column(Integer, ForeignKey("pan_transfer_accounts.id"), nullable=True, index=True)
+    save_root = Column(String(255), nullable=False, default="")
+    default_category_id = Column(Integer, nullable=True, index=True)
+    parser_profile = Column(String(64), nullable=True)
+    backfill_policy = Column(String(32), nullable=False, default="new_messages_only")
+    transfer_policy = Column(String(32), nullable=False, default="quark_only")
+    auto_create_category_dirs = Column(Boolean, nullable=False, default=True)
+    last_processed_message_id = Column(Integer, nullable=True, index=True)
+    last_success_at = Column(DateTime, nullable=True, index=True)
+    last_error_message = Column(Text, nullable=True)
+    created_by = Column(String(128), nullable=True)
+    updated_by = Column(String(128), nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class LearningResourceCategory(Base):
+    __tablename__ = "learning_resource_categories"
+    __table_args__ = (
+        UniqueConstraint("slug", name="ux_learning_resource_categories_slug"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(120), nullable=False)
+    slug = Column(String(160), nullable=False, index=True)
+    directory_name = Column(String(255), nullable=False)
+    directory_id = Column(String(255), nullable=True)
+    directory_status = Column(String(32), nullable=False, default="pending", index=True)
+    is_enabled = Column(Boolean, nullable=False, default=True, index=True)
+    show_in_tabs = Column(Boolean, nullable=False, default=True)
+    sort_order = Column(Integer, nullable=False, default=0, index=True)
+    created_by = Column(String(128), nullable=True)
+    updated_by = Column(String(128), nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class LearningResourceItem(Base):
+    __tablename__ = "learning_resource_items"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_channel_key",
+            "normalized_title",
+            name="ux_learning_resource_items_channel_title",
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    display_title = Column(String(255), nullable=False, index=True)
+    normalized_title = Column(String(255), nullable=False, index=True)
+    status = Column(String(32), nullable=False, default="pending", index=True)
+    primary_category_id = Column(Integer, ForeignKey("learning_resource_categories.id"), nullable=True, index=True)
+    source_channel_key = Column(String(255), nullable=False, index=True)
+    first_source_message_id = Column(Integer, ForeignKey("messages.id"), nullable=True, index=True)
+    latest_source_message_id = Column(Integer, ForeignKey("messages.id"), nullable=True, index=True)
+    latest_source_at = Column(DateTime, nullable=True, index=True)
+    last_published_at = Column(DateTime, nullable=True, index=True)
+    tags = Column(ARRAY(String), nullable=False, default=list)
+    classification_source = Column(String(32), nullable=False, default="rule", index=True)
+    classification_confidence = Column(String(32), nullable=False, default="medium")
+    created_by = Column(String(128), nullable=True)
+    updated_by = Column(String(128), nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class LearningResourceItemCategory(Base):
+    __tablename__ = "learning_resource_item_categories"
+    __table_args__ = (
+        UniqueConstraint("resource_id", "category_id", name="ux_learning_resource_item_categories_pair"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    resource_id = Column(Integer, ForeignKey("learning_resource_items.id", ondelete="CASCADE"), nullable=False, index=True)
+    category_id = Column(Integer, ForeignKey("learning_resource_categories.id", ondelete="CASCADE"), nullable=False, index=True)
+    is_primary = Column(Boolean, nullable=False, default=False, index=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class LearningResourceLink(Base):
+    __tablename__ = "learning_resource_links"
+    __table_args__ = (
+        UniqueConstraint("resource_id", "url_fingerprint", name="ux_learning_resource_links_resource_fingerprint"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    resource_id = Column(Integer, ForeignKey("learning_resource_items.id", ondelete="CASCADE"), nullable=False, index=True)
+    platform = Column(String(64), nullable=False, index=True)
+    source_url = Column(Text, nullable=False)
+    share_url = Column(Text, nullable=True)
+    url_fingerprint = Column(String(64), nullable=False, index=True)
+    target_account_id = Column(Integer, ForeignKey("pan_transfer_accounts.id"), nullable=True, index=True)
+    source_link_target_id = Column(Integer, ForeignKey("link_targets.id"), nullable=True, index=True)
+    is_primary = Column(Boolean, nullable=False, default=False, index=True)
+    is_enabled = Column(Boolean, nullable=False, default=True, index=True)
+    status = Column(String(32), nullable=False, default="pending", index=True)
+    last_error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class LearningResourceTransferJob(Base):
+    __tablename__ = "learning_resource_transfer_jobs"
+    __table_args__ = (
+        UniqueConstraint(
+            "resource_id",
+            "source_link_target_id",
+            name="ux_learning_resource_transfer_jobs_resource_source",
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    resource_id = Column(Integer, ForeignKey("learning_resource_items.id", ondelete="CASCADE"), nullable=False, index=True)
+    source_message_id = Column(Integer, ForeignKey("messages.id"), nullable=True, index=True)
+    source_link_target_id = Column(Integer, ForeignKey("link_targets.id"), nullable=False, index=True)
+    target_account_id = Column(Integer, ForeignKey("pan_transfer_accounts.id"), nullable=False, index=True)
+    batch_id = Column(Integer, ForeignKey("pan_transfer_batches.id"), nullable=True, index=True)
+    batch_item_id = Column(Integer, ForeignKey("pan_transfer_batch_items.id"), nullable=True, index=True)
+    category_id = Column(Integer, ForeignKey("learning_resource_categories.id"), nullable=True, index=True)
+    status = Column(String(32), nullable=False, default="queued", index=True)
+    attempt_count = Column(Integer, nullable=False, default=0)
+    next_retry_at = Column(DateTime, nullable=True, index=True)
+    last_error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class LearningResourceImportJob(Base):
+    __tablename__ = "learning_resource_import_jobs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    filename = Column(String(255), nullable=False)
+    file_hash = Column(String(64), nullable=False, index=True)
+    status = Column(String(32), nullable=False, default="preview", index=True)
+    preview_json = Column(JSONB, nullable=False, default=dict)
+    summary_json = Column(JSONB, nullable=False, default=dict)
+    row_count = Column(Integer, nullable=False, default=0)
+    valid_count = Column(Integer, nullable=False, default=0)
+    duplicate_count = Column(Integer, nullable=False, default=0)
+    error_count = Column(Integer, nullable=False, default=0)
+    created_by = Column(String(128), nullable=True)
+    confirmed_by = Column(String(128), nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class PanTransferBatch(Base):
     __tablename__ = "pan_transfer_batches"
 
@@ -1160,6 +1316,13 @@ def ensure_runtime_storage_tables() -> None:
                 ResourceWorkBinding.__table__,
                 ResourceRecognitionTask.__table__,
                 PanTransferAccount.__table__,
+                LearningChannelConfig.__table__,
+                LearningResourceCategory.__table__,
+                LearningResourceItem.__table__,
+                LearningResourceItemCategory.__table__,
+                LearningResourceLink.__table__,
+                LearningResourceTransferJob.__table__,
+                LearningResourceImportJob.__table__,
                 PanTransferBatch.__table__,
                 PanTransferBatchItem.__table__,
                 PanTransferReplacementLog.__table__,
@@ -1189,12 +1352,38 @@ def ensure_runtime_storage_tables() -> None:
         _ensure_channel_daily_stats_indexes()
         _ensure_resource_ops_indexes()
         _ensure_pan_transfer_columns()
+        _ensure_learning_resource_columns()
         _ensure_ai_center_columns()
         _ensure_media_wall_visibility()
         _ensure_media_wall_link_columns()
         _ensure_pan_transfer_indexes()
         _ensure_link_check_indexes()
         _runtime_storage_checked = True
+
+
+def _ensure_learning_resource_columns() -> None:
+    inspector = inspect(engine)
+    try:
+        item_columns = {column["name"] for column in inspector.get_columns("learning_resource_items")}
+    except Exception:
+        item_columns = set()
+    try:
+        transfer_job_columns = {column["name"] for column in inspector.get_columns("learning_resource_transfer_jobs")}
+    except Exception:
+        transfer_job_columns = set()
+
+    if not item_columns and not transfer_job_columns:
+        return
+
+    with engine.begin() as connection:
+        if "tags" not in item_columns:
+            connection.execute(
+                text("ALTER TABLE learning_resource_items ADD COLUMN tags TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[]")
+            )
+        if "source_message_id" in transfer_job_columns:
+            connection.execute(
+                text("ALTER TABLE learning_resource_transfer_jobs ALTER COLUMN source_message_id DROP NOT NULL")
+            )
 
 
 def _ensure_system_settings_columns() -> None:

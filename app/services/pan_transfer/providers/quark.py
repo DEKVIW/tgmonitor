@@ -680,6 +680,24 @@ class _QuarkClient:
 class QuarkPanTransferProvider(PanTransferProvider):
     platform = PLATFORM_QUARK
 
+    async def list_directories(
+        self,
+        *,
+        credential_value: str,
+        parent_id: str = "0",
+    ) -> list[dict[str, Any]]:
+        async with _QuarkClient(credential_value) as client:
+            rows = await client.list_dir_all(parent_id=str(parent_id or "0"))
+        return [
+            {
+                "id": str(row.get("fid") or "").strip(),
+                "name": str(row.get("file_name") or "").strip(),
+                "is_dir": bool(row.get("dir")),
+            }
+            for row in rows
+            if bool(row.get("dir")) and str(row.get("fid") or "").strip() and str(row.get("file_name") or "").strip()
+        ]
+
     async def validate_account(self, *, credential_value: str, account_name: str) -> PanTransferAccountValidationResult:
         del account_name
         async with _QuarkClient(credential_value) as client:

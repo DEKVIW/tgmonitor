@@ -8,6 +8,7 @@ import {
   CloudUploadOutlined,
   DashboardOutlined,
   LineChartOutlined,
+  ReadOutlined,
   RobotOutlined,
   SettingOutlined,
   ThunderboltOutlined,
@@ -45,6 +46,11 @@ const SidebarNavRuntime = ({ collapsed, onNavigate }: SidebarProps) => {
       key: '/popular',
       icon: renderMenuIcon(<AppstoreOutlined />),
       label: '影视墙',
+    },
+    {
+      key: '/learning-resources',
+      icon: renderMenuIcon(<ReadOutlined />),
+      label: '学习资料',
     },
     ...(!isGuest && isAdmin
       ? [
