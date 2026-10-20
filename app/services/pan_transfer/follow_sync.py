@@ -512,14 +512,6 @@ async def resolve_follow_task_preferred_target_relative_path(
         return selection_path, "selection"
 
     extra_json = dict(task.extra_json or {})
-    if allow_scan:
-        from .file_diagnosis import infer_follow_task_target_relative_path
-
-        scan_result = await infer_follow_task_target_relative_path(session, task_id=int(task.id))
-        if "preferred_target_relative_path" in scan_result:
-            scanned_path = _normalize_target_relative_path(scan_result.get("preferred_target_relative_path"))
-            return scanned_path, "target_scan" if scanned_path else "target_scan_root"
-
     current_share_identity = dict(extra_json.get("current_share_identity") or {})
     current_share_actual_path = _normalize_target_relative_path(
         current_share_identity.get("actual_share_target_relative_path")
@@ -551,6 +543,14 @@ async def resolve_follow_task_preferred_target_relative_path(
             or cached_payload.get("preferred_target_relative_path")
         )
         return cached_path, source if cached_path else f"{source}_root"
+
+    if allow_scan:
+        from .file_diagnosis import infer_follow_task_target_relative_path
+
+        scan_result = await infer_follow_task_target_relative_path(session, task_id=int(task.id))
+        if "preferred_target_relative_path" in scan_result:
+            scanned_path = _normalize_target_relative_path(scan_result.get("preferred_target_relative_path"))
+            return scanned_path, "target_scan" if scanned_path else "target_scan_root"
 
     return None, "resource_dir_root"
 
