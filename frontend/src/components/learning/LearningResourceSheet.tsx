@@ -1,5 +1,5 @@
 import { CheckOutlined, CloseOutlined, DeleteOutlined, EditOutlined, ExportOutlined, ReloadOutlined } from '@ant-design/icons'
-import { Button, Popconfirm, Space, Tooltip } from 'antd'
+import { Popconfirm } from 'antd'
 import type { CSSProperties } from 'react'
 import { formatServerDateTime } from '@/utils/dateTime'
 import { cleanLearningSheetText } from '@/utils/learningResources'
@@ -178,57 +178,49 @@ const LearningResourceSheet = ({
               {isAdmin ? (
                 <div className="learning-sheet-cell learning-sheet-actions" role="cell">
                   {isEditing ? (
-                    <Space className="learning-sheet-actions-content" size={2}>
-                      <Tooltip title="保存">
-                        <Button
-                          type="text"
-                          size="small"
-                          className="learning-sheet-icon-button learning-sheet-icon-button-primary"
-                          icon={<CheckOutlined />}
-                          loading={maintenanceBusyId === resource.id}
-                          aria-label="保存资源"
-                          onClick={() => void onSaveEditing(resource)}
-                        />
-                      </Tooltip>
-                      <Tooltip title="取消">
-                        <Button
-                          type="text"
-                          size="small"
-                          className="learning-sheet-icon-button"
-                          icon={<CloseOutlined />}
-                          aria-label="取消编辑"
-                          onClick={onCancelEditing}
-                        />
-                      </Tooltip>
-                    </Space>
+                    <div className="learning-sheet-actions-content">
+                      <button
+                        type="button"
+                        className="learning-sheet-action-button learning-sheet-action-button-primary"
+                        disabled={maintenanceBusyId === resource.id}
+                        aria-label="保存资源"
+                        onClick={() => void onSaveEditing(resource)}
+                      >
+                        <CheckOutlined />
+                        保存
+                      </button>
+                      <button
+                        type="button"
+                        className="learning-sheet-action-button"
+                        aria-label="取消编辑"
+                        onClick={onCancelEditing}
+                      >
+                        <CloseOutlined />
+                        取消
+                      </button>
+                    </div>
                   ) : (
                     <div className="learning-sheet-actions-content">
-                      <Tooltip title="编辑">
-                        <Button
-                          type="text"
-                          size="small"
-                          className="learning-sheet-action-button"
-                          icon={<EditOutlined />}
-                          aria-label="编辑资源"
-                          onClick={() => onStartEditing(resource)}
-                        >
-                          编辑
-                        </Button>
-                      </Tooltip>
+                      <button
+                        type="button"
+                        className="learning-sheet-action-button"
+                        aria-label="编辑资源"
+                        onClick={() => onStartEditing(resource)}
+                      >
+                        <EditOutlined />
+                        编辑
+                      </button>
                       {resource.status === 'failed' ? (
-                        <Tooltip title="重试转存">
-                          <Button
-                            type="text"
-                            size="small"
-                            className="learning-sheet-action-button"
-                            icon={<ReloadOutlined />}
-                            loading={maintenanceBusyId === resource.id}
-                            aria-label="重试转存"
-                            onClick={() => void onRetry(resource)}
-                          >
-                            重试
-                          </Button>
-                        </Tooltip>
+                        <button
+                          type="button"
+                          className="learning-sheet-action-button"
+                          disabled={maintenanceBusyId === resource.id}
+                          aria-label="重试转存"
+                          onClick={() => void onRetry(resource)}
+                        >
+                          <ReloadOutlined />
+                          重试
+                        </button>
                       ) : null}
                       <Popconfirm
                         title="确认删除这条资源？"
@@ -238,19 +230,15 @@ const LearningResourceSheet = ({
                         okButtonProps={{ danger: true }}
                         onConfirm={() => void onDeleteRow(resource)}
                       >
-                        <Tooltip title="删除">
-                          <Button
-                            type="text"
-                            danger
-                            size="small"
-                            className="learning-sheet-action-button"
-                            icon={<DeleteOutlined />}
-                            loading={maintenanceBusyId === resource.id}
-                            aria-label="删除资源"
-                          >
-                            删除
-                          </Button>
-                        </Tooltip>
+                        <button
+                          type="button"
+                          className="learning-sheet-action-button learning-sheet-action-button-danger"
+                          disabled={maintenanceBusyId === resource.id}
+                          aria-label="删除资源"
+                        >
+                          <DeleteOutlined />
+                          删除
+                        </button>
                       </Popconfirm>
                     </div>
                   )}
