@@ -233,6 +233,102 @@ class FileDiagnosisEpisodeExtensionTests(unittest.TestCase):
         self.assertIsNone(videos[0].season)
         self.assertTrue(videos[0].accepted)
 
+    def test_source_explicit_episode_does_not_require_title_or_parent_context(self) -> None:
+        entry = _FileEntry(
+            side="source",
+            name="S01E186.2026.2160p.WEB-DL.H265.AAC5.1.mp4",
+            entry_id="186",
+            path="/S01E186.2026.2160p.WEB-DL.H265.AAC5.1.mp4",
+            parent_entry_id=None,
+            parent_path=None,
+            parent_name=None,
+            relative_parent_path=None,
+            updated_at=None,
+            size_bytes=None,
+            extension=".mp4",
+            scan_order=1,
+        )
+        stats = _DiagnosisStats()
+        tracked_keys = _build_tracked_keys({"resource_title": "混淆作品"})
+
+        videos = _prepare_quick_entries(
+            [entry],
+            stats=stats,
+            tracked_keys=tracked_keys,
+            tracked_episode=185,
+            tracked_season=4,
+        )
+        _full_parse_entry(videos[0], tracked_keys=tracked_keys, tracked_season=4)
+
+        recommended_entries, recommended_episodes, stop_reason = _build_recommended_entries(
+            videos,
+            anchor_episode=185,
+            inferred_target_relative_path=None,
+        )
+
+        self.assertEqual(videos[0].episode_numbers, [186])
+        self.assertTrue(videos[0].accepted)
+        self.assertEqual(videos[0].parse_reason, "source_explicit_episode")
+        self.assertEqual([entry.name for entry in recommended_entries], [videos[0].name])
+        self.assertEqual(recommended_episodes, [186])
+        self.assertEqual(stop_reason, "contiguous_window_hit")
+
+    def test_target_explicit_episode_without_title_stays_strict(self) -> None:
+        entry = _FileEntry(
+            side="target",
+            name="S01E186.2026.2160p.WEB-DL.H265.AAC5.1.mp4",
+            entry_id="186",
+            path="/S01E186.2026.2160p.WEB-DL.H265.AAC5.1.mp4",
+            parent_entry_id=None,
+            parent_path=None,
+            parent_name=None,
+            relative_parent_path=None,
+            updated_at=None,
+            size_bytes=None,
+            extension=".mp4",
+            scan_order=1,
+        )
+        stats = _DiagnosisStats()
+        videos = _prepare_quick_entries(
+            [entry],
+            stats=stats,
+            tracked_keys=_build_tracked_keys({"resource_title": "混淆作品"}),
+            tracked_episode=185,
+            tracked_season=4,
+        )
+        _full_parse_entry(videos[0], tracked_keys=_build_tracked_keys({"resource_title": "混淆作品"}), tracked_season=4)
+
+        self.assertFalse(videos[0].accepted)
+        self.assertEqual(videos[0].parse_reason, "full_unmatched")
+
+    def test_source_explicit_episode_ignores_untrusted_parent_season(self) -> None:
+        entry = _FileEntry(
+            side="source",
+            name="S01E186.2026.2160p.WEB-DL.H265.AAC5.1.mp4",
+            entry_id="186",
+            path="/第5季/S01E186.2026.2160p.WEB-DL.H265.AAC5.1.mp4",
+            parent_entry_id="season-5",
+            parent_path="/第5季",
+            parent_name="第5季",
+            relative_parent_path="第5季",
+            updated_at=None,
+            size_bytes=None,
+            extension=".mp4",
+            scan_order=1,
+        )
+        stats = _DiagnosisStats()
+        videos = _prepare_quick_entries(
+            [entry],
+            stats=stats,
+            tracked_keys=_build_tracked_keys({"resource_title": "混淆作品"}),
+            tracked_episode=185,
+            tracked_season=4,
+        )
+        _full_parse_entry(videos[0], tracked_keys=_build_tracked_keys({"resource_title": "混淆作品"}), tracked_season=4)
+
+        self.assertTrue(videos[0].accepted)
+        self.assertEqual(videos[0].parse_reason, "source_explicit_episode")
+
 
 if __name__ == "__main__":
     unittest.main()

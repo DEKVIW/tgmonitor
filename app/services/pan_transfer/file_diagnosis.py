@@ -447,7 +447,13 @@ def _full_parse_entry(entry: _FileEntry, *, tracked_keys: set[str], tracked_seas
     if not entry.quality_tags:
         entry.quality_tags = _extract_quality_tags(identity.raw_title)
     season_value = entry.season or tracked_season
-    if tracked_season is not None and season_value is not None and season_value != tracked_season:
+    source_explicit_episode = entry.side == "source" and bool(file_episode_numbers)
+    if (
+        tracked_season is not None
+        and season_value is not None
+        and season_value != tracked_season
+        and not source_explicit_episode
+    ):
         entry.accepted = False
         entry.parse_reason = "season_mismatch"
         return
@@ -455,6 +461,10 @@ def _full_parse_entry(entry: _FileEntry, *, tracked_keys: set[str], tracked_seas
         if match_score >= 0.55 or not tracked_keys:
             entry.accepted = True
             entry.parse_reason = "full_match"
+            return
+        if source_explicit_episode:
+            entry.accepted = True
+            entry.parse_reason = "source_explicit_episode"
             return
         if match_score > 0 and entry.parent_name:
             entry.accepted = True
