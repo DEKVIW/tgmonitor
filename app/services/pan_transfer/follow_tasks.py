@@ -9,6 +9,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
+import aiohttp
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, aliased
 
@@ -70,6 +71,9 @@ PAN_TRANSFER_FOLLOW_INSPECTION_RUNTIME_KEY = "inspection_runtime"
 PAN_TRANSFER_FOLLOW_SOURCE_READINESS_RETRY_KEY = "source_readiness_retry"
 PAN_TRANSFER_FOLLOW_SOURCE_READINESS_RETRY_DELAY_MINUTES = 5
 PAN_TRANSFER_FOLLOW_SOURCE_READINESS_MAX_RETRIES = 3
+PAN_TRANSFER_FOLLOW_DIAGNOSIS_RETRY_KEY = "diagnosis_retry"
+PAN_TRANSFER_FOLLOW_DIAGNOSIS_RETRY_BASE_DELAY_MINUTES = 5
+PAN_TRANSFER_FOLLOW_DIAGNOSIS_MAX_RETRIES = 2
 PAN_TRANSFER_SYNC_CANDIDATE_LOOKBACK_DAYS = 3
 PAN_TRANSFER_SYNC_MIN_CANDIDATE_LOOKBACK_DAYS = 1
 PAN_TRANSFER_SYNC_MAX_CANDIDATE_LOOKBACK_DAYS = 90
@@ -562,6 +566,100 @@ def _schedule_follow_source_readiness_retry(
         "last_stop_reason": _normalize_text(stop_reason, max_length=64) or None,
     }
     _set_task_extra_section(task, PAN_TRANSFER_FOLLOW_SOURCE_READINESS_RETRY_KEY, payload)
+    return payload
+
+
+def _get_follow_diagnosis_retry(task: PanTransferSyncTask) -> dict[str, Any]:
+    raw = _get_task_extra_section(task, PAN_TRANSFER_FOLLOW_DIAGNOSIS_RETRY_KEY)
+    try:
+        attempt_count = max(0, int(raw.get("attempt_count") or 0))
+    except (TypeError, ValueError):
+        attempt_count = 0
+    return {
+        "source_kind": _normalize_text(raw.get("source_kind"), max_length=32).lower() or None,
+        "candidate_link_target_id": _normalize_optional_int(raw.get("candidate_link_target_id")),
+        "candidate_url": _normalize_text(raw.get("candidate_url"), max_length=2048) or None,
+        "source_link_target_id": _normalize_optional_int(raw.get("source_link_target_id")),
+        "source_url": _normalize_text(raw.get("source_url"), max_length=2048) or None,
+        "attempt_count": attempt_count,
+        "next_retry_at": _parse_datetime(raw.get("next_retry_at")),
+        "last_error": _normalize_text(raw.get("last_error"), max_length=1000) or None,
+        "last_error_type": _normalize_text(raw.get("last_error_type"), max_length=128) or None,
+    }
+
+
+def _clear_follow_diagnosis_retry(task: PanTransferSyncTask) -> None:
+    _set_task_extra_section(task, PAN_TRANSFER_FOLLOW_DIAGNOSIS_RETRY_KEY, None)
+
+
+def _diagnosis_retry_matches_task(task: PanTransferSyncTask, retry: dict[str, Any]) -> bool:
+    if retry.get("source_kind") == "current":
+        source_link_target_id = _normalize_optional_int(task.source_link_target_id)
+        retry_link_target_id = _normalize_optional_int(retry.get("source_link_target_id"))
+        if source_link_target_id is not None and retry_link_target_id is not None:
+            return source_link_target_id == retry_link_target_id
+        return bool(
+            _normalize_text(task.source_url)
+            and _normalize_text(task.source_url) == _normalize_text(retry.get("source_url"))
+        )
+
+    candidate_link_target_id = _normalize_optional_int(task.last_candidate_link_target_id)
+    retry_link_target_id = _normalize_optional_int(retry.get("candidate_link_target_id"))
+    if candidate_link_target_id is not None and retry_link_target_id is not None:
+        return candidate_link_target_id == retry_link_target_id
+    return bool(
+        _normalize_text(task.last_candidate_url)
+        and _normalize_text(task.last_candidate_url) == _normalize_text(retry.get("candidate_url"))
+    )
+
+
+def _get_follow_diagnosis_retry_at(task: PanTransferSyncTask) -> datetime | None:
+    retry = _get_follow_diagnosis_retry(task)
+    retry_at = retry.get("next_retry_at")
+    if not isinstance(retry_at, datetime) or not _diagnosis_retry_matches_task(task, retry):
+        return None
+    return retry_at
+
+
+def _is_retryable_follow_diagnosis_error(error: BaseException) -> bool:
+    if isinstance(error, PanTransferProviderError):
+        return bool(error.retryable)
+    return isinstance(
+        error,
+        (asyncio.TimeoutError, TimeoutError, aiohttp.ClientError, ConnectionError, OSError),
+    )
+
+
+def _schedule_follow_diagnosis_retry(
+    task: PanTransferSyncTask,
+    *,
+    source_kind: str,
+    error: BaseException,
+    now: datetime,
+) -> dict[str, Any] | None:
+    retry = _get_follow_diagnosis_retry(task)
+    attempt_count = retry["attempt_count"] if _diagnosis_retry_matches_task(task, retry) else 0
+    next_attempt = int(attempt_count) + 1
+    if next_attempt > PAN_TRANSFER_FOLLOW_DIAGNOSIS_MAX_RETRIES:
+        _clear_follow_diagnosis_retry(task)
+        return None
+
+    delay_minutes = PAN_TRANSFER_FOLLOW_DIAGNOSIS_RETRY_BASE_DELAY_MINUTES * (2 ** (next_attempt - 1))
+    error_message = _normalize_text(error, max_length=1000) or type(error).__name__
+    normalized_source_kind = _normalize_text(source_kind, max_length=32).lower() or "candidate"
+    payload = {
+        "source_kind": normalized_source_kind,
+        "candidate_link_target_id": _normalize_optional_int(task.last_candidate_link_target_id),
+        "candidate_url": _normalize_text(task.last_candidate_url, max_length=2048) or None,
+        "source_link_target_id": _normalize_optional_int(task.source_link_target_id),
+        "source_url": _normalize_text(task.source_url, max_length=2048) or None,
+        "attempt_count": next_attempt,
+        "max_retries": PAN_TRANSFER_FOLLOW_DIAGNOSIS_MAX_RETRIES,
+        "next_retry_at": now + timedelta(minutes=delay_minutes),
+        "last_error": error_message,
+        "last_error_type": type(error).__name__,
+    }
+    _set_task_extra_section(task, PAN_TRANSFER_FOLLOW_DIAGNOSIS_RETRY_KEY, payload)
     return payload
 
 
@@ -1481,9 +1579,16 @@ def _schedule_follow_task_next_check(
         return None
 
     now_utc = now or utcnow()
-    source_readiness_retry_at = _get_follow_source_readiness_retry_at(task)
-    if source_readiness_retry_at is not None and source_readiness_retry_at > now_utc:
-        task.next_check_at = source_readiness_retry_at
+    retry_times = [
+        retry_at
+        for retry_at in (
+            _get_follow_source_readiness_retry_at(task),
+            _get_follow_diagnosis_retry_at(task),
+        )
+        if retry_at is not None and retry_at > now_utc
+    ]
+    if retry_times:
+        task.next_check_at = min(retry_times)
         return task.next_check_at
     inspection_schedule = _get_follow_inspection_schedule(task)
     if inspection_schedule["enabled"]:
@@ -4794,6 +4899,7 @@ async def _handle_follow_task_automation(
 ) -> None:
     automation = _get_task_automation_config(task)
     if not bool(automation.get("enabled")):
+        _clear_follow_diagnosis_retry(task)
         return
 
     mode = _normalize_follow_automation_mode(automation.get("mode"))
@@ -4805,6 +4911,7 @@ async def _handle_follow_task_automation(
     now = utcnow()
     source_kind = _resolve_follow_task_automation_source_kind(task)
     if source_kind is None:
+        _clear_follow_diagnosis_retry(task)
         _set_follow_task_automation_state(
             task,
             enabled=True,
@@ -4837,12 +4944,59 @@ async def _handle_follow_task_automation(
     from .follow_sync import create_pan_transfer_follow_sync_batch
 
     _commit_before_external_call(session)
-    diagnosis = await diagnose_pan_transfer_follow_task_files(
-        session,
-        task_id=int(task.id),
-        source_kind=source_kind,
-        operator=worker_name,
-    )
+    try:
+        diagnosis = await diagnose_pan_transfer_follow_task_files(
+            session,
+            task_id=int(task.id),
+            source_kind=source_kind,
+            operator=worker_name,
+        )
+    except Exception as exc:
+        if not _is_retryable_follow_diagnosis_error(exc):
+            raise
+        retry_payload = _schedule_follow_diagnosis_retry(
+            task,
+            source_kind=source_kind,
+            error=exc,
+            now=now,
+        )
+        if retry_payload is None:
+            raise
+        _set_follow_task_automation_state(
+            task,
+            enabled=True,
+            cooldown_until=None,
+            last_auto_check_at=now,
+            last_auto_source_kind=source_kind,
+            last_auto_sync_mode=sync_mode,
+            last_auto_result="diagnosis_retry",
+            last_auto_batch_id=None,
+        )
+        task.task_state = (
+            PAN_TRANSFER_SYNC_STATE_CANDIDATE_FOUND
+            if source_kind == "candidate"
+            else PAN_TRANSFER_SYNC_STATE_IDLE
+        )
+        task.last_error_message = retry_payload["last_error"]
+        session.add(task)
+        session.flush()
+        _append_follow_task_log(
+            session,
+            task=task,
+            stage="diagnosis",
+            level="warning",
+            message="Follow task diagnosis encountered a transient network error; retry scheduled",
+            payload={
+                "source_kind": source_kind,
+                "error_type": retry_payload["last_error_type"],
+                "error": retry_payload["last_error"],
+                "retry_attempt": retry_payload["attempt_count"],
+                "max_retries": retry_payload["max_retries"],
+                "next_retry_at": retry_payload["next_retry_at"],
+            },
+        )
+        return
+    _clear_follow_diagnosis_retry(task)
     summary = dict(diagnosis.get("summary") or {})
     stop_reason = _normalize_text(summary.get("stop_reason"), max_length=64).lower()
     if source_kind == "candidate" and stop_reason == "no_source_video":
@@ -5033,6 +5187,10 @@ async def _handle_follow_task_automation(
             "source_kind": source_kind,
             "sync_mode": sync_mode,
             "selection_groups": selection_groups,
+            "preferred_target_relative_path": _normalize_text(
+                summary.get("inferred_target_relative_path"), max_length=255
+            ) or None,
+            "target_relative_path_source": "diagnosis",
             "reuse_existing_share_if_valid": bool(automation.get("reuse_existing_share_if_valid", True)),
             "update_publish_record": bool(automation.get("update_publish_record", True)),
             "trigger_mode": "automation",
@@ -5629,6 +5787,8 @@ def process_next_pan_transfer_follow_task(session: Session, *, worker_name: str)
     forced_check = str(task.task_state or "") == PAN_TRANSFER_SYNC_STATE_QUEUED
     source_readiness_retry_at = _get_follow_source_readiness_retry_at(task)
     source_readiness_retry_due = source_readiness_retry_at is not None and source_readiness_retry_at <= now
+    diagnosis_retry_at = _get_follow_diagnosis_retry_at(task)
+    diagnosis_retry_due = diagnosis_retry_at is not None and diagnosis_retry_at <= now
 
     task.task_state = PAN_TRANSFER_SYNC_STATE_CHECKING
     task.locked_by = worker_name[:128]
@@ -5648,7 +5808,7 @@ def process_next_pan_transfer_follow_task(session: Session, *, worker_name: str)
         _record_follow_inspection_attempt(
             task,
             now=task.last_checked_at,
-            consume_trigger=not forced_check and not source_readiness_retry_due,
+            consume_trigger=not forced_check and not source_readiness_retry_due and not diagnosis_retry_due,
         )
         _schedule_follow_task_next_check(task, now=task.last_checked_at)
         task.last_error_message = None
@@ -5677,7 +5837,7 @@ def process_next_pan_transfer_follow_task(session: Session, *, worker_name: str)
         _record_follow_inspection_attempt(
             task,
             now=task.last_checked_at,
-            consume_trigger=not forced_check and not source_readiness_retry_due,
+            consume_trigger=not forced_check and not source_readiness_retry_due and not diagnosis_retry_due,
         )
         _schedule_follow_task_next_check(task, now=task.last_checked_at)
         session.add(task)
