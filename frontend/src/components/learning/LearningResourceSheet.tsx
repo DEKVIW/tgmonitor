@@ -202,7 +202,7 @@ const LearningResourceSheet = ({
                       </Tooltip>
                     </Space>
                   ) : (
-                    <Space className="learning-sheet-actions-content" size={2}>
+                    <div className="learning-sheet-actions-content">
                       <Tooltip title="编辑">
                         <Button
                           type="text"
@@ -252,7 +252,7 @@ const LearningResourceSheet = ({
                           </Button>
                         </Tooltip>
                       </Popconfirm>
-                    </Space>
+                    </div>
                   )}
                 </div>
               ) : null}

@@ -244,19 +244,26 @@
 }
 
 .learning-sheet-actions-content {
-  display: inline-flex;
+  display: flex;
   flex: 0 0 auto;
   align-items: center;
+  gap: 2px;
+  min-width: max-content;
   white-space: nowrap;
 }
 
 .learning-sheet-action-button.ant-btn {
+  display: inline-flex;
   flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
   height: 28px;
   padding: 0 5px;
   border-radius: 3px;
   color: #627688;
   font-size: 12px;
+  opacity: 1;
+  visibility: visible;
 }
 
 .learning-sheet-action-button.ant-btn:hover {
