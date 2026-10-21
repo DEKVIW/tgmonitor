@@ -4,6 +4,7 @@ import { ArrowLeftOutlined, DeleteOutlined, EditOutlined, ExclamationCircleOutli
 import { useAuthStore } from '@/store/authStore'
 import {
   deleteAllImportedLearningResources,
+  deleteLearningAutomationTask,
   deleteLearningResource,
   getLearningAdminItems,
   getLearningAdminOverview,
@@ -272,10 +273,10 @@ const LearningResourcesPage = () => {
     try {
       if (task.is_enabled) {
         await pauseLearningAutomationTask(task.id)
-        message.success('自动任务已暂停')
+        message.success('自动监听已暂停，已入队任务继续处理')
       } else {
         await resumeLearningAutomationTask(task.id)
-        message.success('自动任务已恢复')
+        message.success('自动监听已恢复')
       }
       await refreshFirstPage()
     } catch (taskError: unknown) {
@@ -289,10 +290,23 @@ const LearningResourcesPage = () => {
     setTaskBusyId(task.id)
     try {
       const result = await processLearningAutomationTaskNow(task.id)
-      message.success(`已检查 ${result.selected_messages} 条消息，新增 ${result.jobs || 0} 个转存任务`)
+      message.success(`已补处理 ${result.selected_messages} 条遗漏消息，新增 ${result.jobs || 0} 个转存任务`)
       await refreshFirstPage()
     } catch (taskError: unknown) {
-      message.error(getRequestErrorMessage(taskError, '立即处理失败'))
+      message.error(getRequestErrorMessage(taskError, '补处理遗漏消息失败'))
+    } finally {
+      setTaskBusyId(null)
+    }
+  }
+
+  const handleDeleteTask = async (task: LearningAutomationTask) => {
+    setTaskBusyId(task.id)
+    try {
+      await deleteLearningAutomationTask(task.id)
+      message.success(`自动任务“${task.name}”已删除`)
+      await refreshFirstPage()
+    } catch (taskError: unknown) {
+      message.error(getRequestErrorMessage(taskError, '删除自动任务失败'))
     } finally {
       setTaskBusyId(null)
     }
@@ -531,12 +545,21 @@ const LearningResourcesPage = () => {
                   </div>
                   <Space className="learning-task-actions" wrap>
                     <Tooltip title="编辑任务"><Button type="text" icon={<EditOutlined />} aria-label="编辑任务" onClick={() => openEditTask(task)} /></Tooltip>
-                    <Tooltip title={task.is_enabled ? '暂停自动流程' : '启动自动流程'}>
-                      <Button type="text" icon={task.is_enabled ? <PauseCircleOutlined /> : <PlayCircleOutlined />} loading={taskBusyId === task.id} aria-label={task.is_enabled ? '暂停自动流程' : '启动自动流程'} onClick={() => void handleTaskToggle(task)} />
+                    <Tooltip title={task.is_enabled ? '暂停自动监听' : '启动自动监听'}>
+                      <Button type="text" icon={task.is_enabled ? <PauseCircleOutlined /> : <PlayCircleOutlined />} loading={taskBusyId === task.id} aria-label={task.is_enabled ? '暂停自动监听' : '启动自动监听'} onClick={() => void handleTaskToggle(task)} />
                     </Tooltip>
-                    <Tooltip title="立即处理最近消息"><Button type="text" icon={<SyncOutlined />} loading={taskBusyId === task.id} aria-label="立即处理最近消息" onClick={() => void handleProcessTask(task)} disabled={!task.is_enabled} /></Tooltip>
+                    <Tooltip title="补处理遗漏消息"><Button type="text" icon={<SyncOutlined />} loading={taskBusyId === task.id} aria-label="补处理遗漏消息" onClick={() => void handleProcessTask(task)} disabled={!task.is_enabled} /></Tooltip>
                     <Tooltip title="重试失败任务"><Button type="text" icon={<ReloadOutlined />} loading={taskBusyId === task.id} aria-label="重试失败任务" onClick={() => void handleRetryTask(task)} disabled={task.failed_count === 0} /></Tooltip>
                     <Tooltip title="查看处理日志"><Button type="text" icon={<FileSearchOutlined />} aria-label="查看处理日志" onClick={() => void handleViewTaskLogs(task)} /></Tooltip>
+                    <Popconfirm
+                      title="删除这个自动任务？"
+                      description="仅删除任务配置和任务日志，不删除已发布资料或夸克网盘文件。存在未完成转存项时需要先处理完成。"
+                      okText="删除任务"
+                      cancelText="取消"
+                      onConfirm={() => void handleDeleteTask(task)}
+                    >
+                      <Tooltip title="删除自动任务"><Button type="text" danger icon={<DeleteOutlined />} loading={taskBusyId === task.id} aria-label="删除自动任务" /></Tooltip>
+                    </Popconfirm>
                   </Space>
                 </article>
               ))}
@@ -775,7 +798,7 @@ const LearningResourcesPage = () => {
                 <Switch checked={taskDraft.is_enabled} onChange={(checked) => setTaskDraft((draft) => ({ ...draft, is_enabled: checked }))} />
                 <Text>保存后立即启动自动监听与转存</Text>
               </Space>
-              <Text type="secondary">默认只处理任务启动后的新消息；历史消息可用“立即处理”补入。</Text>
+              <Text type="secondary">默认只处理任务启动后的新消息；监听中断后可用“补处理遗漏消息”补入。</Text>
             </div>
           </div>
         </Modal>

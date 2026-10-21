@@ -18,6 +18,7 @@ from app.schemas.learning_resources import (
     LearningAutomationLogListResponse,
     LearningAutomationRetryResponse,
     LearningAutomationTaskCreateRequest,
+    LearningAutomationTaskDeleteResponse,
     LearningAutomationTaskListResponse,
     LearningAutomationTaskProcessRequest,
     LearningAutomationTaskProcessResponse,
@@ -49,6 +50,7 @@ from app.services.learning_resources import (
 )
 from app.services.learning_automation import (
     get_learning_automation_task,
+    delete_learning_automation_task,
     list_learning_automation_logs,
     list_learning_automation_tasks,
     process_learning_automation_task_now,
@@ -163,6 +165,29 @@ def update_learning_automation_task(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
+@router.delete(
+    "/api/admin/learning-resources/automation-tasks/{task_id}",
+    response_model=LearningAutomationTaskDeleteResponse,
+    summary="删除学习资料自动转存任务",
+)
+def delete_learning_automation_task_api(
+    task_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict[str, Any] = Depends(get_admin_user),
+) -> LearningAutomationTaskDeleteResponse:
+    del current_user
+    try:
+        result = delete_learning_automation_task(db, task_id=int(task_id))
+        db.commit()
+        return LearningAutomationTaskDeleteResponse(**result)
+    except LookupError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+
 @router.post(
     "/api/admin/learning-resources/automation-tasks/{task_id}/pause",
     response_model=LearningAutomationTaskResponse,
@@ -209,7 +234,7 @@ def resume_learning_automation_task(
 @router.post(
     "/api/admin/learning-resources/automation-tasks/{task_id}/process-now",
     response_model=LearningAutomationTaskProcessResponse,
-    summary="立即处理学习资料自动转存任务",
+    summary="补处理学习资料遗漏消息",
 )
 def process_learning_automation_task(
     task_id: int,

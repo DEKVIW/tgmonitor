@@ -38,13 +38,18 @@ def _utcnow() -> datetime:
 
 
 def is_learning_target_enabled(session: Session, extra_json: dict[str, Any]) -> bool:
-    """Check the current task and target before a worker starts a network request."""
+    """Check the target before a worker starts a network request.
+
+    Pausing a task stops new messages from entering the queue. Jobs that were
+    already queued (including a manual catch-up run) are allowed to finish.
+    Target removal, account disablement, or task deletion still stops them.
+    """
     task_id = extra_json.get("learning_task_id")
     target_id = extra_json.get("learning_target_id")
     if task_id and target_id:
         task = session.get(LearningResourceAutomationTask, int(task_id))
         target = session.get(LearningResourceAutomationTaskTarget, int(target_id))
-        if task is None or target is None or not bool(task.is_enabled) or str(task.transfer_policy or "automatic") != "automatic" or not bool(target.is_enabled):
+        if task is None or str(getattr(task, "status", "") or "") == "deleted" or target is None or str(task.transfer_policy or "automatic") != "automatic" or not bool(target.is_enabled):
             return False
         account = session.get(PanTransferAccount, int(target.target_account_id))
         return bool(
@@ -69,6 +74,8 @@ def refresh_learning_automation_task_health(session: Session, task_id: int) -> L
     task = session.get(LearningResourceAutomationTask, int(task_id))
     if task is None:
         return None
+    if str(task.status or "") == "deleted":
+        return task
     pending_count = int(
         session.query(func.count(LearningResourceTransferJob.id))
         .filter(
@@ -217,7 +224,9 @@ def _serialize_learning_task(session: Session, task: LearningResourceAutomationT
 
 def list_learning_automation_tasks(session: Session) -> list[dict[str, Any]]:
     ensure_runtime_storage_tables()
-    tasks = session.query(LearningResourceAutomationTask).order_by(
+    tasks = session.query(LearningResourceAutomationTask).filter(
+        LearningResourceAutomationTask.status != "deleted",
+    ).order_by(
         LearningResourceAutomationTask.updated_at.desc(),
         LearningResourceAutomationTask.id.desc(),
     ).all()
@@ -230,7 +239,7 @@ def list_learning_automation_tasks(session: Session) -> list[dict[str, Any]]:
 def get_learning_automation_task(session: Session, task_id: int) -> dict[str, Any] | None:
     ensure_runtime_storage_tables()
     task = session.get(LearningResourceAutomationTask, int(task_id))
-    if task is None:
+    if task is None or str(task.status or "") == "deleted":
         return None
     refresh_learning_automation_task_health(session, int(task.id))
     session.flush()
@@ -371,7 +380,7 @@ def save_learning_automation_task(
 ) -> dict[str, Any]:
     ensure_runtime_storage_tables()
     task = session.get(LearningResourceAutomationTask, int(task_id)) if task_id else None
-    if task_id and task is None:
+    if task_id and (task is None or str(task.status or "") == "deleted"):
         raise LookupError("学习资料自动任务不存在")
     channel_specs = _validate_task_channels(payload.get("channels") or [])
     target_specs = _validate_task_targets(payload.get("targets") or [])
@@ -397,6 +406,11 @@ def save_learning_automation_task(
     task.updated_by = operator
     task.last_error_message = None
     session.add(task)
+    if task.legacy_config_id:
+        legacy_config = session.get(LearningChannelConfig, int(task.legacy_config_id))
+        if legacy_config is not None:
+            legacy_config.is_enabled = is_enabled
+            session.add(legacy_config)
     session.flush()
 
     existing_channels = {
@@ -451,8 +465,6 @@ def save_learning_automation_task(
         if refreshed is None or refreshed.status == "invalid":
             raise ValueError("任务开启前必须至少有一个启用频道和一个可用转存目标")
         _resume_task_jobs(session, int(task.id))
-    else:
-        _pause_task_jobs(session, int(task.id))
     refresh_learning_automation_task_health(session, int(task.id))
     from app.services.learning_resources import _record_learning_process_log
 
@@ -474,7 +486,7 @@ def save_learning_automation_task(
 
 def set_learning_automation_task_enabled(session: Session, *, task_id: int, enabled: bool) -> dict[str, Any]:
     task = session.get(LearningResourceAutomationTask, int(task_id))
-    if task is None:
+    if task is None or str(task.status or "") == "deleted":
         raise LookupError("学习资料自动任务不存在")
     if enabled:
         task.is_enabled = True
@@ -486,7 +498,11 @@ def set_learning_automation_task_enabled(session: Session, *, task_id: int, enab
         _resume_task_jobs(session, int(task.id))
     else:
         task.is_enabled = False
-        _pause_task_jobs(session, int(task.id))
+    if task.legacy_config_id:
+        legacy_config = session.get(LearningChannelConfig, int(task.legacy_config_id))
+        if legacy_config is not None:
+            legacy_config.is_enabled = bool(enabled)
+            session.add(legacy_config)
     session.add(task)
     refresh_learning_automation_task_health(session, int(task.id))
     from app.services.learning_resources import _record_learning_process_log
@@ -502,6 +518,83 @@ def set_learning_automation_task_enabled(session: Session, *, task_id: int, enab
     return _serialize_learning_task(session, task)
 
 
+def delete_learning_automation_task(session: Session, *, task_id: int) -> dict[str, Any]:
+    task = session.get(LearningResourceAutomationTask, int(task_id))
+    if task is None or str(task.status or "") == "deleted":
+        raise LookupError("学习资料自动任务不存在")
+    unfinished_count = int(
+        session.query(func.count(LearningResourceTransferJob.id))
+        .filter(
+            LearningResourceTransferJob.task_id == int(task.id),
+            LearningResourceTransferJob.status.in_(sorted(ACTIVE_LEARNING_JOB_STATUSES | {"paused"})),
+        )
+        .scalar()
+        or 0
+    )
+    if unfinished_count:
+        raise ValueError(f"任务还有 {unfinished_count} 个未完成转存项，请先等待处理完成或清理补处理批次")
+
+    session.query(LearningResourceProcessLog).filter(
+        LearningResourceProcessLog.task_id == int(task.id),
+    ).delete(synchronize_session=False)
+    session.query(LearningResourceAutomationTaskChannel).filter(
+        LearningResourceAutomationTaskChannel.task_id == int(task.id),
+    ).delete(synchronize_session=False)
+    session.query(LearningResourceAutomationTaskTarget).filter(
+        LearningResourceAutomationTaskTarget.task_id == int(task.id),
+    ).delete(synchronize_session=False)
+
+    if task.legacy_config_id:
+        # Keep a tombstone so the compatibility migration cannot recreate the task.
+        legacy_config = session.get(LearningChannelConfig, int(task.legacy_config_id))
+        if legacy_config is not None:
+            legacy_config.is_enabled = False
+            session.add(legacy_config)
+        task.is_enabled = False
+        task.status = "deleted"
+        task.pending_count = 0
+        task.failed_count = 0
+        task.last_error_message = None
+        session.add(task)
+    else:
+        session.delete(task)
+    session.flush()
+    return {
+        "task_id": int(task_id),
+        "deleted": True,
+        "preserved_resources": True,
+        "preserved_remote_files": True,
+    }
+
+
+def _ensure_task_channel_checkpoint(session: Session, row: LearningResourceAutomationTaskChannel) -> int | None:
+    if row.last_processed_message_id is not None:
+        return int(row.last_processed_message_id)
+
+    channel = session.get(Channel, int(row.channel_id))
+    if channel is None:
+        return None
+    channel_key = _channel_key(channel)
+    legacy_config = session.query(LearningChannelConfig).filter(
+        LearningChannelConfig.channel_key == channel_key,
+    ).first()
+    legacy_checkpoint = int(legacy_config.last_processed_message_id or 0) if legacy_config else 0
+    if legacy_checkpoint > 0:
+        row.last_processed_message_id = legacy_checkpoint
+    else:
+        channel_keys = {channel_key, f"@{channel_key}"}
+        latest_message_id = session.query(func.max(Message.id)).filter(
+            or_(
+                Message.monitor_channel_config_id == int(row.channel_id),
+                Message.monitor_channel_key.in_(sorted(channel_keys)),
+            )
+        ).scalar()
+        row.last_processed_message_id = int(latest_message_id) if latest_message_id else None
+    session.add(row)
+    session.flush()
+    return int(row.last_processed_message_id) if row.last_processed_message_id else None
+
+
 def sync_legacy_learning_channel_config(
     session: Session,
     *,
@@ -513,7 +606,7 @@ def sync_legacy_learning_channel_config(
     task = session.query(LearningResourceAutomationTask).filter(
         LearningResourceAutomationTask.legacy_config_id == int(config.id),
     ).first()
-    if task is None:
+    if task is None or str(task.status or "") == "deleted":
         return
     task.name = str(config.channel_title or config.channel_key or task.name)[:255]
     task.is_enabled = bool(config.is_enabled)
@@ -575,10 +668,10 @@ def process_learning_automation_task_now(
     )
 
     task = session.get(LearningResourceAutomationTask, int(task_id))
-    if task is None:
+    if task is None or str(task.status or "") == "deleted":
         raise LookupError("学习资料自动任务不存在")
     if not bool(task.is_enabled):
-        raise ValueError("任务已暂停，请先恢复后再处理")
+        raise ValueError("任务已暂停，请先恢复自动监听后再补处理遗漏消息")
     refresh_learning_automation_task_health(session, int(task.id))
     if task.status == "invalid":
         raise ValueError("任务配置不完整，请先修正频道或转存目标")
@@ -587,31 +680,50 @@ def process_learning_automation_task_now(
         LearningResourceAutomationTaskChannel.is_enabled.is_(True),
     ).all()
     channel_ids = {int(row.channel_id) for row in channel_rows}
-    channel_keys = {
-        _channel_key(channel)
-        for channel in session.query(Channel).filter(Channel.id.in_(sorted(channel_ids))).all()
-    } if channel_ids else set()
     if not channel_ids:
         raise ValueError("任务没有启用的监听频道")
-    query = session.query(Message).filter(
-        or_(
-            Message.monitor_channel_config_id.in_(sorted(channel_ids)),
-            Message.monitor_channel_key.in_(sorted(channel_keys)),
-        )
-    )
     normalized_ids = sorted({int(value) for value in (message_ids or []) if int(value) > 0})
-    if normalized_ids:
-        query = query.filter(Message.id.in_(normalized_ids))
-    if from_message_id is not None:
-        query = query.filter(Message.id >= int(from_message_id))
-    if to_message_id is not None:
-        query = query.filter(Message.id <= int(to_message_id))
-    if not normalized_ids and from_message_id is None and to_message_id is None:
-        query = query.order_by(Message.id.desc()).limit(200)
+    channel_keys: set[str] = set()
+    for channel_row in channel_rows:
+        channel = session.get(Channel, int(channel_row.channel_id))
+        channel_key = _channel_key(channel) if channel is not None else ""
+        if channel_key:
+            channel_keys.update({channel_key, f"@{channel_key}"})
+    channel_filter = or_(
+        Message.monitor_channel_config_id.in_(sorted(channel_ids)),
+        Message.monitor_channel_key.in_(sorted(channel_keys)) if channel_keys else False,
+    )
+    selected_ids: list[int]
+    if normalized_ids or from_message_id is not None or to_message_id is not None:
+        query = session.query(Message).filter(
+            channel_filter,
+            Message.id.in_(normalized_ids) if normalized_ids else True,
+        )
+        if from_message_id is not None:
+            query = query.filter(Message.id >= int(from_message_id))
+        if to_message_id is not None:
+            query = query.filter(Message.id <= int(to_message_id))
+        selected_ids = [int(message.id) for message in query.order_by(Message.id.asc()).limit(5000).all()]
     else:
-        query = query.order_by(Message.id.asc()).limit(5000)
-    selected = query.all()
-    selected_ids = [int(message.id) for message in selected]
+        selected_id_set: set[int] = set()
+        for channel_row in channel_rows:
+            checkpoint = _ensure_task_channel_checkpoint(session, channel_row)
+            channel = session.get(Channel, int(channel_row.channel_id))
+            channel_key = _channel_key(channel) if channel is not None else ""
+            row_channel_keys = {channel_key, f"@{channel_key}"} if channel_key else set()
+            query = session.query(Message.id).filter(
+                or_(
+                    Message.monitor_channel_config_id == int(channel_row.channel_id),
+                    Message.monitor_channel_key.in_(sorted(row_channel_keys)) if row_channel_keys else False,
+                )
+            )
+            if checkpoint is not None:
+                query = query.filter(Message.id > int(checkpoint))
+            selected_id_set.update(
+                int(message_id)
+                for (message_id,) in query.order_by(Message.id.asc()).limit(5000).all()
+            )
+        selected_ids = sorted(selected_id_set)[:5000]
     if dry_run:
         return {"task_id": int(task.id), "selected_messages": len(selected_ids), "message_ids": selected_ids, "dry_run": True}
     result = enqueue_learning_resources_for_message_ids(
@@ -626,9 +738,9 @@ def process_learning_automation_task_now(
     _record_learning_process_log(
         session,
         stage="replay",
-        message=f"已手动处理 {len(selected_ids)} 条消息，新增 {int(result.get('jobs') or 0)} 个转存任务",
+        message=f"已补处理 {len(selected_ids)} 条遗漏消息，新增 {int(result.get('jobs') or 0)} 个转存任务",
         task_id=int(task.id),
-        details={"message_ids": selected_ids[:500], "result": result},
+        details={"message_ids": selected_ids[:500], "result": result, "mode": "checkpoint_catch_up"},
     )
     session.flush()
     return {"task_id": int(task.id), "selected_messages": len(selected_ids), "dry_run": False, **result}
@@ -638,7 +750,7 @@ def retry_failed_learning_automation_jobs(session: Session, *, task_id: int) -> 
     from app.services.learning_resources import _record_learning_process_log
 
     task = session.get(LearningResourceAutomationTask, int(task_id))
-    if task is None:
+    if task is None or str(task.status or "") == "deleted":
         raise LookupError("学习资料自动任务不存在")
     if not bool(task.is_enabled):
         raise ValueError("任务已暂停，请先恢复后再重试")
@@ -716,6 +828,7 @@ __all__ = [
     "ACTIVE_LEARNING_JOB_STATUSES",
     "FAILED_LEARNING_JOB_STATUSES",
     "get_learning_automation_task",
+    "delete_learning_automation_task",
     "is_learning_target_enabled",
     "list_learning_automation_logs",
     "list_learning_automation_tasks",

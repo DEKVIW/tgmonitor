@@ -77,6 +77,10 @@ export const updateLearningAutomationTask = async (taskId: number, payload: Lear
   return response.data
 }
 
+export const deleteLearningAutomationTask = async (taskId: number): Promise<void> => {
+  await apiClient.delete(`/admin/learning-resources/automation-tasks/${taskId}`)
+}
+
 export const pauseLearningAutomationTask = async (taskId: number): Promise<LearningAutomationTask> => {
   const response = await apiClient.post<LearningAutomationTask>(`/admin/learning-resources/automation-tasks/${taskId}/pause`)
   return response.data

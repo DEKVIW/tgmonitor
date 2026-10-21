@@ -228,6 +228,13 @@ class LearningAutomationTaskResponse(BaseModel):
     targets: list[LearningAutomationTaskTargetResponse] = Field(default_factory=list)
 
 
+class LearningAutomationTaskDeleteResponse(BaseModel):
+    task_id: int
+    deleted: bool = True
+    preserved_resources: bool = True
+    preserved_remote_files: bool = True
+
+
 class LearningAutomationTaskListResponse(BaseModel):
     items: list[LearningAutomationTaskResponse] = Field(default_factory=list)
     total: int = 0

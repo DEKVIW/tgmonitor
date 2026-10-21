@@ -819,6 +819,14 @@ def _get_learning_automation_contexts(
     config = get_learning_channel_config(session, normalized)
     if config is None or not bool(config.is_enabled):
         return []
+    legacy_task = session.query(LearningResourceAutomationTask).filter(
+        LearningResourceAutomationTask.legacy_config_id == int(config.id),
+    ).first()
+    if legacy_task is not None and (
+        str(legacy_task.status or "") == "deleted"
+        or not bool(legacy_task.is_enabled)
+    ):
+        return []
     account = _resolve_learning_account(session, config=config)
     root = normalize_relative_path(str(config.save_root or (account.default_save_root if account else "") or ""))
     if account is None or not root:
