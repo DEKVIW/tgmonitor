@@ -48,7 +48,6 @@ import { cleanLearningSheetText } from '@/utils/learningResources'
 import './LearningResourcesPage.css'
 
 const { Text } = Typography
-const { RangePicker } = DatePicker
 
 type TaskDraftTarget = LearningAutomationTaskTarget
 
@@ -170,7 +169,7 @@ const LearningResourcesPage = () => {
   const [supplementTask, setSupplementTask] = useState<LearningAutomationTask | null>(null)
   const [supplementOpen, setSupplementOpen] = useState(false)
   const [supplementMode, setSupplementMode] = useState<LearningSupplementMode>('checkpoint')
-  const [supplementRange, setSupplementRange] = useState<[Dayjs, Dayjs] | null>(null)
+  const [supplementRange, setSupplementRange] = useState<[Dayjs | null, Dayjs | null] | null>(null)
   const [supplementLimit, setSupplementLimit] = useState(10)
   const [supplementPreview, setSupplementPreview] = useState<LearningAutomationSupplementPreview | null>(null)
   const [supplementRun, setSupplementRun] = useState<LearningAutomationSupplementRun | null>(null)
@@ -798,19 +797,36 @@ const LearningResourcesPage = () => {
                     : '按原始 Telegram 消息数量计算，不按拆分后的资源数量计算。'}
               </Text>
               {supplementMode === 'date_range' ? (
-                <RangePicker
-                  picker="date"
-                  format="YYYY-MM-DD"
-                  allowClear
-                  inputReadOnly
-                  placeholder={['开始日期', '结束日期']}
-                  style={{ width: '100%' }}
-                  value={supplementRange}
-                  onChange={(value) => {
-                    setSupplementRange(value && value[0] && value[1] ? [value[0], value[1]] : null)
-                    setSupplementPreview(null)
-                  }}
-                />
+                <div className="learning-supplement-date-range">
+                  <DatePicker
+                    picker="date"
+                    format="YYYY-MM-DD"
+                    allowClear
+                    inputReadOnly
+                    placeholder="开始日期"
+                    value={supplementRange?.[0] || null}
+                    onChange={(value) => {
+                      const end = supplementRange?.[1]
+                      setSupplementRange(value && (!end || !end.isBefore(value, 'day')) ? [value, end || value] : value ? [value, null] : null)
+                      setSupplementPreview(null)
+                    }}
+                  />
+                  <span className="learning-supplement-date-separator">至</span>
+                  <DatePicker
+                    picker="date"
+                    format="YYYY-MM-DD"
+                    allowClear
+                    inputReadOnly
+                    placeholder="结束日期"
+                    disabledDate={(current) => Boolean(supplementRange?.[0] && current.isBefore(supplementRange[0], 'day'))}
+                    value={supplementRange?.[1] || null}
+                    onChange={(value) => {
+                      const start = supplementRange?.[0]
+                      setSupplementRange(value && start ? [start, value] : value ? [value, value] : start ? [start, null] : null)
+                      setSupplementPreview(null)
+                    }}
+                  />
+                </div>
               ) : null}
               {supplementMode === 'recent' ? (
                 <InputNumber min={1} max={5000} value={supplementLimit} onChange={(value) => { setSupplementLimit(Number(value) || 10); setSupplementPreview(null) }} addonAfter="条有效资源消息" style={{ width: 240 }} />

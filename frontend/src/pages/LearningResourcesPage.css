@@ -454,6 +454,23 @@
   background: #fbfcfd;
 }
 
+.learning-supplement-date-range {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: min(100%, 440px);
+}
+
+.learning-supplement-date-range .ant-picker {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.learning-supplement-date-separator {
+  flex: 0 0 auto;
+  color: #7b8b99;
+}
+
 .learning-supplement-preview {
   display: grid;
   gap: 10px;
