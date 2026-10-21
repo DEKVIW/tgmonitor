@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.models.models import (
     AiCallEvent,
     PanTransferExecutionLog,
+    PanTransferFollowTriggerEvent,
     PanTransferReplacementLog,
     PanTransferSyncTaskLog,
     SystemSettings,
@@ -26,6 +27,7 @@ PAN_TRANSFER_MAINTENANCE_EXTRA_KEY = "pan_transfer_maintenance"
 DEFAULT_CLEANUP_INTERVAL_HOURS = 24
 DEFAULT_EXECUTION_LOG_RETENTION_DAYS = 90
 DEFAULT_FOLLOW_LOG_RETENTION_DAYS = 90
+DEFAULT_FOLLOW_TRIGGER_EVENT_RETENTION_DAYS = 30
 DEFAULT_AI_CALL_EVENT_RETENTION_DAYS = 90
 DEFAULT_REPLACEMENT_LOG_RETENTION_DAYS = 365
 
@@ -105,6 +107,12 @@ def _normalize_maintenance_config(raw_value: Any) -> dict[str, Any]:
             minimum=7,
             maximum=3650,
         ),
+        "follow_trigger_event_retention_days": _coerce_int(
+            payload.get("follow_trigger_event_retention_days"),
+            DEFAULT_FOLLOW_TRIGGER_EVENT_RETENTION_DAYS,
+            minimum=7,
+            maximum=3650,
+        ),
         "ai_call_event_retention_days": _coerce_int(
             payload.get("ai_call_event_retention_days"),
             DEFAULT_AI_CALL_EVENT_RETENTION_DAYS,
@@ -177,16 +185,23 @@ def run_pan_transfer_log_retention(
 
     execution_log_cutoff = now - timedelta(days=int(config["execution_log_retention_days"]))
     follow_log_cutoff = now - timedelta(days=int(config["follow_log_retention_days"]))
+    follow_trigger_event_cutoff = now - timedelta(days=int(config["follow_trigger_event_retention_days"]))
     ai_event_cutoff = now - timedelta(days=int(config["ai_call_event_retention_days"]))
     replacement_log_cutoff = now - timedelta(days=int(config["replacement_log_retention_days"]))
 
     summary = {
         "deleted_execution_logs": _delete_logs_older_than(session, PanTransferExecutionLog, execution_log_cutoff),
         "deleted_follow_task_logs": _delete_logs_older_than(session, PanTransferSyncTaskLog, follow_log_cutoff),
+        "deleted_follow_trigger_events": _delete_logs_older_than(
+            session,
+            PanTransferFollowTriggerEvent,
+            follow_trigger_event_cutoff,
+        ),
         "deleted_ai_call_events": _delete_logs_older_than(session, AiCallEvent, ai_event_cutoff),
         "deleted_replacement_logs": _delete_logs_older_than(session, PanTransferReplacementLog, replacement_log_cutoff),
         "execution_log_retention_days": int(config["execution_log_retention_days"]),
         "follow_log_retention_days": int(config["follow_log_retention_days"]),
+        "follow_trigger_event_retention_days": int(config["follow_trigger_event_retention_days"]),
         "ai_call_event_retention_days": int(config["ai_call_event_retention_days"]),
         "replacement_log_retention_days": int(config["replacement_log_retention_days"]),
         "cleaned_at": _to_utc_iso(now),

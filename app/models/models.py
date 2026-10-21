@@ -610,6 +610,31 @@ class PanTransferSyncTaskLog(Base):
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
 
 
+class PanTransferFollowTriggerEvent(Base):
+    __tablename__ = "pan_transfer_follow_trigger_events"
+    __table_args__ = (
+        UniqueConstraint("message_id", "event_type", name="ux_pan_transfer_follow_trigger_message_type"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    message_id = Column(Integer, ForeignKey("messages.id", ondelete="CASCADE"), nullable=False, index=True)
+    event_type = Column(String(64), nullable=False, default="message_link_received", index=True)
+    status = Column(String(32), nullable=False, default="pending", index=True)
+    candidate_title = Column(String(255), nullable=True)
+    candidate_episode = Column(Integer, nullable=True, index=True)
+    candidate_issue_no = Column(String(32), nullable=True)
+    monitor_channel_key = Column(String(255), nullable=True, index=True)
+    monitor_chat_id = Column(BigInteger, nullable=True, index=True)
+    attempt_count = Column(Integer, nullable=False, default=0)
+    max_attempts = Column(Integer, nullable=False, default=5)
+    next_retry_at = Column(DateTime, nullable=True, index=True)
+    last_error = Column(Text, nullable=True)
+    payload = Column(JSONB, nullable=False, default=dict)
+    processed_at = Column(DateTime, nullable=True, index=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class AiProviderConfig(Base):
     __tablename__ = "ai_provider_configs"
     __table_args__ = (
@@ -1334,6 +1359,7 @@ def ensure_runtime_storage_tables() -> None:
                 PanTransferPublishRecord.__table__,
                 PanTransferSyncTask.__table__,
                 PanTransferSyncTaskLog.__table__,
+                PanTransferFollowTriggerEvent.__table__,
                 MediaWallCategory.__table__,
                 MediaWallItem.__table__,
                 MediaWallItemCategory.__table__,
@@ -1845,6 +1871,14 @@ def _ensure_pan_transfer_indexes() -> None:
         """
         CREATE INDEX IF NOT EXISTS ix_pan_transfer_sync_task_logs_task_created
         ON pan_transfer_sync_task_logs (task_id, created_at DESC)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_pan_transfer_follow_trigger_events_queue
+        ON pan_transfer_follow_trigger_events (status, next_retry_at ASC, created_at ASC)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_pan_transfer_follow_trigger_events_message
+        ON pan_transfer_follow_trigger_events (message_id, created_at DESC)
         """,
     )
     with engine.begin() as connection:

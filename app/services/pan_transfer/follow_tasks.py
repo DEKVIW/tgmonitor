@@ -19,6 +19,7 @@ from app.models.models import (
     MessageLinkRef,
     PanTransferAccount,
     PanTransferBatchItem,
+    PanTransferFollowTriggerEvent,
     PanTransferPublishRecord,
     PanTransferSyncTask,
     PanTransferSyncTaskLog,
@@ -3556,6 +3557,39 @@ async def _delete_follow_task_transferred_resource(
     }
 
 
+def _clear_follow_task_trigger_event_references(session: Session, *, task_id: int) -> int:
+    normalized_task_id = int(task_id)
+    changed_count = 0
+    events = session.query(PanTransferFollowTriggerEvent).all()
+    for event in events:
+        payload = dict(event.payload or {})
+        changed = False
+        for key in ("matched_task_ids", "queued_task_ids", "ignored_task_ids"):
+            raw_ids = payload.get(key)
+            if not isinstance(raw_ids, list):
+                continue
+            filtered_ids = [
+                int(value)
+                for value in raw_ids
+                if _normalize_optional_int(value) is not None and int(value) != normalized_task_id
+            ]
+            if filtered_ids != raw_ids:
+                payload[key] = filtered_ids
+                changed = True
+        realtime_trigger = dict(payload.get("realtime_trigger") or {})
+        if _normalize_optional_int(realtime_trigger.get("task_id")) == normalized_task_id:
+            realtime_trigger.pop("task_id", None)
+            payload["realtime_trigger"] = realtime_trigger
+            changed = True
+        if changed:
+            event.payload = payload
+            session.add(event)
+            changed_count += 1
+    if changed_count:
+        session.flush()
+    return changed_count
+
+
 async def delete_pan_transfer_follow_task(
     session: Session,
     *,
@@ -3569,6 +3603,10 @@ async def delete_pan_transfer_follow_task(
         delete_details = await _delete_follow_task_transferred_resource(session, task=task)
         task = _get_follow_task(session, task_id=task_id)
     media_wall_deleted_count = delete_items_for_sync_task(session, sync_task_id=task.id)
+    trigger_event_reference_cleaned_count = _clear_follow_task_trigger_event_references(
+        session,
+        task_id=int(task.id),
+    )
     (
         session.query(PanTransferSyncTaskLog)
         .filter(PanTransferSyncTaskLog.task_id == int(task.id))
@@ -3583,6 +3621,8 @@ async def delete_pan_transfer_follow_task(
     }
     if media_wall_deleted_count > 0:
         result["media_wall_deleted_count"] = media_wall_deleted_count
+    if trigger_event_reference_cleaned_count > 0:
+        result["trigger_event_reference_cleaned_count"] = trigger_event_reference_cleaned_count
     return result
 
 

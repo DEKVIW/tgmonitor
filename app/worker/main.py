@@ -16,6 +16,7 @@ from app.services.pan_transfer import (
     process_next_pan_transfer_item,
     process_next_pan_transfer_publish_rule,
 )
+from app.services.pan_transfer.follow_triggers import process_next_pan_transfer_follow_trigger_event
 from app.services.pan_transfer.maintenance import run_pan_transfer_log_retention_if_due
 from app.services.resource_ops.recognition_worker import (
     process_next_recognition_task,
@@ -81,6 +82,7 @@ def main() -> None:
                 while not _stop_event.is_set():
                     processed_recognition = False
                     processed_transfer = False
+                    processed_follow_trigger_event = False
                     processed_follow_task = False
                     processed_publish_rule = False
                     processed_media_wall_metadata = False
@@ -115,6 +117,18 @@ def main() -> None:
 
                     with Session(engine) as session:
                         try:
+                            processed_follow_trigger_event = process_next_pan_transfer_follow_trigger_event(
+                                session,
+                                worker_name=WORKER_NAME,
+                            )
+                            session.commit()
+                        except Exception:
+                            session.rollback()
+                            logger.exception("pan transfer follow-trigger worker iteration failed")
+                            processed_follow_trigger_event = False
+
+                    with Session(engine) as session:
+                        try:
                             processed_follow_task = process_next_pan_transfer_follow_task(session, worker_name=WORKER_NAME)
                             session.commit()
                         except Exception:
@@ -143,6 +157,7 @@ def main() -> None:
                     processed = bool(
                         processed_recognition
                         or processed_transfer
+                        or processed_follow_trigger_event
                         or processed_follow_task
                         or processed_publish_rule
                         or processed_media_wall_metadata

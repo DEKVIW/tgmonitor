@@ -15,7 +15,7 @@ from app.core.monitor_observability import MonitorMetrics, log_monitor_event
 from app.core.monitor_parser import parse_message_content, parse_message_records
 from app.models.config import settings
 from app.models.db import async_session
-from app.models.models import Credential, Message, engine, ensure_message_monitor_source_columns
+from app.models.models import Credential, Message, engine, ensure_message_monitor_source_columns, ensure_runtime_storage_tables
 from app.services.channel_registry import (
     get_runtime_channel_metadata,
     get_runtime_channels,
@@ -27,6 +27,7 @@ from app.services.channel_daily_stats_service import (
     accumulate_channel_daily_stats_for_message_ids,
 )
 from app.services.learning_resources import enqueue_learning_resources_for_message_ids
+from app.services.pan_transfer.follow_triggers import enqueue_follow_trigger_events_for_message_ids
 from app.services.monitor_runtime import write_monitor_runtime_state
 from app.services.system_config_service import get_monitor_runtime_config
 
@@ -154,6 +155,7 @@ async def channel_refresh_loop() -> None:
 
 
 api_id, api_hash = get_api_credentials()
+ensure_runtime_storage_tables()
 ensure_message_monitor_source_columns()
 client = TelegramClient("tg_monitor_session", api_id, api_hash)
 channel_usernames = get_channels()
@@ -420,6 +422,35 @@ async def handler(event: Any) -> None:
                                 print(
                                     f"[{monitor_time}] 学习资料自动转存入队失败，但不影响消息入库: "
                                     f"{learning_enqueue_error}"
+                                )
+                        if new_message_ids:
+                            try:
+                                async with session.begin_nested():
+                                    trigger_result = await session.run_sync(
+                                        lambda sync_session: enqueue_follow_trigger_events_for_message_ids(
+                                            sync_session,
+                                            new_message_ids,
+                                        )
+                                    )
+                                if trigger_result.get("created"):
+                                    log_monitor_event(
+                                        logger,
+                                        "follow_trigger_events_enqueued",
+                                        channel=channel_name,
+                                        created=trigger_result.get("created"),
+                                    )
+                            except Exception as follow_trigger_enqueue_error:
+                                log_monitor_event(
+                                    logger,
+                                    "follow_trigger_enqueue_failed",
+                                    level=logging.WARNING,
+                                    channel=channel_name,
+                                    error=str(follow_trigger_enqueue_error),
+                                    affected_messages=len(new_message_ids),
+                                )
+                                print(
+                                    f"[{monitor_time}] 追更实时触发入队失败，但不影响消息入库: "
+                                    f"{follow_trigger_enqueue_error}"
                                 )
                         await session.commit()
                     except Exception:

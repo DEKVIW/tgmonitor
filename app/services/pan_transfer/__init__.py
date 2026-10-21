@@ -32,6 +32,11 @@ from .follow_tasks import (
     resume_pan_transfer_follow_task,
     update_pan_transfer_follow_task_settings,
 )
+from .follow_triggers import (
+    enqueue_follow_trigger_events_for_message_ids,
+    evaluate_follow_trigger,
+    process_next_pan_transfer_follow_trigger_event,
+)
 from .follow_sync import create_pan_transfer_follow_sync_batch
 from .preview import preview_manual_pan_transfer_selection
 from .publishing import (
@@ -58,9 +63,12 @@ __all__ = [
     "list_pan_transfer_accounts",
     "list_pan_transfer_batches",
     "list_pan_transfer_follow_tasks",
+    "enqueue_follow_trigger_events_for_message_ids",
+    "evaluate_follow_trigger",
     "pause_pan_transfer_follow_task",
     "process_next_pan_transfer_item",
     "process_next_pan_transfer_follow_task",
+    "process_next_pan_transfer_follow_trigger_event",
     "process_next_pan_transfer_publish_rule",
     "preview_pan_transfer_link_directory",
     "list_pan_transfer_directories",
