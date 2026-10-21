@@ -1602,7 +1602,7 @@ def _ensure_learning_automation_tasks() -> None:
             task = connection.execute(
                 text("SELECT id FROM learning_resource_automation_tasks WHERE legacy_config_id = :config_id"),
                 {"config_id": int(config["id"])},
-            ).first()
+            ).mappings().first()
             if task is None:
                 root_name = str(config["save_root"] or "").strip()
                 task_status = "running" if bool(config["is_enabled"]) else "paused"
@@ -1629,7 +1629,7 @@ def _ensure_learning_automation_tasks() -> None:
                         "created_by": config["created_by"],
                         "updated_by": config["updated_by"],
                     },
-                ).first()
+                ).mappings().first()
             task_id = int(task["id"])
             channel = connection.execute(
                 text("""
@@ -1639,7 +1639,7 @@ def _ensure_learning_automation_tasks() -> None:
                     LIMIT 1
                 """),
                 {"channel_key": str(config["channel_key"] or "")},
-            ).first()
+            ).mappings().first()
             if channel is not None:
                 connection.execute(
                     text("""
@@ -1659,7 +1659,7 @@ def _ensure_learning_automation_tasks() -> None:
                 account = connection.execute(
                     text("SELECT is_enabled, default_save_root FROM pan_transfer_accounts WHERE id = :account_id"),
                     {"account_id": int(account_id)},
-                ).first()
+                ).mappings().first()
                 root_name = str(config["save_root"] or (account["default_save_root"] if account is not None else "") or "").strip()
                 root_id = f"path:{root_name}" if root_name else "0"
                 target_status = "ready" if account is not None and bool(account["is_enabled"]) and root_name else "waiting_account"
