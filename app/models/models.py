@@ -1610,10 +1610,13 @@ def _ensure_learning_automation_tasks() -> None:
                     text("""
                         INSERT INTO learning_resource_automation_tasks
                             (name, is_enabled, transfer_policy, backfill_policy, status,
-                             legacy_config_id, created_by, updated_by)
+                             legacy_config_id, last_enqueued_at, last_success_at,
+                             pending_count, failed_count, last_error_message,
+                             created_by, updated_by, created_at, updated_at)
                         VALUES
                             (:name, :is_enabled, :transfer_policy, :backfill_policy, :status,
-                             :legacy_config_id, :created_by, :updated_by)
+                             :legacy_config_id, NULL, NULL, 0, 0, NULL,
+                             :created_by, :updated_by, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                         RETURNING id
                     """),
                     {
