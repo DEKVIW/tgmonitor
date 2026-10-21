@@ -6,7 +6,8 @@ from typing import Iterable
 from sqlalchemy import and_, case, func, or_
 from sqlalchemy.orm import Session
 
-from app.models.models import LearningChannelConfig, LearningResourceTransferJob, PanTransferBatch, PanTransferBatchItem, ensure_runtime_storage_tables
+from app.models.models import LearningResourceTransferJob, PanTransferBatch, PanTransferBatchItem, ensure_runtime_storage_tables
+from app.services.learning_automation import is_learning_target_enabled
 
 from .common import dedupe_ints, utcnow
 from .constants import (
@@ -180,15 +181,9 @@ def claim_next_pan_transfer_batch_item(session: Session, *, worker_name: str) ->
         if candidate is None:
             return None
         extra_json = dict(candidate.extra_json or {})
-        channel_key = str(extra_json.get("learning_channel_key") or "").strip()
-        if not channel_key:
+        if not extra_json.get("learning_resource_job_id"):
             break
-        config = (
-            session.query(LearningChannelConfig)
-            .filter(LearningChannelConfig.channel_key == channel_key)
-            .first()
-        )
-        if config is not None and bool(config.is_enabled):
+        if is_learning_target_enabled(session, extra_json):
             break
         candidate.transfer_status = "paused"
         candidate.next_retry_at = None

@@ -5,7 +5,8 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.models.models import LearningChannelConfig, LearningResourceTransferJob, LinkTarget, PanTransferAccount, PanTransferBatch, PanTransferBatchItem, ensure_runtime_storage_tables
+from app.models.models import LearningResourceTransferJob, LinkTarget, PanTransferAccount, PanTransferBatch, PanTransferBatchItem, ensure_runtime_storage_tables
+from app.services.learning_automation import is_learning_target_enabled
 
 from .common import (
     DEFAULT_SHARE_TARGET_MODE,
@@ -57,15 +58,9 @@ def _build_staging_name(item: PanTransferBatchItem) -> str:
 
 def _pause_learning_item_if_disabled(session: Session, *, item: PanTransferBatchItem) -> bool:
     extra_json = dict(item.extra_json or {})
-    channel_key = str(extra_json.get("learning_channel_key") or "").strip()
-    if not channel_key:
+    if not extra_json.get("learning_resource_job_id"):
         return False
-    config = (
-        session.query(LearningChannelConfig)
-        .filter(LearningChannelConfig.channel_key == channel_key)
-        .first()
-    )
-    if config is not None and bool(config.is_enabled):
+    if is_learning_target_enabled(session, extra_json):
         return False
     item.transfer_status = "paused"
     item.next_retry_at = None

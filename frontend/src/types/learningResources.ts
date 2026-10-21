@@ -122,3 +122,84 @@ export interface LearningImportConfirmResult {
   queued_count: number
   batch_id?: number | null
 }
+
+export interface LearningAutomationTaskChannel {
+  id?: number | null
+  channel_id: number
+  channel_key?: string
+  channel_title?: string
+  is_enabled: boolean
+  default_category_id?: number | null
+  last_processed_message_id?: number | null
+}
+
+export interface LearningAutomationTaskTarget {
+  id?: number | null
+  target_account_id: number
+  account_name?: string
+  platform?: string
+  save_root_id: string
+  save_root_name: string
+  auto_create_category_dirs: boolean
+  is_enabled: boolean
+  status?: string
+  last_success_at?: string | null
+  last_error_message?: string | null
+}
+
+export interface LearningAutomationTask {
+  id: number
+  name: string
+  is_enabled: boolean
+  transfer_policy: string
+  backfill_policy: string
+  status: string
+  pending_count: number
+  failed_count: number
+  last_enqueued_at?: string | null
+  last_success_at?: string | null
+  last_error_message?: string | null
+  created_at?: string | null
+  updated_at?: string | null
+  channels: LearningAutomationTaskChannel[]
+  targets: LearningAutomationTaskTarget[]
+}
+
+export interface LearningAutomationTaskListResponse {
+  items: LearningAutomationTask[]
+  total: number
+}
+
+export interface LearningAutomationTaskProcessResponse {
+  task_id: number
+  selected_messages: number
+  message_ids?: number[]
+  dry_run: boolean
+  messages?: number
+  resources?: number
+  jobs?: number
+  skipped?: number
+  failed?: number
+}
+
+export interface LearningAutomationRetryResponse {
+  task_id: number
+  retried_count: number
+}
+
+export interface LearningAutomationLog {
+  id: number
+  stage: string
+  level: string
+  message: string
+  details: Record<string, unknown>
+  resource_id?: number | null
+  transfer_job_id?: number | null
+  source_message_id?: number | null
+  created_at?: string | null
+}
+
+export interface LearningAutomationLogListResponse {
+  items: LearningAutomationLog[]
+  total: number
+}

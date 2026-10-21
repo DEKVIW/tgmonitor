@@ -46,6 +46,114 @@
   margin-top: 14px;
 }
 
+.learning-automation-panel {
+  padding: 18px 20px 12px;
+}
+
+.learning-task-empty {
+  padding: 24px 8px 16px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.learning-task-list {
+  display: grid;
+  gap: 8px;
+}
+
+.learning-task-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 13px 14px;
+  border: 1px solid #e4eaf0;
+  border-radius: 6px;
+  background: #fbfcfd;
+}
+
+.learning-task-main {
+  min-width: 0;
+}
+
+.learning-task-title-line,
+.learning-task-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.learning-task-meta {
+  margin-top: 7px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.learning-task-error-text,
+.learning-task-error {
+  color: #b52e2e;
+}
+
+.learning-task-error {
+  margin-top: 7px;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+
+.learning-task-actions {
+  flex: 0 0 auto;
+}
+
+.learning-task-form {
+  display: grid;
+  gap: 18px;
+  padding-top: 4px;
+}
+
+.learning-task-form-row {
+  display: grid;
+  gap: 7px;
+}
+
+.learning-task-form-section {
+  display: grid;
+  gap: 10px;
+}
+
+.learning-task-form-section-heading,
+.learning-task-form-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.learning-task-form-section-heading > div {
+  display: grid;
+  gap: 4px;
+}
+
+.learning-task-target-list {
+  display: grid;
+  gap: 8px;
+}
+
+.learning-task-target-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px;
+  border: 1px solid #e4eaf0;
+  border-radius: 5px;
+  background: #fbfcfd;
+}
+
+.learning-log-message {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
 .learning-sheet {
   overflow: hidden;
   background: #ffffff;
@@ -370,6 +478,24 @@
   .learning-admin-sheet,
   .learning-import-panel {
     padding: 14px;
+  }
+
+  .learning-task-row,
+  .learning-task-form-section-heading,
+  .learning-task-form-footer,
+  .learning-task-target-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .learning-task-actions {
+    justify-content: flex-start;
+  }
+
+  .learning-task-target-row .ant-select,
+  .learning-task-target-row .ant-input,
+  .learning-task-target-row .ant-btn {
+    width: 100%;
   }
 
   .learning-sheet-toolbar {

@@ -166,3 +166,113 @@ class LearningImportConfirmResponse(BaseModel):
     link_count: int = 0
     queued_count: int = 0
     batch_id: int | None = None
+
+
+class LearningAutomationTaskChannelRequest(BaseModel):
+    id: int | None = Field(default=None, ge=1)
+    channel_id: int = Field(ge=1)
+    is_enabled: bool = True
+    default_category_id: int | None = Field(default=None, ge=1)
+
+
+class LearningAutomationTaskTargetRequest(BaseModel):
+    id: int | None = Field(default=None, ge=1)
+    target_account_id: int = Field(ge=1)
+    save_root_id: str = Field(default="0", max_length=255)
+    save_root_name: str = Field(default="", max_length=255)
+    auto_create_category_dirs: bool = True
+    is_enabled: bool = True
+
+
+class LearningAutomationTaskCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    is_enabled: bool = False
+    backfill_policy: str = Field(default="new_messages_only", max_length=32)
+    channels: list[LearningAutomationTaskChannelRequest] = Field(min_length=1)
+    targets: list[LearningAutomationTaskTargetRequest] = Field(min_length=1)
+
+
+class LearningAutomationTaskUpdateRequest(LearningAutomationTaskCreateRequest):
+    pass
+
+
+class LearningAutomationTaskChannelResponse(LearningAutomationTaskChannelRequest):
+    channel_key: str = ""
+    channel_title: str = ""
+    last_processed_message_id: int | None = None
+
+
+class LearningAutomationTaskTargetResponse(LearningAutomationTaskTargetRequest):
+    account_name: str = ""
+    platform: str = ""
+    status: str = "waiting_account"
+    last_success_at: datetime | None = None
+    last_error_message: str | None = None
+
+
+class LearningAutomationTaskResponse(BaseModel):
+    id: int
+    name: str
+    is_enabled: bool
+    transfer_policy: str = "automatic"
+    backfill_policy: str = "new_messages_only"
+    status: str = "paused"
+    pending_count: int = 0
+    failed_count: int = 0
+    last_enqueued_at: datetime | None = None
+    last_success_at: datetime | None = None
+    last_error_message: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    channels: list[LearningAutomationTaskChannelResponse] = Field(default_factory=list)
+    targets: list[LearningAutomationTaskTargetResponse] = Field(default_factory=list)
+
+
+class LearningAutomationTaskListResponse(BaseModel):
+    items: list[LearningAutomationTaskResponse] = Field(default_factory=list)
+    total: int = 0
+
+
+class LearningAutomationTaskProcessRequest(BaseModel):
+    message_ids: list[int] = Field(default_factory=list, max_length=5000)
+    from_message_id: int | None = Field(default=None, ge=1)
+    to_message_id: int | None = Field(default=None, ge=1)
+    dry_run: bool = False
+
+
+class LearningAutomationReplayRequest(LearningAutomationTaskProcessRequest):
+    task_id: int = Field(ge=1)
+
+
+class LearningAutomationTaskProcessResponse(BaseModel):
+    task_id: int
+    selected_messages: int = 0
+    message_ids: list[int] = Field(default_factory=list)
+    dry_run: bool = False
+    messages: int = 0
+    resources: int = 0
+    jobs: int = 0
+    skipped: int = 0
+    failed: int = 0
+
+
+class LearningAutomationRetryResponse(BaseModel):
+    task_id: int
+    retried_count: int = 0
+
+
+class LearningAutomationLogResponse(BaseModel):
+    id: int
+    stage: str
+    level: str
+    message: str
+    details: dict[str, Any] = Field(default_factory=dict)
+    resource_id: int | None = None
+    transfer_job_id: int | None = None
+    source_message_id: int | None = None
+    created_at: datetime | None = None
+
+
+class LearningAutomationLogListResponse(BaseModel):
+    items: list[LearningAutomationLogResponse] = Field(default_factory=list)
+    total: int = 0

@@ -15,6 +15,15 @@ from app.schemas.learning_resources import (
     LearningImportConfirmRequest,
     LearningImportConfirmResponse,
     LearningImportPreviewResponse,
+    LearningAutomationLogListResponse,
+    LearningAutomationRetryResponse,
+    LearningAutomationTaskCreateRequest,
+    LearningAutomationTaskListResponse,
+    LearningAutomationTaskProcessRequest,
+    LearningAutomationTaskProcessResponse,
+    LearningAutomationTaskResponse,
+    LearningAutomationTaskUpdateRequest,
+    LearningAutomationReplayRequest,
     LearningResourceAdminListResponse,
     LearningResourceAdminResponse,
     LearningResourceDeleteResponse,
@@ -28,7 +37,6 @@ from app.services.learning_resources import (
     count_public_learning_resources,
     delete_all_imported_learning_resources,
     delete_learning_resource,
-    get_admin_learning_item,
     update_learning_resource,
     list_admin_learning_items,
     list_learning_admin_overview,
@@ -38,6 +46,15 @@ from app.services.learning_resources import (
     confirm_learning_import,
     retry_learning_resource,
     update_learning_channel_config,
+)
+from app.services.learning_automation import (
+    get_learning_automation_task,
+    list_learning_automation_logs,
+    list_learning_automation_tasks,
+    process_learning_automation_task_now,
+    retry_failed_learning_automation_jobs,
+    save_learning_automation_task,
+    set_learning_automation_task_enabled,
 )
 from app.services.pan_transfer import list_pan_transfer_directories
 from app.services.system_config_service import is_public_dashboard_enabled
@@ -58,6 +75,238 @@ def _ensure_public_access(current_user: dict[str, Any] | None) -> None:
 
 def _operator(current_user: dict[str, Any]) -> str:
     return str(current_user.get("username") or current_user.get("name") or "admin")
+
+
+@router.get(
+    "/api/admin/learning-resources/automation-tasks",
+    response_model=LearningAutomationTaskListResponse,
+    summary="获取学习资料自动转存任务",
+)
+def get_learning_automation_tasks(
+    db: Session = Depends(get_db),
+    current_user: dict[str, Any] = Depends(get_admin_user),
+) -> LearningAutomationTaskListResponse:
+    del current_user
+    items = list_learning_automation_tasks(db)
+    return LearningAutomationTaskListResponse(items=items, total=len(items))
+
+
+@router.post(
+    "/api/admin/learning-resources/automation-tasks",
+    response_model=LearningAutomationTaskResponse,
+    summary="创建学习资料自动转存任务",
+)
+def create_learning_automation_task(
+    payload: LearningAutomationTaskCreateRequest,
+    db: Session = Depends(get_db),
+    current_user: dict[str, Any] = Depends(get_admin_user),
+) -> LearningAutomationTaskResponse:
+    try:
+        result = save_learning_automation_task(
+            db,
+            task_id=None,
+            payload=payload.model_dump(),
+            operator=_operator(current_user),
+        )
+        db.commit()
+        return LearningAutomationTaskResponse(**result)
+    except LookupError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.get(
+    "/api/admin/learning-resources/automation-tasks/{task_id}",
+    response_model=LearningAutomationTaskResponse,
+    summary="获取学习资料自动转存任务详情",
+)
+def get_learning_automation_task_detail(
+    task_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict[str, Any] = Depends(get_admin_user),
+) -> LearningAutomationTaskResponse:
+    del current_user
+    result = get_learning_automation_task(db, task_id=int(task_id))
+    if result is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="学习资料自动任务不存在")
+    return LearningAutomationTaskResponse(**result)
+
+
+@router.patch(
+    "/api/admin/learning-resources/automation-tasks/{task_id}",
+    response_model=LearningAutomationTaskResponse,
+    summary="编辑学习资料自动转存任务",
+)
+def update_learning_automation_task(
+    task_id: int,
+    payload: LearningAutomationTaskUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: dict[str, Any] = Depends(get_admin_user),
+) -> LearningAutomationTaskResponse:
+    try:
+        result = save_learning_automation_task(
+            db,
+            task_id=int(task_id),
+            payload=payload.model_dump(),
+            operator=_operator(current_user),
+        )
+        db.commit()
+        return LearningAutomationTaskResponse(**result)
+    except LookupError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.post(
+    "/api/admin/learning-resources/automation-tasks/{task_id}/pause",
+    response_model=LearningAutomationTaskResponse,
+    summary="暂停学习资料自动转存任务",
+)
+def pause_learning_automation_task(
+    task_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict[str, Any] = Depends(get_admin_user),
+) -> LearningAutomationTaskResponse:
+    del current_user
+    try:
+        result = set_learning_automation_task_enabled(db, task_id=int(task_id), enabled=False)
+        db.commit()
+        return LearningAutomationTaskResponse(**result)
+    except LookupError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.post(
+    "/api/admin/learning-resources/automation-tasks/{task_id}/resume",
+    response_model=LearningAutomationTaskResponse,
+    summary="恢复学习资料自动转存任务",
+)
+def resume_learning_automation_task(
+    task_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict[str, Any] = Depends(get_admin_user),
+) -> LearningAutomationTaskResponse:
+    del current_user
+    try:
+        result = set_learning_automation_task_enabled(db, task_id=int(task_id), enabled=True)
+        db.commit()
+        return LearningAutomationTaskResponse(**result)
+    except LookupError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.post(
+    "/api/admin/learning-resources/automation-tasks/{task_id}/process-now",
+    response_model=LearningAutomationTaskProcessResponse,
+    summary="立即处理学习资料自动转存任务",
+)
+def process_learning_automation_task(
+    task_id: int,
+    payload: LearningAutomationTaskProcessRequest | None = None,
+    db: Session = Depends(get_db),
+    current_user: dict[str, Any] = Depends(get_admin_user),
+) -> LearningAutomationTaskProcessResponse:
+    try:
+        result = process_learning_automation_task_now(
+            db,
+            task_id=int(task_id),
+            message_ids=(payload.message_ids if payload else None),
+            from_message_id=(payload.from_message_id if payload else None),
+            to_message_id=(payload.to_message_id if payload else None),
+            dry_run=bool(payload.dry_run) if payload else False,
+            operator=_operator(current_user),
+        )
+        db.commit()
+        return LearningAutomationTaskProcessResponse(**result)
+    except LookupError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.post(
+    "/api/admin/learning-resources/replay",
+    response_model=LearningAutomationTaskProcessResponse,
+    summary="按消息范围补处理学习资料",
+)
+def replay_learning_resources(
+    payload: LearningAutomationReplayRequest,
+    db: Session = Depends(get_db),
+    current_user: dict[str, Any] = Depends(get_admin_user),
+) -> LearningAutomationTaskProcessResponse:
+    try:
+        result = process_learning_automation_task_now(
+            db,
+            task_id=int(payload.task_id),
+            message_ids=payload.message_ids,
+            from_message_id=payload.from_message_id,
+            to_message_id=payload.to_message_id,
+            dry_run=bool(payload.dry_run),
+            operator=_operator(current_user),
+        )
+        db.commit()
+        return LearningAutomationTaskProcessResponse(**result)
+    except LookupError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.post(
+    "/api/admin/learning-resources/automation-tasks/{task_id}/retry-failed",
+    response_model=LearningAutomationRetryResponse,
+    summary="重试学习资料自动转存失败任务",
+)
+def retry_learning_automation_task(
+    task_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict[str, Any] = Depends(get_admin_user),
+) -> LearningAutomationRetryResponse:
+    del current_user
+    try:
+        result = retry_failed_learning_automation_jobs(db, task_id=int(task_id))
+        db.commit()
+        return LearningAutomationRetryResponse(**result)
+    except LookupError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.get(
+    "/api/admin/learning-resources/automation-tasks/{task_id}/logs",
+    response_model=LearningAutomationLogListResponse,
+    summary="获取学习资料自动转存日志",
+)
+def get_learning_automation_task_logs(
+    task_id: int,
+    limit: int = Query(default=100, ge=1, le=300),
+    db: Session = Depends(get_db),
+    current_user: dict[str, Any] = Depends(get_admin_user),
+) -> LearningAutomationLogListResponse:
+    del current_user
+    try:
+        items = list_learning_automation_logs(db, task_id=int(task_id), limit=limit)
+        return LearningAutomationLogListResponse(items=items, total=len(items))
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
 
 @router.get(

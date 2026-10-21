@@ -4,19 +4,25 @@ import hashlib
 import io
 import re
 import unicodedata
+from dataclasses import dataclass
+from datetime import timedelta
 from typing import Any, Iterable
 
-from sqlalchemy import func, or_
+from sqlalchemy import desc, or_
 from sqlalchemy.orm import Session
 
 from app.models.models import (
     Channel,
     LearningChannelConfig,
+    LearningResourceAutomationTask,
+    LearningResourceAutomationTaskChannel,
+    LearningResourceAutomationTaskTarget,
     LearningResourceCategory,
     LearningResourceImportJob,
     LearningResourceItem,
     LearningResourceItemCategory,
     LearningResourceLink,
+    LearningResourceProcessLog,
     LearningResourceTransferJob,
     LinkTarget,
     Message,
@@ -43,6 +49,7 @@ LEARNING_STATUS_PENDING = "pending"
 LEARNING_STATUS_TRANSFERRING = "transferring"
 LEARNING_STATUS_PUBLISHED = "published"
 LEARNING_STATUS_FAILED = "failed"
+LEARNING_STATUS_HIDDEN = "hidden"
 LEARNING_JOB_QUEUED = "queued"
 LEARNING_JOB_TRANSFERRING = "transferring"
 LEARNING_JOB_PUBLISHED = "published"
@@ -50,6 +57,17 @@ LEARNING_JOB_FAILED = "failed"
 LEARNING_JOB_PAUSED = "paused"
 LEARNING_IMPORT_MODES = {"direct", "transfer", "collect"}
 MAX_IMPORT_ROWS = 5000
+MAX_LEARNING_PROCESS_LOGS_PER_TASK = 5000
+
+
+@dataclass(frozen=True)
+class LearningAutomationContext:
+    task: LearningResourceAutomationTask
+    channel: LearningResourceAutomationTaskChannel
+    target: LearningResourceAutomationTaskTarget
+    account: PanTransferAccount
+    channel_key: str
+    root: str
 
 _URL_TAG_RE = re.compile(r"^(?:https?://|www\.|https?$)", re.IGNORECASE)
 _SPACE_RE = re.compile(r"\s+")
@@ -324,6 +342,7 @@ def _upsert_learning_import_resource(
     *,
     record: dict[str, Any],
     mode: str,
+    target_account_id: int | None = None,
     operator: str,
 ) -> tuple[LearningResourceItem, LearningResourceCategory, list[tuple[LearningResourceLink, LinkTarget | None]]]:
     title = _clean_import_text(record.get("display_title"), max_length=255) or "未命名资源"
@@ -375,6 +394,7 @@ def _upsert_learning_import_resource(
             .filter(
                 LearningResourceLink.resource_id == int(resource.id),
                 LearningResourceLink.url_fingerprint == fingerprint,
+                LearningResourceLink.target_account_id == target_account_id,
             )
             .first()
         )
@@ -384,6 +404,7 @@ def _upsert_learning_import_resource(
                 platform=platform,
                 source_url=url,
                 url_fingerprint=fingerprint,
+                target_account_id=int(target_account_id) if target_account_id is not None else None,
                 is_primary=False,
                 is_enabled=True,
                 status="pending",
@@ -463,6 +484,7 @@ def confirm_learning_import(
             session,
             record=record,
             mode=normalized_mode,
+            target_account_id=int(account.id) if account is not None else None,
             operator=operator,
         )
         if resource_before is None:
@@ -478,6 +500,7 @@ def confirm_learning_import(
                 .filter(
                     LearningResourceTransferJob.resource_id == int(resource.id),
                     LearningResourceTransferJob.source_link_target_id == int(target.id),
+                    LearningResourceTransferJob.target_account_id == int(account.id),
                 )
                 .first()
             )
@@ -609,8 +632,221 @@ def get_learning_channel_config(session: Session, channel_key: str) -> LearningC
 
 
 def is_learning_channel_enabled(session: Session, channel_key: str) -> bool:
-    config = get_learning_channel_config(session, channel_key)
-    return bool(config and config.is_enabled)
+    normalized = normalize_channel_username(channel_key)
+    return bool(_get_learning_automation_contexts(session, normalized))
+
+
+def _record_learning_process_log(
+    session: Session,
+    *,
+    stage: str,
+    level: str = "info",
+    message: str,
+    task_id: int | None = None,
+    channel_id: int | None = None,
+    target_id: int | None = None,
+    resource_id: int | None = None,
+    transfer_job_id: int | None = None,
+    import_job_id: int | None = None,
+    source_message_id: int | None = None,
+    details: dict[str, Any] | None = None,
+) -> LearningResourceProcessLog:
+    row = LearningResourceProcessLog(
+        task_id=task_id,
+        channel_id=channel_id,
+        target_id=target_id,
+        resource_id=resource_id,
+        transfer_job_id=transfer_job_id,
+        import_job_id=import_job_id,
+        source_message_id=source_message_id,
+        stage=str(stage or "failed")[:32],
+        level=str(level or "info")[:16],
+        message=str(message or "")[:2000],
+        details_json=dict(details or {}),
+    )
+    session.add(row)
+    session.flush()
+    if task_id is not None and int(row.id) % 100 == 0:
+        retention_now = utcnow()
+        session.query(LearningResourceProcessLog).filter(
+            LearningResourceProcessLog.task_id == int(task_id),
+            LearningResourceProcessLog.created_at < retention_now - timedelta(days=90),
+        ).delete(synchronize_session=False)
+        session.query(LearningResourceProcessLog).filter(
+            LearningResourceProcessLog.task_id == int(task_id),
+            LearningResourceProcessLog.level == "info",
+            LearningResourceProcessLog.stage.notin_(["failed", "retrying", "config"]),
+            LearningResourceProcessLog.created_at < retention_now - timedelta(days=30),
+        ).delete(synchronize_session=False)
+        stale_ids = [
+            int(log_id)
+            for (log_id,) in session.query(LearningResourceProcessLog.id)
+            .filter(LearningResourceProcessLog.task_id == int(task_id))
+            .order_by(desc(LearningResourceProcessLog.id))
+            .offset(MAX_LEARNING_PROCESS_LOGS_PER_TASK)
+            .all()
+        ]
+        if stale_ids:
+            session.query(LearningResourceProcessLog).filter(
+                LearningResourceProcessLog.id.in_(stale_ids),
+            ).delete(synchronize_session=False)
+    return row
+
+
+def record_learning_enqueue_failure(
+    session: Session,
+    *,
+    message_ids: Iterable[int],
+    channel_key: str,
+    error_message: str | BaseException,
+) -> int:
+    """Persist replayable enqueue failures without aborting message ingestion."""
+    normalized_ids = sorted({int(message_id) for message_id in message_ids if int(message_id) > 0})
+    if not normalized_ids:
+        return 0
+    normalized_channel = str(channel_key or "").strip()
+    try:
+        normalized_channel = normalize_channel_username(normalized_channel)
+    except ValueError:
+        normalized_channel = normalized_channel[:255]
+    contexts = _get_learning_automation_contexts(session, normalized_channel)
+    channel_ids = {
+        int(context.channel.channel_id)
+        for context in contexts
+        if context.channel.channel_id is not None
+    }
+    task_targets = {
+        (
+            int(context.task.id) if context.task.id is not None else None,
+            int(context.target.id) if context.target.id is not None else None,
+        )
+        for context in contexts
+    }
+    if not task_targets:
+        task_targets = {(None, None)}
+    error_text = str(error_message or "学习资料自动转存入队失败").strip()[:1800]
+    error_type = type(error_message).__name__ if isinstance(error_message, BaseException) else "EnqueueError"
+    written = 0
+    for message_id in normalized_ids:
+        for task_id, target_id in task_targets:
+            _record_learning_process_log(
+                session,
+                stage="failed",
+                level="error",
+                message=f"学习资料自动转存入队失败：{error_text}",
+                task_id=task_id,
+                channel_id=next(iter(channel_ids), None),
+                target_id=target_id,
+                source_message_id=message_id,
+                details={
+                    "replayable": True,
+                    "channel_key": normalized_channel,
+                    "error_type": error_type,
+                },
+            )
+            written += 1
+    return written
+
+
+def _get_learning_automation_contexts(
+    session: Session,
+    channel_key: str,
+    *,
+    task_id: int | None = None,
+) -> list[LearningAutomationContext]:
+    normalized = normalize_channel_username(channel_key)
+    channel_candidates = {normalized, f"@{normalized}"}
+    channels = session.query(Channel).filter(Channel.username.in_(sorted(channel_candidates))).all()
+    channel_ids = {int(channel.id) for channel in channels if channel is not None}
+    contexts: list[LearningAutomationContext] = []
+    if channel_ids:
+        task_context_rows = (
+            session.query(
+                LearningResourceAutomationTaskChannel,
+                LearningResourceAutomationTask,
+                LearningResourceAutomationTaskTarget,
+                PanTransferAccount,
+            )
+            .join(
+                LearningResourceAutomationTask,
+                LearningResourceAutomationTask.id == LearningResourceAutomationTaskChannel.task_id,
+            )
+            .join(
+                LearningResourceAutomationTaskTarget,
+                LearningResourceAutomationTaskTarget.task_id == LearningResourceAutomationTask.id,
+            )
+            .join(
+                PanTransferAccount,
+                PanTransferAccount.id == LearningResourceAutomationTaskTarget.target_account_id,
+            )
+            .filter(
+                LearningResourceAutomationTaskChannel.channel_id.in_(sorted(channel_ids)),
+                LearningResourceAutomationTaskChannel.is_enabled.is_(True),
+                LearningResourceAutomationTask.is_enabled.is_(True),
+                LearningResourceAutomationTask.transfer_policy == "automatic",
+                LearningResourceAutomationTaskTarget.is_enabled.is_(True),
+                PanTransferAccount.is_enabled.is_(True),
+                PanTransferAccount.platform == PLATFORM_QUARK,
+            )
+            .order_by(
+                LearningResourceAutomationTaskChannel.id.asc(),
+                LearningResourceAutomationTaskTarget.id.asc(),
+            )
+            .all()
+        )
+        for task_channel, task, target, account in task_context_rows:
+            if task_id is not None and int(task.id) != int(task_id):
+                continue
+            root = normalize_relative_path(str(target.save_root_name or account.default_save_root or ""))
+            if not root:
+                continue
+            contexts.append(
+                LearningAutomationContext(
+                    task=task,
+                    channel=task_channel,
+                    target=target,
+                    account=account,
+                    channel_key=normalized,
+                    root=root,
+                )
+            )
+
+    if contexts:
+        return contexts
+
+    # Keep direct callers and partially migrated installations functional until
+    # the startup migration has created the task graph.
+    config = get_learning_channel_config(session, normalized)
+    if config is None or not bool(config.is_enabled):
+        return []
+    account = _resolve_learning_account(session, config=config)
+    root = normalize_relative_path(str(config.save_root or (account.default_save_root if account else "") or ""))
+    if account is None or not root:
+        return []
+    legacy_task = LearningResourceAutomationTask(
+        id=None,
+        name=str(config.channel_title or normalized),
+        is_enabled=True,
+        transfer_policy="automatic",
+        status="running",
+        legacy_config_id=int(config.id),
+    )
+    legacy_channel = LearningResourceAutomationTaskChannel(
+        id=None,
+        task_id=None,
+        channel_id=int(channels[0].id) if channels else None,
+        is_enabled=True,
+    )
+    legacy_target = LearningResourceAutomationTaskTarget(
+        id=None,
+        task_id=None,
+        target_account_id=int(account.id),
+        save_root_id=f"path:{root}",
+        save_root_name=root,
+        is_enabled=True,
+        status="ready",
+    )
+    return [LearningAutomationContext(legacy_task, legacy_channel, legacy_target, account, normalized, root)]
 
 
 def _resolve_learning_account(
@@ -667,11 +903,12 @@ def _resource_category_link(
 def _build_learning_paths(
     *,
     account: PanTransferAccount,
-    config: LearningChannelConfig,
+    root: str,
     category: LearningResourceCategory,
     title: str,
 ) -> dict[str, str | None]:
-    root = normalize_relative_path(str(config.save_root or account.default_save_root or ""))
+    del account
+    root = normalize_relative_path(str(root or ""))
     category_root = normalize_relative_path("/".join(part for part in (root, category.directory_name) if part))
     folder_name = sanitize_path_segment(title, fallback="未命名资源", max_length=96)
     return {
@@ -711,7 +948,7 @@ def _find_quark_refs(session: Session, message_id: int) -> list[tuple[MessageLin
 def _create_learning_batch(
     session: Session,
     *,
-    config: LearningChannelConfig,
+    context: LearningAutomationContext,
     jobs: list[tuple[LearningResourceTransferJob, LearningResourceItem, LearningResourceCategory, PanTransferAccount, LinkTarget, Message]],
 ) -> PanTransferBatch:
     batch = PanTransferBatch(
@@ -723,9 +960,11 @@ def _create_learning_batch(
         total_link_target_count=len(jobs),
         started_at=utcnow(),
         request_json={
-            "channel_key": str(config.channel_key or ""),
+            "channel_key": str(context.channel_key or ""),
+            "task_id": int(context.task.id) if context.task.id is not None else None,
+            "target_id": int(context.target.id) if context.target.id is not None else None,
             "target_account_id": int(jobs[0][3].id),
-            "save_root": str(config.save_root or jobs[0][3].default_save_root or ""),
+            "save_root": str(context.root or jobs[0][3].default_save_root or ""),
             "category_ids": sorted({int(category.id) for _, _, category, *_ in jobs}),
         },
         result_json={},
@@ -753,7 +992,9 @@ def _create_learning_batch(
             max_attempts=3,
             extra_json={
                 "learning_resource_job_id": int(job.id),
-                "learning_channel_key": str(config.channel_key or ""),
+                "learning_channel_key": str(context.channel_key or ""),
+                "learning_task_id": int(context.task.id) if context.task.id is not None else None,
+                "learning_target_id": int(context.target.id) if context.target.id is not None else None,
                 "skip_link_replacement": True,
                 "source_message_snapshot": {
                     "title": resource.display_title,
@@ -762,7 +1003,7 @@ def _create_learning_batch(
                 },
                 "resolved_paths": _build_learning_paths(
                     account=account,
-                    config=config,
+                    root=context.root,
                     category=category,
                     title=resource.display_title,
                 ),
@@ -790,17 +1031,24 @@ def enqueue_learning_resources_for_message_ids(
     message_ids: Iterable[int],
     *,
     operator: str = "tg-monitor",
+    task_id: int | None = None,
 ) -> dict[str, int]:
     ensure_runtime_storage_tables()
     normalized_ids = sorted({int(message_id) for message_id in message_ids if int(message_id) > 0})
     if not normalized_ids:
-        return {"messages": 0, "resources": 0, "jobs": 0, "skipped": 0}
+        return {"messages": 0, "resources": 0, "jobs": 0, "skipped": 0, "failed": 0}
 
     messages = session.query(Message).filter(Message.id.in_(normalized_ids)).all()
-    jobs_by_channel: dict[str, list[tuple[LearningResourceTransferJob, LearningResourceItem, LearningResourceCategory, PanTransferAccount, LinkTarget, Message]]] = {}
+    jobs_by_context: dict[
+        tuple[int, int, str],
+        tuple[
+            LearningAutomationContext,
+            list[tuple[LearningResourceTransferJob, LearningResourceItem, LearningResourceCategory, PanTransferAccount, LinkTarget, Message]],
+        ],
+    ] = {}
     processed_messages = 0
     skipped = 0
-    configs_by_key: dict[str, LearningChannelConfig | None] = {}
+    failed = 0
 
     for message in messages:
         channel_key = str(message.monitor_channel_key or "").strip()
@@ -812,19 +1060,18 @@ def enqueue_learning_resources_for_message_ids(
         except ValueError:
             skipped += 1
             continue
-        if channel_key not in configs_by_key:
-            configs_by_key[channel_key] = get_learning_channel_config(session, channel_key)
-        config = configs_by_key[channel_key]
-        if config is None or not bool(config.is_enabled):
+        contexts = _get_learning_automation_contexts(session, channel_key, task_id=task_id)
+        if not contexts:
             skipped += 1
             continue
-        account = _resolve_learning_account(session, config=config)
-        root = normalize_relative_path(str(config.save_root or (account.default_save_root if account else "") or ""))
-        if account is None or not root:
-            config.last_error_message = "学习资料自动转存未配置可用的夸克账号或保存根目录"
-            session.add(config)
-            skipped += 1
-            continue
+
+        for context in contexts:
+            if context.channel.id is not None and (
+                context.channel.last_processed_message_id is None
+                or int(message.id) > int(context.channel.last_processed_message_id)
+            ):
+                context.channel.last_processed_message_id = int(message.id)
+                session.add(context.channel)
 
         quark_refs = _find_quark_refs(session, int(message.id))
         if not quark_refs:
@@ -834,141 +1081,205 @@ def enqueue_learning_resources_for_message_ids(
         title = _display_title(message)
         normalized_title = normalize_learning_title(title)
         classification = classify_learning_message(message)
-        category = _get_or_create_category(
-            session,
-            name=str(classification["name"]),
-            operator=operator,
-        )
-        resource = (
-            session.query(LearningResourceItem)
-            .filter(
-                LearningResourceItem.source_channel_key == channel_key,
-                LearningResourceItem.normalized_title == normalized_title,
-            )
-            .first()
-        )
+        resource: LearningResourceItem | None = None
         source_at = message.timestamp or message.created_at or utcnow()
-        if resource is None:
-            resource = LearningResourceItem(
-                display_title=title,
-                normalized_title=normalized_title,
-                status=LEARNING_STATUS_PENDING,
-                primary_category_id=int(category.id),
-                source_channel_key=channel_key,
-                first_source_message_id=int(message.id),
-                latest_source_message_id=int(message.id),
-                latest_source_at=source_at,
-                tags=[_clean_tag(tag) for tag in list(message.tags or []) if _clean_tag(tag)],
-                classification_source=str(classification["source"]),
-                classification_confidence=str(classification["confidence"]),
-                created_by=operator,
-                updated_by=operator,
-            )
-            session.add(resource)
-            session.flush()
-        elif resource.latest_source_at is None or source_at >= resource.latest_source_at:
-            resource.display_title = title
-            resource.latest_source_message_id = int(message.id)
-            resource.latest_source_at = source_at
-            resource.primary_category_id = int(category.id)
-            resource.classification_source = str(classification["source"])
-            resource.classification_confidence = str(classification["confidence"])
-            resource.tags = [_clean_tag(tag) for tag in list(message.tags or []) if _clean_tag(tag)]
-            resource.updated_by = operator
-            session.add(resource)
-        _resource_category_link(
-            session,
-            resource_id=int(resource.id),
-            category_id=int(category.id),
-        )
 
-        for ref, target in quark_refs:
-            fingerprint = _source_fingerprint(target)
-            link = (
-                session.query(LearningResourceLink)
-                .filter(
-                    LearningResourceLink.resource_id == int(resource.id),
-                    LearningResourceLink.url_fingerprint == fingerprint,
-                )
-                .first()
+        for context in contexts:
+            category = (
+                session.get(LearningResourceCategory, int(context.channel.default_category_id))
+                if context.channel.default_category_id
+                else None
             )
-            if link is not None and link.status == "published" and link.share_url:
-                continue
-            published_link = (
-                session.query(LearningResourceLink)
-                .filter(
-                    LearningResourceLink.resource_id == int(resource.id),
-                    LearningResourceLink.id != int(link.id) if link is not None else True,
-                    LearningResourceLink.is_primary.is_(True),
-                    LearningResourceLink.status == "published",
-                    LearningResourceLink.share_url.isnot(None),
+            if category is None:
+                category = _get_or_create_category(
+                    session,
+                    name=str(classification["name"]),
+                    operator=operator,
                 )
-                .first()
-            )
-            if link is None:
-                link = LearningResourceLink(
-                    resource_id=int(resource.id),
-                    platform=PLATFORM_QUARK,
-                    source_url=str(target.original_url or ref.target_url or ""),
-                    url_fingerprint=fingerprint,
-                    target_account_id=int(account.id),
-                    source_link_target_id=int(target.id),
-                    is_primary=published_link is None,
-                    is_enabled=True,
-                    status="pending",
+            if resource is None:
+                resource = (
+                    session.query(LearningResourceItem)
+                    .filter(
+                        LearningResourceItem.source_channel_key == channel_key,
+                        LearningResourceItem.normalized_title == normalized_title,
+                    )
+                    .first()
                 )
-                session.add(link)
-                session.flush()
-            else:
-                link.target_account_id = int(account.id)
-                link.is_enabled = True
-                link.status = "pending"
-                link.last_error_message = None
-                session.add(link)
-            job = (
-                session.query(LearningResourceTransferJob)
-                .filter(
-                    LearningResourceTransferJob.resource_id == int(resource.id),
-                    LearningResourceTransferJob.source_link_target_id == int(target.id),
+                if resource is None:
+                    resource = LearningResourceItem(
+                        display_title=title,
+                        normalized_title=normalized_title,
+                        status=LEARNING_STATUS_PENDING,
+                        primary_category_id=int(category.id),
+                        source_channel_key=channel_key,
+                        first_source_message_id=int(message.id),
+                        latest_source_message_id=int(message.id),
+                        latest_source_at=source_at,
+                        tags=[_clean_tag(tag) for tag in list(message.tags or []) if _clean_tag(tag)],
+                        classification_source=str(classification["source"]),
+                        classification_confidence=str(classification["confidence"]),
+                        created_by=operator,
+                        updated_by=operator,
+                    )
+                    session.add(resource)
+                    session.flush()
+                elif resource.latest_source_at is None or source_at >= resource.latest_source_at:
+                    resource.display_title = title
+                    resource.latest_source_message_id = int(message.id)
+                    resource.latest_source_at = source_at
+                    resource.primary_category_id = int(category.id)
+                    resource.classification_source = str(classification["source"])
+                    resource.classification_confidence = str(classification["confidence"])
+                    resource.tags = [_clean_tag(tag) for tag in list(message.tags or []) if _clean_tag(tag)]
+                    resource.updated_by = operator
+                    session.add(resource)
+            _resource_category_link(session, resource_id=int(resource.id), category_id=int(category.id))
+            context_jobs: list[tuple[LearningResourceTransferJob, LearningResourceItem, LearningResourceCategory, PanTransferAccount, LinkTarget, Message]] = []
+
+            for ref, target in quark_refs:
+                fingerprint = _source_fingerprint(target)
+                link = (
+                    session.query(LearningResourceLink)
+                    .filter(
+                        LearningResourceLink.resource_id == int(resource.id),
+                        LearningResourceLink.url_fingerprint == fingerprint,
+                        LearningResourceLink.target_account_id == int(context.account.id),
+                    )
+                    .first()
                 )
-                .first()
-            )
-            if job is not None and job.status in {LEARNING_JOB_QUEUED, LEARNING_JOB_TRANSFERRING}:
-                continue
-            if job is None:
-                job = LearningResourceTransferJob(
+                if link is not None and link.status == "published" and link.share_url:
+                    continue
+                published_link = (
+                    session.query(LearningResourceLink)
+                    .filter(
+                        LearningResourceLink.resource_id == int(resource.id),
+                        LearningResourceLink.target_account_id == int(context.account.id),
+                        LearningResourceLink.is_primary.is_(True),
+                        LearningResourceLink.status == "published",
+                        LearningResourceLink.share_url.isnot(None),
+                    )
+                    .first()
+                )
+                if link is None:
+                    link = LearningResourceLink(
+                        resource_id=int(resource.id),
+                        platform=PLATFORM_QUARK,
+                        source_url=str(target.original_url or ref.target_url or ""),
+                        url_fingerprint=fingerprint,
+                        target_account_id=int(context.account.id),
+                        source_link_target_id=int(target.id),
+                        is_primary=published_link is None,
+                        is_enabled=True,
+                        status="pending",
+                    )
+                    session.add(link)
+                    session.flush()
+                else:
+                    link.target_account_id = int(context.account.id)
+                    link.source_link_target_id = int(target.id)
+                    link.is_enabled = True
+                    link.status = "pending"
+                    link.last_error_message = None
+                    session.add(link)
+                job = (
+                    session.query(LearningResourceTransferJob)
+                    .filter(
+                        LearningResourceTransferJob.resource_id == int(resource.id),
+                        LearningResourceTransferJob.source_link_target_id == int(target.id),
+                        LearningResourceTransferJob.target_account_id == int(context.account.id),
+                    )
+                    .first()
+                )
+                if job is not None and job.status in {LEARNING_JOB_QUEUED, LEARNING_JOB_TRANSFERRING}:
+                    continue
+                if job is not None and job.status == LEARNING_JOB_PUBLISHED and link.share_url:
+                    continue
+                if job is not None and job.batch_item_id:
+                    existing_item = session.get(PanTransferBatchItem, int(job.batch_item_id))
+                    if existing_item is not None and existing_item.transfer_status in {"failed", "retry_wait", "paused"}:
+                        existing_item.transfer_status = "queued"
+                        existing_item.next_retry_at = None
+                        existing_item.error_message = None
+                        existing_item.locked_by = None
+                        existing_item.locked_at = None
+                        existing_item.finished_at = None
+                        session.add(existing_item)
+                        batch = session.get(PanTransferBatch, int(existing_item.batch_id))
+                        if batch is not None:
+                            batch.status = "running"
+                            batch.finished_at = None
+                            session.add(batch)
+                        job.status = LEARNING_JOB_QUEUED
+                        job.last_error_message = None
+                        session.add(job)
+                        _record_learning_process_log(
+                            session,
+                            stage="retrying",
+                            message="已将失败的学习资料任务重新加入队列",
+                            task_id=int(context.task.id) if context.task.id is not None else None,
+                            channel_id=int(context.channel.channel_id) if context.channel.channel_id is not None else None,
+                            target_id=int(context.target.id) if context.target.id is not None else None,
+                            resource_id=int(resource.id),
+                            transfer_job_id=int(job.id),
+                            source_message_id=int(message.id),
+                        )
+                        continue
+                if job is None:
+                    job = LearningResourceTransferJob(
+                        task_id=int(context.task.id) if context.task.id is not None else None,
+                        resource_id=int(resource.id),
+                        source_message_id=int(message.id),
+                        source_link_target_id=int(target.id),
+                        target_account_id=int(context.account.id),
+                        category_id=int(category.id),
+                        status=LEARNING_JOB_QUEUED,
+                    )
+                    session.add(job)
+                    session.flush()
+                else:
+                    job.task_id = int(context.task.id) if context.task.id is not None else job.task_id
+                    job.source_message_id = int(message.id)
+                    job.target_account_id = int(context.account.id)
+                    job.category_id = int(category.id)
+                    job.status = LEARNING_JOB_QUEUED
+                    job.last_error_message = None
+                    session.add(job)
+                context_jobs.append((job, resource, category, context.account, target, message))
+                if published_link is None and resource.status != LEARNING_STATUS_HIDDEN:
+                    resource.status = LEARNING_STATUS_TRANSFERRING
+                session.add(resource)
+
+            if context_jobs:
+                group_key = (
+                    int(context.task.id or context.task.legacy_config_id or 0),
+                    int(context.target.id or context.account.id),
+                    context.root,
+                )
+                group = jobs_by_context.setdefault(group_key, (context, []))
+                group[1].extend(context_jobs)
+                context.task.last_enqueued_at = utcnow()
+                session.add(context.task)
+                _record_learning_process_log(
+                    session,
+                    stage="enqueued",
+                    message=f"已为目标账号加入 {len(context_jobs)} 个学习资料转存任务",
+                    task_id=int(context.task.id) if context.task.id is not None else None,
+                    channel_id=int(context.channel.channel_id) if context.channel.channel_id is not None else None,
+                    target_id=int(context.target.id) if context.target.id is not None else None,
                     resource_id=int(resource.id),
                     source_message_id=int(message.id),
-                    source_link_target_id=int(target.id),
-                    target_account_id=int(account.id),
-                    category_id=int(category.id),
-                    status=LEARNING_JOB_QUEUED,
+                    details={"job_count": len(context_jobs), "target_account_id": int(context.account.id)},
                 )
-                session.add(job)
-                session.flush()
-            else:
-                job.source_message_id = int(message.id)
-                job.target_account_id = int(account.id)
-                job.category_id = int(category.id)
-                job.status = LEARNING_JOB_QUEUED
-                job.last_error_message = None
-                session.add(job)
-            jobs_by_channel.setdefault(channel_key, []).append((job, resource, category, account, target, message))
-            if published_link is None and resource.status != LEARNING_STATUS_HIDDEN:
-                resource.status = LEARNING_STATUS_TRANSFERRING
-            session.add(resource)
 
-        config.last_processed_message_id = max(int(config.last_processed_message_id or 0), int(message.id))
-        session.add(config)
-
-    for channel_key, jobs in jobs_by_channel.items():
+    for context, jobs in jobs_by_context.values():
         if jobs:
-            _create_learning_batch(session, config=configs_by_key[channel_key], jobs=jobs)
+            _create_learning_batch(session, context=context, jobs=jobs)
     return {
         "messages": processed_messages,
-        "resources": len({int(job[1].id) for jobs in jobs_by_channel.values() for job in jobs}),
-        "jobs": sum(len(jobs) for jobs in jobs_by_channel.values()),
+        "resources": len({int(job[1].id) for context, jobs in jobs_by_context.values() for job in jobs}),
+        "jobs": sum(len(jobs) for context, jobs in jobs_by_context.values()),
         "skipped": skipped,
+        "failed": failed,
     }
 
 
@@ -985,17 +1296,34 @@ def sync_learning_resource_after_transfer(
     job = session.get(LearningResourceTransferJob, int(job_id))
     if job is None:
         return
+    extra_json = dict(item.extra_json or {})
+    task_id = int(job.task_id) if job.task_id else int(extra_json.get("learning_task_id") or 0) or None
+    target_id = int(extra_json.get("learning_target_id") or 0) or None
     resource = session.get(LearningResourceItem, int(job.resource_id))
     link = (
         session.query(LearningResourceLink)
         .filter(
             LearningResourceLink.resource_id == int(job.resource_id),
             LearningResourceLink.source_link_target_id == int(job.source_link_target_id),
+            LearningResourceLink.target_account_id == int(job.target_account_id),
         )
         .first()
     )
+    if link is None:
+        # Jobs created before target-account scoping used a nullable link target.
+        link = (
+            session.query(LearningResourceLink)
+            .filter(
+                LearningResourceLink.resource_id == int(job.resource_id),
+                LearningResourceLink.source_link_target_id == int(job.source_link_target_id),
+                LearningResourceLink.target_account_id.is_(None),
+            )
+            .first()
+        )
+        if link is not None:
+            link.target_account_id = int(job.target_account_id)
+            session.add(link)
     if success:
-        job.status = LEARNING_JOB_PUBLISHED
         job.attempt_count = max(1, int(job.attempt_count or 0) + 1)
         job.last_error_message = None
         if link is not None:
@@ -1011,12 +1339,38 @@ def sync_learning_resource_after_transfer(
                     LearningResourceLink.id != int(link.id),
                 ).update({"is_primary": False, "is_enabled": False}, synchronize_session=False)
         if resource is not None:
-            resource.status = LEARNING_STATUS_PUBLISHED if link is not None and link.share_url else LEARNING_STATUS_FAILED
+            if resource.status != LEARNING_STATUS_HIDDEN:
+                resource.status = LEARNING_STATUS_PUBLISHED if link is not None and link.share_url else LEARNING_STATUS_FAILED
             if resource.status == LEARNING_STATUS_PUBLISHED:
                 resource.last_published_at = utcnow()
             resource.updated_by = "tg-worker"
             session.add(resource)
-        job.status = LEARNING_JOB_PUBLISHED if resource is None or resource.status == LEARNING_STATUS_PUBLISHED else LEARNING_JOB_FAILED
+        job.status = LEARNING_JOB_PUBLISHED if resource is None or bool(link is not None and link.share_url) else LEARNING_JOB_FAILED
+        published = job.status == LEARNING_JOB_PUBLISHED
+        if task_id is not None:
+            _record_learning_process_log(
+                session,
+                stage="published" if published else "failed",
+                level="info" if published else "error",
+                message="学习资料已完成转存并发布分享链接" if published else "转存完成但未生成有效分享链接",
+                task_id=task_id,
+                target_id=target_id,
+                resource_id=int(resource.id) if resource is not None else None,
+                transfer_job_id=int(job.id),
+                source_message_id=int(job.source_message_id) if job.source_message_id else None,
+                details={"share_url_created": bool(link is not None and link.share_url)},
+            )
+            task = session.get(LearningResourceAutomationTask, int(task_id))
+            target = session.get(LearningResourceAutomationTaskTarget, int(target_id)) if target_id else None
+            if published:
+                if task is not None:
+                    task.last_success_at = utcnow()
+                    task.last_error_message = None
+                    session.add(task)
+                if target is not None:
+                    target.last_success_at = utcnow()
+                    target.last_error_message = None
+                    session.add(target)
     else:
         retry_waiting = str(item.transfer_status or "") == "retry_wait"
         job.status = LEARNING_JOB_QUEUED if retry_waiting else LEARNING_JOB_FAILED
@@ -1026,7 +1380,7 @@ def sync_learning_resource_after_transfer(
             link.status = "failed"
             link.last_error_message = job.last_error_message
             session.add(link)
-        if resource is not None and not retry_waiting:
+        if resource is not None and not retry_waiting and resource.status != LEARNING_STATUS_HIDDEN:
             fallback_link = (
                 session.query(LearningResourceLink)
                 .filter(
@@ -1042,7 +1396,32 @@ def sync_learning_resource_after_transfer(
             resource.status = LEARNING_STATUS_PUBLISHED if fallback_link is not None else LEARNING_STATUS_FAILED
             resource.updated_by = "tg-worker"
             session.add(resource)
+        if task_id is not None:
+            _record_learning_process_log(
+                session,
+                stage="retrying" if retry_waiting else "failed",
+                level="warning" if retry_waiting else "error",
+                message="学习资料转存失败，已等待自动重试" if retry_waiting else "学习资料转存失败",
+                task_id=task_id,
+                target_id=target_id,
+                resource_id=int(resource.id) if resource is not None else None,
+                transfer_job_id=int(job.id),
+                source_message_id=int(job.source_message_id) if job.source_message_id else None,
+                details={"retry_waiting": retry_waiting, "error": job.last_error_message},
+            )
+            task = session.get(LearningResourceAutomationTask, int(task_id))
+            target = session.get(LearningResourceAutomationTaskTarget, int(target_id)) if target_id else None
+            if task is not None:
+                task.last_error_message = job.last_error_message
+                session.add(task)
+            if target is not None:
+                target.last_error_message = job.last_error_message
+                session.add(target)
     session.add(job)
+    if task_id is not None:
+        from app.services.learning_automation import refresh_learning_automation_task_health
+
+        refresh_learning_automation_task_health(session, int(task_id))
     session.flush()
 
 
@@ -1784,6 +2163,14 @@ def update_learning_channel_config(
     config.updated_by = operator
     config.last_error_message = None
     session.add(config)
+    from app.services.learning_automation import sync_legacy_learning_channel_config
+
+    sync_legacy_learning_channel_config(
+        session,
+        config=config,
+        channel_id=int(channel.id),
+        operator=operator,
+    )
     if not config.is_enabled:
         pause_learning_channel_tasks(session, channel_key)
     else:
@@ -1817,6 +2204,7 @@ __all__ = [
     "pause_learning_channel_tasks",
     "parse_learning_import_file",
     "preview_learning_import",
+    "record_learning_enqueue_failure",
     "resume_learning_channel_tasks",
     "retry_learning_resource",
     "sync_learning_resource_after_transfer",

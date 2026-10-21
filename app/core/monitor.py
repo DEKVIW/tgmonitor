@@ -26,7 +26,10 @@ from app.services.resource_ops import (
 from app.services.channel_daily_stats_service import (
     accumulate_channel_daily_stats_for_message_ids,
 )
-from app.services.learning_resources import enqueue_learning_resources_for_message_ids
+from app.services.learning_resources import (
+    enqueue_learning_resources_for_message_ids,
+    record_learning_enqueue_failure,
+)
 from app.services.pan_transfer.follow_triggers import enqueue_follow_trigger_events_for_message_ids
 from app.services.monitor_runtime import write_monitor_runtime_state
 from app.services.system_config_service import get_monitor_runtime_config
@@ -411,6 +414,26 @@ async def handler(event: Any) -> None:
                                         resources=learning_result.get("resources"),
                                     )
                             except Exception as learning_enqueue_error:
+                                enqueue_error = learning_enqueue_error
+                                try:
+                                    async with session.begin_nested():
+                                        await session.run_sync(
+                                            lambda sync_session, error=enqueue_error: record_learning_enqueue_failure(
+                                                sync_session,
+                                                message_ids=new_message_ids,
+                                                channel_key=channel_name,
+                                                error_message=error,
+                                            )
+                                        )
+                                except Exception as learning_log_error:
+                                    log_monitor_event(
+                                        logger,
+                                        "learning_resources_enqueue_failure_log_failed",
+                                        level=logging.ERROR,
+                                        channel=channel_name,
+                                        error=str(learning_log_error),
+                                        affected_messages=len(new_message_ids),
+                                    )
                                 log_monitor_event(
                                     logger,
                                     "learning_resources_enqueue_failed",

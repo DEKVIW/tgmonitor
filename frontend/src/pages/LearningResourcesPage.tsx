@@ -1,25 +1,34 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Alert, Button, Input, List, Modal, Popconfirm, Select, Space, Switch, Table, Tag, Tooltip, Typography, Upload, message } from 'antd'
-import { ArrowLeftOutlined, DeleteOutlined, FolderOpenOutlined, ReloadOutlined, SaveOutlined, UploadOutlined } from '@ant-design/icons'
+import { ArrowLeftOutlined, DeleteOutlined, EditOutlined, ExclamationCircleOutlined, FileSearchOutlined, FolderOpenOutlined, MinusCircleOutlined, PauseCircleOutlined, PlayCircleOutlined, PlusOutlined, ReloadOutlined, SyncOutlined, UploadOutlined } from '@ant-design/icons'
 import { useAuthStore } from '@/store/authStore'
 import {
   deleteAllImportedLearningResources,
   deleteLearningResource,
   getLearningAdminItems,
   getLearningAdminOverview,
+  getLearningAutomationLogs,
+  getLearningAutomationTasks,
   getLearningDirectories,
   getPublicLearningCategories,
   getPublicLearningResources,
   confirmLearningImport,
   previewLearningImport,
   retryLearningResource,
+  retryLearningAutomationTask,
+  createLearningAutomationTask,
+  processLearningAutomationTaskNow,
+  pauseLearningAutomationTask,
+  resumeLearningAutomationTask,
+  updateLearningAutomationTask,
   updateLearningResource,
-  updateLearningChannel,
 } from '@/api/learningResources'
 import type {
   LearningAdminOverview,
   LearningCategory,
   LearningDirectory,
+  LearningAutomationTask,
+  LearningAutomationTaskTarget,
   LearningImportPreview,
   LearningResource,
 } from '@/types/learningResources'
@@ -29,6 +38,31 @@ import { cleanLearningSheetText } from '@/utils/learningResources'
 import './LearningResourcesPage.css'
 
 const { Text } = Typography
+
+type TaskDraftTarget = LearningAutomationTaskTarget
+
+type LearningTaskDraft = {
+  name: string
+  is_enabled: boolean
+  channel_ids: number[]
+  targets: TaskDraftTarget[]
+}
+
+const taskStatusLabel: Record<string, string> = {
+  running: '处理中',
+  waiting: '等待消息',
+  degraded: '有失败任务',
+  paused: '已暂停',
+  invalid: '配置不完整',
+}
+
+const taskStatusColor: Record<string, string> = {
+  running: 'processing',
+  waiting: 'default',
+  degraded: 'warning',
+  paused: 'default',
+  invalid: 'error',
+}
 
 const getRequestErrorMessage = (error: unknown, fallback: string) => {
   if (typeof error === 'object' && error !== null && 'response' in error) {
@@ -51,13 +85,15 @@ const LearningResourcesPage = () => {
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const [selectedChannelId, setSelectedChannelId] = useState<number | null>(null)
-  const [channelDraft, setChannelDraft] = useState({
-    is_enabled: false,
-    target_account_id: undefined as number | undefined,
-    save_root: '',
-  })
-  const [savingConfig, setSavingConfig] = useState(false)
+  const [automationTasks, setAutomationTasks] = useState<LearningAutomationTask[]>([])
+  const [taskModalOpen, setTaskModalOpen] = useState(false)
+  const [editingTaskId, setEditingTaskId] = useState<number | null>(null)
+  const [taskDraft, setTaskDraft] = useState<LearningTaskDraft>({ name: '', is_enabled: false, channel_ids: [], targets: [] })
+  const [savingTask, setSavingTask] = useState(false)
+  const [taskBusyId, setTaskBusyId] = useState<number | null>(null)
+  const [taskLogs, setTaskLogs] = useState<Array<{ id: number; stage: string; level: string; message: string; created_at?: string | null }>>([])
+  const [taskLogsOpen, setTaskLogsOpen] = useState(false)
+  const [taskLogsLoading, setTaskLogsLoading] = useState(false)
   const [maintenanceBusyId, setMaintenanceBusyId] = useState<number | null>(null)
   const [editingId, setEditingId] = useState<number | null>(null)
   const [editDraft, setEditDraft] = useState({ display_title: '', category: '', tags: '', share_url: '' })
@@ -68,18 +104,14 @@ const LearningResourcesPage = () => {
   const [importRoot, setImportRoot] = useState('')
   const [importConfirming, setImportConfirming] = useState(false)
   const [directoryModalOpen, setDirectoryModalOpen] = useState(false)
-  const [directoryTarget, setDirectoryTarget] = useState<'channel' | 'import'>('channel')
+  const [directoryTarget, setDirectoryTarget] = useState<'task' | 'import'>('task')
+  const [directoryTargetIndex, setDirectoryTargetIndex] = useState<number | null>(null)
   const [directoryAccountId, setDirectoryAccountId] = useState<number | undefined>(undefined)
   const [directoryLoading, setDirectoryLoading] = useState(false)
   const [directoryItems, setDirectoryItems] = useState<LearningDirectory[]>([])
   const [directoryStack, setDirectoryStack] = useState<Array<{ id: string; name: string; path: string }>>([])
   const requestSequenceRef = useRef(0)
   const loadMoreRequestedRef = useRef(false)
-
-  const selectedChannel = useMemo(
-    () => overview?.channels.find((channel) => channel.channel_id === selectedChannelId) ?? null,
-    [overview, selectedChannelId],
-  )
 
   const load = useCallback(async (targetPage: number) => {
     const requestId = requestSequenceRef.current + 1
@@ -96,9 +128,10 @@ const LearningResourcesPage = () => {
           page_size: pageSize,
         })
         if (targetPage === 1) {
-          const [overviewData, adminData] = await Promise.all([getLearningAdminOverview(), adminDataRequest])
+          const [overviewData, adminData, taskData] = await Promise.all([getLearningAdminOverview(), adminDataRequest, getLearningAutomationTasks()])
           if (requestId !== requestSequenceRef.current) return
           setOverview(overviewData)
+          setAutomationTasks(taskData.items)
           setCategories(overviewData.categories.map((category) => ({
             id: category.id,
             name: category.name,
@@ -109,9 +142,6 @@ const LearningResourcesPage = () => {
           const items = adminData.items.map((item) => ({ ...item, share_url: item.share_url || '', platform: item.platform || '' }))
           setResources(items)
           setResourceTotal(adminData.total)
-          if (overviewData.channels.length > 0) {
-            setSelectedChannelId((current) => current ?? overviewData.channels[0].channel_id)
-          }
         } else {
           const adminData = await adminDataRequest
           if (requestId !== requestSequenceRef.current) return
@@ -176,26 +206,122 @@ const LearningResourcesPage = () => {
     setPage((current) => current + 1)
   }, [loading, resources.length, resourceTotal])
 
-  useEffect(() => {
-    if (!selectedChannel) return
-    setChannelDraft({
-      is_enabled: selectedChannel.is_enabled,
-      target_account_id: selectedChannel.target_account_id ?? undefined,
-      save_root: selectedChannel.save_root,
-    })
-  }, [selectedChannel])
+  const buildTaskDraft = (task?: LearningAutomationTask): LearningTaskDraft => ({
+    name: task?.name || '',
+    is_enabled: Boolean(task?.is_enabled),
+    channel_ids: task?.channels.filter((channel) => channel.is_enabled).map((channel) => channel.channel_id) || [],
+    targets: task?.targets.map((target) => ({ ...target })) || [],
+  })
 
-  const handleSaveConfig = async () => {
-    if (!selectedChannel) return
-    setSavingConfig(true)
+  const openCreateTask = () => {
+    const firstAccount = overview?.accounts.find((account) => account.is_enabled)
+    setEditingTaskId(null)
+    setTaskDraft({
+      name: '',
+      is_enabled: false,
+      channel_ids: [],
+      targets: firstAccount ? [{ target_account_id: firstAccount.id, save_root_id: '0', save_root_name: firstAccount.default_save_root, auto_create_category_dirs: true, is_enabled: true }] : [],
+    })
+    setTaskModalOpen(true)
+  }
+
+  const openEditTask = (task: LearningAutomationTask) => {
+    setEditingTaskId(task.id)
+    setTaskDraft(buildTaskDraft(task))
+    setTaskModalOpen(true)
+  }
+
+  const handleSaveTask = async () => {
+    if (!taskDraft.name.trim() || taskDraft.channel_ids.length === 0 || taskDraft.targets.length === 0) {
+      message.warning('请填写任务名称，并至少选择一个频道和一个转存目标')
+      return
+    }
+    setSavingTask(true)
     try {
-      await updateLearningChannel(selectedChannel.channel_id, channelDraft)
-      message.success(channelDraft.is_enabled ? '自动监听与转存已开启' : '自动监听与转存已暂停')
+      const payload = {
+        name: taskDraft.name.trim(),
+        is_enabled: taskDraft.is_enabled,
+        backfill_policy: 'new_messages_only',
+        channels: taskDraft.channel_ids.map((channelId) => ({ channel_id: channelId, is_enabled: true })),
+        targets: taskDraft.targets.map((target) => ({
+          id: target.id || undefined,
+          target_account_id: target.target_account_id,
+          save_root_id: target.save_root_id || '0',
+          save_root_name: target.save_root_name || '',
+          auto_create_category_dirs: target.auto_create_category_dirs,
+          is_enabled: target.is_enabled,
+        })),
+      }
+      if (editingTaskId) {
+        await updateLearningAutomationTask(editingTaskId, payload)
+      } else {
+        await createLearningAutomationTask(payload)
+      }
+      message.success(taskDraft.is_enabled ? '自动监听与转存已开启' : '任务配置已保存，当前未启动')
+      setTaskModalOpen(false)
       await refreshFirstPage()
     } catch (saveError: unknown) {
-      message.error(getRequestErrorMessage(saveError, '保存学习资料配置失败'))
+      message.error(getRequestErrorMessage(saveError, '保存自动转存任务失败'))
     } finally {
-      setSavingConfig(false)
+      setSavingTask(false)
+    }
+  }
+
+  const handleTaskToggle = async (task: LearningAutomationTask) => {
+    setTaskBusyId(task.id)
+    try {
+      if (task.is_enabled) {
+        await pauseLearningAutomationTask(task.id)
+        message.success('自动任务已暂停')
+      } else {
+        await resumeLearningAutomationTask(task.id)
+        message.success('自动任务已恢复')
+      }
+      await refreshFirstPage()
+    } catch (taskError: unknown) {
+      message.error(getRequestErrorMessage(taskError, '更新自动任务状态失败'))
+    } finally {
+      setTaskBusyId(null)
+    }
+  }
+
+  const handleProcessTask = async (task: LearningAutomationTask) => {
+    setTaskBusyId(task.id)
+    try {
+      const result = await processLearningAutomationTaskNow(task.id)
+      message.success(`已检查 ${result.selected_messages} 条消息，新增 ${result.jobs || 0} 个转存任务`)
+      await refreshFirstPage()
+    } catch (taskError: unknown) {
+      message.error(getRequestErrorMessage(taskError, '立即处理失败'))
+    } finally {
+      setTaskBusyId(null)
+    }
+  }
+
+  const handleRetryTask = async (task: LearningAutomationTask) => {
+    setTaskBusyId(task.id)
+    try {
+      const result = await retryLearningAutomationTask(task.id)
+      message.success(`已重新加入 ${result.retried_count} 个失败任务`)
+      await refreshFirstPage()
+    } catch (taskError: unknown) {
+      message.error(getRequestErrorMessage(taskError, '重试失败任务失败'))
+    } finally {
+      setTaskBusyId(null)
+    }
+  }
+
+  const handleViewTaskLogs = async (task: LearningAutomationTask) => {
+    setTaskLogsOpen(true)
+    setTaskLogsLoading(true)
+    try {
+      const result = await getLearningAutomationLogs(task.id)
+      setTaskLogs(result.items)
+    } catch (logError: unknown) {
+      message.error(getRequestErrorMessage(logError, '读取任务日志失败'))
+      setTaskLogs([])
+    } finally {
+      setTaskLogsLoading(false)
     }
   }
 
@@ -211,13 +337,16 @@ const LearningResourcesPage = () => {
     }
   }
 
-  const openDirectoryPicker = async (target: 'channel' | 'import') => {
-    const accountId = target === 'channel' ? channelDraft.target_account_id : importAccountId
+  const openDirectoryPicker = async (target: 'task' | 'import', targetIndex?: number) => {
+    const accountId = target === 'task'
+      ? (targetIndex === undefined ? undefined : taskDraft.targets[targetIndex]?.target_account_id)
+      : importAccountId
     if (!accountId) {
       message.warning('请先选择已配置的夸克账号')
       return
     }
     setDirectoryTarget(target)
+    setDirectoryTargetIndex(targetIndex ?? null)
     setDirectoryAccountId(accountId)
     setDirectoryStack([{ id: '0', name: '网盘根目录', path: '' }])
     setDirectoryModalOpen(true)
@@ -241,8 +370,14 @@ const LearningResourcesPage = () => {
 
   const handleDirectorySelect = () => {
     const currentPath = directoryStack[directoryStack.length - 1]?.path || ''
-    if (directoryTarget === 'channel') {
-      setChannelDraft((draft) => ({ ...draft, save_root: currentPath }))
+    const currentId = directoryStack[directoryStack.length - 1]?.id || '0'
+    if (directoryTarget === 'task' && directoryTargetIndex !== null) {
+      setTaskDraft((draft) => ({
+        ...draft,
+        targets: draft.targets.map((target, index) => index === directoryTargetIndex
+          ? { ...target, save_root_id: currentId, save_root_name: currentPath }
+          : target),
+      }))
     } else {
       setImportRoot(currentPath)
     }
@@ -366,49 +501,47 @@ const LearningResourcesPage = () => {
   return (
     <div className="learning-resources-page">
       {isAdmin && overview ? (
-        <section className="learning-config-panel">
+        <section className="learning-config-panel learning-automation-panel">
           <div className="learning-config-heading">
             <div>
               <Text strong>自动监听与转存</Text>
-              <Text type="secondary">关闭时不创建新任务；已发布资料不会被删除。</Text>
+              <Text type="secondary">只有已启动的任务才会处理所选频道的新消息；已发布资料不会因暂停任务被删除。</Text>
             </div>
-            <Tag color={channelDraft.is_enabled ? 'green' : 'default'}>{channelDraft.is_enabled ? '运行中' : '已暂停'}</Tag>
+            <Button type="primary" icon={<PlusOutlined />} onClick={openCreateTask}>新建自动任务</Button>
           </div>
-          <Space wrap className="learning-config-controls">
-            <Select
-              value={selectedChannelId ?? undefined}
-              placeholder="选择监听频道"
-              options={overview.channels.map((channel) => ({ value: channel.channel_id, label: channel.channel_key + ' · ' + channel.channel_title }))}
-              onChange={setSelectedChannelId}
-              style={{ minWidth: 230 }}
-            />
-            <Select
-              value={channelDraft.target_account_id}
-              placeholder="夸克账号"
-              options={overview.accounts.filter((account) => account.is_enabled).map((account) => ({ value: account.id, label: account.account_name }))}
-              onChange={(value) => setChannelDraft((draft) => ({ ...draft, target_account_id: value }))}
-              style={{ minWidth: 160 }}
-            />
-            <Input
-              value={channelDraft.save_root}
-              placeholder="学习资料根目录（可留空使用账号默认目录）"
-              onChange={(event) => setChannelDraft((draft) => ({ ...draft, save_root: event.target.value }))}
-              style={{ width: 220 }}
-            />
-            <Button
-              icon={<FolderOpenOutlined />}
-              onClick={() => void openDirectoryPicker('channel')}
-              disabled={!channelDraft.target_account_id}
-            >
-              选择目录
-            </Button>
-            <Space size={6}>
-              <Switch checked={channelDraft.is_enabled} onChange={(checked) => setChannelDraft((draft) => ({ ...draft, is_enabled: checked }))} />
-              <Text>启用自动流程</Text>
-            </Space>
-            <Button type="primary" icon={<SaveOutlined />} loading={savingConfig} onClick={() => void handleSaveConfig()}>保存配置</Button>
-          </Space>
-          {selectedChannel?.last_error_message ? <Alert className="learning-config-error" type="warning" showIcon message={selectedChannel.last_error_message} /> : null}
+          {automationTasks.length === 0 ? (
+            <div className="learning-task-empty">还没有自动任务。先选择监听频道和夸克账号，保存后再启动。</div>
+          ) : (
+            <div className="learning-task-list">
+              {automationTasks.map((task) => (
+                <article className="learning-task-row" key={task.id}>
+                  <div className="learning-task-main">
+                    <div className="learning-task-title-line">
+                      <Text strong>{task.name}</Text>
+                      <Tag color={taskStatusColor[task.status] || 'default'}>{taskStatusLabel[task.status] || task.status}</Tag>
+                      {task.is_enabled ? <Tag color="green">自动监听已开启</Tag> : null}
+                    </div>
+                    <div className="learning-task-meta">
+                      <span>频道：{task.channels.filter((channel) => channel.is_enabled).map((channel) => channel.channel_key || channel.channel_title).join('、') || '未配置'}</span>
+                      <span>目标：{task.targets.filter((target) => target.is_enabled).map((target) => target.account_name || `账号 ${target.target_account_id}`).join('、') || '未配置'}</span>
+                      <span>待处理 {task.pending_count}</span>
+                      {task.failed_count > 0 ? <span className="learning-task-error-text">失败 {task.failed_count}</span> : null}
+                    </div>
+                    {task.last_error_message ? <div className="learning-task-error"><ExclamationCircleOutlined /> {task.last_error_message}</div> : null}
+                  </div>
+                  <Space className="learning-task-actions" wrap>
+                    <Tooltip title="编辑任务"><Button type="text" icon={<EditOutlined />} aria-label="编辑任务" onClick={() => openEditTask(task)} /></Tooltip>
+                    <Tooltip title={task.is_enabled ? '暂停自动流程' : '启动自动流程'}>
+                      <Button type="text" icon={task.is_enabled ? <PauseCircleOutlined /> : <PlayCircleOutlined />} loading={taskBusyId === task.id} aria-label={task.is_enabled ? '暂停自动流程' : '启动自动流程'} onClick={() => void handleTaskToggle(task)} />
+                    </Tooltip>
+                    <Tooltip title="立即处理最近消息"><Button type="text" icon={<SyncOutlined />} loading={taskBusyId === task.id} aria-label="立即处理最近消息" onClick={() => void handleProcessTask(task)} disabled={!task.is_enabled} /></Tooltip>
+                    <Tooltip title="重试失败任务"><Button type="text" icon={<ReloadOutlined />} loading={taskBusyId === task.id} aria-label="重试失败任务" onClick={() => void handleRetryTask(task)} disabled={task.failed_count === 0} /></Tooltip>
+                    <Tooltip title="查看处理日志"><Button type="text" icon={<FileSearchOutlined />} aria-label="查看处理日志" onClick={() => void handleViewTaskLogs(task)} /></Tooltip>
+                  </Space>
+                </article>
+              ))}
+            </div>
+          )}
         </section>
       ) : null}
 
@@ -538,6 +671,116 @@ const LearningResourcesPage = () => {
         />
       </section>
 
+      {isAdmin && overview ? (
+        <Modal
+          open={taskModalOpen}
+          title={editingTaskId ? '编辑自动监听任务' : '新建自动监听任务'}
+          width={780}
+          okText="保存任务"
+          cancelText="取消"
+          confirmLoading={savingTask}
+          onOk={() => void handleSaveTask()}
+          onCancel={() => setTaskModalOpen(false)}
+        >
+          <div className="learning-task-form">
+            <div className="learning-task-form-row">
+              <Text strong>任务名称</Text>
+              <Input value={taskDraft.name} placeholder="例如：考公资料自动归档" onChange={(event) => setTaskDraft((draft) => ({ ...draft, name: event.target.value }))} />
+            </div>
+            <div className="learning-task-form-row">
+              <Text strong>监听频道</Text>
+              <Select
+                mode="multiple"
+                value={taskDraft.channel_ids}
+                placeholder="选择一个或多个频道"
+                options={overview.channels.map((channel) => ({ value: channel.channel_id, label: `${channel.channel_key} · ${channel.channel_title}` }))}
+                onChange={(values: number[]) => setTaskDraft((draft) => ({ ...draft, channel_ids: values }))}
+                style={{ width: '100%' }}
+                optionFilterProp="label"
+              />
+            </div>
+            <div className="learning-task-form-section">
+              <div className="learning-task-form-section-heading">
+                <div>
+                  <Text strong>转存目标</Text>
+                  <Text type="secondary">同一个任务可以把每条消息转存到多个夸克账号；每个目标可使用不同根目录。</Text>
+                </div>
+                <Button
+                  type="dashed"
+                  icon={<PlusOutlined />}
+                  onClick={() => {
+                    const account = overview.accounts.find((item) => item.is_enabled)
+                    setTaskDraft((draft) => ({
+                      ...draft,
+                      targets: [...draft.targets, {
+                        target_account_id: account?.id || 0,
+                        save_root_id: '0',
+                        save_root_name: account?.default_save_root || '',
+                        auto_create_category_dirs: true,
+                        is_enabled: true,
+                      }],
+                    }))
+                  }}
+                >
+                  添加目标
+                </Button>
+              </div>
+              <div className="learning-task-target-list">
+                {taskDraft.targets.map((target, index) => (
+                  <div className="learning-task-target-row" key={`${target.id || 'new'}-${index}`}>
+                    <Select
+                      value={target.target_account_id || undefined}
+                      placeholder="选择夸克账号"
+                      options={overview.accounts.filter((account) => account.is_enabled).map((account) => ({ value: account.id, label: account.account_name }))}
+                      onChange={(value: number) => {
+                        const account = overview.accounts.find((item) => item.id === value)
+                        setTaskDraft((draft) => ({
+                          ...draft,
+                          targets: draft.targets.map((item, itemIndex) => itemIndex === index
+                            ? { ...item, target_account_id: value, save_root_id: '0', save_root_name: account?.default_save_root || '' }
+                            : item),
+                        }))
+                      }}
+                      style={{ minWidth: 180, flex: '0 0 180px' }}
+                    />
+                    <Input
+                      value={target.save_root_name}
+                      placeholder="账号默认目录"
+                      readOnly
+                      style={{ flex: 1 }}
+                    />
+                    <Button
+                      icon={<FolderOpenOutlined />}
+                      onClick={() => void openDirectoryPicker('task', index)}
+                      disabled={!target.target_account_id}
+                    >
+                      选择目录
+                    </Button>
+                    <Tooltip title="移除此目标">
+                      <Button
+                        type="text"
+                        danger
+                        icon={<MinusCircleOutlined />}
+                        aria-label="移除转存目标"
+                        disabled={taskDraft.targets.length <= 1}
+                        onClick={() => setTaskDraft((draft) => ({ ...draft, targets: draft.targets.filter((_, itemIndex) => itemIndex !== index) }))}
+                      />
+                    </Tooltip>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="learning-task-form-footer">
+              <Space>
+                <Switch checked={taskDraft.is_enabled} onChange={(checked) => setTaskDraft((draft) => ({ ...draft, is_enabled: checked }))} />
+                <Text>保存后立即启动自动监听与转存</Text>
+              </Space>
+              <Text type="secondary">默认只处理任务启动后的新消息；历史消息可用“立即处理”补入。</Text>
+            </div>
+          </div>
+        </Modal>
+      ) : null}
+
       <Modal
         open={directoryModalOpen}
         title="选择网盘资料根目录"
@@ -564,6 +807,29 @@ const LearningResourcesPage = () => {
               <Space><FolderOpenOutlined />{directory.name}</Space>
             </List.Item>
           )}
+        />
+      </Modal>
+
+      <Modal
+        open={taskLogsOpen}
+        title="自动任务处理日志"
+        width={820}
+        footer={null}
+        onCancel={() => setTaskLogsOpen(false)}
+      >
+        <Table
+          rowKey="id"
+          size="small"
+          loading={taskLogsLoading}
+          pagination={{ pageSize: 12 }}
+          dataSource={taskLogs}
+          locale={{ emptyText: '暂无处理日志' }}
+          columns={[
+            { title: '时间', dataIndex: 'created_at', width: 170, render: (value: string | null | undefined) => value ? new Date(value).toLocaleString() : '-' },
+            { title: '阶段', dataIndex: 'stage', width: 90 },
+            { title: '级别', dataIndex: 'level', width: 75, render: (value: string) => <Tag color={value === 'error' ? 'error' : value === 'warning' ? 'warning' : 'default'}>{value}</Tag> },
+            { title: '处理信息', dataIndex: 'message', render: (value: string) => <span className="learning-log-message">{value}</span> },
+          ]}
         />
       </Modal>
     </div>

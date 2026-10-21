@@ -3,6 +3,11 @@ import type {
   LearningAdminItem,
   LearningAdminListResponse,
   LearningAdminOverview,
+  LearningAutomationLogListResponse,
+  LearningAutomationTask,
+  LearningAutomationTaskListResponse,
+  LearningAutomationTaskProcessResponse,
+  LearningAutomationRetryResponse,
   LearningCategory,
   LearningChannelUpdateResponse,
   LearningDirectory,
@@ -10,6 +15,26 @@ import type {
   LearningImportPreview,
   LearningResourceListResponse,
 } from '@/types/learningResources'
+
+export type LearningAutomationTaskPayload = {
+  name: string
+  is_enabled: boolean
+  backfill_policy?: string
+  channels: Array<{
+    id?: number | null
+    channel_id: number
+    is_enabled?: boolean
+    default_category_id?: number | null
+  }>
+  targets: Array<{
+    id?: number | null
+    target_account_id: number
+    save_root_id: string
+    save_root_name: string
+    auto_create_category_dirs?: boolean
+    is_enabled?: boolean
+  }>
+}
 
 export const getPublicLearningCategories = async (): Promise<LearningCategory[]> => {
   const response = await apiClient.get<LearningCategory[]>('/public/learning-resources/categories')
@@ -34,6 +59,57 @@ export const getPublicLearningResources = async (params: {
 
 export const getLearningAdminOverview = async (): Promise<LearningAdminOverview> => {
   const response = await apiClient.get<LearningAdminOverview>('/admin/learning-resources/overview')
+  return response.data
+}
+
+export const getLearningAutomationTasks = async (): Promise<LearningAutomationTaskListResponse> => {
+  const response = await apiClient.get<LearningAutomationTaskListResponse>('/admin/learning-resources/automation-tasks')
+  return response.data
+}
+
+export const createLearningAutomationTask = async (payload: LearningAutomationTaskPayload): Promise<LearningAutomationTask> => {
+  const response = await apiClient.post<LearningAutomationTask>('/admin/learning-resources/automation-tasks', payload)
+  return response.data
+}
+
+export const updateLearningAutomationTask = async (taskId: number, payload: LearningAutomationTaskPayload): Promise<LearningAutomationTask> => {
+  const response = await apiClient.patch<LearningAutomationTask>(`/admin/learning-resources/automation-tasks/${taskId}`, payload)
+  return response.data
+}
+
+export const pauseLearningAutomationTask = async (taskId: number): Promise<LearningAutomationTask> => {
+  const response = await apiClient.post<LearningAutomationTask>(`/admin/learning-resources/automation-tasks/${taskId}/pause`)
+  return response.data
+}
+
+export const resumeLearningAutomationTask = async (taskId: number): Promise<LearningAutomationTask> => {
+  const response = await apiClient.post<LearningAutomationTask>(`/admin/learning-resources/automation-tasks/${taskId}/resume`)
+  return response.data
+}
+
+export const processLearningAutomationTaskNow = async (taskId: number): Promise<LearningAutomationTaskProcessResponse> => {
+  const response = await apiClient.post<LearningAutomationTaskProcessResponse>(`/admin/learning-resources/automation-tasks/${taskId}/process-now`, {})
+  return response.data
+}
+
+export const replayLearningResources = async (payload: {
+  task_id: number
+  message_ids?: number[]
+  from_message_id?: number
+  to_message_id?: number
+  dry_run?: boolean
+}): Promise<LearningAutomationTaskProcessResponse> => {
+  const response = await apiClient.post<LearningAutomationTaskProcessResponse>('/admin/learning-resources/replay', payload)
+  return response.data
+}
+
+export const retryLearningAutomationTask = async (taskId: number): Promise<LearningAutomationRetryResponse> => {
+  const response = await apiClient.post<LearningAutomationRetryResponse>(`/admin/learning-resources/automation-tasks/${taskId}/retry-failed`)
+  return response.data
+}
+
+export const getLearningAutomationLogs = async (taskId: number, limit = 100): Promise<LearningAutomationLogListResponse> => {
+  const response = await apiClient.get<LearningAutomationLogListResponse>(`/admin/learning-resources/automation-tasks/${taskId}/logs?limit=${limit}`)
   return response.data
 }
 

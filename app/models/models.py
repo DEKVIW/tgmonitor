@@ -310,6 +310,82 @@ class LearningChannelConfig(Base):
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class LearningResourceAutomationTask(Base):
+    __tablename__ = "learning_resource_automation_tasks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(255), nullable=False)
+    is_enabled = Column(Boolean, nullable=False, default=False, index=True)
+    transfer_policy = Column(String(32), nullable=False, default="automatic")
+    backfill_policy = Column(String(32), nullable=False, default="new_messages_only")
+    status = Column(String(32), nullable=False, default="paused", index=True)
+    legacy_config_id = Column(Integer, nullable=True, unique=True, index=True)
+    last_enqueued_at = Column(DateTime, nullable=True, index=True)
+    last_success_at = Column(DateTime, nullable=True, index=True)
+    pending_count = Column(Integer, nullable=False, default=0)
+    failed_count = Column(Integer, nullable=False, default=0)
+    last_error_message = Column(Text, nullable=True)
+    created_by = Column(String(128), nullable=True)
+    updated_by = Column(String(128), nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class LearningResourceAutomationTaskChannel(Base):
+    __tablename__ = "learning_resource_automation_task_channels"
+    __table_args__ = (
+        UniqueConstraint("task_id", "channel_id", name="ux_learning_resource_task_channels_pair"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    task_id = Column(Integer, ForeignKey("learning_resource_automation_tasks.id", ondelete="CASCADE"), nullable=False, index=True)
+    channel_id = Column(Integer, ForeignKey("channels.id", ondelete="CASCADE"), nullable=False, index=True)
+    is_enabled = Column(Boolean, nullable=False, default=True, index=True)
+    default_category_id = Column(Integer, ForeignKey("learning_resource_categories.id"), nullable=True, index=True)
+    parser_profile = Column(String(64), nullable=True)
+    last_processed_message_id = Column(Integer, nullable=True, index=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class LearningResourceAutomationTaskTarget(Base):
+    __tablename__ = "learning_resource_automation_task_targets"
+    __table_args__ = (
+        UniqueConstraint("task_id", "target_account_id", "save_root_id", name="ux_learning_resource_task_targets_scope"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    task_id = Column(Integer, ForeignKey("learning_resource_automation_tasks.id", ondelete="CASCADE"), nullable=False, index=True)
+    target_account_id = Column(Integer, ForeignKey("pan_transfer_accounts.id"), nullable=False, index=True)
+    save_root_id = Column(String(255), nullable=False, default="0")
+    save_root_name = Column(String(255), nullable=False, default="")
+    auto_create_category_dirs = Column(Boolean, nullable=False, default=True)
+    is_enabled = Column(Boolean, nullable=False, default=True, index=True)
+    status = Column(String(32), nullable=False, default="ready", index=True)
+    last_success_at = Column(DateTime, nullable=True, index=True)
+    last_error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class LearningResourceProcessLog(Base):
+    __tablename__ = "learning_resource_process_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    task_id = Column(Integer, ForeignKey("learning_resource_automation_tasks.id", ondelete="SET NULL"), nullable=True, index=True)
+    channel_id = Column(Integer, ForeignKey("channels.id", ondelete="SET NULL"), nullable=True, index=True)
+    target_id = Column(Integer, ForeignKey("learning_resource_automation_task_targets.id", ondelete="SET NULL"), nullable=True, index=True)
+    resource_id = Column(Integer, ForeignKey("learning_resource_items.id", ondelete="SET NULL"), nullable=True, index=True)
+    transfer_job_id = Column(Integer, ForeignKey("learning_resource_transfer_jobs.id", ondelete="SET NULL"), nullable=True, index=True)
+    import_job_id = Column(Integer, ForeignKey("learning_resource_import_jobs.id", ondelete="SET NULL"), nullable=True, index=True)
+    source_message_id = Column(Integer, ForeignKey("messages.id", ondelete="SET NULL"), nullable=True, index=True)
+    stage = Column(String(32), nullable=False, index=True)
+    level = Column(String(16), nullable=False, default="info", index=True)
+    message = Column(String(2000), nullable=False, default="")
+    details_json = Column(JSONB, nullable=False, default=dict)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+
 class LearningResourceCategory(Base):
     __tablename__ = "learning_resource_categories"
     __table_args__ = (
@@ -376,7 +452,12 @@ class LearningResourceItemCategory(Base):
 class LearningResourceLink(Base):
     __tablename__ = "learning_resource_links"
     __table_args__ = (
-        UniqueConstraint("resource_id", "url_fingerprint", name="ux_learning_resource_links_resource_fingerprint"),
+        UniqueConstraint(
+            "resource_id",
+            "url_fingerprint",
+            "target_account_id",
+            name="ux_learning_resource_links_resource_fingerprint_target",
+        ),
     )
 
     id = Column(Integer, primary_key=True, index=True)
@@ -401,11 +482,13 @@ class LearningResourceTransferJob(Base):
         UniqueConstraint(
             "resource_id",
             "source_link_target_id",
-            name="ux_learning_resource_transfer_jobs_resource_source",
+            "target_account_id",
+            name="ux_learning_resource_transfer_jobs_resource_source_target",
         ),
     )
 
     id = Column(Integer, primary_key=True, index=True)
+    task_id = Column(Integer, ForeignKey("learning_resource_automation_tasks.id", ondelete="SET NULL"), nullable=True, index=True)
     resource_id = Column(Integer, ForeignKey("learning_resource_items.id", ondelete="CASCADE"), nullable=False, index=True)
     source_message_id = Column(Integer, ForeignKey("messages.id"), nullable=True, index=True)
     source_link_target_id = Column(Integer, ForeignKey("link_targets.id"), nullable=False, index=True)
@@ -417,6 +500,7 @@ class LearningResourceTransferJob(Base):
     attempt_count = Column(Integer, nullable=False, default=0)
     next_retry_at = Column(DateTime, nullable=True, index=True)
     last_error_message = Column(Text, nullable=True)
+    supersedes_job_id = Column(Integer, ForeignKey("learning_resource_transfer_jobs.id", ondelete="SET NULL"), nullable=True, index=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -1346,12 +1430,16 @@ def ensure_runtime_storage_tables() -> None:
                 ResourceRecognitionTask.__table__,
                 PanTransferAccount.__table__,
                 LearningChannelConfig.__table__,
+                LearningResourceAutomationTask.__table__,
+                LearningResourceAutomationTaskChannel.__table__,
+                LearningResourceAutomationTaskTarget.__table__,
                 LearningResourceCategory.__table__,
                 LearningResourceItem.__table__,
                 LearningResourceItemCategory.__table__,
                 LearningResourceLink.__table__,
                 LearningResourceTransferJob.__table__,
                 LearningResourceImportJob.__table__,
+                LearningResourceProcessLog.__table__,
                 PanTransferBatch.__table__,
                 PanTransferBatchItem.__table__,
                 PanTransferReplacementLog.__table__,
@@ -1383,6 +1471,7 @@ def ensure_runtime_storage_tables() -> None:
         _ensure_resource_ops_indexes()
         _ensure_pan_transfer_columns()
         _ensure_learning_resource_columns()
+        _ensure_learning_automation_tasks()
         _ensure_ai_center_columns()
         _ensure_media_wall_visibility()
         _ensure_media_wall_metadata_columns()
@@ -1407,7 +1496,7 @@ def _ensure_learning_resource_columns() -> None:
         return
 
     with engine.begin() as connection:
-        if "tags" not in item_columns:
+        if "tags" not in item_columns and engine.dialect.name == "postgresql":
             connection.execute(
                 text("ALTER TABLE learning_resource_items ADD COLUMN tags TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[]")
             )
@@ -1415,6 +1504,181 @@ def _ensure_learning_resource_columns() -> None:
             connection.execute(
                 text("ALTER TABLE learning_resource_transfer_jobs ALTER COLUMN source_message_id DROP NOT NULL")
             )
+        if engine.dialect.name != "postgresql":
+            return
+        if "task_id" not in transfer_job_columns:
+            connection.execute(
+                text("ALTER TABLE learning_resource_transfer_jobs ADD COLUMN task_id INTEGER")
+            )
+        if "supersedes_job_id" not in transfer_job_columns:
+            connection.execute(
+                text("ALTER TABLE learning_resource_transfer_jobs ADD COLUMN supersedes_job_id INTEGER")
+            )
+        connection.execute(
+            text("ALTER TABLE learning_resource_links DROP CONSTRAINT IF EXISTS ux_learning_resource_links_resource_fingerprint")
+        )
+        connection.execute(
+            text("""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM pg_constraint
+                        WHERE conname = 'ux_learning_resource_links_resource_fingerprint_target'
+                    ) THEN
+                        ALTER TABLE learning_resource_links
+                        ADD CONSTRAINT ux_learning_resource_links_resource_fingerprint_target
+                        UNIQUE (resource_id, url_fingerprint, target_account_id);
+                    END IF;
+                END $$;
+            """)
+        )
+        connection.execute(
+            text("ALTER TABLE learning_resource_transfer_jobs DROP CONSTRAINT IF EXISTS ux_learning_resource_transfer_jobs_resource_source")
+        )
+        connection.execute(
+            text("""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM pg_constraint
+                        WHERE conname = 'ux_learning_resource_transfer_jobs_resource_source_target'
+                    ) THEN
+                        ALTER TABLE learning_resource_transfer_jobs
+                        ADD CONSTRAINT ux_learning_resource_transfer_jobs_resource_source_target
+                        UNIQUE (resource_id, source_link_target_id, target_account_id);
+                    END IF;
+                END $$;
+            """)
+        )
+        connection.execute(
+            text("""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM pg_constraint
+                        WHERE conname = 'fk_learning_resource_transfer_jobs_task_id'
+                    ) THEN
+                        ALTER TABLE learning_resource_transfer_jobs
+                        ADD CONSTRAINT fk_learning_resource_transfer_jobs_task_id
+                        FOREIGN KEY (task_id) REFERENCES learning_resource_automation_tasks(id)
+                        ON DELETE SET NULL;
+                    END IF;
+                    IF NOT EXISTS (
+                        SELECT 1 FROM pg_constraint
+                        WHERE conname = 'fk_learning_resource_transfer_jobs_supersedes_job_id'
+                    ) THEN
+                        ALTER TABLE learning_resource_transfer_jobs
+                        ADD CONSTRAINT fk_learning_resource_transfer_jobs_supersedes_job_id
+                        FOREIGN KEY (supersedes_job_id) REFERENCES learning_resource_transfer_jobs(id)
+                        ON DELETE SET NULL;
+                    END IF;
+                END $$;
+            """)
+        )
+
+
+def _ensure_learning_automation_tasks() -> None:
+    if engine.dialect.name != "postgresql":
+        return
+    inspector = inspect(engine)
+    try:
+        task_columns = {column["name"] for column in inspector.get_columns("learning_resource_automation_tasks")}
+    except Exception:
+        task_columns = set()
+    if not task_columns:
+        return
+
+    with engine.begin() as connection:
+        configs = connection.execute(
+            text("""
+                SELECT id, channel_key, channel_title, is_enabled, target_account_id,
+                       save_root, backfill_policy, transfer_policy, auto_create_category_dirs,
+                       created_by, updated_by
+                FROM learning_channel_configs
+                ORDER BY id
+            """)
+        ).mappings().all()
+        for config in configs:
+            task = connection.execute(
+                text("SELECT id FROM learning_resource_automation_tasks WHERE legacy_config_id = :config_id"),
+                {"config_id": int(config["id"])},
+            ).first()
+            if task is None:
+                root_name = str(config["save_root"] or "").strip()
+                task_status = "running" if bool(config["is_enabled"]) else "paused"
+                task = connection.execute(
+                    text("""
+                        INSERT INTO learning_resource_automation_tasks
+                            (name, is_enabled, transfer_policy, backfill_policy, status,
+                             legacy_config_id, created_by, updated_by)
+                        VALUES
+                            (:name, :is_enabled, :transfer_policy, :backfill_policy, :status,
+                             :legacy_config_id, :created_by, :updated_by)
+                        RETURNING id
+                    """),
+                    {
+                        "name": str(config["channel_title"] or config["channel_key"] or "学习资料自动转存")[:255],
+                        "is_enabled": bool(config["is_enabled"]),
+                        "transfer_policy": "automatic" if str(config["transfer_policy"] or "") == "quark_only" else str(config["transfer_policy"] or "automatic"),
+                        "backfill_policy": str(config["backfill_policy"] or "new_messages_only"),
+                        "status": task_status,
+                        "legacy_config_id": int(config["id"]),
+                        "created_by": config["created_by"],
+                        "updated_by": config["updated_by"],
+                    },
+                ).first()
+            task_id = int(task["id"])
+            channel = connection.execute(
+                text("""
+                    SELECT id FROM channels
+                    WHERE lower(trim(both '@' from coalesce(username, ''))) = lower(trim(both '@' from :channel_key))
+                    ORDER BY id
+                    LIMIT 1
+                """),
+                {"channel_key": str(config["channel_key"] or "")},
+            ).first()
+            if channel is not None:
+                connection.execute(
+                    text("""
+                        INSERT INTO learning_resource_automation_task_channels
+                            (task_id, channel_id, is_enabled, last_processed_message_id)
+                        VALUES (:task_id, :channel_id, :is_enabled, NULL)
+                        ON CONFLICT (task_id, channel_id) DO NOTHING
+                    """),
+                    {
+                        "task_id": task_id,
+                        "channel_id": int(channel["id"]),
+                        "is_enabled": bool(config["is_enabled"]),
+                    },
+                )
+            account_id = config["target_account_id"]
+            if account_id is not None:
+                account = connection.execute(
+                    text("SELECT is_enabled, default_save_root FROM pan_transfer_accounts WHERE id = :account_id"),
+                    {"account_id": int(account_id)},
+                ).first()
+                root_name = str(config["save_root"] or (account["default_save_root"] if account is not None else "") or "").strip()
+                root_id = f"path:{root_name}" if root_name else "0"
+                target_status = "ready" if account is not None and bool(account["is_enabled"]) and root_name else "waiting_account"
+                connection.execute(
+                    text("""
+                        INSERT INTO learning_resource_automation_task_targets
+                            (task_id, target_account_id, save_root_id, save_root_name,
+                             auto_create_category_dirs, is_enabled, status)
+                        VALUES (:task_id, :account_id, :root_id, :root_name,
+                                :auto_create, :is_enabled, :target_status)
+                        ON CONFLICT (task_id, target_account_id, save_root_id) DO NOTHING
+                    """),
+                    {
+                        "task_id": task_id,
+                        "account_id": int(account_id),
+                        "root_id": root_id,
+                        "root_name": root_name,
+                        "auto_create": bool(config["auto_create_category_dirs"]),
+                        "is_enabled": bool(config["is_enabled"]),
+                        "target_status": target_status,
+                    },
+                )
 
 
 def _ensure_system_settings_columns() -> None:
