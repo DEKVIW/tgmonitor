@@ -283,3 +283,8 @@ class LearningAutomationLogResponse(BaseModel):
 class LearningAutomationLogListResponse(BaseModel):
     items: list[LearningAutomationLogResponse] = Field(default_factory=list)
     total: int = 0
+
+
+class LearningAutomationLogClearResponse(BaseModel):
+    task_id: int
+    deleted_count: int = 0

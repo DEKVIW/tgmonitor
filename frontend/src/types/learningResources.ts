@@ -203,3 +203,8 @@ export interface LearningAutomationLogListResponse {
   items: LearningAutomationLog[]
   total: number
 }
+
+export interface LearningAutomationLogClearResponse {
+  task_id: number
+  deleted_count: number
+}

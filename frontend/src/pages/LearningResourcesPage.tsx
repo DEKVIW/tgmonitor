@@ -8,6 +8,7 @@ import {
   deleteLearningResource,
   getLearningAdminItems,
   getLearningAdminOverview,
+  clearLearningAutomationLogs,
   getLearningAutomationLogs,
   getLearningAutomationTasks,
   getLearningDirectories,
@@ -30,10 +31,12 @@ import type {
   LearningDirectory,
   LearningAutomationTask,
   LearningAutomationTaskTarget,
+  LearningAutomationLog,
   LearningImportPreview,
   LearningResource,
 } from '@/types/learningResources'
 import LearningResourceSheet from '@/components/learning/LearningResourceSheet'
+import AppLogTerminal from '@/components/common/AppLogTerminal'
 import { cleanLearningSheetText } from '@/utils/learningResources'
 
 import './LearningResourcesPage.css'
@@ -73,6 +76,60 @@ const getRequestErrorMessage = (error: unknown, fallback: string) => {
   return fallback
 }
 
+const learningLogStageLabels: Record<string, string> = {
+  config: '配置',
+  replay: '补处理',
+  enqueued: '入队',
+  retrying: '重试',
+  transferring: '转存',
+  sharing: '分享',
+  published: '发布',
+  failed: '失败',
+}
+
+const learningLogLevelLabels: Record<string, string> = {
+  info: 'INFO',
+  warning: 'WARN',
+  error: 'ERROR',
+}
+
+const formatLearningLogTime = (value?: string | null) => {
+  if (!value) return '-'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  const pad = (part: number) => String(part).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+}
+
+const formatLearningLogContext = (log: LearningAutomationLog) => {
+  const details = log.details || {}
+  const context: string[] = []
+  const append = (label: string, value: unknown) => {
+    if (value !== undefined && value !== null && String(value).trim()) context.push(`${label}=${String(value).trim()}`)
+  }
+  append('资源', details.resource_title)
+  append('分类', details.category)
+  append('频道', details.channel)
+  append('账号', details.target_account)
+  if (typeof details.job_count === 'number') append('任务数', details.job_count)
+  if (details.share_url_created === true) append('分享', '已生成')
+  if (details.share_url_created === false) append('分享', '未生成')
+  if (details.retry_waiting === true) append('重试', '等待自动重试')
+  append('错误', details.error)
+  if (context.length === 0) {
+    if (log.resource_id) append('资源ID', log.resource_id)
+    if (log.transfer_job_id) append('转存任务ID', log.transfer_job_id)
+    if (log.source_message_id) append('消息ID', log.source_message_id)
+  }
+  return context.length > 0 ? ` | ${context.join(' | ')}` : ''
+}
+
+const buildLearningLogLine = (log: LearningAutomationLog) => {
+  const stage = learningLogStageLabels[log.stage] || log.stage || '未知'
+  const level = learningLogLevelLabels[log.level] || String(log.level || 'INFO').toUpperCase()
+  return `[${formatLearningLogTime(log.created_at)}] [${stage}] [${level}] ${log.message}${formatLearningLogContext(log)}`
+}
+
 const LearningResourcesPage = () => {
   const { user } = useAuthStore()
   const isAdmin = user?.role === 'admin'
@@ -92,9 +149,11 @@ const LearningResourcesPage = () => {
   const [taskDraft, setTaskDraft] = useState<LearningTaskDraft>({ name: '', is_enabled: false, channel_ids: [], targets: [] })
   const [savingTask, setSavingTask] = useState(false)
   const [taskBusyId, setTaskBusyId] = useState<number | null>(null)
-  const [taskLogs, setTaskLogs] = useState<Array<{ id: number; stage: string; level: string; message: string; created_at?: string | null }>>([])
+  const [taskLogs, setTaskLogs] = useState<LearningAutomationLog[]>([])
+  const [taskLogsTask, setTaskLogsTask] = useState<LearningAutomationTask | null>(null)
   const [taskLogsOpen, setTaskLogsOpen] = useState(false)
   const [taskLogsLoading, setTaskLogsLoading] = useState(false)
+  const [taskLogsClearing, setTaskLogsClearing] = useState(false)
   const [maintenanceBusyId, setMaintenanceBusyId] = useState<number | null>(null)
   const [editingId, setEditingId] = useState<number | null>(null)
   const [editDraft, setEditDraft] = useState({ display_title: '', category: '', tags: '', share_url: '' })
@@ -326,16 +385,31 @@ const LearningResourcesPage = () => {
   }
 
   const handleViewTaskLogs = async (task: LearningAutomationTask) => {
+    setTaskLogsTask(task)
     setTaskLogsOpen(true)
     setTaskLogsLoading(true)
     try {
-      const result = await getLearningAutomationLogs(task.id)
-      setTaskLogs(result.items)
+      const result = await getLearningAutomationLogs(task.id, 300)
+      setTaskLogs([...result.items].reverse())
     } catch (logError: unknown) {
       message.error(getRequestErrorMessage(logError, '读取任务日志失败'))
       setTaskLogs([])
     } finally {
       setTaskLogsLoading(false)
+    }
+  }
+
+  const handleClearTaskLogs = async () => {
+    if (!taskLogsTask) return
+    setTaskLogsClearing(true)
+    try {
+      const result = await clearLearningAutomationLogs(taskLogsTask.id)
+      setTaskLogs([])
+      message.success(`已清理 ${result.deleted_count} 条自动任务日志`)
+    } catch (logError: unknown) {
+      message.error(getRequestErrorMessage(logError, '清理任务日志失败'))
+    } finally {
+      setTaskLogsClearing(false)
     }
   }
 
@@ -835,24 +909,37 @@ const LearningResourcesPage = () => {
 
       <Modal
         open={taskLogsOpen}
-        title="自动任务处理日志"
-        width={820}
+        title={taskLogsTask ? `自动任务处理终端 · ${taskLogsTask.name}` : '自动任务处理终端'}
+        width={980}
         footer={null}
-        onCancel={() => setTaskLogsOpen(false)}
+        onCancel={() => {
+          setTaskLogsOpen(false)
+          setTaskLogsTask(null)
+        }}
       >
-        <Table
-          rowKey="id"
-          size="small"
-          loading={taskLogsLoading}
-          pagination={{ pageSize: 12 }}
-          dataSource={taskLogs}
-          locale={{ emptyText: '暂无处理日志' }}
-          columns={[
-            { title: '时间', dataIndex: 'created_at', width: 170, render: (value: string | null | undefined) => value ? new Date(value).toLocaleString() : '-' },
-            { title: '阶段', dataIndex: 'stage', width: 90 },
-            { title: '级别', dataIndex: 'level', width: 75, render: (value: string) => <Tag color={value === 'error' ? 'error' : value === 'warning' ? 'warning' : 'default'}>{value}</Tag> },
-            { title: '处理信息', dataIndex: 'message', render: (value: string) => <span className="learning-log-message">{value}</span> },
-          ]}
+        <AppLogTerminal
+          description="按发生顺序展示最近 300 条任务日志；清理只删除日志记录，不影响资源、转存任务或网盘文件。"
+          controls={
+            <Button size="small" icon={<ReloadOutlined />} loading={taskLogsLoading} onClick={() => taskLogsTask && void handleViewTaskLogs(taskLogsTask)}>
+              刷新
+            </Button>
+          }
+          items={taskLogs.map((log) => ({
+            key: log.id,
+            text: buildLearningLogLine(log),
+            tone: log.level === 'error' ? 'error' : log.level === 'warning' ? 'warning' : log.stage === 'published' ? 'success' : 'default',
+          }))}
+          emptyText={taskLogsLoading ? '正在读取任务日志……' : '暂无处理日志'}
+          copyPayload={taskLogs.map(buildLearningLogLine)}
+          copyEmptyText="当前没有可复制的日志"
+          copySuccessText="已复制任务日志"
+          copyButtonLabel="复制日志"
+          onClearBackend={() => void handleClearTaskLogs()}
+          clearBackendLoading={taskLogsClearing}
+          clearBackendDisabled={taskLogs.length <= 0}
+          clearBackendLabel="清理后端日志"
+          clearBackendConfirmTitle="确认清理该自动任务日志？"
+          clearBackendConfirmDescription="只删除这个任务的处理日志，不会删除学习资料、转存任务或网盘文件。"
         />
       </Modal>
     </div>

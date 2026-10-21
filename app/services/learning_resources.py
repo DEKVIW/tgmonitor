@@ -661,7 +661,7 @@ def _record_learning_process_log(
         source_message_id=source_message_id,
         stage=str(stage or "failed")[:32],
         level=str(level or "info")[:16],
-        message=str(message or "")[:2000],
+        message=" ".join(str(message or "").split())[:2000],
         details_json=dict(details or {}),
     )
     session.add(row)
@@ -1223,13 +1223,19 @@ def enqueue_learning_resources_for_message_ids(
                         _record_learning_process_log(
                             session,
                             stage="retrying",
-                            message="已将失败的学习资料任务重新加入队列",
+                            message=f"重新加入转存队列：{resource.display_title}",
                             task_id=int(context.task.id) if context.task.id is not None else None,
                             channel_id=int(context.channel.channel_id) if context.channel.channel_id is not None else None,
                             target_id=int(context.target.id) if context.target.id is not None else None,
                             resource_id=int(resource.id),
                             transfer_job_id=int(job.id),
                             source_message_id=int(message.id),
+                            details={
+                                "resource_title": str(resource.display_title or ""),
+                                "category": str(category.name or ""),
+                                "target_account": str(context.account.account_name or ""),
+                                "channel": str(context.channel_key or ""),
+                            },
                         )
                         continue
                 if job is None:
@@ -1270,13 +1276,20 @@ def enqueue_learning_resources_for_message_ids(
                 _record_learning_process_log(
                     session,
                     stage="enqueued",
-                    message=f"已为目标账号加入 {len(context_jobs)} 个学习资料转存任务",
+                    message=f"已加入转存队列：{resource.display_title}（{len(context_jobs)}项）",
                     task_id=int(context.task.id) if context.task.id is not None else None,
                     channel_id=int(context.channel.channel_id) if context.channel.channel_id is not None else None,
                     target_id=int(context.target.id) if context.target.id is not None else None,
                     resource_id=int(resource.id),
                     source_message_id=int(message.id),
-                    details={"job_count": len(context_jobs), "target_account_id": int(context.account.id)},
+                    details={
+                        "job_count": len(context_jobs),
+                        "target_account_id": int(context.account.id),
+                        "target_account": str(context.account.account_name or ""),
+                        "resource_title": str(resource.display_title or ""),
+                        "category": str(category.name or ""),
+                        "channel": str(context.channel_key or ""),
+                    },
                 )
 
     for context, jobs in jobs_by_context.values():
@@ -1355,18 +1368,45 @@ def sync_learning_resource_after_transfer(
             session.add(resource)
         job.status = LEARNING_JOB_PUBLISHED if resource is None or bool(link is not None and link.share_url) else LEARNING_JOB_FAILED
         published = job.status == LEARNING_JOB_PUBLISHED
+        category_name = ""
+        if resource is not None and resource.primary_category_id:
+            category = session.get(LearningResourceCategory, int(resource.primary_category_id))
+            category_name = str(category.name or "") if category is not None else ""
         if task_id is not None:
+            if published:
+                _record_learning_process_log(
+                    session,
+                    stage="sharing",
+                    message=f"分享链接已生成，准备发布：{resource.display_title if resource is not None else f'任务#{job.id}'}",
+                    task_id=task_id,
+                    target_id=target_id,
+                    resource_id=int(resource.id) if resource is not None else None,
+                    transfer_job_id=int(job.id),
+                    source_message_id=int(job.source_message_id) if job.source_message_id else None,
+                    details={
+                        "share_url_created": True,
+                        "resource_title": str(resource.display_title or "") if resource is not None else "",
+                    },
+                )
             _record_learning_process_log(
                 session,
                 stage="published" if published else "failed",
                 level="info" if published else "error",
-                message="学习资料已完成转存并发布分享链接" if published else "转存完成但未生成有效分享链接",
+                message=(
+                    f"转存完成并发布：{resource.display_title if resource is not None else f'任务#{job.id}'}"
+                    if published
+                    else f"转存完成但未发布：{resource.display_title if resource is not None else f'任务#{job.id}'}"
+                ),
                 task_id=task_id,
                 target_id=target_id,
                 resource_id=int(resource.id) if resource is not None else None,
                 transfer_job_id=int(job.id),
                 source_message_id=int(job.source_message_id) if job.source_message_id else None,
-                details={"share_url_created": bool(link is not None and link.share_url)},
+                details={
+                    "share_url_created": bool(link is not None and link.share_url),
+                    "resource_title": str(resource.display_title or "") if resource is not None else "",
+                    "category": category_name,
+                },
             )
             task = session.get(LearningResourceAutomationTask, int(task_id))
             target = session.get(LearningResourceAutomationTaskTarget, int(target_id)) if target_id else None
@@ -1409,13 +1449,21 @@ def sync_learning_resource_after_transfer(
                 session,
                 stage="retrying" if retry_waiting else "failed",
                 level="warning" if retry_waiting else "error",
-                message="学习资料转存失败，已等待自动重试" if retry_waiting else "学习资料转存失败",
+                message=(
+                    f"转存失败，等待自动重试：{resource.display_title if resource is not None else f'任务#{job.id}'}"
+                    if retry_waiting
+                    else f"转存失败：{resource.display_title if resource is not None else f'任务#{job.id}'}"
+                ),
                 task_id=task_id,
                 target_id=target_id,
                 resource_id=int(resource.id) if resource is not None else None,
                 transfer_job_id=int(job.id),
                 source_message_id=int(job.source_message_id) if job.source_message_id else None,
-                details={"retry_waiting": retry_waiting, "error": job.last_error_message},
+                details={
+                    "retry_waiting": retry_waiting,
+                    "error": job.last_error_message,
+                    "resource_title": str(resource.display_title or "") if resource is not None else "",
+                },
             )
             task = session.get(LearningResourceAutomationTask, int(task_id))
             target = session.get(LearningResourceAutomationTaskTarget, int(target_id)) if target_id else None

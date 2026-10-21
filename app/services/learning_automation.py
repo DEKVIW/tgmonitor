@@ -824,11 +824,26 @@ def list_learning_automation_logs(session: Session, *, task_id: int, limit: int 
     ]
 
 
+def clear_learning_automation_logs(session: Session, *, task_id: int) -> dict[str, Any]:
+    task = session.get(LearningResourceAutomationTask, int(task_id))
+    if task is None:
+        raise LookupError("学习资料自动任务不存在")
+    deleted_count = int(
+        session.query(LearningResourceProcessLog)
+        .filter(LearningResourceProcessLog.task_id == int(task_id))
+        .delete(synchronize_session=False)
+        or 0
+    )
+    session.flush()
+    return {"task_id": int(task_id), "deleted_count": deleted_count}
+
+
 __all__ = [
     "ACTIVE_LEARNING_JOB_STATUSES",
     "FAILED_LEARNING_JOB_STATUSES",
     "get_learning_automation_task",
     "delete_learning_automation_task",
+    "clear_learning_automation_logs",
     "is_learning_target_enabled",
     "list_learning_automation_logs",
     "list_learning_automation_tasks",

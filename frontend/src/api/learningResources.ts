@@ -4,6 +4,7 @@ import type {
   LearningAdminListResponse,
   LearningAdminOverview,
   LearningAutomationLogListResponse,
+  LearningAutomationLogClearResponse,
   LearningAutomationTask,
   LearningAutomationTaskListResponse,
   LearningAutomationTaskProcessResponse,
@@ -114,6 +115,11 @@ export const retryLearningAutomationTask = async (taskId: number): Promise<Learn
 
 export const getLearningAutomationLogs = async (taskId: number, limit = 100): Promise<LearningAutomationLogListResponse> => {
   const response = await apiClient.get<LearningAutomationLogListResponse>(`/admin/learning-resources/automation-tasks/${taskId}/logs?limit=${limit}`)
+  return response.data
+}
+
+export const clearLearningAutomationLogs = async (taskId: number): Promise<LearningAutomationLogClearResponse> => {
+  const response = await apiClient.post<LearningAutomationLogClearResponse>(`/admin/learning-resources/automation-tasks/${taskId}/logs/clear`)
   return response.data
 }
 
