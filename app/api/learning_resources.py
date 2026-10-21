@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.api.dependencies_runtime_v2 import get_admin_user, get_db, get_optional_current_user
@@ -23,6 +23,9 @@ from app.schemas.learning_resources import (
     LearningAutomationTaskListResponse,
     LearningAutomationTaskProcessRequest,
     LearningAutomationTaskProcessResponse,
+    LearningAutomationSupplementPreviewResponse,
+    LearningAutomationSupplementRequest,
+    LearningAutomationSupplementRunResponse,
     LearningAutomationTaskResponse,
     LearningAutomationTaskUpdateRequest,
     LearningAutomationReplayRequest,
@@ -56,6 +59,11 @@ from app.services.learning_automation import (
     list_learning_automation_logs,
     list_learning_automation_tasks,
     process_learning_automation_task_now,
+    preview_learning_supplement,
+    create_learning_supplement_run,
+    get_learning_supplement_run,
+    pause_learning_supplement,
+    run_learning_supplement,
     retry_failed_learning_automation_jobs,
     save_learning_automation_task,
     set_learning_automation_task_enabled,
@@ -234,6 +242,107 @@ def resume_learning_automation_task(
 
 
 @router.post(
+    "/api/admin/learning-resources/automation-tasks/{task_id}/supplement/preview",
+    response_model=LearningAutomationSupplementPreviewResponse,
+    summary="预览学习资料补充更新",
+)
+def preview_learning_automation_supplement(
+    task_id: int,
+    payload: LearningAutomationSupplementRequest,
+    db: Session = Depends(get_db),
+    current_user: dict[str, Any] = Depends(get_admin_user),
+) -> LearningAutomationSupplementPreviewResponse:
+    del current_user
+    try:
+        result = preview_learning_supplement(
+            db,
+            task_id=int(task_id),
+            mode=payload.mode,
+            from_at=payload.from_at,
+            to_at=payload.to_at,
+            recent_limit=payload.recent_limit,
+        )
+        return LearningAutomationSupplementPreviewResponse(**result)
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.post(
+    "/api/admin/learning-resources/automation-tasks/{task_id}/supplement",
+    response_model=LearningAutomationSupplementRunResponse,
+    summary="开始学习资料补充更新",
+)
+def start_learning_automation_supplement(
+    task_id: int,
+    payload: LearningAutomationSupplementRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_user: dict[str, Any] = Depends(get_admin_user),
+) -> LearningAutomationSupplementRunResponse:
+    try:
+        result = create_learning_supplement_run(
+            db,
+            task_id=int(task_id),
+            mode=payload.mode,
+            from_at=payload.from_at,
+            to_at=payload.to_at,
+            recent_limit=payload.recent_limit,
+            operator=_operator(current_user),
+        )
+        db.commit()
+        background_tasks.add_task(run_learning_supplement, int(result["id"]))
+        return LearningAutomationSupplementRunResponse(**result)
+    except LookupError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.get(
+    "/api/admin/learning-resources/supplement-runs/{run_id}",
+    response_model=LearningAutomationSupplementRunResponse,
+    summary="获取学习资料补充更新状态",
+)
+def get_learning_automation_supplement(
+    run_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict[str, Any] = Depends(get_admin_user),
+) -> LearningAutomationSupplementRunResponse:
+    del current_user
+    result = get_learning_supplement_run(db, supplement_run_id=int(run_id))
+    if result is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="补充更新记录不存在")
+    return LearningAutomationSupplementRunResponse(**result)
+
+
+@router.post(
+    "/api/admin/learning-resources/supplement-runs/{run_id}/pause",
+    response_model=LearningAutomationSupplementRunResponse,
+    summary="暂停学习资料补充更新",
+)
+def pause_learning_automation_supplement(
+    run_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict[str, Any] = Depends(get_admin_user),
+) -> LearningAutomationSupplementRunResponse:
+    del current_user
+    try:
+        result = pause_learning_supplement(db, supplement_run_id=int(run_id))
+        db.commit()
+        return LearningAutomationSupplementRunResponse(**result)
+    except LookupError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+
+@router.post(
     "/api/admin/learning-resources/automation-tasks/{task_id}/process-now",
     response_model=LearningAutomationTaskProcessResponse,
     summary="补处理学习资料遗漏消息",
@@ -251,6 +360,10 @@ def process_learning_automation_task(
             message_ids=(payload.message_ids if payload else None),
             from_message_id=(payload.from_message_id if payload else None),
             to_message_id=(payload.to_message_id if payload else None),
+            mode=(payload.mode if payload else "checkpoint"),
+            from_at=(payload.from_at if payload else None),
+            to_at=(payload.to_at if payload else None),
+            recent_limit=(payload.recent_limit if payload else None),
             dry_run=bool(payload.dry_run) if payload else False,
             operator=_operator(current_user),
         )
@@ -281,6 +394,10 @@ def replay_learning_resources(
             message_ids=payload.message_ids,
             from_message_id=payload.from_message_id,
             to_message_id=payload.to_message_id,
+            mode=payload.mode,
+            from_at=payload.from_at,
+            to_at=payload.to_at,
+            recent_limit=payload.recent_limit,
             dry_run=bool(payload.dry_run),
             operator=_operator(current_user),
         )

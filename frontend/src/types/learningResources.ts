@@ -131,6 +131,7 @@ export interface LearningAutomationTaskChannel {
   is_enabled: boolean
   default_category_id?: number | null
   last_processed_message_id?: number | null
+  last_processed_telegram_message_id?: number | null
 }
 
 export interface LearningAutomationTaskTarget {
@@ -172,14 +173,68 @@ export interface LearningAutomationTaskListResponse {
 
 export interface LearningAutomationTaskProcessResponse {
   task_id: number
+  mode?: string
   selected_messages: number
+  scanned_messages?: number
+  valid_messages?: number
+  skipped_messages?: number
   message_ids?: number[]
+  message_previews?: LearningAutomationSourceMessagePreview[]
   dry_run: boolean
   messages?: number
   resources?: number
+  links?: number
   jobs?: number
   skipped?: number
   failed?: number
+}
+
+export interface LearningAutomationSourceMessagePreview {
+  channel: string
+  monitor_message_id?: number | null
+  message_time?: string | null
+  raw_text?: string | null
+  raw_text_available: boolean
+  resource_titles: string[]
+  resource_count: number
+  link_count: number
+  valid: boolean
+}
+
+export interface LearningAutomationSupplementPreview {
+  task_id: number
+  mode: string
+  scanned_messages: number
+  selected_messages: number
+  valid_messages: number
+  skipped_messages: number
+  resources: number
+  links: number
+  message_previews: LearningAutomationSourceMessagePreview[]
+}
+
+export interface LearningAutomationSupplementRun {
+  id: number
+  task_id: number
+  mode: string
+  status: string
+  from_at?: string | null
+  to_at?: string | null
+  recent_limit?: number | null
+  selected_messages: number
+  scanned_messages: number
+  valid_messages: number
+  skipped_messages: number
+  resources: number
+  links: number
+  jobs: number
+  failed: number
+  last_error_message?: string | null
+  started_at?: string | null
+  finished_at?: string | null
+  paused_at?: string | null
+  created_at?: string | null
+  updated_at?: string | null
 }
 
 export interface LearningAutomationRetryResponse {

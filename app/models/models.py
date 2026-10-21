@@ -30,8 +30,30 @@ class Message(Base):
     monitor_channel_key = Column(String(255), nullable=True, index=True)
     monitor_channel_title = Column(String(255), nullable=True)
     monitor_message_id = Column(Integer, nullable=True, index=True)
+    monitor_raw_text = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     netdisk_types = Column(JSONB, default=list)
+
+
+class MonitorRawMessage(Base):
+    __tablename__ = "monitor_raw_messages"
+    __table_args__ = (
+        UniqueConstraint("monitor_chat_id", "monitor_message_id", name="ux_monitor_raw_messages_chat_message"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    monitor_channel_config_id = Column(Integer, ForeignKey("channels.id"), nullable=True, index=True)
+    monitor_chat_id = Column(BigInteger, nullable=False, index=True)
+    monitor_channel_key = Column(String(255), nullable=False, index=True)
+    monitor_channel_title = Column(String(255), nullable=True)
+    monitor_message_id = Column(Integer, nullable=False, index=True)
+    timestamp = Column(DateTime, nullable=False, index=True)
+    raw_text = Column(Text, nullable=False, default="")
+    parse_status = Column(String(32), nullable=False, default="parsed", index=True)
+    parsed_record_count = Column(Integer, nullable=False, default=0)
+    supported_link_count = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 class LinkTarget(Base):
@@ -344,6 +366,7 @@ class LearningResourceAutomationTaskChannel(Base):
     default_category_id = Column(Integer, ForeignKey("learning_resource_categories.id"), nullable=True, index=True)
     parser_profile = Column(String(64), nullable=True)
     last_processed_message_id = Column(Integer, nullable=True, index=True)
+    last_processed_telegram_message_id = Column(Integer, nullable=True, index=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -368,11 +391,42 @@ class LearningResourceAutomationTaskTarget(Base):
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class LearningResourceSupplementRun(Base):
+    __tablename__ = "learning_resource_supplement_runs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    task_id = Column(Integer, ForeignKey("learning_resource_automation_tasks.id", ondelete="CASCADE"), nullable=False, index=True)
+    mode = Column(String(32), nullable=False, default="checkpoint", index=True)
+    status = Column(String(32), nullable=False, default="queued", index=True)
+    from_at = Column(DateTime, nullable=True)
+    to_at = Column(DateTime, nullable=True)
+    recent_limit = Column(Integer, nullable=True)
+    selected_message_count = Column(Integer, nullable=False, default=0)
+    scanned_message_count = Column(Integer, nullable=False, default=0)
+    valid_message_count = Column(Integer, nullable=False, default=0)
+    skipped_message_count = Column(Integer, nullable=False, default=0)
+    resource_count = Column(Integer, nullable=False, default=0)
+    link_count = Column(Integer, nullable=False, default=0)
+    job_count = Column(Integer, nullable=False, default=0)
+    failed_count = Column(Integer, nullable=False, default=0)
+    selected_message_ids_json = Column(JSONB, nullable=False, default=list)
+    options_json = Column(JSONB, nullable=False, default=dict)
+    result_json = Column(JSONB, nullable=False, default=dict)
+    requested_by = Column(String(128), nullable=True)
+    last_error_message = Column(Text, nullable=True)
+    started_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
+    paused_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class LearningResourceProcessLog(Base):
     __tablename__ = "learning_resource_process_logs"
 
     id = Column(Integer, primary_key=True, index=True)
     task_id = Column(Integer, ForeignKey("learning_resource_automation_tasks.id", ondelete="SET NULL"), nullable=True, index=True)
+    supplement_run_id = Column(Integer, ForeignKey("learning_resource_supplement_runs.id", ondelete="SET NULL"), nullable=True, index=True)
     channel_id = Column(Integer, ForeignKey("channels.id", ondelete="SET NULL"), nullable=True, index=True)
     target_id = Column(Integer, ForeignKey("learning_resource_automation_task_targets.id", ondelete="SET NULL"), nullable=True, index=True)
     resource_id = Column(Integer, ForeignKey("learning_resource_items.id", ondelete="SET NULL"), nullable=True, index=True)
@@ -1383,6 +1437,7 @@ def ensure_message_monitor_source_columns() -> None:
             "monitor_channel_key": "ALTER TABLE messages ADD COLUMN monitor_channel_key VARCHAR(255)",
             "monitor_channel_title": "ALTER TABLE messages ADD COLUMN monitor_channel_title VARCHAR(255)",
             "monitor_message_id": "ALTER TABLE messages ADD COLUMN monitor_message_id INTEGER",
+            "monitor_raw_text": "ALTER TABLE messages ADD COLUMN monitor_raw_text TEXT",
         }
 
         with engine.begin() as connection:
@@ -1406,6 +1461,7 @@ def ensure_runtime_storage_tables() -> None:
         Base.metadata.create_all(
             bind=engine,
             tables=[
+                MonitorRawMessage.__table__,
                 SystemSettings.__table__,
                 LinkCheckPlan.__table__,
                 BackupSettings.__table__,
@@ -1433,6 +1489,7 @@ def ensure_runtime_storage_tables() -> None:
                 LearningResourceAutomationTask.__table__,
                 LearningResourceAutomationTaskChannel.__table__,
                 LearningResourceAutomationTaskTarget.__table__,
+                LearningResourceSupplementRun.__table__,
                 LearningResourceCategory.__table__,
                 LearningResourceItem.__table__,
                 LearningResourceItemCategory.__table__,
@@ -1491,14 +1548,30 @@ def _ensure_learning_resource_columns() -> None:
         transfer_job_columns = {column["name"] for column in inspector.get_columns("learning_resource_transfer_jobs")}
     except Exception:
         transfer_job_columns = set()
+    try:
+        task_channel_columns = {column["name"] for column in inspector.get_columns("learning_resource_automation_task_channels")}
+    except Exception:
+        task_channel_columns = set()
+    try:
+        process_log_columns = {column["name"] for column in inspector.get_columns("learning_resource_process_logs")}
+    except Exception:
+        process_log_columns = set()
 
-    if not item_columns and not transfer_job_columns:
+    if not item_columns and not transfer_job_columns and not task_channel_columns and not process_log_columns:
         return
 
     with engine.begin() as connection:
         if "tags" not in item_columns and engine.dialect.name == "postgresql":
             connection.execute(
                 text("ALTER TABLE learning_resource_items ADD COLUMN tags TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[]")
+            )
+        if "last_processed_telegram_message_id" not in task_channel_columns:
+            connection.execute(
+                text("ALTER TABLE learning_resource_automation_task_channels ADD COLUMN last_processed_telegram_message_id INTEGER")
+            )
+        if "supplement_run_id" not in process_log_columns:
+            connection.execute(
+                text("ALTER TABLE learning_resource_process_logs ADD COLUMN supplement_run_id INTEGER")
             )
         if "source_message_id" in transfer_job_columns:
             connection.execute(
@@ -1570,6 +1643,15 @@ def _ensure_learning_resource_columns() -> None:
                         ALTER TABLE learning_resource_transfer_jobs
                         ADD CONSTRAINT fk_learning_resource_transfer_jobs_supersedes_job_id
                         FOREIGN KEY (supersedes_job_id) REFERENCES learning_resource_transfer_jobs(id)
+                        ON DELETE SET NULL;
+                    END IF;
+                    IF NOT EXISTS (
+                        SELECT 1 FROM pg_constraint
+                        WHERE conname = 'fk_learning_resource_process_logs_supplement_run_id'
+                    ) THEN
+                        ALTER TABLE learning_resource_process_logs
+                        ADD CONSTRAINT fk_learning_resource_process_logs_supplement_run_id
+                        FOREIGN KEY (supplement_run_id) REFERENCES learning_resource_supplement_runs(id)
                         ON DELETE SET NULL;
                     END IF;
                 END $$;

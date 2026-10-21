@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any, Iterable
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
@@ -10,14 +11,18 @@ from app.models.models import (
     Channel,
     LearningChannelConfig,
     LearningResourceProcessLog,
+    LearningResourceSupplementRun,
     LearningResourceTransferJob,
     LearningResourceAutomationTask,
     LearningResourceAutomationTaskChannel,
     LearningResourceAutomationTaskTarget,
+    LinkTarget,
+    MonitorRawMessage,
     Message,
     PanTransferAccount,
     PanTransferBatch,
     PanTransferBatchItem,
+    engine,
     ensure_runtime_storage_tables,
 )
 from app.services.link_check.constants import PLATFORM_QUARK
@@ -35,6 +40,14 @@ def _normalize_learning_root(value: Any) -> str:
 
 def _utcnow() -> datetime:
     return datetime.utcnow()
+
+
+def _normalize_learning_filter_datetime(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value
+    return value.astimezone(ZoneInfo("Asia/Shanghai")).replace(tzinfo=None)
 
 
 def is_learning_target_enabled(session: Session, extra_json: dict[str, Any]) -> bool:
@@ -170,6 +183,7 @@ def _serialize_task_channel(session: Session, row: LearningResourceAutomationTas
         "is_enabled": bool(row.is_enabled),
         "default_category_id": int(row.default_category_id) if row.default_category_id else None,
         "last_processed_message_id": int(row.last_processed_message_id) if row.last_processed_message_id else None,
+        "last_processed_telegram_message_id": int(row.last_processed_telegram_message_id) if row.last_processed_telegram_message_id else None,
     }
 
 
@@ -568,8 +582,17 @@ def delete_learning_automation_task(session: Session, *, task_id: int) -> dict[s
 
 
 def _ensure_task_channel_checkpoint(session: Session, row: LearningResourceAutomationTaskChannel) -> int | None:
+    if row.last_processed_telegram_message_id is not None:
+        return int(row.last_processed_telegram_message_id)
+
     if row.last_processed_message_id is not None:
-        return int(row.last_processed_message_id)
+        legacy_message = session.get(Message, int(row.last_processed_message_id))
+        if legacy_message is not None and legacy_message.monitor_message_id is not None:
+            row.last_processed_telegram_message_id = int(legacy_message.monitor_message_id)
+            session.add(row)
+            session.flush()
+            return int(row.last_processed_telegram_message_id)
+        return None
 
     channel = session.get(Channel, int(row.channel_id))
     if channel is None:
@@ -583,16 +606,29 @@ def _ensure_task_channel_checkpoint(session: Session, row: LearningResourceAutom
         row.last_processed_message_id = legacy_checkpoint
     else:
         channel_keys = {channel_key, f"@{channel_key}"}
-        latest_message_id = session.query(func.max(Message.id)).filter(
+        latest_raw_message = session.query(MonitorRawMessage).filter(
+            or_(
+                MonitorRawMessage.monitor_channel_config_id == int(row.channel_id),
+                MonitorRawMessage.monitor_channel_key.in_(sorted(channel_keys)),
+            )
+        ).order_by(MonitorRawMessage.monitor_message_id.desc()).first()
+        latest_message = session.query(Message).filter(
             or_(
                 Message.monitor_channel_config_id == int(row.channel_id),
                 Message.monitor_channel_key.in_(sorted(channel_keys)),
             )
-        ).scalar()
-        row.last_processed_message_id = int(latest_message_id) if latest_message_id else None
+        ).order_by(Message.id.desc()).first()
+        row.last_processed_message_id = int(latest_message.id) if latest_message is not None else None
+        row.last_processed_telegram_message_id = (
+            int(latest_raw_message.monitor_message_id)
+            if latest_raw_message is not None
+            else int(latest_message.monitor_message_id)
+            if latest_message is not None and latest_message.monitor_message_id is not None
+            else None
+        )
     session.add(row)
     session.flush()
-    return int(row.last_processed_message_id) if row.last_processed_message_id else None
+    return int(row.last_processed_telegram_message_id) if row.last_processed_telegram_message_id else None
 
 
 def sync_legacy_learning_channel_config(
@@ -652,6 +688,260 @@ def sync_legacy_learning_channel_config(
     refresh_learning_automation_task_health(session, int(task.id))
 
 
+def _message_source_key(message: Message) -> tuple[str, int | str]:
+    return (
+        str(message.monitor_channel_key or "").strip(),
+        int(message.monitor_message_id)
+        if message.monitor_message_id is not None
+        else f"db:{int(message.id)}",
+    )
+
+
+def _load_learning_source_groups(
+    session: Session,
+    *,
+    task_channels: list[LearningResourceAutomationTaskChannel],
+    mode: str,
+    from_at: datetime | None = None,
+    to_at: datetime | None = None,
+    recent_limit: int | None = None,
+) -> list[dict[str, Any]]:
+    """Load parsed rows grouped by their original Telegram message.
+
+    ``messages.id`` identifies a parsed row. ``monitor_message_id`` identifies
+    the original Telegram message and is the only cursor used for checkpoint
+    scans. Older imported rows without that field remain addressable through
+    the legacy explicit-ID endpoint.
+    """
+    from app.services.learning_resources import _display_title, _find_quark_refs
+
+    grouped: dict[tuple[str, int | str], dict[str, Any]] = {}
+    for channel_row in task_channels:
+        channel = session.get(Channel, int(channel_row.channel_id))
+        channel_key = _channel_key(channel) if channel is not None else ""
+        row_channel_keys = {channel_key, f"@{channel_key}"} if channel_key else set()
+        checkpoint = _ensure_task_channel_checkpoint(session, channel_row)
+
+        raw_query = session.query(MonitorRawMessage).filter(
+            or_(
+                MonitorRawMessage.monitor_channel_config_id == int(channel_row.channel_id),
+                MonitorRawMessage.monitor_channel_key.in_(sorted(row_channel_keys)) if row_channel_keys else False,
+            )
+        )
+        if mode == "checkpoint":
+            if checkpoint is not None:
+                raw_query = raw_query.filter(MonitorRawMessage.monitor_message_id > int(checkpoint))
+        elif mode == "date_range":
+            if from_at is not None:
+                raw_query = raw_query.filter(MonitorRawMessage.timestamp >= from_at)
+            if to_at is not None:
+                raw_query = raw_query.filter(MonitorRawMessage.timestamp <= to_at)
+        raw_order = (
+            MonitorRawMessage.monitor_message_id.desc()
+            if mode == "recent"
+            else MonitorRawMessage.monitor_message_id.asc()
+        )
+        raw_rows = raw_query.order_by(raw_order).limit(20000).all()
+        for raw_message in raw_rows:
+            source_key = (str(raw_message.monitor_channel_key or "").strip(), int(raw_message.monitor_message_id))
+            message_query = session.query(Message).filter(
+                Message.monitor_message_id == int(raw_message.monitor_message_id),
+                or_(
+                    Message.monitor_chat_id == int(raw_message.monitor_chat_id),
+                    Message.monitor_channel_key == str(raw_message.monitor_channel_key or "").strip(),
+                ),
+            )
+            grouped[source_key] = {
+                "channel_id": int(channel_row.channel_id),
+                "rows": message_query.order_by(Message.id.asc()).all(),
+                "raw": raw_message,
+            }
+
+        # Backward compatibility for messages saved before monitor_raw_messages
+        # existed. New messages are represented by the raw table above, while
+        # these rows fill only source messages that have no raw snapshot yet.
+        message_query = session.query(Message).filter(
+            or_(
+                Message.monitor_channel_config_id == int(channel_row.channel_id),
+                Message.monitor_channel_key.in_(sorted(row_channel_keys)) if row_channel_keys else False,
+            ),
+            Message.monitor_message_id.isnot(None),
+        )
+        if mode == "checkpoint":
+            if checkpoint is not None:
+                message_query = message_query.filter(Message.monitor_message_id > int(checkpoint))
+            elif channel_row.last_processed_message_id is not None:
+                message_query = message_query.filter(Message.id > int(channel_row.last_processed_message_id))
+        elif mode == "date_range":
+            if from_at is not None:
+                message_query = message_query.filter(Message.timestamp >= from_at)
+            if to_at is not None:
+                message_query = message_query.filter(Message.timestamp <= to_at)
+        message_order = (
+            Message.monitor_message_id.desc()
+            if mode == "recent"
+            else Message.monitor_message_id.asc()
+        )
+        message_rows = message_query.order_by(message_order, Message.id.asc()).limit(20000).all()
+        for message in message_rows:
+            source_key = _message_source_key(message)
+            entry = grouped.setdefault(
+                source_key,
+                {"channel_id": int(channel_row.channel_id), "rows": [], "raw": None},
+            )
+            existing_ids = {int(row.id) for row in entry["rows"]}
+            if int(message.id) not in existing_ids:
+                entry["rows"].append(message)
+
+    groups: list[dict[str, Any]] = []
+    for source_key, entry in grouped.items():
+        rows = list(entry["rows"])
+        raw_message = entry.get("raw")
+        rows.sort(key=lambda item: int(item.id))
+        refs: list[tuple[Message, LinkTarget]] = []
+        for message in rows:
+            refs.extend(
+                (message, target)
+                for _, target in _find_quark_refs(session, int(message.id))
+            )
+        raw_text = str(raw_message.raw_text or "").strip() if raw_message is not None else ""
+        if not raw_text:
+            raw_text = next((str(row.monitor_raw_text or "").strip() for row in rows if row.monitor_raw_text), "")
+        titles = []
+        for row in rows:
+            title = _display_title(row)
+            if title and title not in titles:
+                titles.append(title)
+        timestamp = raw_message.timestamp if raw_message is not None else max(
+            (row.timestamp for row in rows if row.timestamp is not None),
+            default=None,
+        )
+        groups.append({
+            "source_key": source_key,
+            "channel_id": int(entry["channel_id"]),
+            "rows": rows,
+            "refs": refs,
+            "monitor_message_id": int(raw_message.monitor_message_id)
+            if raw_message is not None
+            else int(rows[0].monitor_message_id)
+            if rows and rows[0].monitor_message_id is not None
+            else None,
+            "channel_key": str(raw_message.monitor_channel_key or "").strip()
+            if raw_message is not None
+            else str(rows[0].monitor_channel_key or "").strip()
+            if rows
+            else str(source_key[0] or ""),
+            "timestamp": timestamp,
+            "raw_text": raw_text,
+            "titles": titles,
+            "valid_row_ids": {int(message.id) for message, _ in refs},
+            "valid": bool(refs),
+        })
+
+    groups.sort(key=lambda group: (
+        group["timestamp"] or datetime.min,
+        int(group["monitor_message_id"] or 0),
+    ))
+    if mode == "recent":
+        selected: list[dict[str, Any]] = []
+        valid_count = 0
+        for group in reversed(groups):
+            selected.append(group)
+            if group["valid"]:
+                valid_count += 1
+            if valid_count >= max(1, min(int(recent_limit or 10), 5000)):
+                break
+        groups = list(reversed(selected))
+    elif mode == "checkpoint":
+        groups = groups[:5000]
+    else:
+        groups = groups[:5000]
+    return groups
+
+
+def _serialize_learning_source_group(group: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "channel": str(group["channel_key"] or ""),
+        "monitor_message_id": group["monitor_message_id"],
+        "message_time": group["timestamp"],
+        "raw_text": str(group["raw_text"] or "") or None,
+        "raw_text_available": bool(group["raw_text"]),
+        "resource_titles": list(group["titles"]),
+        "resource_count": len(group["valid_row_ids"]),
+        "link_count": len(group["refs"]),
+        "valid": bool(group["valid"]),
+    }
+
+
+def _build_learning_supplement_plan(
+    session: Session,
+    *,
+    task_id: int,
+    mode: str = "checkpoint",
+    from_at: datetime | None = None,
+    to_at: datetime | None = None,
+    recent_limit: int | None = None,
+) -> dict[str, Any]:
+    task = session.get(LearningResourceAutomationTask, int(task_id))
+    if task is None or str(task.status or "") == "deleted":
+        raise LookupError("学习资料自动任务不存在")
+    refresh_learning_automation_task_health(session, int(task.id))
+    if task.status == "invalid":
+        raise ValueError("任务配置不完整，请先修正频道或转存目标")
+    normalized_mode = str(mode or "checkpoint").strip().lower()
+    from_at = _normalize_learning_filter_datetime(from_at)
+    to_at = _normalize_learning_filter_datetime(to_at)
+    if normalized_mode not in {"checkpoint", "date_range", "recent"}:
+        raise ValueError("补充更新方式不正确")
+    if normalized_mode == "date_range" and from_at is None and to_at is None:
+        raise ValueError("按日期范围补充时必须选择时间范围")
+    if normalized_mode == "date_range" and from_at is not None and to_at is not None and from_at > to_at:
+        raise ValueError("补充更新的开始时间不能晚于结束时间")
+    channel_rows = session.query(LearningResourceAutomationTaskChannel).filter(
+        LearningResourceAutomationTaskChannel.task_id == int(task.id),
+        LearningResourceAutomationTaskChannel.is_enabled.is_(True),
+    ).all()
+    if not channel_rows:
+        raise ValueError("任务没有启用的监听频道")
+    groups = _load_learning_source_groups(
+        session,
+        task_channels=channel_rows,
+        mode=normalized_mode,
+        from_at=from_at,
+        to_at=to_at,
+        recent_limit=recent_limit,
+    )
+    selected_groups = [group for group in groups if group["valid"]]
+    selected_ids = [int(row.id) for group in groups for row in group["rows"]]
+    valid_message_count = len(selected_groups)
+    skipped_message_count = len(groups) - valid_message_count
+    resource_count = sum(len(group["valid_row_ids"]) for group in selected_groups)
+    link_count = sum(len(group["refs"]) for group in selected_groups)
+    return {
+        "task_id": int(task.id),
+        "mode": normalized_mode,
+        "groups": groups,
+        "source_groups": [
+            {
+                "channel_id": int(group["channel_id"]),
+                "channel_key": str(group["channel_key"] or ""),
+                "monitor_message_id": int(group["monitor_message_id"]),
+                "message_ids": [int(row.id) for row in group["rows"]],
+            }
+            for group in groups
+            if group["monitor_message_id"] is not None
+        ],
+        "selected_ids": selected_ids,
+        "scanned_messages": len(groups),
+        "selected_messages": valid_message_count,
+        "valid_messages": valid_message_count,
+        "skipped_messages": skipped_message_count,
+        "resources": resource_count,
+        "links": link_count,
+        "message_previews": [_serialize_learning_source_group(group) for group in groups[:50]],
+    }
+
+
 def process_learning_automation_task_now(
     session: Session,
     *,
@@ -659,8 +949,14 @@ def process_learning_automation_task_now(
     message_ids: Iterable[int] | None = None,
     from_message_id: int | None = None,
     to_message_id: int | None = None,
+    mode: str = "checkpoint",
+    from_at: datetime | None = None,
+    to_at: datetime | None = None,
+    recent_limit: int | None = None,
     dry_run: bool = False,
     operator: str = "admin",
+    supplement_run_id: int | None = None,
+    allow_paused_task: bool = True,
 ) -> dict[str, Any]:
     from app.services.learning_resources import (
         _record_learning_process_log,
@@ -670,31 +966,24 @@ def process_learning_automation_task_now(
     task = session.get(LearningResourceAutomationTask, int(task_id))
     if task is None or str(task.status or "") == "deleted":
         raise LookupError("学习资料自动任务不存在")
-    if not bool(task.is_enabled):
-        raise ValueError("任务已暂停，请先恢复自动监听后再补处理遗漏消息")
-    refresh_learning_automation_task_health(session, int(task.id))
-    if task.status == "invalid":
-        raise ValueError("任务配置不完整，请先修正频道或转存目标")
-    channel_rows = session.query(LearningResourceAutomationTaskChannel).filter(
-        LearningResourceAutomationTaskChannel.task_id == int(task.id),
-        LearningResourceAutomationTaskChannel.is_enabled.is_(True),
-    ).all()
-    channel_ids = {int(row.channel_id) for row in channel_rows}
-    if not channel_ids:
-        raise ValueError("任务没有启用的监听频道")
     normalized_ids = sorted({int(value) for value in (message_ids or []) if int(value) > 0})
-    channel_keys: set[str] = set()
-    for channel_row in channel_rows:
-        channel = session.get(Channel, int(channel_row.channel_id))
-        channel_key = _channel_key(channel) if channel is not None else ""
-        if channel_key:
-            channel_keys.update({channel_key, f"@{channel_key}"})
-    channel_filter = or_(
-        Message.monitor_channel_config_id.in_(sorted(channel_ids)),
-        Message.monitor_channel_key.in_(sorted(channel_keys)) if channel_keys else False,
-    )
-    selected_ids: list[int]
+    plan: dict[str, Any]
     if normalized_ids or from_message_id is not None or to_message_id is not None:
+        channel_rows = session.query(LearningResourceAutomationTaskChannel).filter(
+            LearningResourceAutomationTaskChannel.task_id == int(task.id),
+            LearningResourceAutomationTaskChannel.is_enabled.is_(True),
+        ).all()
+        channel_ids = {int(row.channel_id) for row in channel_rows}
+        channel_keys: set[str] = set()
+        for channel_row in channel_rows:
+            channel = session.get(Channel, int(channel_row.channel_id))
+            channel_key = _channel_key(channel) if channel is not None else ""
+            if channel_key:
+                channel_keys.update({channel_key, f"@{channel_key}"})
+        channel_filter = or_(
+            Message.monitor_channel_config_id.in_(sorted(channel_ids)),
+            Message.monitor_channel_key.in_(sorted(channel_keys)) if channel_keys else False,
+        )
         query = session.query(Message).filter(
             channel_filter,
             Message.id.in_(normalized_ids) if normalized_ids else True,
@@ -704,33 +993,49 @@ def process_learning_automation_task_now(
         if to_message_id is not None:
             query = query.filter(Message.id <= int(to_message_id))
         selected_ids = [int(message.id) for message in query.order_by(Message.id.asc()).limit(5000).all()]
+        plan = {
+            "task_id": int(task.id),
+            "mode": "explicit_records",
+            "selected_ids": selected_ids,
+            "scanned_messages": len(selected_ids),
+            "selected_messages": len(selected_ids),
+            "valid_messages": len(selected_ids),
+            "skipped_messages": 0,
+            "resources": len(selected_ids),
+            "links": 0,
+            "message_previews": [],
+        }
     else:
-        selected_id_set: set[int] = set()
-        for channel_row in channel_rows:
-            checkpoint = _ensure_task_channel_checkpoint(session, channel_row)
-            channel = session.get(Channel, int(channel_row.channel_id))
-            channel_key = _channel_key(channel) if channel is not None else ""
-            row_channel_keys = {channel_key, f"@{channel_key}"} if channel_key else set()
-            query = session.query(Message.id).filter(
-                or_(
-                    Message.monitor_channel_config_id == int(channel_row.channel_id),
-                    Message.monitor_channel_key.in_(sorted(row_channel_keys)) if row_channel_keys else False,
-                )
-            )
-            if checkpoint is not None:
-                query = query.filter(Message.id > int(checkpoint))
-            selected_id_set.update(
-                int(message_id)
-                for (message_id,) in query.order_by(Message.id.asc()).limit(5000).all()
-            )
-        selected_ids = sorted(selected_id_set)[:5000]
+        plan = _build_learning_supplement_plan(
+            session,
+            task_id=int(task.id),
+            mode=mode,
+            from_at=from_at,
+            to_at=to_at,
+            recent_limit=recent_limit,
+        )
+    selected_ids = list(plan["selected_ids"])
     if dry_run:
-        return {"task_id": int(task.id), "selected_messages": len(selected_ids), "message_ids": selected_ids, "dry_run": True}
+        return {
+            "task_id": int(task.id),
+            "mode": plan["mode"],
+            "selected_messages": int(plan["selected_messages"]),
+            "scanned_messages": int(plan["scanned_messages"]),
+            "valid_messages": int(plan["valid_messages"]),
+            "skipped_messages": int(plan["skipped_messages"]),
+            "resources": int(plan["resources"]),
+            "links": int(plan["links"]),
+            "message_ids": selected_ids[:5000],
+            "message_previews": plan["message_previews"],
+            "dry_run": True,
+        }
     result = enqueue_learning_resources_for_message_ids(
         session,
         selected_ids,
         operator=operator,
         task_id=int(task.id),
+        supplement_run_id=supplement_run_id,
+        allow_paused_task=allow_paused_task,
     )
     task.last_enqueued_at = _utcnow() if result.get("jobs") else task.last_enqueued_at
     session.add(task)
@@ -738,12 +1043,306 @@ def process_learning_automation_task_now(
     _record_learning_process_log(
         session,
         stage="replay",
-        message=f"已补处理 {len(selected_ids)} 条遗漏消息，新增 {int(result.get('jobs') or 0)} 个转存任务",
+        message=(
+            f"补充更新完成：扫描 {int(plan['scanned_messages'])} 条原始消息，"
+            f"有效 {int(plan['valid_messages'])} 条，新增 {int(result.get('jobs') or 0)} 个转存任务"
+        ),
         task_id=int(task.id),
-        details={"message_ids": selected_ids[:500], "result": result, "mode": "checkpoint_catch_up"},
+        supplement_run_id=supplement_run_id,
+        details={
+            "message_ids": selected_ids[:500],
+            "result": result,
+            "mode": plan["mode"],
+            "scanned_messages": int(plan["scanned_messages"]),
+            "valid_messages": int(plan["valid_messages"]),
+            "skipped_messages": int(plan["skipped_messages"]),
+        },
     )
     session.flush()
-    return {"task_id": int(task.id), "selected_messages": len(selected_ids), "dry_run": False, **result}
+    return {
+        "task_id": int(task.id),
+        "mode": plan["mode"],
+        "selected_messages": int(plan["selected_messages"]),
+        "scanned_messages": int(plan["scanned_messages"]),
+        "valid_messages": int(plan["valid_messages"]),
+        "skipped_messages": int(plan["skipped_messages"]),
+        "resources": int(plan["resources"]),
+        "links": int(plan["links"]),
+        "message_previews": plan["message_previews"],
+        "dry_run": False,
+        **result,
+    }
+
+
+def _serialize_supplement_run(run: LearningResourceSupplementRun) -> dict[str, Any]:
+    return {
+        "id": int(run.id),
+        "task_id": int(run.task_id),
+        "mode": str(run.mode or "checkpoint"),
+        "status": str(run.status or "queued"),
+        "from_at": run.from_at,
+        "to_at": run.to_at,
+        "recent_limit": int(run.recent_limit) if run.recent_limit is not None else None,
+        "selected_messages": int(run.selected_message_count or 0),
+        "scanned_messages": int(run.scanned_message_count or 0),
+        "valid_messages": int(run.valid_message_count or 0),
+        "skipped_messages": int(run.skipped_message_count or 0),
+        "resources": int(run.resource_count or 0),
+        "links": int(run.link_count or 0),
+        "jobs": int(run.job_count or 0),
+        "failed": int(run.failed_count or 0),
+        "last_error_message": str(run.last_error_message or "") or None,
+        "started_at": run.started_at,
+        "finished_at": run.finished_at,
+        "paused_at": run.paused_at,
+        "created_at": run.created_at,
+        "updated_at": run.updated_at,
+    }
+
+
+def preview_learning_supplement(
+    session: Session,
+    *,
+    task_id: int,
+    mode: str = "checkpoint",
+    from_at: datetime | None = None,
+    to_at: datetime | None = None,
+    recent_limit: int | None = None,
+) -> dict[str, Any]:
+    plan = _build_learning_supplement_plan(
+        session,
+        task_id=int(task_id),
+        mode=mode,
+        from_at=from_at,
+        to_at=to_at,
+        recent_limit=recent_limit,
+    )
+    return {
+        "task_id": int(plan["task_id"]),
+        "mode": str(plan["mode"]),
+        "scanned_messages": int(plan["scanned_messages"]),
+        "selected_messages": int(plan["selected_messages"]),
+        "valid_messages": int(plan["valid_messages"]),
+        "skipped_messages": int(plan["skipped_messages"]),
+        "resources": int(plan["resources"]),
+        "links": int(plan["links"]),
+        "message_previews": plan["message_previews"],
+    }
+
+
+def create_learning_supplement_run(
+    session: Session,
+    *,
+    task_id: int,
+    mode: str = "checkpoint",
+    from_at: datetime | None = None,
+    to_at: datetime | None = None,
+    recent_limit: int | None = None,
+    operator: str = "admin",
+) -> dict[str, Any]:
+    task = session.get(LearningResourceAutomationTask, int(task_id))
+    if task is None or str(task.status or "") == "deleted":
+        raise LookupError("学习资料自动任务不存在")
+    active_run = session.query(LearningResourceSupplementRun).filter(
+        LearningResourceSupplementRun.task_id == int(task.id),
+        LearningResourceSupplementRun.status.in_(["queued", "running", "pause_requested"]),
+    ).first()
+    if active_run is not None:
+        raise ValueError("该任务已有补充更新正在运行，请先等待或暂停当前运行")
+    normalized_from_at = _normalize_learning_filter_datetime(from_at)
+    normalized_to_at = _normalize_learning_filter_datetime(to_at)
+    plan = _build_learning_supplement_plan(
+        session,
+        task_id=int(task.id),
+        mode=mode,
+        from_at=normalized_from_at,
+        to_at=normalized_to_at,
+        recent_limit=recent_limit,
+    )
+    run = LearningResourceSupplementRun(
+        task_id=int(task.id),
+        mode=str(plan["mode"]),
+        status="queued",
+        from_at=normalized_from_at,
+        to_at=normalized_to_at,
+        recent_limit=int(recent_limit) if recent_limit is not None else None,
+        selected_message_count=int(plan["selected_messages"]),
+        scanned_message_count=int(plan["scanned_messages"]),
+        valid_message_count=int(plan["valid_messages"]),
+        skipped_message_count=int(plan["skipped_messages"]),
+        resource_count=int(plan["resources"]),
+        link_count=int(plan["links"]),
+        selected_message_ids_json=list(plan["selected_ids"]),
+        options_json={
+            "mode": str(plan["mode"]),
+            "operator": str(operator or "admin"),
+            "source_groups": list(plan["source_groups"]),
+        },
+        requested_by=str(operator or "admin")[:128],
+    )
+    session.add(run)
+    session.flush()
+    from app.services.learning_resources import _record_learning_process_log
+
+    _record_learning_process_log(
+        session,
+        stage="replay",
+        message=(
+            f"补充更新已排队：扫描 {int(plan['scanned_messages'])} 条原始消息，"
+            f"有效 {int(plan['valid_messages'])} 条，资源 {int(plan['resources'])} 条"
+        ),
+        task_id=int(task.id),
+        supplement_run_id=int(run.id),
+        details={
+            "mode": str(plan["mode"]),
+            "scanned_messages": int(plan["scanned_messages"]),
+            "valid_messages": int(plan["valid_messages"]),
+            "skipped_messages": int(plan["skipped_messages"]),
+            "resources": int(plan["resources"]),
+            "links": int(plan["links"]),
+        },
+    )
+    session.flush()
+    return _serialize_supplement_run(run)
+
+
+def _advance_learning_supplement_checkpoints(
+    session: Session,
+    *,
+    task_id: int,
+    source_groups: list[dict[str, Any]],
+) -> None:
+    """Advance raw-message cursors after a supplement batch commits successfully."""
+    if not source_groups:
+        return
+    channel_ids = {
+        int(group["channel_id"])
+        for group in source_groups
+        if group.get("channel_id") is not None
+    }
+    if not channel_ids:
+        return
+    channel_rows = session.query(LearningResourceAutomationTaskChannel).filter(
+        LearningResourceAutomationTaskChannel.task_id == int(task_id),
+        LearningResourceAutomationTaskChannel.channel_id.in_(sorted(channel_ids)),
+    ).all()
+    channel_rows_by_id = {int(row.channel_id): row for row in channel_rows}
+    for group in source_groups:
+        channel_id = group.get("channel_id")
+        message_id = group.get("monitor_message_id")
+        row = channel_rows_by_id.get(int(channel_id)) if channel_id is not None else None
+        if row is None or message_id is None:
+            continue
+        message_id = int(message_id)
+        if message_id <= 0:
+            continue
+        if row.last_processed_telegram_message_id is None or message_id > int(row.last_processed_telegram_message_id):
+            row.last_processed_telegram_message_id = message_id
+            session.add(row)
+
+
+def _group_message_ids_for_supplement(session: Session, message_ids: list[int]) -> list[list[int]]:
+    rows = session.query(Message).filter(Message.id.in_(message_ids)).order_by(Message.id.asc()).all()
+    groups: dict[tuple[str, int | str], list[int]] = {}
+    for row in rows:
+        groups.setdefault(_message_source_key(row), []).append(int(row.id))
+    return list(groups.values())
+
+
+def run_learning_supplement(supplement_run_id: int) -> None:
+    session = Session(engine)
+    try:
+        run = session.get(LearningResourceSupplementRun, int(supplement_run_id))
+        if run is None or run.status not in {"queued", "running"}:
+            return
+        run.status = "running"
+        run.started_at = _utcnow()
+        session.add(run)
+        session.commit()
+        message_ids = [int(value) for value in list(run.selected_message_ids_json or []) if int(value) > 0]
+        stored_source_groups = list(dict(run.options_json or {}).get("source_groups") or [])
+        if not stored_source_groups:
+            stored_source_groups = [
+                {"message_ids": group_ids}
+                for group_ids in _group_message_ids_for_supplement(session, message_ids)
+            ]
+        chunk_size = 25
+        for offset in range(0, len(stored_source_groups), chunk_size):
+            session.refresh(run)
+            if run.status == "pause_requested":
+                run.status = "paused"
+                run.paused_at = _utcnow()
+                run.finished_at = _utcnow()
+                session.add(run)
+                session.commit()
+                return
+            source_group_chunk = stored_source_groups[offset:offset + chunk_size]
+            chunk_ids = [
+                int(message_id)
+                for group in source_group_chunk
+                for message_id in list(group.get("message_ids") or [])
+                if int(message_id) > 0
+            ]
+            result: dict[str, Any] = {}
+            if chunk_ids:
+                result = process_learning_automation_task_now(
+                    session,
+                    task_id=int(run.task_id),
+                    message_ids=chunk_ids,
+                    operator=str(run.requested_by or "admin"),
+                    supplement_run_id=int(run.id),
+                    allow_paused_task=True,
+                )
+                run.job_count = int(run.job_count or 0) + int(result.get("jobs") or 0)
+                run.failed_count = int(run.failed_count or 0) + int(result.get("failed") or 0)
+            _advance_learning_supplement_checkpoints(
+                session,
+                task_id=int(run.task_id),
+                source_groups=source_group_chunk,
+            )
+            run.result_json = {
+                "last_result": result,
+                "processed_groups": min(offset + chunk_size, len(stored_source_groups)),
+            }
+            session.add(run)
+            session.commit()
+        run.status = "completed"
+        run.finished_at = _utcnow()
+        session.add(run)
+        session.commit()
+    except Exception as exc:
+        session.rollback()
+        run = session.get(LearningResourceSupplementRun, int(supplement_run_id))
+        if run is not None:
+            run.status = "failed"
+            run.last_error_message = str(exc or "补充更新失败")[:1800]
+            run.finished_at = _utcnow()
+            session.add(run)
+            session.commit()
+    finally:
+        session.close()
+
+
+def pause_learning_supplement(session: Session, *, supplement_run_id: int) -> dict[str, Any]:
+    run = session.get(LearningResourceSupplementRun, int(supplement_run_id))
+    if run is None:
+        raise LookupError("补充更新记录不存在")
+    if run.status == "queued":
+        run.status = "paused"
+        run.paused_at = _utcnow()
+        run.finished_at = _utcnow()
+    elif run.status == "running":
+        run.status = "pause_requested"
+    else:
+        raise ValueError("当前补充更新不在运行中")
+    session.add(run)
+    session.flush()
+    return _serialize_supplement_run(run)
+
+
+def get_learning_supplement_run(session: Session, *, supplement_run_id: int) -> dict[str, Any] | None:
+    run = session.get(LearningResourceSupplementRun, int(supplement_run_id))
+    return _serialize_supplement_run(run) if run is not None else None
 
 
 def retry_failed_learning_automation_jobs(session: Session, *, task_id: int) -> dict[str, Any]:
@@ -847,9 +1446,14 @@ __all__ = [
     "is_learning_target_enabled",
     "list_learning_automation_logs",
     "list_learning_automation_tasks",
+    "preview_learning_supplement",
+    "create_learning_supplement_run",
+    "get_learning_supplement_run",
+    "pause_learning_supplement",
     "process_learning_automation_task_now",
     "retry_failed_learning_automation_jobs",
     "refresh_learning_automation_task_health",
+    "run_learning_supplement",
     "save_learning_automation_task",
     "set_learning_automation_task_enabled",
     "sync_legacy_learning_channel_config",

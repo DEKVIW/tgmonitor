@@ -9,13 +9,14 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 from telethon import TelegramClient, events
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.monitor_observability import MonitorMetrics, log_monitor_event
 from app.core.monitor_parser import parse_message_content, parse_message_records
 from app.models.config import settings
 from app.models.db import async_session
-from app.models.models import Credential, Message, engine, ensure_message_monitor_source_columns, ensure_runtime_storage_tables
+from app.models.models import Credential, Message, MonitorRawMessage, engine, ensure_message_monitor_source_columns, ensure_runtime_storage_tables
 from app.services.channel_registry import (
     get_runtime_channel_metadata,
     get_runtime_channels,
@@ -48,6 +49,60 @@ last_message_channel: str | None = None
 
 FAILED_MESSAGES_LOG = Path("data/failed_messages.log")
 ERROR_MESSAGES_LOG = Path("data/error_messages.log")
+
+
+async def _save_monitor_raw_message(
+    *,
+    monitor_channel_config_id: int | None,
+    monitor_chat_id: int | None,
+    monitor_channel_key: str,
+    monitor_channel_title: str,
+    monitor_message_id: int | None,
+    timestamp: datetime.datetime,
+    raw_text: str,
+    parse_status: str,
+    parsed_record_count: int,
+    supported_link_count: int,
+) -> None:
+    if monitor_chat_id is None or monitor_message_id is None:
+        return
+    try:
+        async with async_session() as session:
+            result = await session.execute(
+                select(MonitorRawMessage).where(
+                    MonitorRawMessage.monitor_chat_id == int(monitor_chat_id),
+                    MonitorRawMessage.monitor_message_id == int(monitor_message_id),
+                )
+            )
+            row = result.scalar_one_or_none()
+            if row is None:
+                row = MonitorRawMessage(
+                    monitor_channel_config_id=monitor_channel_config_id,
+                    monitor_chat_id=int(monitor_chat_id),
+                    monitor_channel_key=str(monitor_channel_key or "")[:255],
+                    monitor_channel_title=str(monitor_channel_title or "")[:255] or None,
+                    monitor_message_id=int(monitor_message_id),
+                    timestamp=timestamp,
+                )
+            row.monitor_channel_config_id = monitor_channel_config_id
+            row.monitor_channel_key = str(monitor_channel_key or "")[:255]
+            row.monitor_channel_title = str(monitor_channel_title or "")[:255] or None
+            row.timestamp = timestamp
+            row.raw_text = str(raw_text or "")
+            row.parse_status = str(parse_status or "parsed")[:32]
+            row.parsed_record_count = max(0, int(parsed_record_count or 0))
+            row.supported_link_count = max(0, int(supported_link_count or 0))
+            session.add(row)
+            await session.commit()
+    except Exception as error:
+        log_monitor_event(
+            logger,
+            "raw_message_save_failed",
+            level=logging.WARNING,
+            channel=monitor_channel_key,
+            monitor_message_id=monitor_message_id,
+            error=str(error),
+        )
 
 
 def get_api_credentials() -> Tuple[int, str]:
@@ -282,6 +337,18 @@ async def handler(event: Any) -> None:
             parsed_records = [record for record in parsed_records if record.get("links")]
             monitor_metrics.record_parse(diagnostics, has_links=bool(parsed_records))
         except Exception as parse_error:
+            await _save_monitor_raw_message(
+                monitor_channel_config_id=int(channel_runtime_info.get("config_id")) if channel_runtime_info.get("config_id") else None,
+                monitor_chat_id=int(incoming_chat_id) if incoming_chat_id is not None else None,
+                monitor_channel_key=str(channel_runtime_info.get("channel_key") or channel_name or ""),
+                monitor_channel_title=str(chat_title or ""),
+                monitor_message_id=getattr(event.message, "id", None),
+                timestamp=telegram_local_time,
+                raw_text=message_text,
+                parse_status="parse_failed",
+                parsed_record_count=0,
+                supported_link_count=0,
+            )
             monitor_metrics.record_failure("parse", channel=channel_name, error=str(parse_error))
             log_monitor_event(
                 logger,
@@ -300,6 +367,18 @@ async def handler(event: Any) -> None:
             return
 
         if not parsed_records:
+            await _save_monitor_raw_message(
+                monitor_channel_config_id=int(channel_runtime_info.get("config_id")) if channel_runtime_info.get("config_id") else None,
+                monitor_chat_id=int(incoming_chat_id) if incoming_chat_id is not None else None,
+                monitor_channel_key=str(channel_runtime_info.get("channel_key") or channel_name or ""),
+                monitor_channel_title=str(chat_title or ""),
+                monitor_message_id=getattr(event.message, "id", None),
+                timestamp=telegram_local_time,
+                raw_text=message_text,
+                parse_status="no_supported_links",
+                parsed_record_count=0,
+                supported_link_count=0,
+            )
             monitor_metrics.increment("messages_filtered_no_links")
             log_monitor_event(
                 logger,
@@ -315,6 +394,19 @@ async def handler(event: Any) -> None:
             )
             print(f"[{monitor_time}] 过滤掉无网盘链接的消息")
             return
+
+        await _save_monitor_raw_message(
+            monitor_channel_config_id=int(channel_runtime_info.get("config_id")) if channel_runtime_info.get("config_id") else None,
+            monitor_chat_id=int(incoming_chat_id) if incoming_chat_id is not None else None,
+            monitor_channel_key=str(channel_runtime_info.get("channel_key") or channel_name or ""),
+            monitor_channel_title=str(chat_title or ""),
+            monitor_message_id=getattr(event.message, "id", None),
+            timestamp=telegram_local_time,
+            raw_text=message_text,
+            parse_status="parsed",
+            parsed_record_count=len(parsed_records),
+            supported_link_count=sum(len(record.get("links") or {}) for record in parsed_records),
+        )
 
         saved_netdisk_types = sorted(
             {
@@ -344,6 +436,7 @@ async def handler(event: Any) -> None:
                                 monitor_channel_key=monitor_channel_key,
                                 monitor_channel_title=monitor_channel_title,
                                 monitor_message_id=int(monitor_message_id) if monitor_message_id is not None else None,
+                                monitor_raw_text=message_text,
                                 **parsed_data,
                                 netdisk_types=list(parsed_data["links"].keys()),
                             )

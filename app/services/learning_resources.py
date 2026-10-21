@@ -648,6 +648,7 @@ def _record_learning_process_log(
     resource_id: int | None = None,
     transfer_job_id: int | None = None,
     import_job_id: int | None = None,
+    supplement_run_id: int | None = None,
     source_message_id: int | None = None,
     details: dict[str, Any] | None = None,
 ) -> LearningResourceProcessLog:
@@ -658,6 +659,7 @@ def _record_learning_process_log(
         resource_id=resource_id,
         transfer_job_id=transfer_job_id,
         import_job_id=import_job_id,
+        supplement_run_id=supplement_run_id,
         source_message_id=source_message_id,
         stage=str(stage or "failed")[:32],
         level=str(level or "info")[:16],
@@ -753,6 +755,7 @@ def _get_learning_automation_contexts(
     channel_key: str,
     *,
     task_id: int | None = None,
+    allow_paused_task: bool = False,
 ) -> list[LearningAutomationContext]:
     normalized = normalize_channel_username(channel_key)
     channel_candidates = {normalized, f"@{normalized}"}
@@ -760,7 +763,7 @@ def _get_learning_automation_contexts(
     channel_ids = {int(channel.id) for channel in channels if channel is not None}
     contexts: list[LearningAutomationContext] = []
     if channel_ids:
-        task_context_rows = (
+        task_context_query = (
             session.query(
                 LearningResourceAutomationTaskChannel,
                 LearningResourceAutomationTask,
@@ -782,8 +785,8 @@ def _get_learning_automation_contexts(
             .filter(
                 LearningResourceAutomationTaskChannel.channel_id.in_(sorted(channel_ids)),
                 LearningResourceAutomationTaskChannel.is_enabled.is_(True),
-                LearningResourceAutomationTask.is_enabled.is_(True),
                 LearningResourceAutomationTask.transfer_policy == "automatic",
+                LearningResourceAutomationTask.status != "deleted",
                 LearningResourceAutomationTaskTarget.is_enabled.is_(True),
                 PanTransferAccount.is_enabled.is_(True),
                 PanTransferAccount.platform == PLATFORM_QUARK,
@@ -792,8 +795,10 @@ def _get_learning_automation_contexts(
                 LearningResourceAutomationTaskChannel.id.asc(),
                 LearningResourceAutomationTaskTarget.id.asc(),
             )
-            .all()
         )
+        if not allow_paused_task:
+            task_context_query = task_context_query.filter(LearningResourceAutomationTask.is_enabled.is_(True))
+        task_context_rows = task_context_query.all()
         for task_channel, task, target, account in task_context_rows:
             if task_id is not None and int(task.id) != int(task_id):
                 continue
@@ -817,14 +822,14 @@ def _get_learning_automation_contexts(
     # Keep direct callers and partially migrated installations functional until
     # the startup migration has created the task graph.
     config = get_learning_channel_config(session, normalized)
-    if config is None or not bool(config.is_enabled):
+    if config is None or (not bool(config.is_enabled) and not allow_paused_task):
         return []
     legacy_task = session.query(LearningResourceAutomationTask).filter(
         LearningResourceAutomationTask.legacy_config_id == int(config.id),
     ).first()
     if legacy_task is not None and (
         str(legacy_task.status or "") == "deleted"
-        or not bool(legacy_task.is_enabled)
+        or (not bool(legacy_task.is_enabled) and not allow_paused_task)
     ):
         return []
     account = _resolve_learning_account(session, config=config)
@@ -1040,6 +1045,8 @@ def enqueue_learning_resources_for_message_ids(
     *,
     operator: str = "tg-monitor",
     task_id: int | None = None,
+    supplement_run_id: int | None = None,
+    allow_paused_task: bool = False,
 ) -> dict[str, int]:
     ensure_runtime_storage_tables()
     normalized_ids = sorted({int(message_id) for message_id in message_ids if int(message_id) > 0})
@@ -1058,6 +1065,25 @@ def enqueue_learning_resources_for_message_ids(
     skipped = 0
     failed = 0
 
+    source_groups: dict[tuple[str, int | str], list[Message]] = {}
+    for message in messages:
+        source_key = (
+            str(message.monitor_channel_key or "").strip(),
+            int(message.monitor_message_id)
+            if message.monitor_message_id is not None
+            else f"db:{int(message.id)}",
+        )
+        source_groups.setdefault(source_key, []).append(message)
+    source_position: dict[int, tuple[int, int, str | None]] = {}
+    for group in source_groups.values():
+        group.sort(key=lambda item: int(item.id))
+        source_message_id = int(group[0].monitor_message_id) if group[0].monitor_message_id is not None else None
+        for index, group_message in enumerate(group, start=1):
+            source_position[int(group_message.id)] = (index, len(group), str(source_message_id) if source_message_id is not None else None)
+    processed_source_keys: set[tuple[str, int | str]] = set()
+    skipped_source_keys: set[tuple[str, int | str]] = set()
+    logged_source_contexts: set[tuple[int, tuple[str, int | str]]] = set()
+
     for message in messages:
         channel_key = str(message.monitor_channel_key or "").strip()
         if not channel_key:
@@ -1068,7 +1094,12 @@ def enqueue_learning_resources_for_message_ids(
         except ValueError:
             skipped += 1
             continue
-        contexts = _get_learning_automation_contexts(session, channel_key, task_id=task_id)
+        contexts = _get_learning_automation_contexts(
+            session,
+            channel_key,
+            task_id=task_id,
+            allow_paused_task=allow_paused_task,
+        )
         if not contexts:
             skipped += 1
             continue
@@ -1080,13 +1111,78 @@ def enqueue_learning_resources_for_message_ids(
             ):
                 context.channel.last_processed_message_id = int(message.id)
                 session.add(context.channel)
+            if context.channel.id is not None and message.monitor_message_id is not None and (
+                context.channel.last_processed_telegram_message_id is None
+                or int(message.monitor_message_id) > int(context.channel.last_processed_telegram_message_id)
+            ):
+                context.channel.last_processed_telegram_message_id = int(message.monitor_message_id)
+                session.add(context.channel)
 
         quark_refs = _find_quark_refs(session, int(message.id))
-        if not quark_refs:
-            skipped += 1
-            continue
-        processed_messages += 1
+        source_key = (
+            channel_key,
+            int(message.monitor_message_id)
+            if message.monitor_message_id is not None
+            else f"db:{int(message.id)}",
+        )
+        resource_index, resource_total, monitor_message_id = source_position.get(
+            int(message.id),
+            (1, 1, str(message.monitor_message_id) if message.monitor_message_id is not None else None),
+        )
         title = _display_title(message)
+        for context in contexts:
+            context_key = (int(context.task.id or 0), source_key)
+            if context_key in logged_source_contexts:
+                continue
+            logged_source_contexts.add(context_key)
+            _record_learning_process_log(
+                session,
+                stage="received",
+                message=f"收到原始消息：{title}",
+                task_id=int(context.task.id) if context.task.id is not None else None,
+                channel_id=int(context.channel.channel_id) if context.channel.channel_id is not None else None,
+                supplement_run_id=supplement_run_id,
+                source_message_id=int(message.id),
+                details={
+                    "resource_total": resource_total,
+                    "monitor_message_id": monitor_message_id,
+                    "raw_text_available": bool(message.monitor_raw_text),
+                    "channel": str(context.channel_key or ""),
+                },
+            )
+            _record_learning_process_log(
+                session,
+                stage="classified" if quark_refs else "skipped",
+                message=(
+                    f"解析完成：识别 {resource_total} 条资源、{len(quark_refs)} 个夸克链接"
+                    if quark_refs
+                    else "跳过原始消息：未识别当前任务支持的网盘链接"
+                ),
+                task_id=int(context.task.id) if context.task.id is not None else None,
+                channel_id=int(context.channel.channel_id) if context.channel.channel_id is not None else None,
+                supplement_run_id=supplement_run_id,
+                source_message_id=int(message.id),
+                details={
+                    "resource_total": resource_total,
+                    "link_count": len(quark_refs),
+                    "monitor_message_id": monitor_message_id,
+                    "channel": str(context.channel_key or ""),
+                },
+            )
+        if not quark_refs:
+            if source_key not in skipped_source_keys:
+                skipped_source_keys.add(source_key)
+                skipped += 1
+            continue
+        source_key = (
+            channel_key,
+            int(message.monitor_message_id)
+            if message.monitor_message_id is not None
+            else f"db:{int(message.id)}",
+        )
+        if source_key not in processed_source_keys:
+            processed_source_keys.add(source_key)
+            processed_messages += 1
         normalized_title = normalize_learning_title(title)
         classification = classify_learning_message(message)
         resource: LearningResourceItem | None = None
@@ -1229,12 +1325,16 @@ def enqueue_learning_resources_for_message_ids(
                             target_id=int(context.target.id) if context.target.id is not None else None,
                             resource_id=int(resource.id),
                             transfer_job_id=int(job.id),
+                            supplement_run_id=supplement_run_id,
                             source_message_id=int(message.id),
                             details={
                                 "resource_title": str(resource.display_title or ""),
                                 "category": str(category.name or ""),
                                 "target_account": str(context.account.account_name or ""),
                                 "channel": str(context.channel_key or ""),
+                                "resource_index": resource_index,
+                                "resource_total": resource_total,
+                                "monitor_message_id": monitor_message_id,
                             },
                         )
                         continue
@@ -1276,11 +1376,12 @@ def enqueue_learning_resources_for_message_ids(
                 _record_learning_process_log(
                     session,
                     stage="enqueued",
-                    message=f"已加入转存队列：{resource.display_title}（{len(context_jobs)}项）",
+                    message=f"已加入转存队列：资源 {resource_index}/{resource_total} · {resource.display_title}",
                     task_id=int(context.task.id) if context.task.id is not None else None,
                     channel_id=int(context.channel.channel_id) if context.channel.channel_id is not None else None,
                     target_id=int(context.target.id) if context.target.id is not None else None,
                     resource_id=int(resource.id),
+                    supplement_run_id=supplement_run_id,
                     source_message_id=int(message.id),
                     details={
                         "job_count": len(context_jobs),
@@ -1289,6 +1390,9 @@ def enqueue_learning_resources_for_message_ids(
                         "resource_title": str(resource.display_title or ""),
                         "category": str(category.name or ""),
                         "channel": str(context.channel_key or ""),
+                        "resource_index": resource_index,
+                        "resource_total": resource_total,
+                        "monitor_message_id": monitor_message_id,
                     },
                 )
 

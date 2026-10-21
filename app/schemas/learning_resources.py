@@ -200,6 +200,7 @@ class LearningAutomationTaskChannelResponse(LearningAutomationTaskChannelRequest
     channel_key: str = ""
     channel_title: str = ""
     last_processed_message_id: int | None = None
+    last_processed_telegram_message_id: int | None = None
 
 
 class LearningAutomationTaskTargetResponse(LearningAutomationTaskTargetRequest):
@@ -244,6 +245,10 @@ class LearningAutomationTaskProcessRequest(BaseModel):
     message_ids: list[int] = Field(default_factory=list, max_length=5000)
     from_message_id: int | None = Field(default=None, ge=1)
     to_message_id: int | None = Field(default=None, ge=1)
+    mode: str = Field(default="checkpoint", max_length=32)
+    from_at: datetime | None = None
+    to_at: datetime | None = None
+    recent_limit: int | None = Field(default=None, ge=1, le=5000)
     dry_run: bool = False
 
 
@@ -253,14 +258,63 @@ class LearningAutomationReplayRequest(LearningAutomationTaskProcessRequest):
 
 class LearningAutomationTaskProcessResponse(BaseModel):
     task_id: int
+    mode: str = "checkpoint"
     selected_messages: int = 0
+    scanned_messages: int = 0
+    valid_messages: int = 0
+    skipped_messages: int = 0
     message_ids: list[int] = Field(default_factory=list)
+    message_previews: list[dict[str, Any]] = Field(default_factory=list)
     dry_run: bool = False
     messages: int = 0
     resources: int = 0
+    links: int = 0
     jobs: int = 0
     skipped: int = 0
     failed: int = 0
+
+
+class LearningAutomationSupplementRequest(BaseModel):
+    mode: str = Field(default="checkpoint", max_length=32)
+    from_at: datetime | None = None
+    to_at: datetime | None = None
+    recent_limit: int | None = Field(default=None, ge=1, le=5000)
+
+
+class LearningAutomationSupplementPreviewResponse(BaseModel):
+    task_id: int
+    mode: str
+    scanned_messages: int = 0
+    selected_messages: int = 0
+    valid_messages: int = 0
+    skipped_messages: int = 0
+    resources: int = 0
+    links: int = 0
+    message_previews: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class LearningAutomationSupplementRunResponse(BaseModel):
+    id: int
+    task_id: int
+    mode: str
+    status: str
+    from_at: datetime | None = None
+    to_at: datetime | None = None
+    recent_limit: int | None = None
+    selected_messages: int = 0
+    scanned_messages: int = 0
+    valid_messages: int = 0
+    skipped_messages: int = 0
+    resources: int = 0
+    links: int = 0
+    jobs: int = 0
+    failed: int = 0
+    last_error_message: str | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    paused_at: datetime | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 class LearningAutomationRetryResponse(BaseModel):

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Alert, Button, Input, List, Modal, Popconfirm, Select, Space, Switch, Table, Tag, Tooltip, Typography, Upload, message } from 'antd'
+import { Alert, Button, DatePicker, Input, InputNumber, List, Modal, Popconfirm, Radio, Select, Space, Switch, Table, Tag, Tooltip, Typography, Upload, message } from 'antd'
 import { ArrowLeftOutlined, DeleteOutlined, EditOutlined, ExclamationCircleOutlined, FileSearchOutlined, FolderOpenOutlined, MinusCircleOutlined, PauseCircleOutlined, PlayCircleOutlined, PlusOutlined, ReloadOutlined, SyncOutlined, UploadOutlined } from '@ant-design/icons'
 import { useAuthStore } from '@/store/authStore'
+import type { Dayjs } from 'dayjs'
 import {
   deleteAllImportedLearningResources,
   deleteLearningAutomationTask,
@@ -12,6 +13,7 @@ import {
   getLearningAutomationLogs,
   getLearningAutomationTasks,
   getLearningDirectories,
+  getLearningAutomationSupplement,
   getPublicLearningCategories,
   getPublicLearningResources,
   confirmLearningImport,
@@ -19,9 +21,11 @@ import {
   retryLearningResource,
   retryLearningAutomationTask,
   createLearningAutomationTask,
-  processLearningAutomationTaskNow,
+  pauseLearningAutomationSupplement,
+  previewLearningAutomationSupplement,
   pauseLearningAutomationTask,
   resumeLearningAutomationTask,
+  startLearningAutomationSupplement,
   updateLearningAutomationTask,
   updateLearningResource,
 } from '@/api/learningResources'
@@ -32,6 +36,8 @@ import type {
   LearningAutomationTask,
   LearningAutomationTaskTarget,
   LearningAutomationLog,
+  LearningAutomationSupplementPreview,
+  LearningAutomationSupplementRun,
   LearningImportPreview,
   LearningResource,
 } from '@/types/learningResources'
@@ -42,6 +48,7 @@ import { cleanLearningSheetText } from '@/utils/learningResources'
 import './LearningResourcesPage.css'
 
 const { Text } = Typography
+const { RangePicker } = DatePicker
 
 type TaskDraftTarget = LearningAutomationTaskTarget
 
@@ -51,6 +58,8 @@ type LearningTaskDraft = {
   channel_ids: number[]
   targets: TaskDraftTarget[]
 }
+
+type LearningSupplementMode = 'checkpoint' | 'date_range' | 'recent'
 
 const taskStatusLabel: Record<string, string> = {
   running: '处理中',
@@ -78,7 +87,10 @@ const getRequestErrorMessage = (error: unknown, fallback: string) => {
 
 const learningLogStageLabels: Record<string, string> = {
   config: '配置',
-  replay: '补处理',
+  received: '监听',
+  classified: '解析',
+  skipped: '跳过',
+  replay: '补充更新',
   enqueued: '入队',
   retrying: '重试',
   transferring: '转存',
@@ -111,16 +123,15 @@ const formatLearningLogContext = (log: LearningAutomationLog) => {
   append('分类', details.category)
   append('频道', details.channel)
   append('账号', details.target_account)
+  if (typeof details.resource_index === 'number' && typeof details.resource_total === 'number') {
+    append('资源序号', `${details.resource_index}/${details.resource_total}`)
+  }
   if (typeof details.job_count === 'number') append('任务数', details.job_count)
+  if (typeof details.link_count === 'number') append('链接数', details.link_count)
   if (details.share_url_created === true) append('分享', '已生成')
   if (details.share_url_created === false) append('分享', '未生成')
   if (details.retry_waiting === true) append('重试', '等待自动重试')
   append('错误', details.error)
-  if (context.length === 0) {
-    if (log.resource_id) append('资源ID', log.resource_id)
-    if (log.transfer_job_id) append('转存任务ID', log.transfer_job_id)
-    if (log.source_message_id) append('消息ID', log.source_message_id)
-  }
   return context.length > 0 ? ` | ${context.join(' | ')}` : ''
 }
 
@@ -154,6 +165,15 @@ const LearningResourcesPage = () => {
   const [taskLogsOpen, setTaskLogsOpen] = useState(false)
   const [taskLogsLoading, setTaskLogsLoading] = useState(false)
   const [taskLogsClearing, setTaskLogsClearing] = useState(false)
+  const [supplementTask, setSupplementTask] = useState<LearningAutomationTask | null>(null)
+  const [supplementOpen, setSupplementOpen] = useState(false)
+  const [supplementMode, setSupplementMode] = useState<LearningSupplementMode>('checkpoint')
+  const [supplementRange, setSupplementRange] = useState<[Dayjs, Dayjs] | null>(null)
+  const [supplementLimit, setSupplementLimit] = useState(10)
+  const [supplementPreview, setSupplementPreview] = useState<LearningAutomationSupplementPreview | null>(null)
+  const [supplementRun, setSupplementRun] = useState<LearningAutomationSupplementRun | null>(null)
+  const [supplementLoading, setSupplementLoading] = useState(false)
+  const [supplementPausing, setSupplementPausing] = useState(false)
   const [maintenanceBusyId, setMaintenanceBusyId] = useState<number | null>(null)
   const [editingId, setEditingId] = useState<number | null>(null)
   const [editDraft, setEditDraft] = useState({ display_title: '', category: '', tags: '', share_url: '' })
@@ -172,6 +192,19 @@ const LearningResourcesPage = () => {
   const [directoryStack, setDirectoryStack] = useState<Array<{ id: string; name: string; path: string }>>([])
   const requestSequenceRef = useRef(0)
   const loadMoreRequestedRef = useRef(false)
+
+  const supplementRunId = supplementRun?.id
+  const supplementRunStatus = supplementRun?.status
+
+  useEffect(() => {
+    if (!supplementRunId || !['queued', 'running', 'pause_requested'].includes(supplementRunStatus || '')) return undefined
+    const timer = window.setInterval(() => {
+      void getLearningAutomationSupplement(supplementRunId)
+        .then((nextRun) => setSupplementRun(nextRun))
+        .catch(() => undefined)
+    }, 1500)
+    return () => window.clearInterval(timer)
+  }, [supplementRunId, supplementRunStatus])
 
   const load = useCallback(async (targetPage: number) => {
     const requestId = requestSequenceRef.current + 1
@@ -345,16 +378,82 @@ const LearningResourcesPage = () => {
     }
   }
 
-  const handleProcessTask = async (task: LearningAutomationTask) => {
-    setTaskBusyId(task.id)
+  const openSupplement = (task: LearningAutomationTask) => {
+    setSupplementTask(task)
+    setSupplementMode('checkpoint')
+    setSupplementRange(null)
+    setSupplementLimit(10)
+    setSupplementPreview(null)
+    setSupplementRun(null)
+    setSupplementOpen(true)
+  }
+
+  const closeSupplement = () => {
+    setSupplementOpen(false)
+    setSupplementTask(null)
+    setSupplementPreview(null)
+    setSupplementRun(null)
+  }
+
+  const buildSupplementPayload = () => {
+    if (supplementMode === 'date_range') {
+      return {
+        mode: supplementMode,
+        from_at: supplementRange?.[0]?.toISOString(),
+        to_at: supplementRange?.[1]?.toISOString(),
+      }
+    }
+    if (supplementMode === 'recent') {
+      return { mode: supplementMode, recent_limit: Math.max(1, Math.min(5000, Number(supplementLimit) || 10)) }
+    }
+    return { mode: supplementMode }
+  }
+
+  const handlePreviewSupplement = async () => {
+    if (!supplementTask) return
+    if (supplementMode === 'date_range' && (!supplementRange?.[0] || !supplementRange?.[1])) {
+      message.warning('请选择完整的补充更新时间范围')
+      return
+    }
+    setSupplementLoading(true)
     try {
-      const result = await processLearningAutomationTaskNow(task.id)
-      message.success(`已补处理 ${result.selected_messages} 条遗漏消息，新增 ${result.jobs || 0} 个转存任务`)
-      await refreshFirstPage()
-    } catch (taskError: unknown) {
-      message.error(getRequestErrorMessage(taskError, '补处理遗漏消息失败'))
+      setSupplementPreview(await previewLearningAutomationSupplement(supplementTask.id, buildSupplementPayload()))
+    } catch (previewError: unknown) {
+      message.error(getRequestErrorMessage(previewError, '预览补充更新失败'))
+      setSupplementPreview(null)
     } finally {
-      setTaskBusyId(null)
+      setSupplementLoading(false)
+    }
+  }
+
+  const handleStartSupplement = async () => {
+    if (!supplementTask || !supplementPreview) {
+      message.warning('请先预览待处理内容')
+      return
+    }
+    setSupplementLoading(true)
+    try {
+      const run = await startLearningAutomationSupplement(supplementTask.id, buildSupplementPayload())
+      setSupplementRun(run)
+      message.success('补充更新已开始，实时监听不受影响')
+      await refreshFirstPage()
+    } catch (startError: unknown) {
+      message.error(getRequestErrorMessage(startError, '开始补充更新失败'))
+    } finally {
+      setSupplementLoading(false)
+    }
+  }
+
+  const handlePauseSupplement = async () => {
+    if (!supplementRun) return
+    setSupplementPausing(true)
+    try {
+      setSupplementRun(await pauseLearningAutomationSupplement(supplementRun.id))
+      message.success('已请求暂停补充更新，当前批次完成后停止')
+    } catch (pauseError: unknown) {
+      message.error(getRequestErrorMessage(pauseError, '暂停补充更新失败'))
+    } finally {
+      setSupplementPausing(false)
     }
   }
 
@@ -622,7 +721,7 @@ const LearningResourcesPage = () => {
                     <Tooltip title={task.is_enabled ? '暂停自动监听' : '启动自动监听'}>
                       <Button type="text" icon={task.is_enabled ? <PauseCircleOutlined /> : <PlayCircleOutlined />} loading={taskBusyId === task.id} aria-label={task.is_enabled ? '暂停自动监听' : '启动自动监听'} onClick={() => void handleTaskToggle(task)} />
                     </Tooltip>
-                    <Tooltip title="补处理遗漏消息"><Button type="text" icon={<SyncOutlined />} loading={taskBusyId === task.id} aria-label="补处理遗漏消息" onClick={() => void handleProcessTask(task)} disabled={!task.is_enabled} /></Tooltip>
+                    <Tooltip title="补充更新"><Button type="text" icon={<SyncOutlined />} loading={supplementTask?.id === task.id && supplementLoading} aria-label="补充更新" onClick={() => openSupplement(task)} disabled={task.status === 'invalid'} /></Tooltip>
                     <Tooltip title="重试失败任务"><Button type="text" icon={<ReloadOutlined />} loading={taskBusyId === task.id} aria-label="重试失败任务" onClick={() => void handleRetryTask(task)} disabled={task.failed_count === 0} /></Tooltip>
                     <Tooltip title="查看处理日志"><Button type="text" icon={<FileSearchOutlined />} aria-label="查看处理日志" onClick={() => void handleViewTaskLogs(task)} /></Tooltip>
                     <Popconfirm
@@ -641,6 +740,119 @@ const LearningResourcesPage = () => {
           )}
         </section>
       ) : null}
+
+      <Modal
+        open={supplementOpen}
+        title={supplementTask ? `补充更新 · ${supplementTask.name}` : '补充更新'}
+        width={980}
+        onCancel={closeSupplement}
+        footer={supplementRun ? (
+          <Space>
+            <Button onClick={closeSupplement}>关闭</Button>
+            {['queued', 'running', 'pause_requested'].includes(supplementRun.status) ? (
+              <Button icon={<PauseCircleOutlined />} loading={supplementPausing} onClick={() => void handlePauseSupplement()}>
+                暂停补充更新
+              </Button>
+            ) : null}
+          </Space>
+        ) : (
+          <Space>
+            <Button onClick={closeSupplement}>取消</Button>
+            <Button loading={supplementLoading} onClick={() => void handlePreviewSupplement()}>预览待处理内容</Button>
+            <Button type="primary" loading={supplementLoading} disabled={!supplementPreview} onClick={() => void handleStartSupplement()}>
+              开始补充更新
+            </Button>
+          </Space>
+        )}
+      >
+        {!supplementRun ? (
+          <div className="learning-supplement-panel">
+            <Alert
+              type="info"
+              showIcon
+              message="补处理监听期间遗漏的资源消息，不影响实时监听；已处理内容会自动跳过。"
+            />
+            <div className="learning-supplement-form">
+              <Text strong>补充方式</Text>
+              <Radio.Group
+                value={supplementMode}
+                onChange={(event) => {
+                  setSupplementMode(event.target.value)
+                  setSupplementPreview(null)
+                }}
+                optionType="button"
+                buttonStyle="solid"
+                options={[
+                  { label: '继续上次补充', value: 'checkpoint' },
+                  { label: '按日期范围', value: 'date_range' },
+                  { label: '处理最近 N 条', value: 'recent' },
+                ]}
+              />
+              <Text type="secondary">
+                {supplementMode === 'checkpoint'
+                  ? '从每个频道上次扫描到的原始消息位置继续。'
+                  : supplementMode === 'date_range'
+                    ? '扫描指定时间范围内的原始消息。'
+                    : '按原始 Telegram 消息数量计算，不按拆分后的资源数量计算。'}
+              </Text>
+              {supplementMode === 'date_range' ? (
+                <RangePicker showTime style={{ width: '100%' }} value={supplementRange} onChange={(value) => { setSupplementRange(value as [Dayjs, Dayjs] | null); setSupplementPreview(null) }} />
+              ) : null}
+              {supplementMode === 'recent' ? (
+                <InputNumber min={1} max={5000} value={supplementLimit} onChange={(value) => { setSupplementLimit(Number(value) || 10); setSupplementPreview(null) }} addonAfter="条有效资源消息" style={{ width: 240 }} />
+              ) : null}
+            </div>
+            {supplementPreview ? (
+              <div className="learning-supplement-preview">
+                <div className="learning-supplement-summary">
+                  <span>扫描原始消息：<strong>{supplementPreview.scanned_messages}</strong></span>
+                  <span>有效资源消息：<strong>{supplementPreview.valid_messages}</strong></span>
+                  <span>跳过无链接：<strong>{supplementPreview.skipped_messages}</strong></span>
+                  <span>资源记录：<strong>{supplementPreview.resources}</strong></span>
+                  <span>网盘链接：<strong>{supplementPreview.links}</strong></span>
+                </div>
+                <Text strong>原始消息预览</Text>
+                <List
+                  size="small"
+                  bordered
+                  dataSource={supplementPreview.message_previews}
+                  locale={{ emptyText: '没有找到待补充内容' }}
+                  renderItem={(preview) => (
+                    <List.Item>
+                      <div className="learning-supplement-message-preview">
+                        <div className="learning-supplement-message-heading">
+                          <Text strong>{preview.channel || '未知频道'}{preview.monitor_message_id ? ` · 原始消息 ${preview.monitor_message_id}` : ''}</Text>
+                          <Tag color={preview.valid ? 'green' : 'default'}>{preview.valid ? '含有效链接' : '跳过'}</Tag>
+                          <Text type="secondary">资源 {preview.resource_count} 条 · 链接 {preview.link_count} 个</Text>
+                        </div>
+                        <div className="learning-supplement-message-titles">{preview.resource_titles.join(' ｜ ') || '无可识别资源标题'}</div>
+                        {preview.raw_text ? <pre>{preview.raw_text}</pre> : <Text type="secondary">历史记录未保存原始正文，仅展示解析结果。</Text>}
+                      </div>
+                    </List.Item>
+                  )}
+                />
+                {supplementPreview.message_previews.length >= 50 ? <Text type="secondary">仅展示前 50 条原始消息，实际处理范围以统计结果为准。</Text> : null}
+              </div>
+            ) : null}
+          </div>
+        ) : (
+          <div className="learning-supplement-run-panel">
+            <Alert
+              type={supplementRun.status === 'failed' ? 'error' : supplementRun.status === 'completed' ? 'success' : 'info'}
+              showIcon
+              message={`补充更新${supplementRun.status === 'completed' ? '已完成' : supplementRun.status === 'failed' ? '失败' : supplementRun.status === 'paused' ? '已暂停' : '处理中'}`}
+              description={supplementRun.last_error_message || '实时监听不受影响，已经创建的转存任务会继续按队列执行。'}
+            />
+            <div className="learning-supplement-summary">
+              <span>扫描原始消息：<strong>{supplementRun.scanned_messages}</strong></span>
+              <span>有效资源消息：<strong>{supplementRun.valid_messages}</strong></span>
+              <span>资源记录：<strong>{supplementRun.resources}</strong></span>
+              <span>新增转存任务：<strong>{supplementRun.jobs}</strong></span>
+              <span>失败：<strong>{supplementRun.failed}</strong></span>
+            </div>
+          </div>
+        )}
+      </Modal>
 
       {isAdmin && overview ? (
         <section className="learning-import-panel">
@@ -872,7 +1084,7 @@ const LearningResourcesPage = () => {
                 <Switch checked={taskDraft.is_enabled} onChange={(checked) => setTaskDraft((draft) => ({ ...draft, is_enabled: checked }))} />
                 <Text>保存后立即启动自动监听与转存</Text>
               </Space>
-              <Text type="secondary">默认只处理任务启动后的新消息；监听中断后可用“补处理遗漏消息”补入。</Text>
+              <Text type="secondary">默认只处理任务启动后的新消息；监听中断后可用“补充更新”补入。</Text>
             </div>
           </div>
         </Modal>

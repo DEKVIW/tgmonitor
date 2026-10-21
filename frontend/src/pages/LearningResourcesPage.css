@@ -440,6 +440,72 @@
   margin-top: 16px;
 }
 
+.learning-supplement-panel,
+.learning-supplement-run-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.learning-supplement-form {
+  display: grid;
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid #e2e9ef;
+  background: #fbfcfd;
+}
+
+.learning-supplement-preview {
+  display: grid;
+  gap: 10px;
+}
+
+.learning-supplement-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  padding: 12px 14px;
+  border: 1px solid #e2e9ef;
+  background: #f7fafc;
+  color: #607385;
+  font-size: 13px;
+}
+
+.learning-supplement-summary strong {
+  color: #1d3348;
+  font-variant-numeric: tabular-nums;
+}
+
+.learning-supplement-message-preview {
+  display: grid;
+  width: 100%;
+  gap: 7px;
+}
+
+.learning-supplement-message-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.learning-supplement-message-titles {
+  color: #304a60;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.learning-supplement-message-preview pre {
+  max-height: 160px;
+  margin: 0;
+  overflow: auto;
+  padding: 10px;
+  border: 1px solid #e5ebf0;
+  background: #f7f9fb;
+  color: #4e6376;
+  font: 12px/1.6 Consolas, 'Microsoft YaHei', monospace;
+  white-space: pre-wrap;
+}
+
 .learning-import-controls {
   align-items: center;
 }

@@ -8,6 +8,8 @@ import type {
   LearningAutomationTask,
   LearningAutomationTaskListResponse,
   LearningAutomationTaskProcessResponse,
+  LearningAutomationSupplementPreview,
+  LearningAutomationSupplementRun,
   LearningAutomationRetryResponse,
   LearningCategory,
   LearningChannelUpdateResponse,
@@ -94,6 +96,45 @@ export const resumeLearningAutomationTask = async (taskId: number): Promise<Lear
 
 export const processLearningAutomationTaskNow = async (taskId: number): Promise<LearningAutomationTaskProcessResponse> => {
   const response = await apiClient.post<LearningAutomationTaskProcessResponse>(`/admin/learning-resources/automation-tasks/${taskId}/process-now`, {})
+  return response.data
+}
+
+export type LearningAutomationSupplementPayload = {
+  mode: 'checkpoint' | 'date_range' | 'recent'
+  from_at?: string
+  to_at?: string
+  recent_limit?: number
+}
+
+export const previewLearningAutomationSupplement = async (
+  taskId: number,
+  payload: LearningAutomationSupplementPayload,
+): Promise<LearningAutomationSupplementPreview> => {
+  const response = await apiClient.post<LearningAutomationSupplementPreview>(
+    `/admin/learning-resources/automation-tasks/${taskId}/supplement/preview`,
+    payload,
+  )
+  return response.data
+}
+
+export const startLearningAutomationSupplement = async (
+  taskId: number,
+  payload: LearningAutomationSupplementPayload,
+): Promise<LearningAutomationSupplementRun> => {
+  const response = await apiClient.post<LearningAutomationSupplementRun>(
+    `/admin/learning-resources/automation-tasks/${taskId}/supplement`,
+    payload,
+  )
+  return response.data
+}
+
+export const getLearningAutomationSupplement = async (runId: number): Promise<LearningAutomationSupplementRun> => {
+  const response = await apiClient.get<LearningAutomationSupplementRun>(`/admin/learning-resources/supplement-runs/${runId}`)
+  return response.data
+}
+
+export const pauseLearningAutomationSupplement = async (runId: number): Promise<LearningAutomationSupplementRun> => {
+  const response = await apiClient.post<LearningAutomationSupplementRun>(`/admin/learning-resources/supplement-runs/${runId}/pause`)
   return response.data
 }
 
