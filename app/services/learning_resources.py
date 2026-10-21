@@ -1051,7 +1051,7 @@ def enqueue_learning_resources_for_message_ids(
     ensure_runtime_storage_tables()
     normalized_ids = sorted({int(message_id) for message_id in message_ids if int(message_id) > 0})
     if not normalized_ids:
-        return {"messages": 0, "resources": 0, "jobs": 0, "skipped": 0, "failed": 0}
+        return {"messages": 0, "resources": 0, "jobs": 0, "skipped": 0, "skipped_existing": 0, "failed": 0}
 
     messages = session.query(Message).filter(Message.id.in_(normalized_ids)).all()
     jobs_by_context: dict[
@@ -1064,6 +1064,7 @@ def enqueue_learning_resources_for_message_ids(
     processed_messages = 0
     skipped = 0
     failed = 0
+    skipped_existing = 0
 
     source_groups: dict[tuple[str, int | str], list[Message]] = {}
     for message in messages:
@@ -1252,6 +1253,7 @@ def enqueue_learning_resources_for_message_ids(
                     .first()
                 )
                 if link is not None and link.status == "published" and link.share_url:
+                    skipped_existing += 1
                     continue
                 published_link = (
                     session.query(LearningResourceLink)
@@ -1295,8 +1297,10 @@ def enqueue_learning_resources_for_message_ids(
                     .first()
                 )
                 if job is not None and job.status in {LEARNING_JOB_QUEUED, LEARNING_JOB_TRANSFERRING}:
+                    skipped_existing += 1
                     continue
                 if job is not None and job.status == LEARNING_JOB_PUBLISHED and link.share_url:
+                    skipped_existing += 1
                     continue
                 if job is not None and job.batch_item_id:
                     existing_item = session.get(PanTransferBatchItem, int(job.batch_item_id))
@@ -1404,6 +1408,7 @@ def enqueue_learning_resources_for_message_ids(
         "resources": len({int(job[1].id) for context, jobs in jobs_by_context.values() for job in jobs}),
         "jobs": sum(len(jobs) for context, jobs in jobs_by_context.values()),
         "skipped": skipped,
+        "skipped_existing": skipped_existing,
         "failed": failed,
     }
 

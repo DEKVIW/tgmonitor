@@ -185,6 +185,7 @@ export interface LearningAutomationTaskProcessResponse {
   resources?: number
   links?: number
   jobs?: number
+  skipped_existing?: number
   skipped?: number
   failed?: number
 }
@@ -228,6 +229,7 @@ export interface LearningAutomationSupplementRun {
   resources: number
   links: number
   jobs: number
+  skipped_existing: number
   failed: number
   last_error_message?: string | null
   started_at?: string | null

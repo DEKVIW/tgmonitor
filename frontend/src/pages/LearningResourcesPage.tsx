@@ -119,15 +119,17 @@ const formatLearningLogContext = (log: LearningAutomationLog) => {
   const append = (label: string, value: unknown) => {
     if (value !== undefined && value !== null && String(value).trim()) context.push(`${label}=${String(value).trim()}`)
   }
-  append('资源', details.resource_title)
   append('分类', details.category)
   append('频道', details.channel)
   append('账号', details.target_account)
-  if (typeof details.resource_index === 'number' && typeof details.resource_total === 'number') {
+  if (typeof details.monitor_message_id === 'number') {
+    append('原始消息', details.monitor_message_id)
+  }
+  if (typeof details.resource_index === 'number' && typeof details.resource_total === 'number' && !log.message.includes(`资源 ${details.resource_index}/${details.resource_total}`)) {
     append('资源序号', `${details.resource_index}/${details.resource_total}`)
   }
-  if (typeof details.job_count === 'number') append('任务数', details.job_count)
-  if (typeof details.link_count === 'number') append('链接数', details.link_count)
+  if (typeof details.job_count === 'number' && details.job_count > 1) append('任务数', details.job_count)
+  if (typeof details.link_count === 'number' && details.link_count > 1) append('链接数', details.link_count)
   if (details.share_url_created === true) append('分享', '已生成')
   if (details.share_url_created === false) append('分享', '未生成')
   if (details.retry_waiting === true) append('重试', '等待自动重试')
@@ -399,8 +401,8 @@ const LearningResourcesPage = () => {
     if (supplementMode === 'date_range') {
       return {
         mode: supplementMode,
-        from_at: supplementRange?.[0]?.toISOString(),
-        to_at: supplementRange?.[1]?.toISOString(),
+        from_at: supplementRange?.[0]?.startOf('day').toISOString(),
+        to_at: supplementRange?.[1]?.endOf('day').toISOString(),
       }
     }
     if (supplementMode === 'recent') {
@@ -796,7 +798,19 @@ const LearningResourcesPage = () => {
                     : '按原始 Telegram 消息数量计算，不按拆分后的资源数量计算。'}
               </Text>
               {supplementMode === 'date_range' ? (
-                <RangePicker showTime style={{ width: '100%' }} value={supplementRange} onChange={(value) => { setSupplementRange(value as [Dayjs, Dayjs] | null); setSupplementPreview(null) }} />
+                <RangePicker
+                  picker="date"
+                  format="YYYY-MM-DD"
+                  allowClear
+                  inputReadOnly
+                  placeholder={['开始日期', '结束日期']}
+                  style={{ width: '100%' }}
+                  value={supplementRange}
+                  onChange={(value) => {
+                    setSupplementRange(value && value[0] && value[1] ? [value[0], value[1]] : null)
+                    setSupplementPreview(null)
+                  }}
+                />
               ) : null}
               {supplementMode === 'recent' ? (
                 <InputNumber min={1} max={5000} value={supplementLimit} onChange={(value) => { setSupplementLimit(Number(value) || 10); setSupplementPreview(null) }} addonAfter="条有效资源消息" style={{ width: 240 }} />
@@ -848,6 +862,7 @@ const LearningResourcesPage = () => {
               <span>有效资源消息：<strong>{supplementRun.valid_messages}</strong></span>
               <span>资源记录：<strong>{supplementRun.resources}</strong></span>
               <span>新增转存任务：<strong>{supplementRun.jobs}</strong></span>
+              <span>跳过已存在：<strong>{supplementRun.skipped_existing}</strong></span>
               <span>失败：<strong>{supplementRun.failed}</strong></span>
             </div>
           </div>
@@ -1130,7 +1145,7 @@ const LearningResourcesPage = () => {
         }}
       >
         <AppLogTerminal
-          description="按发生顺序展示最近 300 条任务日志；清理只删除日志记录，不影响资源、转存任务或网盘文件。"
+          description="按实际发生顺序展示处理日志：原始消息 → 解析 → 入队 → 转存 → 分享 → 发布。每条日志保留原始消息、分类、账号和失败原因等关键上下文。清理只删除日志记录。"
           controls={
             <Button size="small" icon={<ReloadOutlined />} loading={taskLogsLoading} onClick={() => taskLogsTask && void handleViewTaskLogs(taskLogsTask)}>
               刷新

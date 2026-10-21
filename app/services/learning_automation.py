@@ -957,6 +957,7 @@ def process_learning_automation_task_now(
     operator: str = "admin",
     supplement_run_id: int | None = None,
     allow_paused_task: bool = True,
+    record_summary_log: bool = True,
 ) -> dict[str, Any]:
     from app.services.learning_resources import (
         _record_learning_process_log,
@@ -993,18 +994,8 @@ def process_learning_automation_task_now(
         if to_message_id is not None:
             query = query.filter(Message.id <= int(to_message_id))
         selected_ids = [int(message.id) for message in query.order_by(Message.id.asc()).limit(5000).all()]
-        plan = {
-            "task_id": int(task.id),
-            "mode": "explicit_records",
-            "selected_ids": selected_ids,
-            "scanned_messages": len(selected_ids),
-            "selected_messages": len(selected_ids),
-            "valid_messages": len(selected_ids),
-            "skipped_messages": 0,
-            "resources": len(selected_ids),
-            "links": 0,
-            "message_previews": [],
-        }
+        plan = _build_explicit_learning_message_plan(session, selected_ids)
+        plan["task_id"] = int(task.id)
     else:
         plan = _build_learning_supplement_plan(
             session,
@@ -1025,6 +1016,7 @@ def process_learning_automation_task_now(
             "skipped_messages": int(plan["skipped_messages"]),
             "resources": int(plan["resources"]),
             "links": int(plan["links"]),
+            "skipped_existing": 0,
             "message_ids": selected_ids[:5000],
             "message_previews": plan["message_previews"],
             "dry_run": True,
@@ -1040,24 +1032,26 @@ def process_learning_automation_task_now(
     task.last_enqueued_at = _utcnow() if result.get("jobs") else task.last_enqueued_at
     session.add(task)
     refresh_learning_automation_task_health(session, int(task.id))
-    _record_learning_process_log(
-        session,
-        stage="replay",
-        message=(
-            f"补充更新完成：扫描 {int(plan['scanned_messages'])} 条原始消息，"
-            f"有效 {int(plan['valid_messages'])} 条，新增 {int(result.get('jobs') or 0)} 个转存任务"
-        ),
-        task_id=int(task.id),
-        supplement_run_id=supplement_run_id,
-        details={
-            "message_ids": selected_ids[:500],
-            "result": result,
-            "mode": plan["mode"],
-            "scanned_messages": int(plan["scanned_messages"]),
-            "valid_messages": int(plan["valid_messages"]),
-            "skipped_messages": int(plan["skipped_messages"]),
-        },
-    )
+    if record_summary_log:
+        _record_learning_process_log(
+            session,
+            stage="replay",
+            message=(
+                f"补充更新完成：扫描 {int(plan['scanned_messages'])} 条原始消息，"
+                f"有效 {int(plan['valid_messages'])} 条，新增 {int(result.get('jobs') or 0)} 个转存任务，"
+                f"跳过已存在 {int(result.get('skipped_existing') or 0)} 个任务"
+            ),
+            task_id=int(task.id),
+            supplement_run_id=supplement_run_id,
+            details={
+                "message_ids": selected_ids[:500],
+                "result": result,
+                "mode": plan["mode"],
+                "scanned_messages": int(plan["scanned_messages"]),
+                "valid_messages": int(plan["valid_messages"]),
+                "skipped_messages": int(plan["skipped_messages"]),
+            },
+        )
     session.flush()
     return {
         "task_id": int(task.id),
@@ -1090,6 +1084,7 @@ def _serialize_supplement_run(run: LearningResourceSupplementRun) -> dict[str, A
         "resources": int(run.resource_count or 0),
         "links": int(run.link_count or 0),
         "jobs": int(run.job_count or 0),
+        "skipped_existing": int(run.skipped_existing_count or 0),
         "failed": int(run.failed_count or 0),
         "last_error_message": str(run.last_error_message or "") or None,
         "started_at": run.started_at,
@@ -1249,9 +1244,86 @@ def _group_message_ids_for_supplement(session: Session, message_ids: list[int]) 
     return list(groups.values())
 
 
+def _build_explicit_learning_message_plan(session: Session, message_ids: list[int]) -> dict[str, Any]:
+    """Build message-level counts from an explicit parsed-row selection."""
+    from app.services.learning_resources import _display_title, _find_quark_refs
+
+    rows = session.query(Message).filter(Message.id.in_(message_ids)).order_by(Message.id.asc()).all()
+    grouped: dict[tuple[str, int | str], list[Message]] = {}
+    for row in rows:
+        grouped.setdefault(_message_source_key(row), []).append(row)
+
+    groups: list[dict[str, Any]] = []
+    for source_key, source_rows in grouped.items():
+        source_rows.sort(key=lambda item: int(item.id))
+        refs = [
+            (message, target)
+            for message in source_rows
+            for _, target in _find_quark_refs(session, int(message.id))
+        ]
+        titles: list[str] = []
+        for row in source_rows:
+            title = _display_title(row)
+            if title and title not in titles:
+                titles.append(title)
+        groups.append({
+            "source_key": source_key,
+            "channel_id": int(source_rows[0].monitor_channel_config_id)
+            if source_rows[0].monitor_channel_config_id is not None
+            else None,
+            "rows": source_rows,
+            "refs": refs,
+            "monitor_message_id": int(source_rows[0].monitor_message_id)
+            if source_rows[0].monitor_message_id is not None
+            else None,
+            "channel_key": str(source_rows[0].monitor_channel_key or "").strip(),
+            "timestamp": max(
+                (row.timestamp for row in source_rows if row.timestamp is not None),
+                default=None,
+            ),
+            "raw_text": next(
+                (str(row.monitor_raw_text or "").strip() for row in source_rows if row.monitor_raw_text),
+                "",
+            ),
+            "titles": titles,
+            "valid_row_ids": {int(message.id) for message, _ in refs},
+            "valid": bool(refs),
+        })
+
+    groups.sort(key=lambda group: (
+        group["timestamp"] or datetime.min,
+        int(group["monitor_message_id"] or 0),
+    ))
+    selected_groups = [group for group in groups if group["valid"]]
+    return {
+        "mode": "explicit_records",
+        "groups": groups,
+        "source_groups": [
+            {
+                "channel_id": int(group["channel_id"]),
+                "channel_key": str(group["channel_key"] or ""),
+                "monitor_message_id": int(group["monitor_message_id"]),
+                "message_ids": [int(row.id) for row in group["rows"]],
+            }
+            for group in groups
+            if group["channel_id"] is not None and group["monitor_message_id"] is not None
+        ],
+        "selected_ids": [int(row.id) for group in groups for row in group["rows"]],
+        "scanned_messages": len(groups),
+        "selected_messages": len(selected_groups),
+        "valid_messages": len(selected_groups),
+        "skipped_messages": len(groups) - len(selected_groups),
+        "resources": sum(len(group["valid_row_ids"]) for group in selected_groups),
+        "links": sum(len(group["refs"]) for group in selected_groups),
+        "message_previews": [_serialize_learning_source_group(group) for group in groups[:50]],
+    }
+
+
 def run_learning_supplement(supplement_run_id: int) -> None:
     session = Session(engine)
     try:
+        from app.services.learning_resources import _record_learning_process_log
+
         run = session.get(LearningResourceSupplementRun, int(supplement_run_id))
         if run is None or run.status not in {"queued", "running"}:
             return
@@ -1292,8 +1364,10 @@ def run_learning_supplement(supplement_run_id: int) -> None:
                     operator=str(run.requested_by or "admin"),
                     supplement_run_id=int(run.id),
                     allow_paused_task=True,
+                    record_summary_log=False,
                 )
                 run.job_count = int(run.job_count or 0) + int(result.get("jobs") or 0)
+                run.skipped_existing_count = int(run.skipped_existing_count or 0) + int(result.get("skipped_existing") or 0)
                 run.failed_count = int(run.failed_count or 0) + int(result.get("failed") or 0)
             _advance_learning_supplement_checkpoints(
                 session,
@@ -1303,11 +1377,44 @@ def run_learning_supplement(supplement_run_id: int) -> None:
             run.result_json = {
                 "last_result": result,
                 "processed_groups": min(offset + chunk_size, len(stored_source_groups)),
+                "summary": {
+                    "scanned_messages": int(run.scanned_message_count or 0),
+                    "valid_messages": int(run.valid_message_count or 0),
+                    "skipped_messages": int(run.skipped_message_count or 0),
+                    "resources": int(run.resource_count or 0),
+                    "links": int(run.link_count or 0),
+                    "jobs": int(run.job_count or 0),
+                    "skipped_existing": int(run.skipped_existing_count or 0),
+                    "failed": int(run.failed_count or 0),
+                },
             }
             session.add(run)
             session.commit()
         run.status = "completed"
         run.finished_at = _utcnow()
+        _record_learning_process_log(
+            session,
+            stage="replay",
+            message=(
+                f"补充更新完成：扫描 {int(run.scanned_message_count or 0)} 条原始消息，"
+                f"有效 {int(run.valid_message_count or 0)} 条，"
+                f"新增 {int(run.job_count or 0)} 个转存任务，"
+                f"跳过已存在 {int(run.skipped_existing_count or 0)} 个任务，"
+                f"失败 {int(run.failed_count or 0)} 个"
+            ),
+            task_id=int(run.task_id),
+            supplement_run_id=int(run.id),
+            details={
+                "scanned_messages": int(run.scanned_message_count or 0),
+                "valid_messages": int(run.valid_message_count or 0),
+                "skipped_messages": int(run.skipped_message_count or 0),
+                "resources": int(run.resource_count or 0),
+                "links": int(run.link_count or 0),
+                "jobs": int(run.job_count or 0),
+                "skipped_existing": int(run.skipped_existing_count or 0),
+                "failed": int(run.failed_count or 0),
+            },
+        )
         session.add(run)
         session.commit()
     except Exception as exc:

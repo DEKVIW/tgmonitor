@@ -270,6 +270,7 @@ class LearningAutomationTaskProcessResponse(BaseModel):
     resources: int = 0
     links: int = 0
     jobs: int = 0
+    skipped_existing: int = 0
     skipped: int = 0
     failed: int = 0
 
@@ -308,6 +309,7 @@ class LearningAutomationSupplementRunResponse(BaseModel):
     resources: int = 0
     links: int = 0
     jobs: int = 0
+    skipped_existing: int = 0
     failed: int = 0
     last_error_message: str | None = None
     started_at: datetime | None = None

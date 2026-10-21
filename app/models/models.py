@@ -409,6 +409,7 @@ class LearningResourceSupplementRun(Base):
     link_count = Column(Integer, nullable=False, default=0)
     job_count = Column(Integer, nullable=False, default=0)
     failed_count = Column(Integer, nullable=False, default=0)
+    skipped_existing_count = Column(Integer, nullable=False, default=0)
     selected_message_ids_json = Column(JSONB, nullable=False, default=list)
     options_json = Column(JSONB, nullable=False, default=dict)
     result_json = Column(JSONB, nullable=False, default=dict)
@@ -1556,8 +1557,12 @@ def _ensure_learning_resource_columns() -> None:
         process_log_columns = {column["name"] for column in inspector.get_columns("learning_resource_process_logs")}
     except Exception:
         process_log_columns = set()
+    try:
+        supplement_run_columns = {column["name"] for column in inspector.get_columns("learning_resource_supplement_runs")}
+    except Exception:
+        supplement_run_columns = set()
 
-    if not item_columns and not transfer_job_columns and not task_channel_columns and not process_log_columns:
+    if not item_columns and not transfer_job_columns and not task_channel_columns and not process_log_columns and not supplement_run_columns:
         return
 
     with engine.begin() as connection:
@@ -1572,6 +1577,10 @@ def _ensure_learning_resource_columns() -> None:
         if "supplement_run_id" not in process_log_columns:
             connection.execute(
                 text("ALTER TABLE learning_resource_process_logs ADD COLUMN supplement_run_id INTEGER")
+            )
+        if "skipped_existing_count" not in supplement_run_columns:
+            connection.execute(
+                text("ALTER TABLE learning_resource_supplement_runs ADD COLUMN skipped_existing_count INTEGER NOT NULL DEFAULT 0")
             )
         if "source_message_id" in transfer_job_columns:
             connection.execute(
