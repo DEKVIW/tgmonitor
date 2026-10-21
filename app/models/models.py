@@ -1644,8 +1644,10 @@ def _ensure_learning_automation_tasks() -> None:
                 connection.execute(
                     text("""
                         INSERT INTO learning_resource_automation_task_channels
-                            (task_id, channel_id, is_enabled, last_processed_message_id)
-                        VALUES (:task_id, :channel_id, :is_enabled, NULL)
+                            (task_id, channel_id, is_enabled, last_processed_message_id,
+                             created_at, updated_at)
+                        VALUES (:task_id, :channel_id, :is_enabled, NULL,
+                                CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                         ON CONFLICT (task_id, channel_id) DO NOTHING
                     """),
                     {
@@ -1667,9 +1669,11 @@ def _ensure_learning_automation_tasks() -> None:
                     text("""
                         INSERT INTO learning_resource_automation_task_targets
                             (task_id, target_account_id, save_root_id, save_root_name,
-                             auto_create_category_dirs, is_enabled, status)
+                             auto_create_category_dirs, is_enabled, status,
+                             created_at, updated_at)
                         VALUES (:task_id, :account_id, :root_id, :root_name,
-                                :auto_create, :is_enabled, :target_status)
+                                :auto_create, :is_enabled, :target_status,
+                                CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                         ON CONFLICT (task_id, target_account_id, save_root_id) DO NOTHING
                     """),
                     {
