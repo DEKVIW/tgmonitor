@@ -788,7 +788,7 @@ def update_learning_visibility(
         status=str(resource.status or ""),
         share_url=None,
         category=None,
-        latest_source_at=resource.latest_source_at,
+        latest_source_at=resource.latest_source_at if resource.latest_source_message_id is not None else None,
         updated_at=resource.updated_at,
     )
 
@@ -814,7 +814,7 @@ def retry_learning_resource_api(
             status=str(resource.status or ""),
             share_url=None,
             category=None,
-            latest_source_at=resource.latest_source_at,
+            latest_source_at=resource.latest_source_at if resource.latest_source_message_id is not None else None,
             updated_at=resource.updated_at,
         )
     except LookupError as exc:

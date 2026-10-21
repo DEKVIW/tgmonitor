@@ -2086,7 +2086,10 @@ def list_public_learning_resources(
             ],
             "share_url": str(link.share_url or ""),
             "platform": str(link.platform or PLATFORM_QUARK),
-            "updated_at": item.latest_source_at or item.updated_at,
+            "latest_source_at": item.latest_source_at if item.latest_source_message_id is not None else None,
+            "updated_at": (
+                item.latest_source_at if item.latest_source_message_id is not None else item.updated_at
+            ),
             "created_at": item.created_at,
         }
         for item, category, link, message in rows
@@ -2142,7 +2145,7 @@ def _serialize_admin_learning_item(
         "share_url": str(link.share_url or "") if link else None,
         "platform": str(link.platform or PLATFORM_QUARK) if link else "",
         "source_channel_key": str(item.source_channel_key or ""),
-        "latest_source_at": item.latest_source_at,
+        "latest_source_at": item.latest_source_at if item.latest_source_message_id is not None else None,
         "updated_at": item.updated_at,
     }
 

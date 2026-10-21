@@ -15,6 +15,7 @@ export interface LearningResource {
   share_url: string
   platform: string
   source_channel_key?: string
+  latest_source_at?: string | null
   updated_at?: string | null
   created_at?: string | null
 }

@@ -122,8 +122,10 @@ const LearningResourceSheet = ({
           const category = cleanLearningSheetText(resource.category?.name || '待分类')
           const tags = cleanTags(resource.tags)
           const statusMeta = getLearningStatusMeta(resource.status)
-          const updatedAt = resource.updated_at
-            ? formatServerDateTime(resource.updated_at, 'YYYY-MM-DD HH:mm', 'Asia/Shanghai')
+          const updatedAt = resource.latest_source_at
+            ? formatServerDateTime(resource.latest_source_at, 'YYYY-MM-DD HH:mm', 'Asia/Shanghai', true)
+            : resource.updated_at
+              ? formatServerDateTime(resource.updated_at, 'YYYY-MM-DD HH:mm', 'Asia/Shanghai')
             : '-'
 
           return (

@@ -21,6 +21,7 @@ class LearningResourceResponse(BaseModel):
     tags: list[str] = Field(default_factory=list)
     share_url: str
     platform: str
+    latest_source_at: datetime | None = None
     updated_at: datetime | None = None
     created_at: datetime | None = None
 
