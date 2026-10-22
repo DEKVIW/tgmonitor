@@ -21,6 +21,7 @@ build/
 *.env
 
 # 数据库/数据文件
+/data/
 *.db
 *.sqlite3
 *.sqlite
