@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { Alert, Button, Empty, Image, Skeleton, Spin, Tabs, Tag, Typography } from 'antd'
+import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { Alert, Button, Empty, Image, Pagination, Skeleton, Spin, Tabs, Tag, Typography } from 'antd'
 import { ArrowLeftOutlined, ArrowRightOutlined, CloseOutlined, ExportOutlined, LinkOutlined, ReloadOutlined } from '@ant-design/icons'
 
 import { getPublicMediaWall, getPublicMediaWallCategories, getPublicMediaWallItem } from '@/api/mediaWall'
@@ -11,6 +11,12 @@ import { sanitizeHtml } from '@/utils/safeHtml'
 import './MediaWallPage.css'
 
 const { Title, Text } = Typography
+const MEDIA_WALL_PAGE_SIZE = 24
+
+const parsePage = (value: string | null) => {
+  const parsed = Number(value)
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : 1
+}
 
 const getRequestErrorMessage = (error: unknown, fallback: string) => {
   if (typeof error === 'object' && error !== null && 'response' in error) {
@@ -192,6 +198,7 @@ const MediaWallDetail = ({ item, onBack }: { item: MediaWallItem; onBack: () => 
 }
 
 const MediaWallPage = () => {
+  const location = useLocation()
   const navigate = useNavigate()
   const { itemId, categorySlug } = useParams<{ itemId?: string; categorySlug?: string }>()
   const [searchParams] = useSearchParams()
@@ -204,6 +211,8 @@ const MediaWallPage = () => {
 
   const selectedCategory = searchParams.get('category') || categorySlug || 'all'
   const searchQuery = searchParams.get('search') || ''
+  const currentPage = parsePage(searchParams.get('page'))
+  const [total, setTotal] = useState(0)
 
   const loadList = useCallback(async () => {
     setLoading(true)
@@ -211,21 +220,35 @@ const MediaWallPage = () => {
     try {
       const [categoryData, listData] = await Promise.all([
         getPublicMediaWallCategories(),
-        getPublicMediaWall({ category: selectedCategory, search: searchQuery || undefined }),
+        getPublicMediaWall({
+          category: selectedCategory,
+          search: searchQuery || undefined,
+          page: currentPage,
+          page_size: MEDIA_WALL_PAGE_SIZE,
+        }),
       ])
       setCategories(categoryData)
-      if (searchQuery.trim() && listData.items.length === 0) {
+      const totalPages = Math.max(1, Math.ceil(listData.total / MEDIA_WALL_PAGE_SIZE))
+      if (listData.total > 0 && currentPage > totalPages) {
+        const nextParams = new URLSearchParams(location.search)
+        if (totalPages === 1) nextParams.delete('page')
+        else nextParams.set('page', String(totalPages))
+        navigate(`${location.pathname}${nextParams.toString() ? `?${nextParams.toString()}` : ''}`, { replace: true })
+        return
+      }
+      if (searchQuery.trim() && listData.items.length === 0 && currentPage === 1) {
         const fallbackParams = new URLSearchParams({ search: searchQuery.trim() })
         navigate(`/messages?${fallbackParams.toString()}`, { replace: true })
         return
       }
       setItems(listData.items)
+      setTotal(listData.total)
     } catch (loadError: unknown) {
       setError(getRequestErrorMessage(loadError, '影视推荐加载失败，请稍后重试'))
     } finally {
       setLoading(false)
     }
-  }, [navigate, searchQuery, selectedCategory])
+  }, [currentPage, location.pathname, location.search, navigate, searchQuery, selectedCategory])
 
   useEffect(() => {
     if (!itemId) {
@@ -249,6 +272,7 @@ const MediaWallPage = () => {
 
   const handleCategoryChange = (category: string) => {
     const nextParams = new URLSearchParams(searchParams)
+    nextParams.delete('page')
     if (category === 'all') {
       nextParams.delete('category')
       navigate('/popular' + (nextParams.toString() ? `?${nextParams.toString()}` : ''))
@@ -256,6 +280,14 @@ const MediaWallPage = () => {
     }
     nextParams.delete('category')
     navigate(`/popular/category/${encodeURIComponent(category)}${nextParams.toString() ? `?${nextParams.toString()}` : ''}`)
+  }
+
+  const handlePageChange = (nextPage: number) => {
+    const nextParams = new URLSearchParams(location.search)
+    if (nextPage === 1) nextParams.delete('page')
+    else nextParams.set('page', String(nextPage))
+    navigate(`${location.pathname}${nextParams.toString() ? `?${nextParams.toString()}` : ''}`)
+    window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
   const handleMoreResources = () => {
@@ -320,6 +352,21 @@ const MediaWallPage = () => {
       ) : (
         <div className="media-wall-empty"><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={searchQuery ? '没有找到匹配的影视推荐' : '当前分类暂无公开影视推荐'} /></div>
       )}
+
+      {!loading && total > MEDIA_WALL_PAGE_SIZE ? (
+        <div className="media-wall-pagination">
+          <Pagination
+            current={currentPage}
+            pageSize={MEDIA_WALL_PAGE_SIZE}
+            total={total}
+            responsive
+            showLessItems
+            showSizeChanger={false}
+            showTotal={(count) => `共 ${count} 部`}
+            onChange={handlePageChange}
+          />
+        </div>
+      ) : null}
     </div>
   )
 }

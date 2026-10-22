@@ -397,6 +397,16 @@
   text-align: right;
 }
 
+.media-wall-pagination {
+  display: flex;
+  justify-content: center;
+  margin: 28px 0 8px;
+}
+
+.media-wall-pagination .ant-pagination {
+  margin: 0;
+}
+
 @media (max-width: 768px) {
   .media-wall-page,
   .media-wall-detail-page {
@@ -429,6 +439,10 @@
 
   .media-wall-grid {
     gap: 10px;
+  }
+
+  .media-wall-pagination {
+    margin-top: 22px;
   }
 
   .media-wall-detail-hero {
