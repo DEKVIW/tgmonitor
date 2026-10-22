@@ -5,7 +5,7 @@ from datetime import date, datetime, timedelta
 from typing import Any, Iterable
 
 from sqlalchemy import Date as SQLDate
-from sqlalchemy import case, cast, distinct, func, or_, select, union
+from sqlalchemy import and_, case, cast, distinct, func, or_, select, union
 from sqlalchemy.orm import Session, aliased
 
 from app.models.models import (
@@ -920,10 +920,20 @@ def _load_workbench_candidate_rows(
     latest_ref_id_subquery = (
         session.query(
             MessageLinkRef.link_target_id.label("link_target_id"),
-            func.max(MessageLinkRef.id).label("latest_ref_id"),
+            MessageLinkRef.id.label("latest_ref_id"),
+            func.row_number()
+            .over(
+                partition_by=MessageLinkRef.link_target_id,
+                order_by=(
+                    MessageLinkRef.message_timestamp.desc().nullslast(),
+                    Message.timestamp.desc().nullslast(),
+                    MessageLinkRef.id.desc(),
+                ),
+            )
+            .label("ref_rank"),
         )
         .join(candidate_target_ids, candidate_target_ids.c.link_target_id == MessageLinkRef.link_target_id)
-        .group_by(MessageLinkRef.link_target_id)
+        .join(Message, Message.id == MessageLinkRef.message_id)
         .subquery()
     )
     latest_ref = aliased(MessageLinkRef)
@@ -980,10 +990,16 @@ def _load_workbench_candidate_rows(
             ref_stats_subquery.c.last_message_time,
             ref_stats_subquery.c.recent_ref_count_30d,
             ref_stats_subquery.c.ref_active_days_30d,
+            latest_ref.id.label("latest_link_ref_id"),
+            latest_ref.message_id.label("latest_message_record_id"),
             latest_ref.display_text.label("display_text"),
             latest_ref.provider_label.label("provider_label"),
             latest_ref.target_url.label("target_url"),
             latest_message.title.label("latest_message_title"),
+            latest_message.monitor_chat_id.label("latest_monitor_chat_id"),
+            latest_message.monitor_channel_key.label("latest_monitor_channel_key"),
+            latest_message.monitor_channel_title.label("latest_monitor_channel_title"),
+            latest_message.monitor_message_id.label("latest_monitor_message_id"),
             health_metrics_subquery.c.total_checks_30d,
             health_metrics_subquery.c.invalid_checks_30d,
             latest_health.is_valid.label("latest_is_valid"),
@@ -1001,7 +1017,13 @@ def _load_workbench_candidate_rows(
         .join(ref_stats_subquery, ref_stats_subquery.c.link_target_id == LinkTarget.id)
         .outerjoin(click_total_subquery, click_total_subquery.c.link_target_id == LinkTarget.id)
         .outerjoin(click_metrics_subquery, click_metrics_subquery.c.link_target_id == LinkTarget.id)
-        .outerjoin(latest_ref_id_subquery, latest_ref_id_subquery.c.link_target_id == LinkTarget.id)
+        .outerjoin(
+            latest_ref_id_subquery,
+            and_(
+                latest_ref_id_subquery.c.link_target_id == LinkTarget.id,
+                latest_ref_id_subquery.c.ref_rank == 1,
+            ),
+        )
         .outerjoin(latest_ref, latest_ref.id == latest_ref_id_subquery.c.latest_ref_id)
         .outerjoin(latest_message, latest_message.id == latest_ref.message_id)
         .outerjoin(health_metrics_subquery, health_metrics_subquery.c.normalized_url == LinkTarget.normalized_url)
@@ -1055,6 +1077,12 @@ def _load_workbench_candidate_rows(
             "search_clicks_30d": _to_int(row.search_clicks_30d),
             "active_days_30d": _to_int(row.active_days_30d),
             "latest_message_title": row.latest_message_title or "",
+            "latest_link_ref_id": _to_int(row.latest_link_ref_id),
+            "latest_message_record_id": _to_int(row.latest_message_record_id),
+            "latest_monitor_chat_id": _to_int(row.latest_monitor_chat_id),
+            "latest_monitor_channel_key": row.latest_monitor_channel_key or "",
+            "latest_monitor_channel_title": row.latest_monitor_channel_title or "",
+            "latest_monitor_message_id": _to_int(row.latest_monitor_message_id),
             "total_checks_30d": _to_int(row.total_checks_30d),
             "invalid_checks_30d": _to_int(row.invalid_checks_30d),
             "latest_is_valid": row.latest_is_valid,

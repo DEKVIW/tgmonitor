@@ -34,7 +34,6 @@ from .follow_tasks import (
     PAN_TRANSFER_SYNC_STATE_SYNC_QUEUED,
     _append_follow_task_log,
     _build_follow_current_share_identity_snapshot,
-    _apply_follow_task_state_without_candidate,
     _clear_follow_task_candidate_fields,
     _ensure_follow_task_identity_snapshot,
     _get_follow_task,
@@ -627,17 +626,31 @@ def _resolve_follow_sync_source(
         source_target = session.get(LinkTarget, int(link_target_id))
         if source_target is None:
             raise LookupError("candidate source link target not found")
+        candidate_snapshot = {
+            "title": _normalize_text(task.last_candidate_title, max_length=255)
+            or _normalize_text(task.topic_title, max_length=255)
+            or None,
+            "description": None,
+            "tags": [],
+            "message_time": task.last_candidate_message_time,
+        }
+        candidate_recall = dict(dict(task.extra_json or {}).get("candidate_recall") or {})
+        for recalled in list(candidate_recall.get("items") or []):
+            if _normalize_optional_int(recalled.get("link_target_id")) != link_target_id:
+                continue
+            candidate_snapshot.update(
+                {
+                    "message_record_id": _normalize_optional_int(recalled.get("message_id")),
+                    "message_link_ref_id": _normalize_optional_int(recalled.get("link_ref_id")),
+                    "title": _normalize_text(recalled.get("title"), max_length=255) or candidate_snapshot["title"],
+                    "message_time": recalled.get("latest_message_time") or candidate_snapshot["message_time"],
+                }
+            )
+            break
         source_snapshot = _get_latest_link_target_message_snapshot(
             session,
             link_target_id=int(link_target_id),
-            fallback_snapshot={
-                "title": _normalize_text(task.last_candidate_title, max_length=255)
-                or _normalize_text(task.topic_title, max_length=255)
-                or None,
-                "description": None,
-                "tags": [],
-                "message_time": task.last_candidate_message_time,
-            },
+            fallback_snapshot=candidate_snapshot,
         )
         return source_target, _normalize_text(source_target.original_url), source_snapshot
 

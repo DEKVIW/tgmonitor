@@ -10,7 +10,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import aiohttp
-from sqlalchemy import func, or_
+from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session, aliased
 
 from app.models.models import (
@@ -386,6 +386,24 @@ def _normalize_match_key(value: Any) -> str:
     return "".join(char for char in text if char.isalnum() or "\u4e00" <= char <= "\u9fff")
 
 
+def _normalize_follow_confidence(value: Any) -> float:
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        named = {
+            "very_high": 0.95,
+            "high": 0.85,
+            "medium": 0.6,
+            "low": 0.3,
+            "very_low": 0.1,
+        }
+        if normalized in named:
+            return named[normalized]
+    try:
+        return max(0.0, min(float(value or 0), 1.0))
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _normalize_follow_query_text(value: Any, *, max_length: int = 255) -> str:
     text = unicodedata.normalize("NFKC", _normalize_text(value, max_length=max_length))
     text = (
@@ -462,6 +480,14 @@ def _build_follow_identity_search_queries(*values: Any, max_items: int = PAN_TRA
     return _dedupe_texts(queries, max_items=max_items, max_length=80)
 
 
+def _is_follow_identity_component_from_title(value: Any, source_title: Any) -> bool:
+    component_key = _normalize_match_key(value)
+    title_key = _normalize_match_key(source_title)
+    if not component_key or not title_key:
+        return False
+    return component_key in title_key or title_key in component_key
+
+
 def _extract_follow_episode_hint(*texts: Any) -> int | None:
     matches: list[int] = []
     for raw_value in texts:
@@ -494,7 +520,7 @@ def _extract_follow_season_hint(*texts: Any) -> int | None:
 
 
 def _get_task_extra_section(task: PanTransferSyncTask, key: str) -> dict[str, Any]:
-    extra_json = dict(task.extra_json or {})
+    extra_json = dict(getattr(task, "extra_json", None) or {})
     section = extra_json.get(key)
     return dict(section or {}) if isinstance(section, dict) else {}
 
@@ -680,6 +706,12 @@ def _normalize_source_message_snapshot(value: Mapping[str, Any] | None) -> dict[
         "description": _normalize_text(raw.get("description"), max_length=2000) or None,
         "tags": normalized_tags,
         "message_time": normalized_message_time,
+        "message_record_id": _normalize_optional_int(raw.get("message_record_id")),
+        "message_link_ref_id": _normalize_optional_int(raw.get("message_link_ref_id")),
+        "monitor_chat_id": _normalize_optional_int(raw.get("monitor_chat_id")),
+        "monitor_channel_key": _normalize_text(raw.get("monitor_channel_key"), max_length=255) or None,
+        "monitor_channel_title": _normalize_text(raw.get("monitor_channel_title"), max_length=255) or None,
+        "monitor_message_id": _normalize_optional_int(raw.get("monitor_message_id")),
     }
     return {key: value for key, value in snapshot.items() if value not in (None, [], "")}
 
@@ -922,13 +954,17 @@ def _follow_state_matches_source_origin(
     origin_snapshot = _normalize_source_message_snapshot(origin.get("source_message_snapshot"))
     origin_title = _normalize_text(origin_snapshot.get("title"), max_length=255)
     state_title = _normalize_text(normalized_state.get("resource_title"), max_length=255)
-    if not origin_title or not state_title:
+    if not origin_title:
+        # Legacy tasks may predate source identity metadata. Preserve their
+        # stored progress until an administrator rebinds the task.
         return True
+    if not state_title:
+        return False
 
     origin_identity = parse_resource_identity(origin_title)
     state_identity = parse_resource_identity(state_title)
     if not origin_identity.is_target_work or not state_identity.is_target_work:
-        return True
+        return normalize_match_key(origin_title) == normalize_match_key(state_title)
     origin_keys = {
         normalize_match_key(value)
         for value in [origin_identity.core_title, *origin_identity.aliases]
@@ -1311,6 +1347,12 @@ def _normalize_follow_source_origin(value: Mapping[str, Any] | None) -> dict[str
         "link_target_id": _normalize_optional_int(raw.get("link_target_id")),
         "source_url": _normalize_text(raw.get("source_url")) or None,
         "source_share_key": _normalize_text(raw.get("source_share_key"), max_length=255) or None,
+        "message_record_id": _normalize_optional_int(raw.get("message_record_id")),
+        "message_link_ref_id": _normalize_optional_int(raw.get("message_link_ref_id")),
+        "monitor_chat_id": _normalize_optional_int(raw.get("monitor_chat_id")),
+        "monitor_channel_key": _normalize_text(raw.get("monitor_channel_key"), max_length=255) or None,
+        "monitor_channel_title": _normalize_text(raw.get("monitor_channel_title"), max_length=255) or None,
+        "monitor_message_id": _normalize_optional_int(raw.get("monitor_message_id")),
         "source_message_snapshot": _normalize_source_message_snapshot(raw.get("source_message_snapshot")),
     }
     return {
@@ -1326,6 +1368,12 @@ def _build_follow_source_origin(
     source_url: str | None,
     source_share_key: str | None,
     source_message_snapshot: Mapping[str, Any] | None,
+    message_record_id: int | None = None,
+    message_link_ref_id: int | None = None,
+    monitor_chat_id: int | None = None,
+    monitor_channel_key: str | None = None,
+    monitor_channel_title: str | None = None,
+    monitor_message_id: int | None = None,
 ) -> dict[str, Any]:
     return _normalize_follow_source_origin(
         {
@@ -1333,6 +1381,12 @@ def _build_follow_source_origin(
             "source_url": source_url,
             "source_share_key": source_share_key,
             "source_message_snapshot": source_message_snapshot,
+            "message_record_id": message_record_id,
+            "message_link_ref_id": message_link_ref_id,
+            "monitor_chat_id": monitor_chat_id,
+            "monitor_channel_key": monitor_channel_key,
+            "monitor_channel_title": monitor_channel_title,
+            "monitor_message_id": monitor_message_id,
         }
     )
 
@@ -1436,38 +1490,165 @@ def _get_follow_task_source_origin(
     task: PanTransferSyncTask,
 ) -> dict[str, Any]:
     existing = _normalize_follow_source_origin(_get_task_extra_section(task, "source_origin"))
-    if existing.get("link_target_id") and existing.get("source_url"):
+    existing_snapshot = _normalize_source_message_snapshot(existing.get("source_message_snapshot"))
+    if (
+        existing.get("link_target_id")
+        and existing.get("source_url")
+        and existing_snapshot.get("title")
+        and (existing.get("monitor_channel_key") or existing.get("monitor_chat_id") is not None)
+    ):
         return existing
     batch_item = session.get(PanTransferBatchItem, int(task.source_batch_item_id or 0)) if task.source_batch_item_id is not None else None
-    source_target = None
-    origin_link_target_id = None
-    origin_source_url = None
-    origin_source_share_key = None
-    origin_snapshot: dict[str, Any] | None = None
-    if batch_item is not None and batch_item.link_target_id is not None:
-        origin_link_target_id = int(batch_item.link_target_id)
-        source_target = session.get(LinkTarget, int(batch_item.link_target_id))
-        origin_source_url = _normalize_text(getattr(source_target, "original_url", None)) or _normalize_text(batch_item.original_url) or None
-        origin_source_share_key = _normalize_text(getattr(source_target, "share_key", None), max_length=255) or None
-        origin_snapshot = _normalize_source_message_snapshot(dict(dict(batch_item.extra_json or {}).get("source_message_snapshot") or {}))
-        if not origin_snapshot.get("message_time") and batch_item.latest_message_time is not None:
-            origin_snapshot["message_time"] = _serialize_json_value(batch_item.latest_message_time)
-    if origin_link_target_id is None:
-        origin_link_target_id = _normalize_optional_int(task.source_link_target_id)
-        source_target = session.get(LinkTarget, int(origin_link_target_id)) if origin_link_target_id is not None else None
-        origin_source_url = _normalize_text(getattr(source_target, "original_url", None)) or _normalize_text(task.source_url) or None
-        origin_source_share_key = _normalize_text(getattr(source_target, "share_key", None), max_length=255) or _normalize_text(task.source_share_key, max_length=255) or None
-        origin_snapshot = _normalize_source_message_snapshot(_get_task_extra_section(task, "source_message_snapshot"))
+    origin_link_target_id = (
+        _normalize_optional_int(existing.get("link_target_id"))
+        or (_normalize_optional_int(batch_item.link_target_id) if batch_item is not None else None)
+        or _normalize_optional_int(task.source_link_target_id)
+    )
+    source_target = session.get(LinkTarget, int(origin_link_target_id)) if origin_link_target_id is not None else None
+    origin_source_url = (
+        _normalize_text(existing.get("source_url"))
+        or _normalize_text(getattr(source_target, "original_url", None))
+        or (_normalize_text(batch_item.original_url) if batch_item is not None else "")
+        or _normalize_text(task.source_url)
+        or None
+    )
+    origin_source_share_key = (
+        _normalize_text(existing.get("source_share_key"), max_length=255)
+        or _normalize_text(getattr(source_target, "share_key", None), max_length=255)
+        or (_normalize_text(task.source_share_key, max_length=255) if batch_item is None else "")
+        or None
+    )
+    fallback_snapshot = _normalize_source_message_snapshot(
+        existing_snapshot
+        or (dict(dict(batch_item.extra_json or {}).get("source_message_snapshot") or {}) if batch_item is not None else {})
+        or _get_task_extra_section(task, "source_message_snapshot")
+    )
+    for key in (
+        "message_record_id",
+        "message_link_ref_id",
+        "monitor_chat_id",
+        "monitor_channel_key",
+        "monitor_channel_title",
+        "monitor_message_id",
+    ):
+        if key not in fallback_snapshot and existing.get(key) is not None:
+            fallback_snapshot[key] = existing.get(key)
+    if not fallback_snapshot.get("message_time") and batch_item is not None and batch_item.latest_message_time is not None:
+        fallback_snapshot["message_time"] = _serialize_json_value(batch_item.latest_message_time)
+    origin_snapshot = (
+        _get_latest_link_target_message_snapshot(
+            session,
+            link_target_id=int(origin_link_target_id),
+            fallback_snapshot=fallback_snapshot,
+        )
+        if origin_link_target_id is not None
+        else fallback_snapshot
+    )
     origin = _build_follow_source_origin(
         link_target_id=origin_link_target_id,
         source_url=origin_source_url,
         source_share_key=origin_source_share_key,
         source_message_snapshot=origin_snapshot,
+        message_record_id=_normalize_optional_int(origin_snapshot.get("message_record_id"))
+        or _normalize_optional_int(existing.get("message_record_id")),
+        message_link_ref_id=_normalize_optional_int(origin_snapshot.get("message_link_ref_id"))
+        or _normalize_optional_int(existing.get("message_link_ref_id")),
+        monitor_chat_id=_normalize_optional_int(origin_snapshot.get("monitor_chat_id"))
+        or _normalize_optional_int(existing.get("monitor_chat_id")),
+        monitor_channel_key=_normalize_text(origin_snapshot.get("monitor_channel_key"), max_length=255)
+        or _normalize_text(existing.get("monitor_channel_key"), max_length=255)
+        or None,
+        monitor_channel_title=_normalize_text(origin_snapshot.get("monitor_channel_title"), max_length=255)
+        or _normalize_text(existing.get("monitor_channel_title"), max_length=255)
+        or None,
+        monitor_message_id=_normalize_optional_int(origin_snapshot.get("monitor_message_id"))
+        or _normalize_optional_int(existing.get("monitor_message_id")),
     )
-    _set_task_extra_section(task, "source_origin", origin)
-    session.add(task)
-    session.flush()
+    if existing:
+        origin = {**existing, **origin}
+        origin["source_message_snapshot"] = {
+            **dict(existing.get("source_message_snapshot") or {}),
+            **dict(origin.get("source_message_snapshot") or {}),
+        }
+        origin = _normalize_follow_source_origin(origin)
+    if origin != existing:
+        _set_task_extra_section(task, "source_origin", origin)
+        session.add(task)
+        session.flush()
     return origin
+
+
+def _resolve_follow_task_source_channel(
+    session: Session,
+    *,
+    task: PanTransferSyncTask,
+) -> tuple[str | None, int | None]:
+    origin = _get_follow_task_source_origin(session, task=task)
+    channel_key = _normalize_text(origin.get("monitor_channel_key"), max_length=255) or None
+    chat_id = _normalize_optional_int(origin.get("monitor_chat_id"))
+    # A shared link can occur in multiple messages and channels. Without a
+    # persisted source identity, guessing from the latest reference can bind a
+    # legacy task to the wrong channel and pollute candidate matching.
+    return channel_key, chat_id
+
+
+def _build_follow_source_channel_filter(
+    message_alias: Any,
+    *,
+    channel_key: str | None,
+    chat_id: int | None,
+) -> Any | None:
+    conditions: list[Any] = []
+    if channel_key:
+        conditions.append(func.lower(message_alias.monitor_channel_key) == channel_key.casefold())
+    if chat_id is not None:
+        conditions.append(message_alias.monitor_chat_id == chat_id)
+    return and_(*conditions) if conditions else None
+
+
+def _build_follow_candidate_latest_ref_subquery(
+    session: Session,
+    *,
+    earliest_message_time: datetime,
+    channel_key: str | None,
+    chat_id: int | None,
+) -> Any | None:
+    source_message = aliased(Message)
+    channel_filter = _build_follow_source_channel_filter(
+        source_message,
+        channel_key=channel_key,
+        chat_id=chat_id,
+    )
+    if channel_filter is None:
+        return None
+    return (
+        session.query(
+            MessageLinkRef.link_target_id.label("link_target_id"),
+            MessageLinkRef.id.label("latest_ref_id"),
+            func.row_number()
+            .over(
+                partition_by=MessageLinkRef.link_target_id,
+                order_by=(
+                    MessageLinkRef.message_timestamp.desc().nullslast(),
+                    source_message.timestamp.desc().nullslast(),
+                    MessageLinkRef.id.desc(),
+                ),
+            )
+            .label("ref_rank"),
+        )
+        .join(source_message, source_message.id == MessageLinkRef.message_id)
+        .filter(
+            or_(
+                MessageLinkRef.message_timestamp >= earliest_message_time,
+                and_(
+                    MessageLinkRef.message_timestamp.is_(None),
+                    source_message.timestamp >= earliest_message_time,
+                ),
+            ),
+            channel_filter,
+        )
+        .subquery()
+    )
 
 
 def _resolve_follow_task_resource_title(task: PanTransferSyncTask) -> str:
@@ -1484,62 +1665,69 @@ def _resolve_follow_task_resource_title(task: PanTransferSyncTask) -> str:
     )
 
 
-def _collect_follow_reference_texts(task: PanTransferSyncTask) -> list[str]:
-    source_origin = _normalize_follow_source_origin(_get_task_extra_section(task, "source_origin"))
-    source_origin_snapshot = _normalize_source_message_snapshot(source_origin.get("source_message_snapshot"))
-    origin_title = _normalize_text(source_origin_snapshot.get("title"), max_length=255)
-    fallback_titles = []
-    if not origin_title:
-        fallback_titles = [
-            _normalize_text(task.work_title, max_length=255),
-            _normalize_text(task.topic_title, max_length=255),
-            _normalize_text(task.task_name, max_length=255),
-        ]
-    texts = [
-        _resolve_follow_task_resource_title(task),
-        origin_title,
-        *fallback_titles,
-    ]
-    return _dedupe_texts([item for item in texts if item], max_items=8, max_length=255)
-
-
 def _get_latest_link_target_message_snapshot(
     session: Session,
     *,
     link_target_id: int,
     fallback_snapshot: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    row = (
+    fallback = _normalize_source_message_snapshot(fallback_snapshot)
+    preferred_ref_id = _normalize_optional_int(fallback.get("message_link_ref_id"))
+    preferred_message_id = _normalize_optional_int(fallback.get("message_record_id"))
+    if preferred_ref_id is None and preferred_message_id is None:
+        # A link target is not a message identity. Do not infer the source
+        # from whichever message happened to reference the same URL most
+        # recently.
+        return fallback
+    query = (
         session.query(
+            Message.id.label("message_record_id"),
+            MessageLinkRef.id.label("message_link_ref_id"),
             MessageLinkRef.display_text.label("display_text"),
             MessageLinkRef.message_timestamp.label("message_timestamp"),
             Message.title.label("message_title"),
             Message.description.label("message_description"),
             Message.tags.label("message_tags"),
             Message.timestamp.label("message_created_at"),
+            Message.monitor_chat_id.label("monitor_chat_id"),
+            Message.monitor_channel_key.label("monitor_channel_key"),
+            Message.monitor_channel_title.label("monitor_channel_title"),
+            Message.monitor_message_id.label("monitor_message_id"),
         )
         .outerjoin(Message, Message.id == MessageLinkRef.message_id)
         .filter(MessageLinkRef.link_target_id == int(link_target_id))
-        .order_by(
+    )
+    if preferred_ref_id is not None:
+        query = query.filter(MessageLinkRef.id == preferred_ref_id)
+    elif preferred_message_id is not None:
+        query = query.filter(Message.id == preferred_message_id)
+
+    rows = (
+        query.order_by(
             MessageLinkRef.message_timestamp.desc().nullslast(),
             Message.timestamp.desc().nullslast(),
             MessageLinkRef.id.desc(),
         )
-        .first()
+        .limit(20)
+        .all()
     )
-    fallback = _normalize_source_message_snapshot(fallback_snapshot)
-    if row is None:
+    if not rows:
         return fallback
+    row = rows[0]
     message_time = getattr(row, "message_timestamp", None) or getattr(row, "message_created_at", None)
     snapshot = _normalize_source_message_snapshot(
         {
-            "title": _normalize_text(getattr(row, "message_title", None), max_length=255)
-            or _normalize_text(getattr(row, "display_text", None), max_length=255)
-            or fallback.get("title"),
+            "title": _normalize_text(getattr(row, "message_title", None), max_length=255) or fallback.get("title"),
             "description": _normalize_text(getattr(row, "message_description", None), max_length=2000)
             or fallback.get("description"),
             "tags": list(getattr(row, "message_tags", None) or fallback.get("tags") or []),
             "message_time": message_time or fallback.get("message_time"),
+            "message_record_id": getattr(row, "message_record_id", None) or fallback.get("message_record_id"),
+            "message_link_ref_id": getattr(row, "message_link_ref_id", None) or fallback.get("message_link_ref_id"),
+            "monitor_chat_id": getattr(row, "monitor_chat_id", None) or fallback.get("monitor_chat_id"),
+            "monitor_channel_key": getattr(row, "monitor_channel_key", None) or fallback.get("monitor_channel_key"),
+            "monitor_channel_title": getattr(row, "monitor_channel_title", None) or fallback.get("monitor_channel_title"),
+            "monitor_message_id": getattr(row, "monitor_message_id", None) or fallback.get("monitor_message_id"),
         }
     )
     if not snapshot.get("title") and fallback.get("title"):
@@ -1553,16 +1741,23 @@ def _refresh_follow_task_source_message_snapshot(
     task: PanTransferSyncTask,
     fallback_snapshot: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    current_snapshot = _normalize_source_message_snapshot(_get_task_extra_section(task, "source_message_snapshot"))
+    fallback = _normalize_source_message_snapshot(fallback_snapshot or current_snapshot)
     link_target_id = _normalize_optional_int(task.source_link_target_id)
     if link_target_id is None:
-        snapshot = _normalize_source_message_snapshot(fallback_snapshot or _get_task_extra_section(task, "source_message_snapshot"))
+        snapshot = current_snapshot or fallback
     else:
-        snapshot = _get_latest_link_target_message_snapshot(
-            session,
-            link_target_id=link_target_id,
-            fallback_snapshot=fallback_snapshot or _get_task_extra_section(task, "source_message_snapshot"),
-        )
-    current_snapshot = _normalize_source_message_snapshot(_get_task_extra_section(task, "source_message_snapshot"))
+        snapshot = current_snapshot or fallback
+        if not snapshot.get("title") or not (
+            snapshot.get("monitor_channel_key") or snapshot.get("monitor_chat_id") is not None
+        ):
+            enriched = _get_latest_link_target_message_snapshot(
+                session,
+                link_target_id=link_target_id,
+                fallback_snapshot=snapshot,
+            )
+            snapshot = {**enriched, **snapshot}
+    snapshot = _normalize_source_message_snapshot(snapshot)
     if snapshot != current_snapshot:
         _set_task_extra_section(task, "source_message_snapshot", snapshot)
         session.add(task)
@@ -1706,87 +1901,17 @@ def _get_follow_candidate_policy(task: PanTransferSyncTask) -> dict[str, int]:
     return _build_follow_candidate_policy(_get_task_extra_section(task, "candidate_policy"))
 
 
-def _build_follow_identity_fallback(task: PanTransferSyncTask) -> dict[str, Any]:
-    resource_title = _resolve_follow_task_resource_title(task)
-    reference_titles = _collect_follow_reference_texts(task)
-    cleaned_titles = _dedupe_texts([_clean_follow_title(item) for item in reference_titles], max_items=6)
-    core_title = cleaned_titles[0] if cleaned_titles else (_clean_follow_title(resource_title) or resource_title)
-    aliases = _dedupe_texts(reference_titles + cleaned_titles, max_items=6)
-    latest_episode = _extract_follow_episode_hint(*reference_titles)
-    season = _extract_follow_season_hint(*reference_titles)
-    source_message_snapshot = _normalize_source_message_snapshot(_get_task_extra_section(task, "source_message_snapshot"))
-    reference_message_time = _serialize_json_value(
-        _parse_datetime(source_message_snapshot.get("message_time")) or task.last_candidate_message_time
-    )
-    release_year = None
-    for raw_value in reference_titles:
-        matched = re.search(r"(19|20)\d{2}", raw_value)
-        if matched is None:
-            continue
-        try:
-            release_year = int(matched.group(0))
-        except (TypeError, ValueError):
-            release_year = None
-        if release_year is not None:
-            break
-    search_queries = _build_follow_identity_search_queries(core_title, *aliases, *reference_titles)
-    return {
-        "resource_title": resource_title,
-        "core_title": core_title or (_normalize_text(task.topic_title, max_length=255) or f"resource_{int(task.id)}"),
-        "aliases": aliases,
-        "release_year": release_year,
-        "season": season,
-        "latest_episode": latest_episode,
-        "content_type": None,
-        "search_queries": search_queries,
-        "reference_titles": reference_titles,
-        "reference_message_time": reference_message_time,
-        "reason": "fallback_title_extract",
-        "source": "fallback",
-        "updated_at": _serialize_json_value(utcnow()),
-        "used_model": None,
-        "used_api_mode": None,
-    }
-
-
-def _build_follow_identity_user_prompt(task: PanTransferSyncTask) -> str:
-    source_message_snapshot = _normalize_source_message_snapshot(_get_task_extra_section(task, "source_message_snapshot"))
-    reference_titles = _collect_follow_reference_texts(task)
-    payload = {
-        "platform": _normalize_text(task.platform, max_length=64) or None,
-        "reference_titles": reference_titles,
-        "source_message_title": _normalize_text(source_message_snapshot.get("title"), max_length=255) or None,
-        "source_message_description": _normalize_text(source_message_snapshot.get("description"), max_length=1000) or None,
-        "current_topic_title": _normalize_text(task.topic_title, max_length=255) or None,
-        "current_work_title": _normalize_text(task.work_title, max_length=255) or None,
-    }
-    return (
-        "从这些资源标题里提取追更识别身份。\n"
-        "只返回 JSON，对象字段固定为："
-        "core_title, aliases, release_year, season, latest_episode, content_type, search_queries, reason。\n"
-        "要求：\n"
-        "1. core_title 只保留作品本身名字，去掉年份、分辨率、帧率、集数范围、演员、更新文案。\n"
-        "2. aliases 只保留同一作品的紧凑别名，不要放无关噪音。\n"
-        "3. search_queries 用于站内召回，按从严格到宽松排序，最多 4 个。\n"
-        "4. latest_episode 只填当前资源明确能看出的最新集数，没有就填 null。\n"
-        "5. 如果不确定，也要尽量给出最稳妥的 core_title。\n\n"
-        f"{_normalize_log_payload(payload)}"
-    )
-
-
 def _build_follow_identity_user_prompt_v2(task: PanTransferSyncTask) -> str:
     resource_title = _resolve_follow_task_resource_title(task)
-    reference_titles = _collect_follow_reference_texts(task)
     payload = {
         "platform": _normalize_text(task.platform, max_length=64) or None,
         "resource_title": resource_title,
-        "alternate_titles": [item for item in reference_titles if item != resource_title][:4],
     }
     return (
         "Extract a follow-tracking identity from the current resource title.\n"
         "Return JSON only with keys: core_title, aliases, release_year, season, latest_episode, content_type, search_queries, reason.\n"
         "Rules:\n"
-        "1. Use resource_title as the primary input and treat alternate_titles only as fallback context.\n"
+        "1. Use resource_title as the only identity input.\n"
         "2. core_title should keep only the work name itself and strip year, resolution, frame rate, episode range, actor list, and update copy.\n"
         "3. aliases should contain only compact alternate names for the same work, without noisy metadata.\n"
         "4. search_queries should be ordered from strict to loose for in-site recall, with at most 4 items.\n"
@@ -1814,15 +1939,22 @@ def _extract_follow_identity_with_ai(session: Session, *, task: PanTransferSyncT
     parsed = extract_json_object_from_text(route_result.text)
     if not isinstance(parsed, dict):
         raise ValueError("identity route did not return a JSON object")
+    resource_title = _resolve_follow_task_resource_title(task)
     core_title = _clean_follow_title(parsed.get("core_title"))
-    if not core_title:
+    if not core_title or not _is_follow_identity_component_from_title(core_title, resource_title):
         raise ValueError("identity route returned an empty core title")
     aliases = _dedupe_texts(
-        [core_title, *list(parsed.get("aliases") or []), *_collect_follow_reference_texts(task)],
+        [
+            core_title,
+            *[
+                alias
+                for alias in list(parsed.get("aliases") or [])
+                if _is_follow_identity_component_from_title(alias, resource_title)
+            ],
+        ],
         max_items=6,
     )
-    search_queries = _build_follow_identity_search_queries(core_title, *aliases, *(list(parsed.get("search_queries") or [])))
-    resource_title = _resolve_follow_task_resource_title(task)
+    search_queries = _build_follow_identity_search_queries(core_title, *aliases)
     return {
         "resource_title": resource_title,
         "core_title": core_title,
@@ -1832,7 +1964,7 @@ def _extract_follow_identity_with_ai(session: Session, *, task: PanTransferSyncT
         "latest_episode": _normalize_optional_int(parsed.get("latest_episode")),
         "content_type": _normalize_text(parsed.get("content_type"), max_length=32) or None,
         "search_queries": search_queries,
-        "reference_titles": _collect_follow_reference_texts(task),
+        "reference_titles": [resource_title] if resource_title else [],
         "reference_message_time": _serialize_json_value(_get_follow_reference_message_time(task, {})),
         "reason": _normalize_text(parsed.get("reason"), max_length=255) or "ai_identity_extract",
         "source": "ai",
@@ -1862,6 +1994,31 @@ def _ensure_follow_task_identity_snapshot(
         and existing_resource_title == current_resource_title
         and existing_core_key in rule_identity_keys
     ):
+        sanitized_existing = dict(existing)
+        for key in (
+            "core_title",
+            "aliases",
+            "release_year",
+            "season",
+            "latest_episode",
+            "latest_issue",
+            "content_type",
+            "search_queries",
+            "reference_titles",
+            "parsed_identity",
+            "parse_confidence",
+            "is_target_work",
+            "needs_ai_review",
+            "is_complete",
+        ):
+            if key in rule_snapshot:
+                sanitized_existing[key] = rule_snapshot[key]
+        sanitized_existing["resource_title"] = current_resource_title
+        if sanitized_existing != existing:
+            _set_task_extra_section(task, "identity_snapshot", sanitized_existing)
+            session.add(task)
+            session.flush()
+            return sanitized_existing, True
         return existing, False
     snapshot = dict(rule_snapshot)
     if rule_identity.needs_ai_review and not rule_identity.should_skip_ai:
@@ -1942,238 +2099,11 @@ def _serialize_follow_task_log(row: PanTransferSyncTaskLog) -> dict[str, Any]:
 
 
 def _build_follow_task_rule_assessment(row: PanTransferSyncTask) -> dict[str, Any]:
-    task_state = _normalize_text(row.task_state, max_length=32).lower() or PAN_TRANSFER_SYNC_STATE_IDLE
-    source_status = _normalize_text(row.source_link_status, max_length=32).lower() or "unknown"
-    share_status = _normalize_text(row.current_share_status, max_length=32).lower() or "unknown"
-    has_candidate = bool(_normalize_text(row.last_candidate_url))
-    has_error = bool(_normalize_text(row.last_error_message, max_length=2000))
-
-    if task_state in {
-        PAN_TRANSFER_SYNC_STATE_QUEUED,
-        PAN_TRANSFER_SYNC_STATE_CHECKING,
-        PAN_TRANSFER_SYNC_STATE_SYNC_QUEUED,
-    }:
-        return {
-            "rule_key": "busy",
-            "rule_label": "等待当前任务完成",
-            "summary": "当前已经有检查或同步在进行，先等待本轮完成，再决定是否执行新的同步规则。",
-            "recommended_source_kind": None,
-            "recommended_sync_mode": None,
-            "execution_mode": "busy",
-            "risk_level": "info",
-            "requires_manual_confirmation": False,
-            "can_execute": False,
-        }
-
-    if auto_ready and (has_candidate or source_status in {"valid", "healthy"}):
-        recommended_source_kind = "candidate" if has_candidate else "current"
-        recommended_sync_mode = (
-            "replace_all"
-            if automation_mode == PAN_TRANSFER_FOLLOW_AUTOMATION_MODE_AUTO_REPLACE_ALL
-            else "incremental"
-        )
-        return {
-            "rule_key": (
-                "auto_replace_all"
-                if automation_mode == PAN_TRANSFER_FOLLOW_AUTOMATION_MODE_AUTO_REPLACE_ALL
-                else "auto_incremental"
-            ),
-            "rule_label": (
-                "鑷姩鍏ㄩ噺鏇挎崲"
-                if automation_mode == PAN_TRANSFER_FOLLOW_AUTOMATION_MODE_AUTO_REPLACE_ALL
-                else "鑷姩澧為噺鍚屾"
-            ),
-            "summary": (
-                "绯荤粺浼氫紭鍏堜娇鐢ㄥ€欓€夊師閾撅紝娌℃湁鍊欓€夋椂鍐嶄娇鐢ㄥ綋鍓嶅師閾撅紝璇婃柇鍚庤嚜鍔ㄥ垱寤哄叏閲忔浛鎹㈡壒娆°€?"
-                if automation_mode == PAN_TRANSFER_FOLLOW_AUTOMATION_MODE_AUTO_REPLACE_ALL
-                else "绯荤粺浼氫紭鍏堜娇鐢ㄥ€欓€夊師閾撅紝娌℃湁鍊欓€夋椂鍐嶄娇鐢ㄥ綋鍓嶅師閾撅紝璇婃柇鍚庤嚜鍔ㄥ垱寤烘€昏€岀殑澧為噺鍚屾鎵规銆?"
-            ),
-            "recommended_source_kind": recommended_source_kind,
-            "recommended_sync_mode": recommended_sync_mode,
-            "execution_mode": "recheck_only",
-            "risk_level": (
-                "warning"
-                if automation_mode == PAN_TRANSFER_FOLLOW_AUTOMATION_MODE_AUTO_REPLACE_ALL
-                else "info"
-            ),
-            "requires_manual_confirmation": False,
-            "can_execute": True,
-        }
-
-    if has_candidate:
-        return {
-            "rule_key": "candidate_manual_review",
-            "rule_label": "规则三：候选人工确认",
-            "summary": (
-                "已发现新的候选原链。为避免不同目录结构直接写入现有资源目录，"
-                "默认先进入人工确认，核对目录或文件后再同步。"
-            ),
-            "recommended_source_kind": "candidate",
-            "recommended_sync_mode": "incremental",
-            "execution_mode": "manual_modal",
-            "risk_level": "warning",
-            "requires_manual_confirmation": True,
-            "can_execute": True,
-        }
-
-    if source_status in {"invalid", "error"}:
-        return {
-            "rule_key": "await_candidate",
-            "rule_label": "等待新候选原链",
-            "summary": "当前原链已不可用，先重新检查或等待新的候选原链出现，再决定后续同步处理。",
-            "recommended_source_kind": None,
-            "recommended_sync_mode": None,
-            "execution_mode": "wait_candidate",
-            "risk_level": "warning",
-            "requires_manual_confirmation": False,
-            "can_execute": False,
-        }
-
-    if has_error:
-        return {
-            "rule_key": "recheck_required",
-            "rule_label": "先重新检查",
-            "summary": "最近一次跟踪出现异常，建议先重新检查，确认原链、分享和候选状态后再继续同步。",
-            "recommended_source_kind": None,
-            "recommended_sync_mode": None,
-            "execution_mode": "recheck_only",
-            "risk_level": "warning",
-            "requires_manual_confirmation": False,
-            "can_execute": True,
-        }
-
-    if share_status in {"invalid", "error"}:
-        return {
-            "rule_key": "safe_sync_current",
-            "rule_label": "规则一：安全同步当前原链",
-            "summary": "当前主要问题是对外分享异常。优先复用现有资源目录，从当前原链重新同步并刷新对外分享。",
-            "recommended_source_kind": "current",
-            "recommended_sync_mode": "standard",
-            "execution_mode": "direct_sync",
-            "risk_level": "info",
-            "requires_manual_confirmation": False,
-            "can_execute": True,
-        }
-
-    return {
-        "rule_key": "safe_sync_current",
-        "rule_label": "规则一：安全同步当前原链",
-        "summary": "当前原链仍可用，默认复用现有资源目录执行安全同步，不主动删除旧内容。",
-        "recommended_source_kind": "current",
-        "recommended_sync_mode": "standard",
-        "execution_mode": "direct_sync",
-        "risk_level": "info",
-        "requires_manual_confirmation": False,
-        "can_execute": True,
-    }
+    return _build_follow_task_rule_assessment_v3(row)
 
 
 def _build_follow_task_rule_assessment_v2(row: PanTransferSyncTask) -> dict[str, Any]:
-    task_state = _normalize_text(row.task_state, max_length=32).lower() or PAN_TRANSFER_SYNC_STATE_IDLE
-    source_status = _normalize_text(row.source_link_status, max_length=32).lower() or "unknown"
-    share_status = _normalize_text(row.current_share_status, max_length=32).lower() or "unknown"
-    has_candidate = bool(_normalize_text(row.last_candidate_url))
-    has_error = bool(_normalize_text(row.last_error_message, max_length=2000))
-    extra_json = dict(row.extra_json or {})
-    automation = _build_task_automation_config(extra_json.get("automation"))
-    automation_mode = _normalize_follow_automation_mode(automation.get("mode"))
-    auto_ready = bool(automation.get("enabled"))
-
-    if task_state in {
-        PAN_TRANSFER_SYNC_STATE_QUEUED,
-        PAN_TRANSFER_SYNC_STATE_CHECKING,
-        PAN_TRANSFER_SYNC_STATE_SYNC_QUEUED,
-    }:
-        return {
-            "rule_key": "busy",
-            "rule_label": "等待当前任务完成",
-            "summary": "当前已经有巡检或同步在进行，先等待本轮完成，再决定是否执行新的追更处理。",
-            "recommended_source_kind": None,
-            "recommended_sync_mode": None,
-            "execution_mode": "busy",
-            "risk_level": "info",
-            "requires_manual_confirmation": False,
-            "can_execute": False,
-        }
-
-    if has_error:
-        return {
-            "rule_key": "recheck_required",
-            "rule_label": "先重新检查",
-            "summary": "最近一次追更检查出现异常，建议先重新检查，确认原链、分享和候选状态后再继续处理。",
-            "recommended_source_kind": None,
-            "recommended_sync_mode": None,
-            "execution_mode": "recheck_only",
-            "risk_level": "warning",
-            "requires_manual_confirmation": False,
-            "can_execute": True,
-        }
-
-    if source_status in {"invalid", "error"} and not has_candidate:
-        return {
-            "rule_key": "await_candidate",
-            "rule_label": "等待候选原链",
-            "summary": "当前原链已经不可用，稳定原链自动增量会立即停用，并放开巡检去寻找新的候选原链。",
-            "recommended_source_kind": None,
-            "recommended_sync_mode": None,
-            "execution_mode": "wait_candidate",
-            "risk_level": "warning",
-            "requires_manual_confirmation": False,
-            "can_execute": False,
-        }
-
-    if False and auto_ready and source_status in {"valid", "healthy"}:
-        return {
-            "rule_key": "auto_origin_incremental",
-            "rule_label": "规则1：稳定原链自动增量",
-            "summary": "仅对最初绑定的原链生效。巡检时会自动对比资源目录，只补充缺失内容，不再主动找候选原链。",
-            "recommended_source_kind": "current",
-            "recommended_sync_mode": "incremental",
-            "execution_mode": "recheck_only",
-            "risk_level": "info",
-            "requires_manual_confirmation": False,
-            "can_execute": True,
-        }
-
-    if has_candidate:
-        return {
-            "rule_key": "candidate_manual_incremental",
-            "rule_label": "规则2：候选人工增量",
-            "summary": "已发现候选原链。建议先进入人工增量同步，确认目录或文件后再写入现有资源目录。",
-            "recommended_source_kind": "candidate",
-            "recommended_sync_mode": "incremental",
-            "execution_mode": "manual_modal",
-            "risk_level": "warning",
-            "requires_manual_confirmation": True,
-            "can_execute": True,
-        }
-
-    if share_status in {"invalid", "error"}:
-        return {
-            "rule_key": "manual_incremental_current",
-            "rule_label": "规则2：人工增量同步",
-            "summary": "当前对外分享异常，但原链仍可用。可人工选择当前原链中的目录或文件，同步到现有资源目录后再生成新的分享。",
-            "recommended_source_kind": "current",
-            "recommended_sync_mode": "incremental",
-            "execution_mode": "manual_modal",
-            "risk_level": "warning",
-            "requires_manual_confirmation": True,
-            "can_execute": True,
-        }
-
-    return {
-        "rule_key": "manual_incremental_current",
-        "rule_label": "规则2：人工增量同步",
-        "summary": "当前原链仍可用，但未启用自动增量。可人工挑选需要补充的目录或文件，增量写入现有资源目录。",
-        "recommended_source_kind": "current",
-        "recommended_sync_mode": "incremental",
-        "execution_mode": "manual_modal",
-        "risk_level": "info",
-        "requires_manual_confirmation": True,
-        "can_execute": True,
-    }
-
-
+    return _build_follow_task_rule_assessment_v3(row)
 
 def _build_follow_task_rule_assessment_v3(row: PanTransferSyncTask) -> dict[str, Any]:
     task_state = _normalize_text(row.task_state, max_length=32).lower() or PAN_TRANSFER_SYNC_STATE_IDLE
@@ -3129,8 +3059,21 @@ def _serialize_follow_task(row: PanTransferSyncTask) -> dict[str, Any]:
     }
 
 
-def _get_follow_task(session: Session, *, task_id: int) -> PanTransferSyncTask:
-    task = session.get(PanTransferSyncTask, int(task_id))
+def _get_follow_task(
+    session: Session,
+    *,
+    task_id: int,
+    for_update: bool = False,
+) -> PanTransferSyncTask:
+    if for_update:
+        task = (
+            session.query(PanTransferSyncTask)
+            .filter(PanTransferSyncTask.id == int(task_id))
+            .with_for_update()
+            .first()
+        )
+    else:
+        task = session.get(PanTransferSyncTask, int(task_id))
     if task is None:
         raise LookupError("follow task not found")
     return task
@@ -3271,6 +3214,11 @@ def create_pan_transfer_follow_task_from_batch_item(
     source_message_snapshot = _normalize_source_message_snapshot(dict(extra_json.get("source_message_snapshot") or {}))
     if not source_message_snapshot.get("message_time") and item.latest_message_time is not None:
         source_message_snapshot["message_time"] = _serialize_json_value(item.latest_message_time)
+    source_message_snapshot = _get_latest_link_target_message_snapshot(
+        session,
+        link_target_id=int(item.link_target_id),
+        fallback_snapshot=source_message_snapshot,
+    )
     topic_payload = _build_follow_topic_payload(session, item=item)
     interval_minutes = _normalize_interval_minutes((payload or {}).get("check_interval_minutes"))
     inspection_schedule = _normalize_inspection_schedule((payload or {}).get("inspection_schedule"))
@@ -3345,6 +3293,12 @@ def create_pan_transfer_follow_task_from_batch_item(
                 source_url=source_url,
                 source_share_key=source_share_key,
                 source_message_snapshot=source_message_snapshot,
+                message_record_id=_normalize_optional_int(source_message_snapshot.get("message_record_id")),
+                message_link_ref_id=_normalize_optional_int(source_message_snapshot.get("message_link_ref_id")),
+                monitor_chat_id=_normalize_optional_int(source_message_snapshot.get("monitor_chat_id")),
+                monitor_channel_key=_normalize_text(source_message_snapshot.get("monitor_channel_key"), max_length=255) or None,
+                monitor_channel_title=_normalize_text(source_message_snapshot.get("monitor_channel_title"), max_length=255) or None,
+                monitor_message_id=_normalize_optional_int(source_message_snapshot.get("monitor_message_id")),
             ),
             "applied_update_state": _build_follow_applied_update_state(
                 resource_title=_normalize_text(source_message_snapshot.get("title"), max_length=255)
@@ -3681,9 +3635,22 @@ async def delete_pan_transfer_follow_task(
     delete_transferred_resource: bool = False,
 ) -> dict[str, Any]:
     ensure_runtime_storage_tables()
-    task = _get_follow_task(session, task_id=task_id)
+    task = _get_follow_task(session, task_id=task_id, for_update=True)
+    if str(task.task_state or "") in {
+        PAN_TRANSFER_SYNC_STATE_CHECKING,
+        PAN_TRANSFER_SYNC_STATE_SYNC_QUEUED,
+    } or _normalize_text(task.locked_by, max_length=128):
+        raise ValueError("cannot delete a follow task while it is processing")
     delete_details: dict[str, Any] = {}
+    task.status = PAN_TRANSFER_SYNC_STATUS_PAUSED
+    task.task_state = PAN_TRANSFER_SYNC_STATE_IDLE
+    task.next_check_at = None
+    task.locked_by = None
+    task.locked_at = None
+    session.add(task)
+    session.flush()
     if delete_transferred_resource:
+        _commit_before_external_call(session)
         delete_details = await _delete_follow_task_transferred_resource(session, task=task)
         task = _get_follow_task(session, task_id=task_id)
     media_wall_deleted_count = delete_items_for_sync_task(session, sync_task_id=task.id)
@@ -3730,18 +3697,15 @@ def _is_useful_follow_query(value: Any) -> bool:
     return len(normalized) >= (2 if has_cjk else 4)
 
 
-def _build_follow_candidate_payload(row: Any, *, fallback_title: str) -> dict[str, Any]:
+def _build_follow_candidate_payload(row: Any) -> dict[str, Any]:
     latest_message_title = _normalize_text(getattr(row, "latest_message_title", None), max_length=255)
-    display_text = _normalize_text(getattr(row, "display_text", None), max_length=255)
     return {
         "link_target_id": int(row.link_target_id),
         "message_id": _normalize_optional_int(getattr(row, "message_id", None)),
         "link_ref_id": _normalize_optional_int(getattr(row, "link_ref_id", None)),
         "link_index": _normalize_optional_non_negative_int(getattr(row, "link_index", None)),
         "url": _normalize_text(getattr(row, "original_url", None)),
-        "title": latest_message_title or display_text or fallback_title,
-        "display_text": display_text or None,
-        "description": _normalize_text(getattr(row, "latest_message_description", None), max_length=1000) or None,
+        "title": latest_message_title,
         "latest_message_time": getattr(row, "latest_message_time", None),
     }
 
@@ -3773,28 +3737,35 @@ def _merge_follow_candidate_lists(*candidate_lists: list[dict[str, Any]]) -> lis
     )
 
 
-def _list_follow_candidates_by_work(session: Session, *, task: PanTransferSyncTask) -> list[dict[str, Any]]:
+def _list_follow_candidates_by_work(
+    session: Session,
+    *,
+    task: PanTransferSyncTask,
+    snapshot: dict[str, Any],
+) -> list[dict[str, Any]]:
     if task.work_id is None:
+        return []
+    queries = _build_follow_candidate_search_queries(task, snapshot)
+    if not queries:
         return []
     candidate_policy = _get_follow_candidate_policy(task)
     excluded_ids = _build_task_excluded_target_ids(task)
     earliest_message_time = utcnow() - timedelta(days=int(candidate_policy["lookback_days"]))
-    latest_ref_subquery = (
-        session.query(
-            MessageLinkRef.link_target_id.label("link_target_id"),
-            func.max(MessageLinkRef.id).label("latest_ref_id"),
-        )
-        .filter(
-            or_(
-                MessageLinkRef.message_timestamp.is_(None),
-                MessageLinkRef.message_timestamp >= earliest_message_time,
-            )
-        )
-        .group_by(MessageLinkRef.link_target_id)
-        .subquery()
+    channel_key, chat_id = _resolve_follow_task_source_channel(session, task=task)
+    latest_ref_subquery = _build_follow_candidate_latest_ref_subquery(
+        session,
+        earliest_message_time=earliest_message_time,
+        channel_key=channel_key,
+        chat_id=chat_id,
     )
+    if latest_ref_subquery is None:
+        return []
     latest_ref = aliased(MessageLinkRef)
     latest_message = aliased(Message)
+    like_filters: list[Any] = []
+    for query in queries:
+        escaped_query = str(query).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        like_filters.append(latest_message.title.ilike(f"%{escaped_query}%", escape="\\"))
     query = (
         session.query(
             LinkTarget.id.label("link_target_id"),
@@ -3802,9 +3773,7 @@ def _list_follow_candidates_by_work(session: Session, *, task: PanTransferSyncTa
             latest_ref.id.label("link_ref_id"),
             latest_ref.message_id.label("message_id"),
             latest_ref.link_index.label("link_index"),
-            latest_ref.display_text.label("display_text"),
             latest_message.title.label("latest_message_title"),
-            latest_message.description.label("latest_message_description"),
             latest_ref.message_timestamp.label("latest_message_time"),
         )
         .join(ResourceWorkBinding, ResourceWorkBinding.link_target_id == LinkTarget.id)
@@ -3812,9 +3781,13 @@ def _list_follow_candidates_by_work(session: Session, *, task: PanTransferSyncTa
         .outerjoin(latest_ref, latest_ref.id == latest_ref_subquery.c.latest_ref_id)
         .outerjoin(latest_message, latest_message.id == latest_ref.message_id)
         .filter(
+            latest_ref_subquery.c.ref_rank == 1,
             ResourceWorkBinding.work_id == int(task.work_id),
             ResourceWorkBinding.match_status == "matched",
             LinkTarget.platform == str(task.platform or ""),
+            latest_message.title.isnot(None),
+            func.btrim(latest_message.title) != "",
+            or_(*like_filters),
         )
     )
     if excluded_ids:
@@ -3825,16 +3798,26 @@ def _list_follow_candidates_by_work(session: Session, *, task: PanTransferSyncTa
         LinkTarget.id.desc(),
     ).limit(int(candidate_policy["max_recall_candidates"]))
     return [
-        _build_follow_candidate_payload(row, fallback_title=_normalize_text(task.topic_title, max_length=255) or f"task_{int(task.id)}")
+        _build_follow_candidate_payload(row)
         for row in query.all()
     ]
 
 
 def _build_follow_candidate_search_queries(task: PanTransferSyncTask, snapshot: dict[str, Any]) -> list[str]:
+    origin_snapshot = _normalize_source_message_snapshot(
+        _normalize_follow_source_origin(_get_task_extra_section(task, "source_origin")).get("source_message_snapshot")
+    )
+    source_title = (
+        _normalize_text(origin_snapshot.get("title"), max_length=255)
+        or _normalize_text(snapshot.get("resource_title"), max_length=255)
+        or _resolve_follow_task_resource_title(task)
+    )
+    if not source_title:
+        return []
+    source_identity = parse_resource_identity(source_title)
     return _build_follow_identity_search_queries(
-        snapshot.get("core_title"),
-        *(snapshot.get("aliases") or []),
-        *(snapshot.get("search_queries") or []),
+        source_identity.core_title or source_title,
+        *(source_identity.aliases or []),
     )
 
 
@@ -3850,31 +3833,23 @@ def _list_follow_candidates_by_identity(
     candidate_policy = _get_follow_candidate_policy(task)
     excluded_ids = _build_task_excluded_target_ids(task)
     earliest_message_time = utcnow() - timedelta(days=int(candidate_policy["lookback_days"]))
-    latest_ref_subquery = (
-        session.query(
-            MessageLinkRef.link_target_id.label("link_target_id"),
-            func.max(MessageLinkRef.id).label("latest_ref_id"),
-        )
-        .filter(
-            or_(
-                MessageLinkRef.message_timestamp.is_(None),
-                MessageLinkRef.message_timestamp >= earliest_message_time,
-            )
-        )
-        .group_by(MessageLinkRef.link_target_id)
-        .subquery()
+    channel_key, chat_id = _resolve_follow_task_source_channel(session, task=task)
+    latest_ref_subquery = _build_follow_candidate_latest_ref_subquery(
+        session,
+        earliest_message_time=earliest_message_time,
+        channel_key=channel_key,
+        chat_id=chat_id,
     )
+    if latest_ref_subquery is None:
+        return []
     latest_ref = aliased(MessageLinkRef)
     latest_message = aliased(Message)
     like_filters: list[Any] = []
     for query in queries:
-        like_pattern = f"%{query}%"
+        escaped_query = str(query).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        like_pattern = f"%{escaped_query}%"
         like_filters.extend(
-            [
-                latest_message.title.ilike(like_pattern),
-                latest_message.description.ilike(like_pattern),
-                latest_ref.display_text.ilike(like_pattern),
-            ]
+            [latest_message.title.ilike(like_pattern, escape="\\")]
         )
     query = (
         session.query(
@@ -3883,15 +3858,19 @@ def _list_follow_candidates_by_identity(
             latest_ref.id.label("link_ref_id"),
             latest_ref.message_id.label("message_id"),
             latest_ref.link_index.label("link_index"),
-            latest_ref.display_text.label("display_text"),
             latest_message.title.label("latest_message_title"),
-            latest_message.description.label("latest_message_description"),
             latest_ref.message_timestamp.label("latest_message_time"),
         )
         .join(latest_ref_subquery, latest_ref_subquery.c.link_target_id == LinkTarget.id)
         .outerjoin(latest_ref, latest_ref.id == latest_ref_subquery.c.latest_ref_id)
         .outerjoin(latest_message, latest_message.id == latest_ref.message_id)
-        .filter(LinkTarget.platform == str(task.platform or ""), or_(*like_filters))
+        .filter(
+            latest_ref_subquery.c.ref_rank == 1,
+            LinkTarget.platform == str(task.platform or ""),
+            latest_message.title.isnot(None),
+            func.btrim(latest_message.title) != "",
+            or_(*like_filters),
+        )
     )
     if excluded_ids:
         query = query.filter(~LinkTarget.id.in_(excluded_ids))
@@ -3901,7 +3880,7 @@ def _list_follow_candidates_by_identity(
         LinkTarget.id.desc(),
     ).limit(int(candidate_policy["max_recall_candidates"]))
     return [
-        _build_follow_candidate_payload(row, fallback_title=_normalize_text(snapshot.get("core_title"), max_length=255) or f"task_{int(task.id)}")
+        _build_follow_candidate_payload(row)
         for row in query.all()
     ]
 
@@ -3917,88 +3896,6 @@ def _get_follow_reference_message_time(task: PanTransferSyncTask, snapshot: dict
     return None
 
 
-def _judge_follow_candidate_fallback(
-    task: PanTransferSyncTask,
-    *,
-    snapshot: dict[str, Any],
-    candidate: dict[str, Any],
-) -> dict[str, Any]:
-    effective_snapshot = _apply_follow_materialized_update_state_to_snapshot(
-        task,
-        _apply_follow_applied_update_state_to_snapshot(task, snapshot),
-    )
-    candidate_title = _normalize_text(candidate.get("title"), max_length=255)
-    current_resource_title = _normalize_text(effective_snapshot.get("resource_title"), max_length=255) or _resolve_follow_task_resource_title(task)
-    query_keys = [
-        _normalize_match_key(effective_snapshot.get("core_title")),
-        *[_normalize_match_key(item) for item in list(effective_snapshot.get("aliases") or [])],
-        *[_normalize_match_key(item) for item in list(effective_snapshot.get("search_queries") or [])],
-    ]
-    candidate_key = _normalize_match_key(candidate_title)
-    same_work = any(key and key in candidate_key for key in query_keys)
-    current_episode = _normalize_optional_int(effective_snapshot.get("latest_episode")) or _extract_follow_episode_hint(
-        current_resource_title,
-    )
-    candidate_episode = _extract_follow_episode_hint(candidate_title)
-    is_newer = bool(same_work and current_episode is not None and candidate_episode is not None and candidate_episode > current_episode)
-    return {
-        "is_same_work": same_work,
-        "is_newer": is_newer,
-        "should_promote": bool(same_work and is_newer),
-        "confidence": 0.66 if same_work and is_newer else (0.5 if same_work else 0.2),
-        "current_episode": current_episode,
-        "candidate_episode": candidate_episode,
-        "reason": (
-            "fallback_episode_compare"
-            if same_work and current_episode is not None and candidate_episode is not None
-            else "fallback_keyword_compare"
-        ),
-        "judge_source": "fallback",
-    }
-
-
-def _build_follow_candidate_judge_user_prompt(
-    task: PanTransferSyncTask,
-    *,
-    snapshot: dict[str, Any],
-    candidate: dict[str, Any],
-) -> str:
-    effective_snapshot = _apply_follow_materialized_update_state_to_snapshot(
-        task,
-        _apply_follow_applied_update_state_to_snapshot(task, snapshot),
-    )
-    payload = {
-        "tracked_resource": {
-            "platform": _normalize_text(task.platform, max_length=64) or None,
-            "core_title": effective_snapshot.get("core_title"),
-            "aliases": list(effective_snapshot.get("aliases") or []),
-            "release_year": effective_snapshot.get("release_year"),
-            "season": effective_snapshot.get("season"),
-            "latest_episode": effective_snapshot.get("latest_episode"),
-            "reference_titles": list(effective_snapshot.get("reference_titles") or []),
-            "reference_message_time": effective_snapshot.get("reference_message_time")
-            or _serialize_json_value(_get_follow_reference_message_time(task, effective_snapshot)),
-        },
-        "candidate": {
-            "title": candidate.get("title"),
-            "display_text": candidate.get("display_text"),
-            "description": candidate.get("description"),
-            "latest_message_time": _serialize_json_value(candidate.get("latest_message_time")),
-        },
-    }
-    return (
-        "判断这个候选资源是否应该成为追更候选。\n"
-        "只返回 JSON，对象字段固定为："
-        "is_same_work, is_newer, should_promote, confidence, current_episode, candidate_episode, reason。\n"
-        "要求：\n"
-        "1. 必须先判断是不是同一作品。\n"
-        "2. 只有同一作品且候选明显比当前资源更新时，should_promote 才能为 true。\n"
-        "3. 如果标题只是噪音不同，但核心作品一致，也算同一作品。\n"
-        "4. 如果候选集数更高、更新时间更晚，优先判断为更新。\n\n"
-        f"{_normalize_log_payload(payload)}"
-    )
-
-
 def _build_follow_candidate_judge_user_prompt_v2(
     task: PanTransferSyncTask,
     *,
@@ -4009,19 +3906,26 @@ def _build_follow_candidate_judge_user_prompt_v2(
         task,
         _apply_follow_applied_update_state_to_snapshot(task, snapshot),
     )
+    source_origin = _normalize_follow_source_origin(_get_task_extra_section(task, "source_origin"))
+    origin_snapshot = _normalize_source_message_snapshot(source_origin.get("source_message_snapshot"))
+    tracked_resource_title = (
+        _normalize_text(origin_snapshot.get("title"), max_length=255)
+        or _normalize_text(effective_snapshot.get("resource_title"), max_length=255)
+        or _resolve_follow_task_resource_title(task)
+    )
+    tracked_identity = parse_resource_identity(tracked_resource_title)
     payload = {
         "tracked_resource": {
             "platform": _normalize_text(task.platform, max_length=64) or None,
-            "resource_title": _normalize_text(effective_snapshot.get("resource_title"), max_length=255)
-            or _resolve_follow_task_resource_title(task),
-            "core_title": effective_snapshot.get("core_title"),
-            "aliases": list(effective_snapshot.get("aliases") or []),
+            "resource_title": tracked_resource_title,
+            "core_title": tracked_identity.core_title,
+            "aliases": list(tracked_identity.aliases or []),
             "release_year": effective_snapshot.get("release_year"),
             "season": effective_snapshot.get("season"),
             "latest_episode": effective_snapshot.get("latest_episode"),
             "latest_issue": effective_snapshot.get("latest_issue"),
             "is_complete": effective_snapshot.get("is_complete"),
-            "search_queries": list(effective_snapshot.get("search_queries") or []),
+            "search_queries": list(tracked_identity.search_queries or []),
         },
         "candidate": {
             "title": _normalize_text(candidate.get("title"), max_length=255) or None,
@@ -4075,7 +3979,7 @@ def _judge_follow_candidate_with_ai(
         "is_same_work": same_work,
         "is_newer": is_newer,
         "should_promote": should_promote,
-        "confidence": float(parsed.get("confidence") or 0),
+        "confidence": _normalize_follow_confidence(parsed.get("confidence")),
         "current_episode": _normalize_optional_int(parsed.get("current_episode")),
         "candidate_episode": _normalize_optional_int(parsed.get("candidate_episode")),
         "reason": _normalize_text(parsed.get("reason"), max_length=255) or "ai_candidate_judge",
@@ -4170,7 +4074,7 @@ def _mark_follow_candidate_recall_item(
         recall_item["should_promote"] = _normalize_optional_bool(normalized_assessment.get("should_promote"))
         recall_item["same_episode_replace"] = _normalize_optional_bool(normalized_assessment.get("same_episode_replace"))
         recall_item["confidence"] = (
-            float(normalized_assessment.get("confidence"))
+            _normalize_follow_confidence(normalized_assessment.get("confidence"))
             if normalized_assessment.get("confidence") not in (None, "")
             else None
         )
@@ -4196,68 +4100,6 @@ def _set_follow_candidate_recall_selection(
     recall_snapshot["selected_result"] = _normalize_text(result, max_length=64).lower() or None
 
 
-def _pick_follow_candidate(
-    session: Session,
-    *,
-    task: PanTransferSyncTask,
-    snapshot: dict[str, Any],
-) -> tuple[
-    dict[str, Any] | None,
-    dict[str, Any] | None,
-    dict[str, Any],
-    dict[str, Any] | None,
-    dict[str, Any] | None,
-]:
-    candidate_policy = _get_follow_candidate_policy(task)
-    recalled_candidates = _merge_follow_candidate_lists(
-        _list_follow_candidates_by_work(session, task=task),
-        _list_follow_candidates_by_identity(session, task=task, snapshot=snapshot),
-    )[: int(candidate_policy["max_recall_candidates"])]
-    recall_snapshot = _build_follow_candidate_recall_snapshot(task=task, snapshot=snapshot, candidates=recalled_candidates)
-    if not recalled_candidates:
-        return (
-            None,
-            {
-                "judge_source": "none",
-                "reason": "no_recalled_candidate",
-                "recall_count": 0,
-                "queries": list(recall_snapshot.get("queries") or []),
-            },
-            recall_snapshot,
-            None,
-            None,
-        )
-
-    last_assessment: dict[str, Any] | None = None
-    same_episode_candidate: dict[str, Any] | None = None
-    same_episode_assessment: dict[str, Any] | None = None
-    for candidate in recalled_candidates[: int(candidate_policy["max_judge_candidates"])]:
-        try:
-            assessment = _judge_follow_candidate_with_ai(session, task=task, snapshot=snapshot, candidate=candidate)
-        except Exception as exc:
-            logger.warning(
-                "follow candidate judge fell back task_id=%s candidate=%s error=%s",
-                int(task.id),
-                int(candidate.get("link_target_id") or 0),
-                _normalize_text(exc, max_length=1000) or type(exc).__name__,
-            )
-            assessment = _judge_follow_candidate_fallback(task, snapshot=snapshot, candidate=candidate)
-            assessment["judge_error"] = _normalize_text(exc, max_length=500) or type(exc).__name__
-        assessment["checked_at"] = _serialize_json_value(utcnow())
-        assessment["candidate_link_target_id"] = int(candidate.get("link_target_id") or 0)
-        assessment["candidate_title"] = _normalize_text(candidate.get("title"), max_length=255) or None
-        assessment["recall_count"] = len(recalled_candidates)
-        assessment["queries"] = list(recall_snapshot.get("queries") or [])
-        last_assessment = assessment
-        if assessment.get("should_promote"):
-            recall_snapshot["selected_link_target_id"] = _normalize_optional_int(candidate.get("link_target_id"))
-            return candidate, assessment, recall_snapshot, same_episode_candidate, same_episode_assessment
-        if same_episode_candidate is None and _is_same_episode_follow_replacement_candidate(assessment):
-            same_episode_candidate = dict(candidate)
-            same_episode_assessment = dict(assessment)
-    return None, last_assessment, recall_snapshot, same_episode_candidate, same_episode_assessment
-
-
 async def _safe_validate_url(url: str | None) -> dict[str, Any]:
     normalized_url = _normalize_text(url)
     if not normalized_url:
@@ -4275,18 +4117,6 @@ async def _safe_validate_url(url: str | None) -> dict[str, Any]:
 def _is_healthy_link_status(value: Any) -> bool:
     normalized = _normalize_text(value, max_length=32).lower()
     return normalized in {"valid", "healthy"}
-
-
-def _is_same_episode_follow_replacement_candidate(assessment: dict[str, Any] | None) -> bool:
-    if not isinstance(assessment, dict):
-        return False
-    if _normalize_optional_bool(assessment.get("is_same_work")) is not True:
-        return False
-    if _normalize_optional_bool(assessment.get("is_newer")) is not False:
-        return False
-    current_episode = _normalize_optional_int(assessment.get("current_episode"))
-    candidate_episode = _normalize_optional_int(assessment.get("candidate_episode"))
-    return current_episode is not None and current_episode == candidate_episode
 
 
 def _clear_follow_task_candidate_fields(task: PanTransferSyncTask) -> None:
@@ -4362,9 +4192,13 @@ def _apply_follow_task_state_without_candidate(task: PanTransferSyncTask) -> Non
 
 def _build_follow_identity_rule_snapshot(task: PanTransferSyncTask) -> tuple[dict[str, Any], Any]:
     resource_title = _resolve_follow_task_resource_title(task)
-    reference_titles = _collect_follow_reference_texts(task)
-    alternate_titles = [title for title in reference_titles if title != resource_title][:4]
-    identity = parse_resource_identity(resource_title, alternate_titles=alternate_titles)
+    identity = parse_resource_identity(resource_title)
+    aliases = [
+        alias
+        for alias in list(identity.aliases or [])
+        if _is_follow_identity_component_from_title(alias, resource_title)
+    ]
+    reference_titles = [resource_title] if resource_title else []
     source_message_snapshot = _normalize_source_message_snapshot(_get_task_extra_section(task, "source_message_snapshot"))
     reference_message_time = _serialize_json_value(
         _parse_datetime(source_message_snapshot.get("message_time")) or task.last_candidate_message_time
@@ -4374,7 +4208,7 @@ def _build_follow_identity_rule_snapshot(task: PanTransferSyncTask) -> tuple[dic
         "core_title": _normalize_text(identity.core_title, max_length=255)
         or _clean_follow_title(resource_title)
         or resource_title,
-        "aliases": _dedupe_texts(identity.aliases or reference_titles, max_items=6, max_length=255),
+        "aliases": _dedupe_texts(aliases, max_items=6, max_length=255),
         "release_year": identity.release_year,
         "season": identity.season,
         "latest_episode": identity.episode,
@@ -4382,8 +4216,7 @@ def _build_follow_identity_rule_snapshot(task: PanTransferSyncTask) -> tuple[dic
         "content_type": _normalize_text(identity.content_type, max_length=32) or None,
         "search_queries": _build_follow_identity_search_queries(
             identity.core_title or resource_title,
-            *(identity.aliases or reference_titles),
-            *(identity.search_queries or []),
+            *aliases,
         ),
         "reference_titles": reference_titles,
         "reference_message_time": reference_message_time,
@@ -4416,16 +4249,32 @@ def _judge_follow_candidate_fallback(
         task,
         _apply_follow_applied_update_state_to_snapshot(task, snapshot),
     )
-    tracked_resource_title = _normalize_text(effective_snapshot.get("resource_title"), max_length=255) or _resolve_follow_task_resource_title(task)
+    source_origin = _normalize_follow_source_origin(_get_task_extra_section(task, "source_origin"))
+    origin_snapshot = _normalize_source_message_snapshot(source_origin.get("source_message_snapshot"))
+    tracked_resource_title = (
+        _normalize_text(origin_snapshot.get("title"), max_length=255)
+        or _normalize_text(effective_snapshot.get("resource_title"), max_length=255)
+        or _resolve_follow_task_resource_title(task)
+    )
     tracked_identity = parse_resource_identity(
         tracked_resource_title,
-        alternate_titles=list(effective_snapshot.get("reference_titles") or [])[:4],
     )
     tracked_identity = _apply_follow_snapshot_progress_to_identity(
         tracked_identity,
         snapshot=effective_snapshot,
     )
-    candidate_title = _normalize_text(candidate.get("title"), max_length=255) or _normalize_text(candidate.get("display_text"), max_length=255)
+    candidate_title = _normalize_text(candidate.get("title"), max_length=255)
+    if not candidate_title:
+        return {
+            "is_same_work": False,
+            "is_newer": False,
+            "should_promote": False,
+            "confidence": 0.0,
+            "current_episode": _normalize_optional_int(effective_snapshot.get("latest_episode")),
+            "candidate_episode": None,
+            "reason": "candidate_title_missing",
+            "judge_source": "fallback",
+        }
     candidate_identity = parse_resource_identity(candidate_title)
     decision = compare_follow_candidate(
         tracked_identity,
@@ -4541,11 +4390,7 @@ def _assess_follow_candidate(
     assessment = _apply_follow_candidate_hard_rules(assessment, fallback_assessment=rule_assessment)
     assessment["checked_at"] = _serialize_json_value(utcnow())
     assessment["candidate_link_target_id"] = _normalize_optional_int(candidate.get("link_target_id"))
-    assessment["candidate_title"] = (
-        _normalize_text(candidate.get("title"), max_length=255)
-        or _normalize_text(candidate.get("display_text"), max_length=255)
-        or None
-    )
+    assessment["candidate_title"] = _normalize_text(candidate.get("title"), max_length=255) or None
     assessment["recall_count"] = len(list((recall_snapshot or {}).get("items") or []))
     assessment["queries"] = list((recall_snapshot or {}).get("queries") or list(snapshot.get("search_queries") or []))
     return assessment
@@ -4565,7 +4410,7 @@ def _pick_follow_candidate(
 ]:
     candidate_policy = _get_follow_candidate_policy(task)
     recalled_candidates = _merge_follow_candidate_lists(
-        _list_follow_candidates_by_work(session, task=task),
+        _list_follow_candidates_by_work(session, task=task, snapshot=snapshot),
         _list_follow_candidates_by_identity(session, task=task, snapshot=snapshot),
     )[: int(candidate_policy["max_recall_candidates"])]
     recall_snapshot = _build_follow_candidate_recall_snapshot(task=task, snapshot=snapshot, candidates=recalled_candidates)

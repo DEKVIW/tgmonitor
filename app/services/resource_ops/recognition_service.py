@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Iterable
 
-from sqlalchemy import func, or_
+from sqlalchemy import and_, func, or_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session, aliased
 
@@ -141,9 +141,19 @@ def _build_recognition_candidate_query(session: Session):
     latest_ref_id_subquery = (
         session.query(
             MessageLinkRef.link_target_id.label("link_target_id"),
-            func.max(MessageLinkRef.id).label("latest_ref_id"),
+            MessageLinkRef.id.label("latest_ref_id"),
+            func.row_number()
+            .over(
+                partition_by=MessageLinkRef.link_target_id,
+                order_by=(
+                    MessageLinkRef.message_timestamp.desc().nullslast(),
+                    Message.timestamp.desc().nullslast(),
+                    MessageLinkRef.id.desc(),
+                ),
+            )
+            .label("ref_rank"),
         )
-        .group_by(MessageLinkRef.link_target_id)
+        .join(Message, Message.id == MessageLinkRef.message_id)
         .subquery()
     )
     latest_ref = aliased(MessageLinkRef)
@@ -169,7 +179,13 @@ def _build_recognition_candidate_query(session: Session):
             binding.extra_json.label("binding_extra_json"),
         )
         .join(ref_stats_subquery, ref_stats_subquery.c.link_target_id == LinkTarget.id)
-        .outerjoin(latest_ref_id_subquery, latest_ref_id_subquery.c.link_target_id == LinkTarget.id)
+        .outerjoin(
+            latest_ref_id_subquery,
+            and_(
+                latest_ref_id_subquery.c.link_target_id == LinkTarget.id,
+                latest_ref_id_subquery.c.ref_rank == 1,
+            ),
+        )
         .outerjoin(latest_ref, latest_ref.id == latest_ref_id_subquery.c.latest_ref_id)
         .outerjoin(latest_message, latest_message.id == latest_ref.message_id)
         .outerjoin(click_subquery, click_subquery.c.link_target_id == LinkTarget.id)
@@ -764,8 +780,6 @@ def _legacy_resolve_link_target_work(
     candidate_row: RecognitionCandidate | None = None,
     config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    runtime_config = config or get_resource_ops_runtime_config(session)
-
     candidate = candidate_row or _get_candidate_by_link_target_id(session, link_target_id=int(link_target_id))
     if candidate is None:
         raise LookupError(f"link_target {link_target_id} not found")
@@ -987,7 +1001,6 @@ def sync_resource_work_bindings(
     operator: str | None = None,
 ) -> dict[str, Any]:
     ensure_runtime_storage_tables()
-    config = get_resource_ops_runtime_config(session)
     normalized_mode = _normalize_text(mode, max_length=16).lower() or "pending"
     if normalized_mode == "full":
         normalized_mode = "all"

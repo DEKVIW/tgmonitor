@@ -4,7 +4,7 @@ import math
 from datetime import date, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import String, case, cast, distinct, func, or_
+from sqlalchemy import String, and_, case, cast, distinct, func, or_
 from sqlalchemy.orm import Session, aliased
 
 from app.models.models import LinkClickEvent, LinkTarget, LinkTargetDailyStat, Message, MessageLinkRef
@@ -178,9 +178,19 @@ def _load_candidate_rows(
     latest_ref_id_subquery = (
         session.query(
             MessageLinkRef.link_target_id.label("link_target_id"),
-            func.max(MessageLinkRef.id).label("latest_ref_id"),
+            MessageLinkRef.id.label("latest_ref_id"),
+            func.row_number()
+            .over(
+                partition_by=MessageLinkRef.link_target_id,
+                order_by=(
+                    MessageLinkRef.message_timestamp.desc().nullslast(),
+                    Message.timestamp.desc().nullslast(),
+                    MessageLinkRef.id.desc(),
+                ),
+            )
+            .label("ref_rank"),
         )
-        .group_by(MessageLinkRef.link_target_id)
+        .join(Message, Message.id == MessageLinkRef.message_id)
         .subquery()
     )
     latest_ref = aliased(MessageLinkRef)
@@ -211,7 +221,13 @@ def _load_candidate_rows(
         )
         .join(click_subquery, click_subquery.c.link_target_id == LinkTarget.id)
         .join(ref_stats_subquery, ref_stats_subquery.c.link_target_id == LinkTarget.id)
-        .outerjoin(latest_ref_id_subquery, latest_ref_id_subquery.c.link_target_id == LinkTarget.id)
+        .outerjoin(
+            latest_ref_id_subquery,
+            and_(
+                latest_ref_id_subquery.c.link_target_id == LinkTarget.id,
+                latest_ref_id_subquery.c.ref_rank == 1,
+            ),
+        )
         .outerjoin(latest_ref, latest_ref.id == latest_ref_id_subquery.c.latest_ref_id)
     )
 

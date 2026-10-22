@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import distinct, func, or_
+from sqlalchemy import and_, distinct, func, or_
 from sqlalchemy.orm import Session, aliased
 
 from app.models.models import (
@@ -108,8 +108,19 @@ def _build_manual_candidate_items(
     )
     latest_ref_id_query = session.query(
         MessageLinkRef.link_target_id.label("link_target_id"),
-        func.max(MessageLinkRef.id).label("latest_ref_id"),
+        MessageLinkRef.id.label("latest_ref_id"),
+        func.row_number()
+        .over(
+            partition_by=MessageLinkRef.link_target_id,
+            order_by=(
+                MessageLinkRef.message_timestamp.desc().nullslast(),
+                Message.timestamp.desc().nullslast(),
+                MessageLinkRef.id.desc(),
+            ),
+        )
+        .label("ref_rank"),
     )
+    latest_ref_id_query = latest_ref_id_query.join(Message, Message.id == MessageLinkRef.message_id)
     if selected_message_ids:
         ref_summary_query = ref_summary_query.filter(MessageLinkRef.message_id.in_(selected_message_ids))
         latest_ref_id_query = latest_ref_id_query.filter(MessageLinkRef.message_id.in_(selected_message_ids))
@@ -117,7 +128,7 @@ def _build_manual_candidate_items(
         ref_summary_query = ref_summary_query.filter(MessageLinkRef.link_target_id.in_(normalized_link_target_ids))
         latest_ref_id_query = latest_ref_id_query.filter(MessageLinkRef.link_target_id.in_(normalized_link_target_ids))
     ref_summary_subquery = ref_summary_query.group_by(MessageLinkRef.link_target_id).subquery()
-    latest_ref_id_subquery = latest_ref_id_query.group_by(MessageLinkRef.link_target_id).subquery()
+    latest_ref_id_subquery = latest_ref_id_query.subquery()
 
     latest_ref = aliased(MessageLinkRef)
     latest_message = aliased(Message)
@@ -144,15 +155,27 @@ def _build_manual_candidate_items(
             ref_summary_subquery.c.source_ref_count.label("source_ref_count"),
             ref_summary_subquery.c.latest_message_time.label("latest_message_time"),
             latest_ref.display_text.label("display_text"),
+            latest_ref.id.label("latest_link_ref_id"),
+            latest_ref.message_id.label("latest_message_record_id"),
             latest_message.title.label("latest_message_title"),
             latest_message.description.label("latest_message_description"),
             latest_message.tags.label("latest_message_tags"),
+            latest_message.monitor_chat_id.label("latest_monitor_chat_id"),
+            latest_message.monitor_channel_key.label("latest_monitor_channel_key"),
+            latest_message.monitor_channel_title.label("latest_monitor_channel_title"),
+            latest_message.monitor_message_id.label("latest_monitor_message_id"),
             latest_health.is_valid.label("latest_is_valid"),
             latest_health.error_reason.label("latest_health_reason"),
             work.canonical_title.label("work_title"),
         )
         .join(ref_summary_subquery, ref_summary_subquery.c.link_target_id == LinkTarget.id)
-        .outerjoin(latest_ref_id_subquery, latest_ref_id_subquery.c.link_target_id == LinkTarget.id)
+        .outerjoin(
+            latest_ref_id_subquery,
+            and_(
+                latest_ref_id_subquery.c.link_target_id == LinkTarget.id,
+                latest_ref_id_subquery.c.ref_rank == 1,
+            ),
+        )
         .outerjoin(latest_ref, latest_ref.id == latest_ref_id_subquery.c.latest_ref_id)
         .outerjoin(latest_message, latest_message.id == latest_ref.message_id)
         .outerjoin(latest_health_id_subquery, latest_health_id_subquery.c.normalized_url == LinkTarget.normalized_url)
@@ -175,10 +198,8 @@ def _build_manual_candidate_items(
             continue
         recommended_account = account_map.get(row.platform)
         short_title = (
-            _normalize_text(row.work_title, max_length=255)
-            or _normalize_text(row.latest_message_title, max_length=255)
-            or _normalize_text(row.display_text, max_length=255)
-            or _normalize_text(row.latest_message_description, max_length=255)
+            _normalize_text(row.latest_message_title, max_length=255)
+            or _normalize_text(row.work_title, max_length=255)
             or _normalize_text(row.share_key, max_length=255)
             or f"资源 {int(row.link_target_id)}"
         )
@@ -195,6 +216,10 @@ def _build_manual_candidate_items(
                 "impact_message_count": int(row.impact_message_count or 0),
                 "source_ref_count": int(row.source_ref_count or 0),
                 "latest_message_time": row.latest_message_time,
+                "latest_link_ref_id": int(row.latest_link_ref_id) if row.latest_link_ref_id is not None else None,
+                "latest_message_record_id": int(row.latest_message_record_id)
+                if row.latest_message_record_id is not None
+                else None,
                 "latest_message_title": _normalize_text(row.latest_message_title, max_length=255) or None,
                 "latest_message_description": _normalize_text(row.latest_message_description, max_length=1000) or None,
                 "latest_message_tags": [
@@ -202,6 +227,14 @@ def _build_manual_candidate_items(
                     for tag in list(row.latest_message_tags or [])
                     if _normalize_text(tag, max_length=64)
                 ],
+                "latest_monitor_chat_id": int(row.latest_monitor_chat_id)
+                if row.latest_monitor_chat_id is not None
+                else None,
+                "latest_monitor_channel_key": _normalize_text(row.latest_monitor_channel_key, max_length=255) or None,
+                "latest_monitor_channel_title": _normalize_text(row.latest_monitor_channel_title, max_length=255) or None,
+                "latest_monitor_message_id": int(row.latest_monitor_message_id)
+                if row.latest_monitor_message_id is not None
+                else None,
                 "work_title": _normalize_text(row.work_title, max_length=255) or None,
                 "recommended_account_id": recommended_account.get("id") if recommended_account else None,
                 "recommended_account_name": recommended_account.get("account_name") if recommended_account else None,

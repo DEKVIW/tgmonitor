@@ -26,11 +26,11 @@ from .follow_tasks import (
     _apply_follow_applied_update_state_to_snapshot,
     _apply_follow_materialized_update_state_to_snapshot,
     _apply_follow_snapshot_progress_to_identity,
-    _collect_follow_reference_texts,
     _get_task_automation_config,
     _get_task_extra_section,
     _normalize_optional_int,
     _normalize_text,
+    _get_follow_task_source_origin,
     _resolve_follow_task_resource_title,
 )
 
@@ -124,11 +124,11 @@ def _build_tracked_identity(task: PanTransferSyncTask) -> Any:
         task,
         _apply_follow_applied_update_state_to_snapshot(task, snapshot),
     )
-    resource_title = _normalize_text(snapshot.get("resource_title"), max_length=255) or _resolve_follow_task_resource_title(task)
-    identity = parse_resource_identity(
-        resource_title,
-        alternate_titles=_collect_follow_reference_texts(task)[:8],
+    resource_title = _resolve_follow_task_resource_title(task) or _normalize_text(
+        snapshot.get("resource_title"),
+        max_length=255,
     )
+    identity = parse_resource_identity(resource_title)
     return _apply_follow_snapshot_progress_to_identity(identity, snapshot=snapshot)
 
 
@@ -195,21 +195,10 @@ def _list_message_candidates(
 
 
 def _get_task_source_channel(session: Session, task: PanTransferSyncTask) -> tuple[str | None, int | None]:
-    source_link_target_id = _normalize_optional_int(task.source_link_target_id)
-    if source_link_target_id is None:
-        return None, None
-    row = (
-        session.query(Message.monitor_channel_key, Message.monitor_chat_id)
-        .join(MessageLinkRef, MessageLinkRef.message_id == Message.id)
-        .filter(MessageLinkRef.link_target_id == source_link_target_id)
-        .order_by(Message.timestamp.desc(), Message.id.desc())
-        .first()
-    )
-    if row is None:
-        return None, None
+    origin = _get_follow_task_source_origin(session, task=task)
     return (
-        _normalize_text(row[0], max_length=255) or None,
-        _normalize_optional_int(row[1]),
+        _normalize_text(origin.get("monitor_channel_key"), max_length=255) or None,
+        _normalize_optional_int(origin.get("monitor_chat_id")),
     )
 
 
@@ -221,10 +210,14 @@ def _same_source_channel(
 ) -> bool:
     event_channel_key = _normalize_text(event.monitor_channel_key, max_length=255) or None
     event_chat_id = _normalize_optional_int(event.monitor_chat_id)
-    if task_channel_key and event_channel_key:
-        return task_channel_key.casefold() == event_channel_key.casefold()
-    if task_chat_id is not None and event_chat_id is not None:
-        return task_chat_id == event_chat_id
+    if not task_channel_key and task_chat_id is None:
+        return False
+    if not event_channel_key and event_chat_id is None:
+        return False
+    if task_channel_key and task_channel_key.casefold() != (event_channel_key or "").casefold():
+        return False
+    if task_chat_id is not None and event_chat_id != task_chat_id:
+        return False
     return True
 
 
@@ -369,8 +362,9 @@ def process_next_pan_transfer_follow_trigger_event(session: Session, *, worker_n
     if event is None:
         return False
 
+    previous_attempt_count = int(event.attempt_count or 0)
     event.status = FOLLOW_TRIGGER_EVENT_STATUS_PROCESSING
-    event.attempt_count = int(event.attempt_count or 0) + 1
+    event.attempt_count = previous_attempt_count + 1
     event.last_error = None
     session.add(event)
     session.flush()
@@ -454,6 +448,7 @@ def process_next_pan_transfer_follow_trigger_event(session: Session, *, worker_n
             }
         )
         if deferred_task_ids:
+            event.attempt_count = previous_attempt_count
             event.status = FOLLOW_TRIGGER_EVENT_STATUS_ERROR
             event.next_retry_at = now + FOLLOW_TRIGGER_EVENT_RETRY_DELAY
             event.last_error = "matched follow task is busy; trigger deferred"

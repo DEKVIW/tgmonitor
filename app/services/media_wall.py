@@ -187,20 +187,30 @@ def _follow_state_matches_source_origin(
         return True
     origin_title = _follow_source_origin_title(task)
     state_title = _clean_text(state.get("resource_title") or state.get("core_title"), max_length=255)
-    if not origin_title or not state_title:
+    if not origin_title:
+        # Keep legacy media-wall records visible until source identity is
+        # explicitly available for a safe mismatch check.
         return True
+    if not state_title:
+        return False
 
     origin_identity = parse_resource_identity(origin_title)
     state_identity = parse_resource_identity(state_title)
     if not origin_identity.is_target_work or not state_identity.is_target_work:
-        return True
+        return normalize_match_key(origin_title) == normalize_match_key(state_title)
     origin_keys = {
         normalize_match_key(value)
         for value in (origin_identity.core_title, *origin_identity.aliases)
         if normalize_match_key(value)
     }
     state_key = normalize_match_key(state_identity.core_title)
-    return not state_key or state_key in origin_keys
+    return bool(state_key and state_key in origin_keys)
+
+
+def _is_trusted_current_share_identity(task: PanTransferSyncTask, state: Any) -> bool:
+    if not isinstance(state, dict) or not state:
+        return True
+    return _follow_state_matches_source_origin(task, state)
 
 
 def _get_trusted_follow_state(task: PanTransferSyncTask, key: str) -> dict[str, Any]:
@@ -583,8 +593,8 @@ def _serialize_item(
     raw_current_share_url = _canonical_link_url(task.current_share_url) if task and task.current_share_url else ""
     current_share_identity = (task.extra_json or {}).get("current_share_identity") if task else None
     current_share_identity_is_trusted = bool(
-        not isinstance(current_share_identity, dict)
-        or _follow_state_matches_source_origin(task, current_share_identity)
+        not public
+        or _is_trusted_current_share_identity(task, current_share_identity)
     )
     blocked_current_share_url = raw_current_share_url if not current_share_identity_is_trusted else ""
     current_share_url = raw_current_share_url if current_share_identity_is_trusted else ""

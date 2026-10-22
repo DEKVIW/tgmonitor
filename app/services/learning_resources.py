@@ -1013,6 +1013,15 @@ def _create_learning_batch(
                     "title": resource.display_title,
                     "description": str(message.description or ""),
                     "tags": list(message.tags or []),
+                    "message_record_id": int(message.id),
+                    "monitor_chat_id": int(message.monitor_chat_id)
+                    if message.monitor_chat_id is not None
+                    else None,
+                    "monitor_channel_key": str(message.monitor_channel_key or "") or None,
+                    "monitor_channel_title": str(message.monitor_channel_title or "") or None,
+                    "monitor_message_id": int(message.monitor_message_id)
+                    if message.monitor_message_id is not None
+                    else None,
                 },
                 "resolved_paths": _build_learning_paths(
                     account=account,
