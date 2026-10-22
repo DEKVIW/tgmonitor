@@ -41,6 +41,7 @@ MAX_IMPORT_ROWS = 5000
 MAX_SOURCE_RESPONSE_BYTES = 2 * 1024 * 1024
 METADATA_CACHE_TTL_SECONDS = 6 * 60 * 60
 SOURCE_ENDPOINT_CACHE_TTL_SECONDS = 10 * 60
+MEDIA_WALL_COMPLETED_UPDATE_WINDOW = timedelta(days=30)
 MEDIA_WALL_METADATA_NOT_SYNCED = "not_synced"
 MEDIA_WALL_METADATA_PENDING = "pending"
 MEDIA_WALL_METADATA_PROCESSING = "processing"
@@ -256,25 +257,55 @@ def _get_trusted_follow_title(task: PanTransferSyncTask) -> str:
     return ""
 
 
+def _get_follow_state_completion(state: dict[str, Any]) -> bool | None:
+    raw_value = state.get("is_completed")
+    if raw_value is not None:
+        return str(raw_value).strip().lower() in {"1", "true", "yes", "on"}
+
+    state_title = _clean_text(state.get("resource_title"), max_length=255)
+    if not state_title:
+        return None
+    return bool(parse_resource_identity(state_title).is_complete)
+
+
 def _build_progress(task: PanTransferSyncTask | None) -> dict[str, Any]:
     if task is None:
         return {"episode": None, "label": "暂无追更进度", "task_state": None, "share_status": None}
 
-    episode = None
-    for state in (
+    states = (
         _get_trusted_follow_state(task, "applied_update_state"),
         _get_trusted_follow_state(task, "materialized_update_state"),
         _get_trusted_follow_identity_snapshot(task),
-    ):
+    )
+    episode = None
+    progress_state: dict[str, Any] = {}
+    for state in states:
         episode = _extract_episode(state)
         if episode is not None:
+            progress_state = state
             break
+    identity = None
     if episode is None:
+        progress_state = next(
+            (state for state in states if _get_follow_state_completion(state) is not None),
+            {},
+        )
+    if episode is None and not progress_state:
         identity = parse_resource_identity(_get_trusted_follow_title(task))
         episode = identity.episode
+
+    is_completed = _get_follow_state_completion(progress_state)
+    if is_completed is None:
+        if identity is None:
+            identity = parse_resource_identity(_get_trusted_follow_title(task))
+        is_completed = bool(identity.is_complete)
+    if is_completed:
+        label = f"已完结 · 全 {episode} 集" if episode else "已完结"
+    else:
+        label = f"更新至第 {episode} 集" if episode else "追更同步中"
     return {
         "episode": episode,
-        "label": f"更新至第 {episode} 集" if episode else "追更同步中",
+        "label": label,
         "task_state": task.task_state,
         "share_status": task.current_share_status,
         "last_checked_at": task.last_checked_at,
@@ -298,16 +329,26 @@ def _parse_content_updated_at(value: Any) -> datetime | None:
 
 
 def _get_content_updated_at(task: PanTransferSyncTask | None) -> datetime | None:
-    """Return only the actual update time for an active, unfinished follow task."""
+    """Return a recent content update time for an active follow task."""
     if task is None or str(task.status or "") != "active":
         return None
+    now = _now()
     for state in (
         _get_trusted_follow_state(task, "applied_update_state"),
         _get_trusted_follow_state(task, "materialized_update_state"),
     ):
-        if str(state.get("is_completed") or "").lower() == "true":
-            continue
         updated_at = _parse_content_updated_at(state.get("updated_at"))
+        if updated_at is None:
+            continue
+        is_completed = _get_follow_state_completion(state)
+        if is_completed:
+            comparison_now = now
+            if updated_at.tzinfo is not None and comparison_now.tzinfo is None:
+                comparison_now = comparison_now.replace(tzinfo=updated_at.tzinfo)
+            elif updated_at.tzinfo is None and comparison_now.tzinfo is not None:
+                updated_at = updated_at.replace(tzinfo=comparison_now.tzinfo)
+            if updated_at > comparison_now or comparison_now - updated_at > MEDIA_WALL_COMPLETED_UPDATE_WINDOW:
+                continue
         if updated_at is not None:
             return updated_at
     return None

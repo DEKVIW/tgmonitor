@@ -17,6 +17,7 @@ os.environ.setdefault("SECRET_SALT", "test-salt")
 
 from app.models.models import AiProviderConfig, MediaWallItem, MediaWallLink, PanTransferSyncTask
 from app.services.media_wall import (
+    MEDIA_WALL_COMPLETED_UPDATE_WINDOW,
     MEDIA_WALL_METADATA_NOT_SYNCED,
     MEDIA_WALL_VISIBILITIES,
     _build_progress,
@@ -92,6 +93,95 @@ class MediaWallServiceTests(unittest.TestCase):
 
         self.assertEqual(progress["episode"], 13)
         self.assertEqual(_get_content_updated_at(task).isoformat(), "2026-10-22T12:00:00")
+
+    @patch("app.services.media_wall._now", return_value=datetime(2026, 10, 22, 13, 0, 0))
+    def test_media_wall_shows_recent_completed_follow_state(self, _mock_now) -> None:
+        task = SimpleNamespace(
+            status="active",
+            task_state="idle",
+            current_share_status="valid",
+            last_checked_at=None,
+            extra_json={
+                "source_origin": {
+                    "source_message_snapshot": {
+                        "title": "醉梦 S01E10",
+                    }
+                },
+                "applied_update_state": {
+                    "resource_title": "醉梦 全18集 2026",
+                    "episode": 18,
+                    "is_completed": True,
+                    "updated_at": "2026-10-22T12:00:00Z",
+                },
+            },
+            last_candidate_title=None,
+            work_title="醉梦",
+            topic_title="醉梦",
+            task_name="醉梦",
+        )
+
+        progress = _build_progress(task)
+
+        self.assertEqual(progress["label"], "已完结 · 全 18 集")
+        self.assertEqual(_get_content_updated_at(task).isoformat(), "2026-10-22T12:00:00+00:00")
+
+    @patch("app.services.media_wall._now", return_value=datetime(2026, 11, 23, 13, 0, 0))
+    def test_media_wall_hides_completed_update_after_display_window(self, _mock_now) -> None:
+        task = SimpleNamespace(
+            status="active",
+            task_state="idle",
+            current_share_status="valid",
+            last_checked_at=None,
+            extra_json={
+                "source_origin": {
+                    "source_message_snapshot": {
+                        "title": "醉梦 S01E10",
+                    }
+                },
+                "applied_update_state": {
+                    "resource_title": "醉梦 全18集 2026",
+                    "episode": 18,
+                    "is_completed": True,
+                    "updated_at": "2026-10-22T12:00:00",
+                },
+            },
+            last_candidate_title=None,
+            work_title="醉梦",
+            topic_title="醉梦",
+            task_name="醉梦",
+        )
+
+        progress = _build_progress(task)
+
+        self.assertEqual(progress["label"], "已完结 · 全 18 集")
+        self.assertIsNone(_get_content_updated_at(task))
+        self.assertEqual(MEDIA_WALL_COMPLETED_UPDATE_WINDOW, timedelta(days=30))
+
+    def test_media_wall_completed_follow_state_without_episode_shows_status_only(self) -> None:
+        task = SimpleNamespace(
+            status="active",
+            task_state="idle",
+            current_share_status="valid",
+            last_checked_at=None,
+            extra_json={
+                "source_origin": {
+                    "source_message_snapshot": {
+                        "title": "某部影视 S01E01",
+                    }
+                },
+                "applied_update_state": {
+                    "resource_title": "某部影视",
+                    "is_completed": True,
+                    "updated_at": "2026-10-22T12:00:00",
+                },
+            },
+            last_candidate_title=None,
+            work_title="某部影视",
+            topic_title="某部影视",
+            task_name="某部影视",
+        )
+
+        self.assertEqual(_build_progress(task)["label"], "已完结")
 
     def test_public_media_wall_hides_current_share_with_mismatched_identity(self) -> None:
         task = SimpleNamespace(
