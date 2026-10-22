@@ -19,8 +19,10 @@ from app.models.models import AiProviderConfig, MediaWallItem, MediaWallLink, Pa
 from app.services.media_wall import (
     MEDIA_WALL_METADATA_NOT_SYNCED,
     MEDIA_WALL_VISIBILITIES,
+    _build_progress,
     _build_import_preview,
     _fingerprint_url,
+    _get_content_updated_at,
     _invalidate_metadata_cache,
     _metadata_cache,
     _normalize_title,
@@ -32,6 +34,137 @@ from app.services.media_wall_link_health import _next_check_at
 
 
 class MediaWallServiceTests(unittest.TestCase):
+    def test_media_wall_ignores_mismatched_follow_state_when_reading_progress(self) -> None:
+        task = SimpleNamespace(
+            status="active",
+            task_state="idle",
+            current_share_status="valid",
+            last_checked_at=None,
+            extra_json={
+                "source_origin": {
+                    "source_message_snapshot": {
+                        "title": "大主宰 S01E10",
+                    }
+                },
+                "applied_update_state": {
+                    "resource_title": "斗破苍穹 S01E99",
+                    "episode": 99,
+                    "updated_at": "2026-10-22T12:00:00",
+                },
+            },
+            last_candidate_title="斗破苍穹 S01E99",
+            work_title="斗破苍穹",
+            topic_title="斗破苍穹",
+            task_name="斗破苍穹",
+        )
+
+        progress = _build_progress(task)
+
+        self.assertEqual(progress["episode"], 10)
+        self.assertEqual(progress["label"], "更新至第 10 集")
+        self.assertIsNone(_get_content_updated_at(task))
+
+    def test_media_wall_keeps_matching_follow_state_and_update_time(self) -> None:
+        task = SimpleNamespace(
+            status="active",
+            task_state="idle",
+            current_share_status="valid",
+            last_checked_at=None,
+            extra_json={
+                "source_origin": {
+                    "source_message_snapshot": {
+                        "title": "大主宰 S01E10",
+                    }
+                },
+                "applied_update_state": {
+                    "resource_title": "大主宰 S01E13",
+                    "episode": 13,
+                    "updated_at": "2026-10-22T12:00:00",
+                },
+            },
+            last_candidate_title="大主宰 S01E13",
+            work_title="大主宰",
+            topic_title="大主宰",
+            task_name="大主宰",
+        )
+
+        progress = _build_progress(task)
+
+        self.assertEqual(progress["episode"], 13)
+        self.assertEqual(_get_content_updated_at(task).isoformat(), "2026-10-22T12:00:00")
+
+    def test_public_media_wall_hides_current_share_with_mismatched_identity(self) -> None:
+        task = SimpleNamespace(
+            id=7,
+            status="active",
+            task_state="idle",
+            current_share_url="https://pan.example/share/wrong",
+            current_share_status="valid",
+            last_checked_at=None,
+            extra_json={
+                "source_origin": {
+                    "source_message_snapshot": {
+                        "title": "大主宰 S01E10",
+                    }
+                },
+                "current_share_identity": {
+                    "resource_title": "斗破苍穹 S01E99",
+                },
+            },
+            last_candidate_title="斗破苍穹 S01E99",
+            work_title="斗破苍穹",
+            topic_title="斗破苍穹",
+            task_name="斗破苍穹",
+        )
+        item = SimpleNamespace(
+            id=1,
+            display_title="大主宰",
+            metadata_query_title="大主宰",
+            visibility="public",
+            sort_order=0,
+            custom_poster_url=None,
+            metadata_json={},
+            sync_task_id=7,
+            metadata_status="ready",
+            metadata_last_synced_at=None,
+            metadata_last_error=None,
+            created_at=None,
+            updated_at=None,
+        )
+        link = SimpleNamespace(
+            id=1,
+            platform="quark",
+            url="https://pan.example/share/wrong",
+            label=None,
+            is_primary=True,
+            is_enabled=True,
+            source_type="sync",
+            last_checked_at=None,
+            last_status="valid",
+            invalid_streak=0,
+            next_check_at=None,
+            last_error_message=None,
+        )
+
+        class EmptySession:
+            def get(self, model, item_id):
+                return None
+
+            def query(self, model):
+                raise AssertionError("query should not be used when serialization context is provided")
+
+        result = _serialize_item(
+            EmptySession(),
+            item,
+            public=True,
+            include_metadata=True,
+            tasks={7: task},
+            links_by_item={1: [link]},
+            categories_by_item={},
+        )
+
+        self.assertEqual(result["links"], [])
+
     def test_media_wall_has_no_draft_state_and_ai_provider_tracks_operator(self) -> None:
         self.assertEqual(MEDIA_WALL_VISIBILITIES, {"public", "hidden"})
         self.assertEqual(MediaWallItem.__table__.c.visibility.default.arg, "public")

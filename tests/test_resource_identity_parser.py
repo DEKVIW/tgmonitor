@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from app.services.resource_identity import parse_resource_identity
+from app.services.resource_identity import compare_follow_candidate, parse_resource_identity
 
 
 class ResourceIdentityParserTests(unittest.TestCase):
@@ -21,6 +21,26 @@ class ResourceIdentityParserTests(unittest.TestCase):
         self.assertIsNone(identity.core_title)
         self.assertTrue(identity.should_skip_ai)
         self.assertEqual(identity.reason, "link_platform_label")
+
+    def test_generic_episode_words_do_not_become_identity_keys(self) -> None:
+        identity = parse_resource_identity(
+            "月鳞绮纪 更22集",
+            alternate_titles=["集", "更新"],
+        )
+
+        self.assertNotIn("集", identity.aliases)
+        self.assertNotIn("更新", identity.aliases)
+        self.assertNotIn("集", identity.normalized_keys)
+        self.assertNotIn("更新", identity.normalized_keys)
+
+    def test_different_works_do_not_promote_by_episode_number(self) -> None:
+        tracked = parse_resource_identity("大主宰 更95集")
+        candidate = parse_resource_identity("斗破苍穹 更215集")
+
+        decision = compare_follow_candidate(tracked, candidate)
+
+        self.assertFalse(decision.is_same_work)
+        self.assertFalse(decision.should_promote)
 
 
 if __name__ == "__main__":

@@ -27,7 +27,7 @@ from app.models.models import (
     ensure_runtime_storage_tables,
 )
 from app.services.ai_center import execute_text_route, extract_json_object_from_text
-from app.services.resource_identity import compare_follow_candidate, parse_resource_identity
+from app.services.resource_identity import compare_follow_candidate, normalize_match_key, parse_resource_identity
 from app.services.resource_ops import get_work_binding_lookup
 from app.services.media_wall import delete_items_for_sync_task
 
@@ -879,7 +879,8 @@ def _normalize_follow_materialized_update_state(value: Mapping[str, Any] | None)
 
 
 def _get_follow_task_materialized_update_state(task: PanTransferSyncTask) -> dict[str, Any]:
-    return _normalize_follow_materialized_update_state(_get_task_extra_section(task, "materialized_update_state"))
+    state = _normalize_follow_materialized_update_state(_get_task_extra_section(task, "materialized_update_state"))
+    return state if _follow_state_matches_source_origin(task, state) else {}
 
 
 def _collect_follow_task_materialized_episode_numbers(task: PanTransferSyncTask) -> list[int]:
@@ -898,8 +899,8 @@ def _resolve_follow_applied_update_state_resource_title(
     current_share_identity = _get_follow_task_current_share_identity(task)
     for candidate in (
         _normalize_text(dict(fallback_state or {}).get("resource_title"), max_length=255),
-        _normalize_text(current_share_identity.get("resource_title"), max_length=255),
         _normalize_text(source_origin_snapshot.get("title"), max_length=255),
+        _normalize_text(current_share_identity.get("resource_title"), max_length=255),
         _normalize_text(source_message_snapshot.get("title"), max_length=255),
         _normalize_text(getattr(task, "work_title", None), max_length=255),
         _normalize_text(getattr(task, "topic_title", None), max_length=255),
@@ -910,14 +911,43 @@ def _resolve_follow_applied_update_state_resource_title(
     return None
 
 
+def _follow_state_matches_source_origin(
+    task: PanTransferSyncTask,
+    state: Mapping[str, Any] | None,
+) -> bool:
+    normalized_state = _normalize_follow_applied_update_state(state)
+    if not normalized_state:
+        return True
+    origin = _normalize_follow_source_origin(_get_task_extra_section(task, "source_origin"))
+    origin_snapshot = _normalize_source_message_snapshot(origin.get("source_message_snapshot"))
+    origin_title = _normalize_text(origin_snapshot.get("title"), max_length=255)
+    state_title = _normalize_text(normalized_state.get("resource_title"), max_length=255)
+    if not origin_title or not state_title:
+        return True
+
+    origin_identity = parse_resource_identity(origin_title)
+    state_identity = parse_resource_identity(state_title)
+    if not origin_identity.is_target_work or not state_identity.is_target_work:
+        return True
+    origin_keys = {
+        normalize_match_key(value)
+        for value in [origin_identity.core_title, *origin_identity.aliases]
+        if normalize_match_key(value)
+    }
+    state_core = normalize_match_key(state_identity.core_title)
+    return bool(state_core and state_core in origin_keys)
+
+
 def _get_follow_task_applied_update_state(task: PanTransferSyncTask) -> dict[str, Any]:
     persisted = _normalize_follow_applied_update_state(_get_task_extra_section(task, "applied_update_state"))
+    if persisted and not _follow_state_matches_source_origin(task, persisted):
+        persisted = {}
     if persisted:
         return persisted
 
     current_share_identity = _get_follow_task_current_share_identity(task)
     if current_share_identity:
-        return _build_follow_applied_update_state(
+        current_share_state = _build_follow_applied_update_state(
             resource_title=_normalize_text(current_share_identity.get("resource_title"), max_length=255)
             or _resolve_follow_applied_update_state_resource_title(task),
             core_title=current_share_identity.get("core_title"),
@@ -926,6 +956,8 @@ def _get_follow_task_applied_update_state(task: PanTransferSyncTask) -> dict[str
             issue_no=current_share_identity.get("issue_no"),
             source="auto",
         )
+        if _follow_state_matches_source_origin(task, current_share_state):
+            return current_share_state
 
     source_origin = _normalize_follow_source_origin(_get_task_extra_section(task, "source_origin"))
     source_origin_snapshot = _normalize_source_message_snapshot(source_origin.get("source_message_snapshot"))
@@ -1439,10 +1471,13 @@ def _get_follow_task_source_origin(
 
 
 def _resolve_follow_task_resource_title(task: PanTransferSyncTask) -> str:
+    source_origin = _normalize_follow_source_origin(_get_task_extra_section(task, "source_origin"))
+    source_origin_snapshot = _normalize_source_message_snapshot(source_origin.get("source_message_snapshot"))
     source_message_snapshot = _normalize_source_message_snapshot(_get_task_extra_section(task, "source_message_snapshot"))
     return (
-        _normalize_text(source_message_snapshot.get("title"), max_length=255)
+        _normalize_text(source_origin_snapshot.get("title"), max_length=255)
         or _normalize_text(task.work_title, max_length=255)
+        or _normalize_text(source_message_snapshot.get("title"), max_length=255)
         or _normalize_text(task.topic_title, max_length=255)
         or _normalize_text(task.task_name, max_length=255)
         or f"resource_{int(task.id)}"
@@ -1450,12 +1485,20 @@ def _resolve_follow_task_resource_title(task: PanTransferSyncTask) -> str:
 
 
 def _collect_follow_reference_texts(task: PanTransferSyncTask) -> list[str]:
+    source_origin = _normalize_follow_source_origin(_get_task_extra_section(task, "source_origin"))
+    source_origin_snapshot = _normalize_source_message_snapshot(source_origin.get("source_message_snapshot"))
+    origin_title = _normalize_text(source_origin_snapshot.get("title"), max_length=255)
+    fallback_titles = []
+    if not origin_title:
+        fallback_titles = [
+            _normalize_text(task.work_title, max_length=255),
+            _normalize_text(task.topic_title, max_length=255),
+            _normalize_text(task.task_name, max_length=255),
+        ]
     texts = [
         _resolve_follow_task_resource_title(task),
-        _normalize_text(task.work_title, max_length=255),
-        _normalize_text(task.topic_title, max_length=255),
-        _normalize_text(task.task_name, max_length=255),
-        _normalize_text(task.last_candidate_title, max_length=255),
+        origin_title,
+        *fallback_titles,
     ]
     return _dedupe_texts([item for item in texts if item], max_items=8, max_length=255)
 
@@ -1807,19 +1850,42 @@ def _ensure_follow_task_identity_snapshot(
     existing = _get_task_extra_section(task, "identity_snapshot")
     current_resource_title = _resolve_follow_task_resource_title(task)
     existing_resource_title = _normalize_text(existing.get("resource_title"), max_length=255)
-    if existing.get("core_title") and existing_resource_title == current_resource_title:
+    rule_snapshot, rule_identity = _build_follow_identity_rule_snapshot(task)
+    rule_identity_keys = {
+        normalize_match_key(value)
+        for value in [rule_identity.core_title, *rule_identity.aliases]
+        if normalize_match_key(value)
+    }
+    existing_core_key = normalize_match_key(existing.get("core_title"))
+    if (
+        existing_core_key
+        and existing_resource_title == current_resource_title
+        and existing_core_key in rule_identity_keys
+    ):
         return existing, False
-    try:
-        snapshot = _extract_follow_identity_with_ai(session, task=task)
-    except Exception as exc:
-        logger.warning(
-            "follow identity extraction fell back task_id=%s error=%s",
-            int(task.id),
-            _normalize_text(exc, max_length=1000) or type(exc).__name__,
-        )
-        snapshot = _build_follow_identity_fallback(task)
-        snapshot["identity_error"] = _normalize_text(exc, max_length=500) or type(exc).__name__
+    snapshot = dict(rule_snapshot)
+    if rule_identity.needs_ai_review and not rule_identity.should_skip_ai:
+        try:
+            snapshot = _extract_follow_identity_with_ai(session, task=task)
+        except Exception as exc:
+            logger.warning(
+                "follow identity extraction fell back task_id=%s error=%s",
+                int(task.id),
+                _normalize_text(exc, max_length=1000) or type(exc).__name__,
+            )
+            snapshot = dict(rule_snapshot)
+            snapshot["identity_error"] = _normalize_text(exc, max_length=500) or type(exc).__name__
+        else:
+            snapshot["reference_titles"] = rule_snapshot.get("reference_titles")
+            snapshot["reference_message_time"] = rule_snapshot.get("reference_message_time")
+            snapshot["latest_issue"] = rule_identity.issue_no
+            snapshot["parse_confidence"] = float(rule_identity.confidence or 0)
+            snapshot["is_target_work"] = bool(rule_identity.is_target_work)
+            snapshot["needs_ai_review"] = False
+            snapshot["is_complete"] = bool(rule_identity.is_complete)
+            snapshot["rule_identity"] = rule_identity.to_dict()
     snapshot["resource_title"] = current_resource_title
+    snapshot.setdefault("parsed_identity", rule_identity.to_dict())
     _set_task_extra_section(task, "identity_snapshot", snapshot)
     if not _normalize_text(task.work_title, max_length=255):
         task.topic_title = _normalize_text(snapshot.get("core_title"), max_length=255) or task.topic_title
@@ -2966,17 +3032,35 @@ def _serialize_follow_task(row: PanTransferSyncTask) -> dict[str, Any]:
     automation["origin_mode_available"] = bool(origin_mode_status.get("available"))
     automation["origin_mode_reason"] = _normalize_text(origin_mode_status.get("reason"), max_length=64).lower() or None
     source_message_snapshot = _normalize_source_message_snapshot(dict(extra_json.get("source_message_snapshot") or {}))
-    current_share_identity = _get_follow_task_current_share_identity(row)
+    raw_current_share_identity = _get_follow_task_current_share_identity(row)
+    current_share_identity = (
+        raw_current_share_identity
+        if _follow_state_matches_source_origin(row, raw_current_share_identity)
+        else {}
+    )
     source_origin = _normalize_follow_source_origin(extra_json.get("source_origin"))
     source_origin_snapshot = _normalize_source_message_snapshot(source_origin.get("source_message_snapshot"))
     current_share_message_title = _normalize_text(current_share_identity.get("resource_title"), max_length=255) or None
-    current_share_resource_title = (
+    source_message_title = _normalize_text(source_message_snapshot.get("title"), max_length=255) or None
+    if source_message_title and not _follow_state_matches_source_origin(row, {"resource_title": source_message_title}):
+        source_message_title = _normalize_text(source_origin_snapshot.get("title"), max_length=255) or None
+    effective_source_title = (
         current_share_message_title
+        or _normalize_text(applied_update_state.get("resource_title"), max_length=255)
         or _normalize_text(source_origin_snapshot.get("title"), max_length=255)
-        or str(row.work_title or "") or None
-        or str(row.topic_title or "")
-        or str(row.task_name or "")
+        or _normalize_text(row.work_title, max_length=255)
+        or _normalize_text(row.topic_title, max_length=255)
+        or _normalize_text(row.task_name, max_length=255)
         or f"resource_{int(row.id)}"
+    )
+    effective_work_title = _normalize_text(row.work_title, max_length=255) or None
+    if effective_work_title and not _follow_state_matches_source_origin(row, {"resource_title": effective_work_title}):
+        effective_work_title = _normalize_text(source_origin_snapshot.get("title"), max_length=255) or None
+    effective_topic_title = _normalize_text(row.topic_title, max_length=255)
+    if effective_topic_title and not _follow_state_matches_source_origin(row, {"resource_title": effective_topic_title}):
+        effective_topic_title = _normalize_text(source_origin_snapshot.get("title"), max_length=255) or effective_source_title
+    current_share_resource_title = (
+        effective_source_title
     )
     return {
         "id": int(row.id),
@@ -2989,15 +3073,15 @@ def _serialize_follow_task(row: PanTransferSyncTask) -> dict[str, Any]:
         "source_link_target_id": int(row.source_link_target_id) if row.source_link_target_id is not None else None,
         "source_url": str(row.source_url or ""),
         "source_share_key": str(row.source_share_key or "") or None,
-        "source_message_title": _normalize_text(source_message_snapshot.get("title"), max_length=255) or None,
+        "source_message_title": source_message_title,
         "current_share_message_title": current_share_message_title,
         "current_share_resource_title": current_share_resource_title,
         "applied_update_state": applied_update_state,
         "materialized_update_state": materialized_update_state,
         "topic_key": str(row.topic_key or ""),
-        "topic_title": str(row.topic_title or ""),
+        "topic_title": effective_topic_title,
         "work_id": int(row.work_id) if row.work_id is not None else None,
-        "work_title": str(row.work_title or "") or None,
+        "work_title": effective_work_title,
         "publish_record_id": int(row.publish_record_id) if row.publish_record_id is not None else _normalize_optional_int(publish_binding.get("record_id")),
         "publish_record_title": _normalize_text(publish_binding.get("published_title"), max_length=255) or None,
         "publish_record_message_id": _normalize_optional_int(publish_binding.get("published_message_id")),
@@ -3749,8 +3833,6 @@ def _list_follow_candidates_by_work(session: Session, *, task: PanTransferSyncTa
 def _build_follow_candidate_search_queries(task: PanTransferSyncTask, snapshot: dict[str, Any]) -> list[str]:
     return _build_follow_identity_search_queries(
         snapshot.get("core_title"),
-        task.work_title,
-        task.topic_title,
         *(snapshot.get("aliases") or []),
         *(snapshot.get("search_queries") or []),
     )
@@ -4322,59 +4404,6 @@ def _build_follow_identity_rule_snapshot(task: PanTransferSyncTask) -> tuple[dic
 def _build_follow_identity_fallback(task: PanTransferSyncTask) -> dict[str, Any]:
     snapshot, _identity = _build_follow_identity_rule_snapshot(task)
     return snapshot
-
-
-def _build_follow_candidate_search_queries(task: PanTransferSyncTask, snapshot: dict[str, Any]) -> list[str]:
-    return _build_follow_identity_search_queries(
-        snapshot.get("core_title"),
-        task.work_title,
-        task.topic_title,
-        *(snapshot.get("aliases") or []),
-        *(snapshot.get("search_queries") or []),
-    )
-
-
-def _ensure_follow_task_identity_snapshot(
-    session: Session,
-    *,
-    task: PanTransferSyncTask,
-) -> tuple[dict[str, Any], bool]:
-    existing = _get_task_extra_section(task, "identity_snapshot")
-    current_resource_title = _resolve_follow_task_resource_title(task)
-    existing_resource_title = _normalize_text(existing.get("resource_title"), max_length=255)
-    if existing.get("core_title") and existing_resource_title == current_resource_title:
-        return existing, False
-
-    rule_snapshot, rule_identity = _build_follow_identity_rule_snapshot(task)
-    snapshot = dict(rule_snapshot)
-    if rule_identity.needs_ai_review and not rule_identity.should_skip_ai:
-        try:
-            snapshot = _extract_follow_identity_with_ai(session, task=task)
-        except Exception as exc:
-            logger.warning(
-                "follow identity extraction fell back task_id=%s error=%s",
-                int(task.id),
-                _normalize_text(exc, max_length=1000) or type(exc).__name__,
-            )
-            snapshot = dict(rule_snapshot)
-            snapshot["identity_error"] = _normalize_text(exc, max_length=500) or type(exc).__name__
-        else:
-            snapshot["reference_titles"] = rule_snapshot.get("reference_titles")
-            snapshot["reference_message_time"] = rule_snapshot.get("reference_message_time")
-            snapshot["latest_issue"] = rule_identity.issue_no
-            snapshot["parse_confidence"] = float(rule_identity.confidence or 0)
-            snapshot["is_target_work"] = bool(rule_identity.is_target_work)
-            snapshot["needs_ai_review"] = False
-            snapshot["is_complete"] = bool(rule_identity.is_complete)
-            snapshot["rule_identity"] = rule_identity.to_dict()
-    snapshot["resource_title"] = current_resource_title
-    snapshot.setdefault("parsed_identity", rule_identity.to_dict())
-    _set_task_extra_section(task, "identity_snapshot", snapshot)
-    if not _normalize_text(task.work_title, max_length=255):
-        task.topic_title = _normalize_text(snapshot.get("core_title"), max_length=255) or task.topic_title
-    session.add(task)
-    session.flush()
-    return snapshot, True
 
 
 def _judge_follow_candidate_fallback(

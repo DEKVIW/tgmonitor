@@ -112,6 +112,21 @@ META_KEYWORD_PATTERN = re.compile(
     r"(?:更新|更至?|全集|完结|4K|8K|HDR|DV|WEB-?|AMZN|ATVP|HMAX|MAX|杜比|内封|字幕|高码|臻彩|剧情|爱情|悬疑|犯罪|国漫|动画|综艺|多国字幕)",
     re.IGNORECASE,
 )
+GENERIC_IDENTITY_KEYS = frozenset({
+    "集",
+    "期",
+    "全",
+    "全集",
+    "全季",
+    "更",
+    "更新",
+    "第",
+    "季",
+    "episode",
+    "episodes",
+    "ep",
+    "season",
+})
 
 
 def normalize_text(value: Any, *, max_length: int | None = None) -> str:
@@ -134,6 +149,11 @@ def normalize_match_key(value: Any) -> str:
     text = re.sub(r"(?:第\s*[零一二三四五六七八九十百两\d]+\s*季|season\s*\d+|年番\s*\d*)", " ", text, flags=re.IGNORECASE)
     text = re.sub(r"[^\w\u4e00-\u9fff]+", "", text)
     return text[:255]
+
+
+def is_meaningful_identity_key(value: Any) -> bool:
+    key = normalize_match_key(value)
+    return bool(key and key not in GENERIC_IDENTITY_KEYS)
 
 
 def _dedupe_texts(values: Iterable[str], *, max_items: int = 6, max_length: int = 120) -> list[str]:
@@ -438,7 +458,7 @@ def _build_search_queries(
     release_year: int | None,
     season: int | None,
 ) -> list[str]:
-    if not core_title:
+    if not core_title or not is_meaningful_identity_key(core_title):
         return []
     queries: list[str] = [core_title]
     if season is not None:
@@ -447,7 +467,11 @@ def _build_search_queries(
     if release_year is not None:
         queries.append(f"{core_title} {release_year}")
     queries.extend(aliases)
-    return _dedupe_texts(queries, max_items=4, max_length=80)
+    return _dedupe_texts(
+        [item for item in queries if is_meaningful_identity_key(item)],
+        max_items=4,
+        max_length=80,
+    )
 
 
 def parse_resource_identity(
@@ -493,6 +517,7 @@ def parse_resource_identity(
         max_items=6,
         max_length=255,
     )
+    aliases = [alias for alias in aliases if is_meaningful_identity_key(alias)]
 
     release_year = _extract_year(raw_title)
     season = _extract_season(raw_title)
@@ -507,7 +532,11 @@ def parse_resource_identity(
         season=season,
     )
     normalized_keys = _dedupe_texts(
-        [normalize_match_key(item) for item in [core_title, *aliases] if item],
+        [
+            normalize_match_key(item)
+            for item in [core_title, *aliases]
+            if item and is_meaningful_identity_key(item)
+        ],
         max_items=6,
         max_length=255,
     )

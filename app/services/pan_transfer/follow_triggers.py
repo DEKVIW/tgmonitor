@@ -26,6 +26,7 @@ from .follow_tasks import (
     _apply_follow_applied_update_state_to_snapshot,
     _apply_follow_materialized_update_state_to_snapshot,
     _apply_follow_snapshot_progress_to_identity,
+    _collect_follow_reference_texts,
     _get_task_automation_config,
     _get_task_extra_section,
     _normalize_optional_int,
@@ -124,12 +125,10 @@ def _build_tracked_identity(task: PanTransferSyncTask) -> Any:
         _apply_follow_applied_update_state_to_snapshot(task, snapshot),
     )
     resource_title = _normalize_text(snapshot.get("resource_title"), max_length=255) or _resolve_follow_task_resource_title(task)
-    reference_titles = list(snapshot.get("reference_titles") or [])
-    for candidate in (task.work_title, task.topic_title, task.task_name):
-        normalized = _normalize_text(candidate, max_length=255)
-        if normalized and normalized not in reference_titles:
-            reference_titles.append(normalized)
-    identity = parse_resource_identity(resource_title, alternate_titles=reference_titles[:8])
+    identity = parse_resource_identity(
+        resource_title,
+        alternate_titles=_collect_follow_reference_texts(task)[:8],
+    )
     return _apply_follow_snapshot_progress_to_identity(identity, snapshot=snapshot)
 
 

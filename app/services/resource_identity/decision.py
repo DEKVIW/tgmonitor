@@ -3,14 +3,14 @@ from __future__ import annotations
 from datetime import datetime
 
 from .models import FollowCandidateDecision, ParsedResourceIdentity
-from .parser import normalize_match_key
+from .parser import is_meaningful_identity_key, normalize_match_key
 
 
 def _identity_keys(identity: ParsedResourceIdentity | None) -> list[str]:
     if identity is None:
         return []
-    keys = [key for key in identity.normalized_keys if key]
-    if not keys and identity.core_title:
+    keys = [key for key in identity.normalized_keys if is_meaningful_identity_key(key)]
+    if not keys and identity.core_title and is_meaningful_identity_key(identity.core_title):
         keys.append(normalize_match_key(identity.core_title))
     return [key for key in keys if key]
 

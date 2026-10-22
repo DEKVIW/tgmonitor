@@ -152,7 +152,6 @@ def _build_follow_sync_source_metadata_promotion(
         )
         candidate_identity = parse_resource_identity(
             candidate_title,
-            alternate_titles=[tracked_title],
         )
         decision = compare_follow_candidate(
             tracked_identity,

@@ -29,7 +29,7 @@ from app.models.models import (
     ensure_runtime_storage_tables,
 )
 from app.services.link_check.parser import detect_platform_from_url, is_http_url, normalize_candidate_url
-from app.services.resource_identity import parse_resource_identity
+from app.services.resource_identity import normalize_match_key, parse_resource_identity
 
 
 logger = logging.getLogger(__name__)
@@ -168,17 +168,99 @@ def _extract_episode(value: Any) -> int | None:
     return None
 
 
+def _follow_source_origin_title(task: PanTransferSyncTask) -> str:
+    extra_json = dict(task.extra_json or {})
+    source_origin = extra_json.get("source_origin")
+    if not isinstance(source_origin, dict):
+        return ""
+    source_snapshot = source_origin.get("source_message_snapshot")
+    if not isinstance(source_snapshot, dict):
+        return ""
+    return _clean_text(source_snapshot.get("title"), max_length=255)
+
+
+def _follow_state_matches_source_origin(
+    task: PanTransferSyncTask,
+    state: Any,
+) -> bool:
+    if not isinstance(state, dict) or not state:
+        return True
+    origin_title = _follow_source_origin_title(task)
+    state_title = _clean_text(state.get("resource_title") or state.get("core_title"), max_length=255)
+    if not origin_title or not state_title:
+        return True
+
+    origin_identity = parse_resource_identity(origin_title)
+    state_identity = parse_resource_identity(state_title)
+    if not origin_identity.is_target_work or not state_identity.is_target_work:
+        return True
+    origin_keys = {
+        normalize_match_key(value)
+        for value in (origin_identity.core_title, *origin_identity.aliases)
+        if normalize_match_key(value)
+    }
+    state_key = normalize_match_key(state_identity.core_title)
+    return not state_key or state_key in origin_keys
+
+
+def _get_trusted_follow_state(task: PanTransferSyncTask, key: str) -> dict[str, Any]:
+    state = (task.extra_json or {}).get(key)
+    if not isinstance(state, dict):
+        return {}
+    return dict(state) if _follow_state_matches_source_origin(task, state) else {}
+
+
+def _get_trusted_follow_identity_snapshot(task: PanTransferSyncTask) -> dict[str, Any]:
+    snapshot = (task.extra_json or {}).get("identity_snapshot")
+    if not isinstance(snapshot, dict):
+        return {}
+    return dict(snapshot) if _follow_state_matches_source_origin(task, snapshot) else {}
+
+
+def _get_trusted_follow_title(task: PanTransferSyncTask) -> str:
+    origin_title = _follow_source_origin_title(task)
+    candidates = (
+        _get_trusted_follow_state(task, "applied_update_state"),
+        _get_trusted_follow_state(task, "materialized_update_state"),
+        _get_trusted_follow_identity_snapshot(task),
+        (task.extra_json or {}).get("current_share_identity") or {},
+    )
+    for state in candidates:
+        if not isinstance(state, dict) or not _follow_state_matches_source_origin(task, state):
+            continue
+        title = _clean_text(state.get("resource_title") or state.get("core_title"), max_length=255)
+        if title:
+            return title
+    for candidate in (
+        origin_title,
+        task.work_title,
+        (task.extra_json or {}).get("source_message_snapshot", {}).get("title")
+        if isinstance((task.extra_json or {}).get("source_message_snapshot"), dict)
+        else None,
+        task.topic_title,
+        task.task_name,
+    ):
+        title = _clean_text(candidate, max_length=255)
+        if title and _follow_state_matches_source_origin(task, {"resource_title": title}):
+            return title
+    return ""
+
+
 def _build_progress(task: PanTransferSyncTask | None) -> dict[str, Any]:
     if task is None:
         return {"episode": None, "label": "暂无追更进度", "task_state": None, "share_status": None}
 
-    extra_json = dict(task.extra_json or {})
-    applied_update_state = extra_json.get("applied_update_state")
-    episode = _extract_episode(applied_update_state) if isinstance(applied_update_state, dict) else None
-    if episode is None and not applied_update_state:
-        episode = _extract_episode(extra_json)
+    episode = None
+    for state in (
+        _get_trusted_follow_state(task, "applied_update_state"),
+        _get_trusted_follow_state(task, "materialized_update_state"),
+        _get_trusted_follow_identity_snapshot(task),
+    ):
+        episode = _extract_episode(state)
+        if episode is not None:
+            break
     if episode is None:
-        identity = parse_resource_identity(task.last_candidate_title or task.work_title or task.topic_title or "")
+        identity = parse_resource_identity(_get_trusted_follow_title(task))
         episode = identity.episode
     return {
         "episode": episode,
@@ -209,10 +291,16 @@ def _get_content_updated_at(task: PanTransferSyncTask | None) -> datetime | None
     """Return only the actual update time for an active, unfinished follow task."""
     if task is None or str(task.status or "") != "active":
         return None
-    applied_update_state = dict((task.extra_json or {}).get("applied_update_state") or {})
-    if str(applied_update_state.get("is_completed") or "").lower() == "true":
-        return None
-    return _parse_content_updated_at(applied_update_state.get("updated_at"))
+    for state in (
+        _get_trusted_follow_state(task, "applied_update_state"),
+        _get_trusted_follow_state(task, "materialized_update_state"),
+    ):
+        if str(state.get("is_completed") or "").lower() == "true":
+            continue
+        updated_at = _parse_content_updated_at(state.get("updated_at"))
+        if updated_at is not None:
+            return updated_at
+    return None
 
 
 def _public_item_ordering() -> tuple[Any, ...]:
@@ -492,12 +580,21 @@ def _serialize_item(
     progress = _build_progress(task)
     content_updated_at = _get_content_updated_at(task)
     serialized_links: list[dict[str, Any]] = []
-    current_share_url = _canonical_link_url(task.current_share_url) if task and task.current_share_url else ""
+    raw_current_share_url = _canonical_link_url(task.current_share_url) if task and task.current_share_url else ""
+    current_share_identity = (task.extra_json or {}).get("current_share_identity") if task else None
+    current_share_identity_is_trusted = bool(
+        not isinstance(current_share_identity, dict)
+        or _follow_state_matches_source_origin(task, current_share_identity)
+    )
+    blocked_current_share_url = raw_current_share_url if not current_share_identity_is_trusted else ""
+    current_share_url = raw_current_share_url if current_share_identity_is_trusted else ""
     task_is_active = bool(task and str(task.status or "") == "active")
     task_share_status = str(task.current_share_status or "unknown").lower() if task else "unknown"
     task_share_enabled = not task_is_active or task_share_status != "invalid"
     for link in links:
         serialized_link = _serialize_link(link)
+        if public and blocked_current_share_url and serialized_link["url"] == blocked_current_share_url:
+            continue
         if current_share_url and serialized_link["url"] == current_share_url and task and task.status != "deleted":
             serialized_link.update(
                 {
@@ -635,31 +732,38 @@ def list_public_items(
             MediaWallItemCategory.category_id == category.id
         )
     query = query.filter(_public_link_exists_filter())
-    total = int(query.count() or 0)
     safe_page = max(1, int(page or 1))
     safe_size = min(max(1, int(page_size or 24)), 60)
-    items = (
+    candidate_items = (
         query.outerjoin(PanTransferSyncTask, PanTransferSyncTask.id == MediaWallItem.sync_task_id)
-        .order_by(*_public_item_ordering())
-        .offset((safe_page - 1) * safe_size)
-        .limit(safe_size)
         .all()
     )
-    serialization_context = _build_item_serialization_context(session, items, public=True)
+    serialization_context = _build_item_serialization_context(session, candidate_items, public=True)
+    serialized_items = [
+        _serialize_item(
+            session,
+            item,
+            public=True,
+            include_metadata=True,
+            tasks=serialization_context[0],
+            links_by_item=serialization_context[1],
+            categories_by_item=serialization_context[2],
+        )
+        for item in candidate_items
+    ]
+    serialized_items = [item for item in serialized_items if item["links"]]
+
+    def public_sort_key(item: dict[str, Any]) -> tuple[int, float, int, int]:
+        updated_at = _parse_content_updated_at(item.get("last_content_updated_at"))
+        if updated_at is None:
+            return (1, 0.0, int(item["sort_order"]), -int(item["id"]))
+        return (0, -updated_at.timestamp(), int(item["sort_order"]), -int(item["id"]))
+
+    serialized_items.sort(key=public_sort_key)
+    start = (safe_page - 1) * safe_size
     return {
-        "items": [
-            _serialize_item(
-                session,
-                item,
-                public=True,
-                include_metadata=True,
-                tasks=serialization_context[0],
-                links_by_item=serialization_context[1],
-                categories_by_item=serialization_context[2],
-            )
-            for item in items
-        ],
-        "total": total,
+        "items": serialized_items[start : start + safe_size],
+        "total": len(serialized_items),
         "page": safe_page,
         "page_size": safe_size,
     }
