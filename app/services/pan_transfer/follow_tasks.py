@@ -1578,49 +1578,12 @@ def _get_follow_task_source_origin(
     return origin
 
 
-def _resolve_follow_task_source_channel(
-    session: Session,
-    *,
-    task: PanTransferSyncTask,
-) -> tuple[str | None, int | None]:
-    origin = _get_follow_task_source_origin(session, task=task)
-    channel_key = _normalize_text(origin.get("monitor_channel_key"), max_length=255) or None
-    chat_id = _normalize_optional_int(origin.get("monitor_chat_id"))
-    # A shared link can occur in multiple messages and channels. Without a
-    # persisted source identity, guessing from the latest reference can bind a
-    # legacy task to the wrong channel and pollute candidate matching.
-    return channel_key, chat_id
-
-
-def _build_follow_source_channel_filter(
-    message_alias: Any,
-    *,
-    channel_key: str | None,
-    chat_id: int | None,
-) -> Any | None:
-    conditions: list[Any] = []
-    if channel_key:
-        conditions.append(func.lower(message_alias.monitor_channel_key) == channel_key.casefold())
-    if chat_id is not None:
-        conditions.append(message_alias.monitor_chat_id == chat_id)
-    return and_(*conditions) if conditions else None
-
-
 def _build_follow_candidate_latest_ref_subquery(
     session: Session,
     *,
     earliest_message_time: datetime,
-    channel_key: str | None,
-    chat_id: int | None,
-) -> Any | None:
+) -> Any:
     source_message = aliased(Message)
-    channel_filter = _build_follow_source_channel_filter(
-        source_message,
-        channel_key=channel_key,
-        chat_id=chat_id,
-    )
-    if channel_filter is None:
-        return None
     return (
         session.query(
             MessageLinkRef.link_target_id.label("link_target_id"),
@@ -1645,7 +1608,8 @@ def _build_follow_candidate_latest_ref_subquery(
                     source_message.timestamp >= earliest_message_time,
                 ),
             ),
-            channel_filter,
+            source_message.monitor_channel_key.isnot(None),
+            source_message.monitor_message_id.isnot(None),
         )
         .subquery()
     )
@@ -3751,15 +3715,10 @@ def _list_follow_candidates_by_work(
     candidate_policy = _get_follow_candidate_policy(task)
     excluded_ids = _build_task_excluded_target_ids(task)
     earliest_message_time = utcnow() - timedelta(days=int(candidate_policy["lookback_days"]))
-    channel_key, chat_id = _resolve_follow_task_source_channel(session, task=task)
     latest_ref_subquery = _build_follow_candidate_latest_ref_subquery(
         session,
         earliest_message_time=earliest_message_time,
-        channel_key=channel_key,
-        chat_id=chat_id,
     )
-    if latest_ref_subquery is None:
-        return []
     latest_ref = aliased(MessageLinkRef)
     latest_message = aliased(Message)
     like_filters: list[Any] = []
@@ -3833,15 +3792,10 @@ def _list_follow_candidates_by_identity(
     candidate_policy = _get_follow_candidate_policy(task)
     excluded_ids = _build_task_excluded_target_ids(task)
     earliest_message_time = utcnow() - timedelta(days=int(candidate_policy["lookback_days"]))
-    channel_key, chat_id = _resolve_follow_task_source_channel(session, task=task)
     latest_ref_subquery = _build_follow_candidate_latest_ref_subquery(
         session,
         earliest_message_time=earliest_message_time,
-        channel_key=channel_key,
-        chat_id=chat_id,
     )
-    if latest_ref_subquery is None:
-        return []
     latest_ref = aliased(MessageLinkRef)
     latest_message = aliased(Message)
     like_filters: list[Any] = []

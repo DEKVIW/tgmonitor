@@ -30,7 +30,6 @@ from .follow_tasks import (
     _get_task_extra_section,
     _normalize_optional_int,
     _normalize_text,
-    _get_follow_task_source_origin,
     _resolve_follow_task_resource_title,
 )
 
@@ -192,33 +191,6 @@ def _list_message_candidates(
             }
         )
     return candidates
-
-
-def _get_task_source_channel(session: Session, task: PanTransferSyncTask) -> tuple[str | None, int | None]:
-    origin = _get_follow_task_source_origin(session, task=task)
-    return (
-        _normalize_text(origin.get("monitor_channel_key"), max_length=255) or None,
-        _normalize_optional_int(origin.get("monitor_chat_id")),
-    )
-
-
-def _same_source_channel(
-    *,
-    event: PanTransferFollowTriggerEvent,
-    task_channel_key: str | None,
-    task_chat_id: int | None,
-) -> bool:
-    event_channel_key = _normalize_text(event.monitor_channel_key, max_length=255) or None
-    event_chat_id = _normalize_optional_int(event.monitor_chat_id)
-    if not task_channel_key and task_chat_id is None:
-        return False
-    if not event_channel_key and event_chat_id is None:
-        return False
-    if task_channel_key and task_channel_key.casefold() != (event_channel_key or "").casefold():
-        return False
-    if task_chat_id is not None and event_chat_id != task_chat_id:
-        return False
-    return True
 
 
 def _pending_candidate_blocks_trigger(
@@ -393,13 +365,6 @@ def process_next_pan_transfer_follow_trigger_event(session: Session, *, worker_n
         ):
             automation = _get_task_automation_config(task)
             if not bool(automation.get("enabled")):
-                continue
-            task_channel_key, task_chat_id = _get_task_source_channel(session, task)
-            if not _same_source_channel(
-                event=event,
-                task_channel_key=task_channel_key,
-                task_chat_id=task_chat_id,
-            ):
                 continue
             assessment = evaluate_follow_trigger(
                 task,
