@@ -71,6 +71,8 @@ const isProgressRemark = (remark: string | null | undefined, episode: number | n
   return episodeNumbers.some((value) => Number(value) === episode)
 }
 
+const getCardProgressLabel = (label: string) => label.replace(/^已完结(?=\s|·|$)/, '完结')
+
 const MediaWallCard = ({ item, onClick, imageLoading }: { item: MediaWallItem; onClick: () => void; imageLoading: 'eager' | 'lazy' }) => {
   const [imageError, setImageError] = useState(false)
 
@@ -100,7 +102,7 @@ const MediaWallCard = ({ item, onClick, imageLoading }: { item: MediaWallItem; o
       </div>
       <div className="media-wall-card-body">
         <strong title={item.display_title}>{item.display_title}</strong>
-        <span>{item.progress.label}</span>
+        <span>{getCardProgressLabel(item.progress.label)}</span>
       </div>
     </button>
   )

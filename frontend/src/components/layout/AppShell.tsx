@@ -67,6 +67,55 @@ const AppShell = ({ children, publicShell = false }: AppShellProps) => {
   }, [collapsed, isMobile])
 
   useEffect(() => {
+    if (!isMobile || collapsed) {
+      return undefined
+    }
+
+    const scrollTop = window.scrollY
+    const bodyStyle = document.body.style
+    const previousBodyStyles = {
+      position: bodyStyle.position,
+      top: bodyStyle.top,
+      left: bodyStyle.left,
+      right: bodyStyle.right,
+      width: bodyStyle.width,
+      overflow: bodyStyle.overflow,
+    }
+
+    bodyStyle.position = 'fixed'
+    bodyStyle.top = `-${scrollTop}px`
+    bodyStyle.left = '0'
+    bodyStyle.right = '0'
+    bodyStyle.width = '100%'
+    bodyStyle.overflow = 'hidden'
+
+    return () => {
+      bodyStyle.position = previousBodyStyles.position
+      bodyStyle.top = previousBodyStyles.top
+      bodyStyle.left = previousBodyStyles.left
+      bodyStyle.right = previousBodyStyles.right
+      bodyStyle.width = previousBodyStyles.width
+      bodyStyle.overflow = previousBodyStyles.overflow
+      window.scrollTo(0, scrollTop)
+    }
+  }, [collapsed, isMobile])
+
+  useEffect(() => {
+    if (!isMobile || collapsed) {
+      return undefined
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setCollapsed(true)
+      }
+    }
+
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [collapsed, isMobile])
+
+  useEffect(() => {
     if (!token) {
       return undefined
     }

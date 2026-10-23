@@ -180,6 +180,12 @@
   font-size: 12px;
 }
 
+.media-wall-card-body span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .media-wall-skeleton {
   min-height: 230px;
   border-radius: 8px;

@@ -143,8 +143,10 @@
 /* 响应式设计 */
 @media (max-width: 768px) {
   .app-sidebar {
+    background: var(--surface-strong);
+    backdrop-filter: none;
+    box-shadow: 18px 0 40px rgba(15, 23, 42, 0.2);
     transform: translateX(-100%);
-    box-shadow: 18px 0 40px rgba(15, 23, 42, 0.16);
   }
 
   .app-sidebar.expanded {
@@ -155,5 +157,4 @@
   .app-sidebar.collapsed {
     width: 216px;
   }
-
 }
