@@ -98,6 +98,8 @@ class LearningResourceAdminResponse(BaseModel):
     source_channel_key: str = ""
     latest_source_at: datetime | None = None
     updated_at: datetime | None = None
+    created_at: datetime | None = None
+    remote_cleanup_available: bool = False
 
 
 class LearningResourceAdminListResponse(BaseModel):
@@ -125,6 +127,54 @@ class LearningResourceDeleteResponse(BaseModel):
     deleted_import_jobs: int = 0
     deleted_batches: int = 0
     deleted_categories: int = 0
+    remote_delete_requested: bool = False
+    remote_deleted: int = 0
+    remote_already_missing: int = 0
+    remote_recycle_bin_cleared: int = 0
+
+
+class LearningDuplicateItemResponse(BaseModel):
+    id: int
+    display_title: str
+    status: str
+    category: dict[str, Any] | None = None
+    tags: list[str] = Field(default_factory=list)
+    share_url: str | None = None
+    platform: str = ""
+    source_channel_key: str = ""
+    latest_source_at: datetime | None = None
+    updated_at: datetime | None = None
+    created_at: datetime | None = None
+    remote_cleanup_available: bool = False
+    is_latest: bool = False
+
+
+class LearningDuplicateGroupResponse(BaseModel):
+    normalized_title: str
+    title: str
+    keep_resource_id: int
+    items: list[LearningDuplicateItemResponse] = Field(default_factory=list)
+
+
+class LearningDuplicateListResponse(BaseModel):
+    groups: list[LearningDuplicateGroupResponse] = Field(default_factory=list)
+    group_count: int = 0
+    duplicate_count: int = 0
+
+
+class LearningDuplicateCleanupRequest(BaseModel):
+    delete_remote_resources: bool = False
+
+
+class LearningDuplicateCleanupResponse(BaseModel):
+    groups_processed: int = 0
+    deleted_resources: int = 0
+    skipped_resources: int = 0
+    remote_delete_requested: bool = False
+    remote_deleted: int = 0
+    remote_already_missing: int = 0
+    remote_recycle_bin_cleared: int = 0
+    failures: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class LearningDirectoryResponse(BaseModel):

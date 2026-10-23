@@ -32,6 +32,9 @@ from app.schemas.learning_resources import (
     LearningResourceAdminListResponse,
     LearningResourceAdminResponse,
     LearningResourceDeleteResponse,
+    LearningDuplicateCleanupRequest,
+    LearningDuplicateCleanupResponse,
+    LearningDuplicateListResponse,
     LearningResourceListResponse,
     LearningResourceResponse,
     LearningResourceUpdateRequest,
@@ -40,8 +43,10 @@ from app.schemas.learning_resources import (
 from app.services.learning_resources import (
     count_admin_learning_items,
     count_public_learning_resources,
+    cleanup_duplicate_learning_resources,
     delete_all_imported_learning_resources,
     delete_learning_resource,
+    list_duplicate_learning_resources,
     update_learning_resource,
     list_admin_learning_items,
     list_learning_admin_overview,
@@ -69,6 +74,7 @@ from app.services.learning_automation import (
     set_learning_automation_task_enabled,
 )
 from app.services.pan_transfer import list_pan_transfer_directories
+from app.services.pan_transfer.providers import PanTransferProviderError
 from app.services.system_config_service import is_public_dashboard_enabled
 from app.models.models import LearningResourceItem, LearningResourceLink
 
@@ -590,24 +596,71 @@ def update_learning_resource_item(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
+@router.get(
+    "/api/admin/learning-resources/duplicates",
+    response_model=LearningDuplicateListResponse,
+    summary="查找重复学习资料",
+)
+def get_duplicate_learning_resources(
+    db: Session = Depends(get_db),
+    current_user: dict[str, Any] = Depends(get_admin_user),
+) -> LearningDuplicateListResponse:
+    del current_user
+    return LearningDuplicateListResponse(**list_duplicate_learning_resources(db))
+
+
+@router.post(
+    "/api/admin/learning-resources/duplicates/cleanup",
+    response_model=LearningDuplicateCleanupResponse,
+    summary="清理重复学习资料",
+)
+async def cleanup_duplicate_learning_resources_api(
+    payload: LearningDuplicateCleanupRequest,
+    db: Session = Depends(get_db),
+    current_user: dict[str, Any] = Depends(get_admin_user),
+) -> LearningDuplicateCleanupResponse:
+    del current_user
+    try:
+        result = await cleanup_duplicate_learning_resources(
+            db,
+            delete_remote_resources=payload.delete_remote_resources,
+        )
+        db.commit()
+        return LearningDuplicateCleanupResponse(**result)
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+
 @router.delete(
     "/api/admin/learning-resources/items/{resource_id}",
     response_model=LearningResourceDeleteResponse,
     summary="删除单条学习资料",
 )
-def delete_learning_resource_item(
+async def delete_learning_resource_item(
     resource_id: int,
+    delete_remote_resource: bool = Query(default=False),
     db: Session = Depends(get_db),
     current_user: dict[str, Any] = Depends(get_admin_user),
 ) -> LearningResourceDeleteResponse:
     del current_user
     try:
-        result = delete_learning_resource(db, resource_id=int(resource_id))
+        result = await delete_learning_resource(
+            db,
+            resource_id=int(resource_id),
+            delete_remote_resource=delete_remote_resource,
+        )
         db.commit()
         return LearningResourceDeleteResponse(**result)
     except LookupError as exc:
         db.rollback()
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except PanTransferProviderError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
 
 @router.delete(

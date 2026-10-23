@@ -440,6 +440,16 @@
   margin-top: 16px;
 }
 
+.learning-duplicate-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.learning-duplicate-panel strong {
+  color: var(--text-strong);
+  font-variant-numeric: tabular-nums;
+}
+
 .learning-supplement-panel,
 .learning-supplement-run-panel {
   display: grid;

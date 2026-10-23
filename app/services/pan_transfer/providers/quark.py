@@ -1155,13 +1155,37 @@ class QuarkPanTransferProvider(PanTransferProvider):
         async with _QuarkClient(credential_value) as client:
             validation_payload = await client.get_user_info()
 
-            async def purge_recycle_bin_if_requested() -> tuple[bool, dict[str, Any] | None]:
+            async def purge_recycle_bin_if_requested(
+                *,
+                target_id: str | None = None,
+                target_name: str | None = None,
+            ) -> tuple[bool, dict[str, Any] | None]:
                 if not purge_after_delete:
                     return False, None
                 recycle_payload: dict[str, Any] | None = None
                 trash_rows = await client.list_trash_entries()
                 if not trash_rows:
-                    return True, recycle_payload
+                    return False, recycle_payload
+                target_id = str(target_id or "").strip()
+                target_name = str(target_name or "").strip()
+                if not target_id:
+                    return False, recycle_payload
+                matching_rows = [
+                    row
+                    for row in trash_rows
+                    if (
+                        str(row.get("fid") or "").strip() == target_id
+                        or str(row.get("file_id") or "").strip() == target_id
+                        or str(
+                            row.get("record_id")
+                            or row.get("recordId")
+                            or row.get("recordid")
+                            or ""
+                        ).strip() == target_id
+                    )
+                ]
+                if not matching_rows:
+                    return False, recycle_payload
                 record_ids = [
                     str(
                         row.get("record_id")
@@ -1169,7 +1193,7 @@ class QuarkPanTransferProvider(PanTransferProvider):
                         or row.get("recordid")
                         or ""
                     ).strip()
-                    for row in trash_rows
+                    for row in matching_rows
                 ]
                 record_ids = [record_id for record_id in record_ids if record_id]
                 if record_ids:
@@ -1177,14 +1201,27 @@ class QuarkPanTransferProvider(PanTransferProvider):
                 for _ in range(12):
                     await asyncio.sleep(0.8)
                     remaining_trash_rows = await client.list_trash_entries()
-                    if not remaining_trash_rows:
+                    remaining_target_rows = [
+                        row
+                        for row in remaining_trash_rows
+                        if (
+                            str(row.get("fid") or "").strip() == target_id
+                            or str(row.get("file_id") or "").strip() == target_id
+                            or str(
+                                row.get("record_id")
+                                or row.get("recordId")
+                                or row.get("recordid")
+                                or ""
+                            ).strip() == target_id
+                        )
+                    ]
+                    if not remaining_target_rows:
                         return True, recycle_payload
                 raise PanTransferProviderError(
                     "Quark recycle bin was not cleared in time",
                     payload={
-                        "staging_root": parent_path,
-                        "staging_folder_name": staging_folder_name,
-                        "staging_folder_id": staging_folder_id,
+                        "staging_folder_name": target_name,
+                        "staging_folder_id": target_id,
                     },
                 )
 
@@ -1219,18 +1256,16 @@ class QuarkPanTransferProvider(PanTransferProvider):
             if folder is None:
                 folder = client._match_dir(rows, folder_name=staging_folder_name)
             if folder is None:
-                recycle_bin_cleared, recycle_payload = await purge_recycle_bin_if_requested()
                 return PanTransferDeleteResult(
                     deleted=False,
                     already_missing=True,
-                    recycle_bin_cleared=recycle_bin_cleared,
+                    recycle_bin_cleared=False,
                     staging_root=parent_path,
                     staging_folder_name=staging_folder_name,
                     staging_folder_id=folder_id or None,
                     payload={
                         "validation": validation_payload,
                         "missing_folder_name": staging_folder_name,
-                        "recycle_payload": recycle_payload,
                     },
                 )
 
@@ -1265,7 +1300,10 @@ class QuarkPanTransferProvider(PanTransferProvider):
                                     "staging_folder_id": folder_id,
                                 },
                             )
-                        recycle_bin_cleared, recycle_payload = await purge_recycle_bin_if_requested()
+                        recycle_bin_cleared, recycle_payload = await purge_recycle_bin_if_requested(
+                            target_id=folder_id,
+                            target_name=staging_folder_name,
+                        )
                     return PanTransferDeleteResult(
                         deleted=True,
                         already_missing=False,

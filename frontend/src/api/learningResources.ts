@@ -16,6 +16,9 @@ import type {
   LearningDirectory,
   LearningImportConfirmResult,
   LearningImportPreview,
+  LearningDuplicateCleanupResult,
+  LearningDuplicateListResponse,
+  LearningResourceDeleteResult,
   LearningResourceListResponse,
 } from '@/types/learningResources'
 
@@ -211,8 +214,27 @@ export const updateLearningResource = async (
   return response.data
 }
 
-export const deleteLearningResource = async (resourceId: number): Promise<void> => {
-  await apiClient.delete(`/admin/learning-resources/items/${resourceId}`)
+export const deleteLearningResource = async (
+  resourceId: number,
+  deleteRemoteResource = false,
+): Promise<LearningResourceDeleteResult> => {
+  const suffix = deleteRemoteResource ? '?delete_remote_resource=true' : ''
+  const response = await apiClient.delete<LearningResourceDeleteResult>(`/admin/learning-resources/items/${resourceId}${suffix}`)
+  return response.data
+}
+
+export const getDuplicateLearningResources = async (): Promise<LearningDuplicateListResponse> => {
+  const response = await apiClient.get<LearningDuplicateListResponse>('/admin/learning-resources/duplicates')
+  return response.data
+}
+
+export const cleanupDuplicateLearningResources = async (
+  deleteRemoteResources = false,
+): Promise<LearningDuplicateCleanupResult> => {
+  const response = await apiClient.post<LearningDuplicateCleanupResult>('/admin/learning-resources/duplicates/cleanup', {
+    delete_remote_resources: deleteRemoteResources,
+  })
+  return response.data
 }
 
 export const deleteAllImportedLearningResources = async (): Promise<{

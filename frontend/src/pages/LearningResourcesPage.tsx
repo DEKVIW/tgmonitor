@@ -5,8 +5,10 @@ import { useAuthStore } from '@/store/authStore'
 import type { Dayjs } from 'dayjs'
 import {
   deleteAllImportedLearningResources,
+  cleanupDuplicateLearningResources,
   deleteLearningAutomationTask,
   deleteLearningResource,
+  getDuplicateLearningResources,
   getLearningAdminItems,
   getLearningAdminOverview,
   clearLearningAutomationLogs,
@@ -38,12 +40,14 @@ import type {
   LearningAutomationLog,
   LearningAutomationSupplementPreview,
   LearningAutomationSupplementRun,
+  LearningDuplicateListResponse,
   LearningImportPreview,
   LearningResource,
 } from '@/types/learningResources'
 import LearningResourceSheet from '@/components/learning/LearningResourceSheet'
 import AppLogTerminal from '@/components/common/AppLogTerminal'
 import { cleanLearningSheetText } from '@/utils/learningResources'
+import { formatServerDateTime } from '@/utils/dateTime'
 
 import './LearningResourcesPage.css'
 
@@ -105,11 +109,7 @@ const learningLogLevelLabels: Record<string, string> = {
 }
 
 const formatLearningLogTime = (value?: string | null) => {
-  if (!value) return '-'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return value
-  const pad = (part: number) => String(part).padStart(2, '0')
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+  return formatServerDateTime(value, 'YYYY-MM-DD HH:mm:ss', 'Asia/Shanghai')
 }
 
 const formatLearningLogContext = (log: LearningAutomationLog) => {
@@ -184,6 +184,11 @@ const LearningResourcesPage = () => {
   const [importAccountId, setImportAccountId] = useState<number | undefined>(undefined)
   const [importRoot, setImportRoot] = useState('')
   const [importConfirming, setImportConfirming] = useState(false)
+  const [duplicateOpen, setDuplicateOpen] = useState(false)
+  const [duplicateData, setDuplicateData] = useState<LearningDuplicateListResponse | null>(null)
+  const [duplicateLoading, setDuplicateLoading] = useState(false)
+  const [duplicateCleanupLoading, setDuplicateCleanupLoading] = useState(false)
+  const [duplicateDeleteRemote, setDuplicateDeleteRemote] = useState(false)
   const [directoryModalOpen, setDirectoryModalOpen] = useState(false)
   const [directoryTarget, setDirectoryTarget] = useState<'task' | 'import'>('task')
   const [directoryTargetIndex, setDirectoryTargetIndex] = useState<number | null>(null)
@@ -638,17 +643,74 @@ const LearningResourcesPage = () => {
     }
   }
 
-  const handleDeleteRow = async (item: LearningResource) => {
+  const executeDeleteRow = async (item: LearningResource, deleteRemoteResource: boolean) => {
     setMaintenanceBusyId(item.id)
     try {
-      await deleteLearningResource(item.id)
-      message.success('资源及其学习资料记录已删除')
+      const result = await deleteLearningResource(item.id, deleteRemoteResource)
+      const remoteMessage = deleteRemoteResource
+        ? `，已清理 ${result.remote_deleted || 0} 个托管网盘目录`
+        : ''
+      message.success(`资源及其学习资料记录已删除${remoteMessage}`)
       await refreshFirstPage()
     } catch (deleteError: unknown) {
       message.error(getRequestErrorMessage(deleteError, '删除资源失败'))
     } finally {
       setMaintenanceBusyId(null)
     }
+  }
+
+  const handleDeleteRow = (item: LearningResource, deleteRemoteResource: boolean) => {
+    Modal.confirm({
+      title: deleteRemoteResource ? '删除记录并清理网盘？' : '仅删除系统记录？',
+      content: deleteRemoteResource
+        ? `将删除“${item.display_title}”的系统记录，并删除系统自动转存的资源目录。分类目录和资料根目录不会删除；自有直链不会被远端删除。`
+        : `只删除“${item.display_title}”的系统记录，保留网盘远端文件。`,
+      okText: deleteRemoteResource ? '删除并清理' : '删除记录',
+      cancelText: '取消',
+      okButtonProps: { danger: true },
+      onOk: () => executeDeleteRow(item, deleteRemoteResource),
+    })
+  }
+
+  const handleFindDuplicates = async () => {
+    setDuplicateOpen(true)
+    setDuplicateLoading(true)
+    try {
+      setDuplicateData(await getDuplicateLearningResources())
+    } catch (duplicateError: unknown) {
+      message.error(getRequestErrorMessage(duplicateError, '查找重复资料失败'))
+      setDuplicateData(null)
+    } finally {
+      setDuplicateLoading(false)
+    }
+  }
+
+  const handleCleanupDuplicates = () => {
+    if (!duplicateData || duplicateData.duplicate_count <= 0) return
+    Modal.confirm({
+      title: duplicateDeleteRemote ? '保留最新资料并清理旧网盘目录？' : '保留最新资料并删除旧记录？',
+      content: duplicateDeleteRemote
+        ? '系统会按标准化标题分组，保留来源时间最新的一条，删除其他旧记录，并清理这些记录对应的系统托管资源目录。自有直链不会被远端删除。'
+        : '系统会按标准化标题分组，保留来源时间最新的一条，只删除其他旧记录并保留网盘文件。',
+      okText: duplicateDeleteRemote ? '保留最新并清理' : '保留最新并删除',
+      cancelText: '取消',
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        setDuplicateCleanupLoading(true)
+        try {
+          const result = await cleanupDuplicateLearningResources(duplicateDeleteRemote)
+          const failureMessage = result.skipped_resources > 0 ? `，${result.skipped_resources} 条因异常保留` : ''
+          message.success(`已删除 ${result.deleted_resources} 条旧资料${failureMessage}`)
+          setDuplicateOpen(false)
+          setDuplicateData(null)
+          await refreshFirstPage()
+        } catch (cleanupError: unknown) {
+          message.error(getRequestErrorMessage(cleanupError, '清理重复资料失败'))
+        } finally {
+          setDuplicateCleanupLoading(false)
+        }
+      },
+    })
   }
 
   const handleDeleteAllImported = async () => {
@@ -978,6 +1040,7 @@ const LearningResourcesPage = () => {
                 onClick={() => void refreshFirstPage()}
               />
             </Tooltip>
+            {isAdmin ? <Button icon={<FileSearchOutlined />} onClick={() => void handleFindDuplicates()}>查找重复资料</Button> : null}
             {isAdmin ? (
               <Popconfirm
                 title="删除全部手动导入资料？"
@@ -1006,10 +1069,67 @@ const LearningResourcesPage = () => {
           onCancelEditing={cancelEditing}
           onEditDraftChange={(field, value) => setEditDraft((draft) => ({ ...draft, [field]: value }))}
           onSaveEditing={(resource) => void handleSaveEditing(resource)}
-          onDeleteRow={(resource) => void handleDeleteRow(resource)}
+          onDeleteRow={(resource, deleteRemoteResource) => handleDeleteRow(resource, deleteRemoteResource)}
           onRetry={(resource) => void handleRetry(resource)}
         />
       </section>
+
+      {isAdmin ? (
+        <Modal
+          open={duplicateOpen}
+          title="重复学习资料"
+          width={1080}
+          onCancel={() => setDuplicateOpen(false)}
+          footer={(
+            <Space>
+              <Button onClick={() => void handleFindDuplicates()} loading={duplicateLoading}>重新扫描</Button>
+              <Button onClick={() => setDuplicateOpen(false)}>关闭</Button>
+              <Button
+                type="primary"
+                danger
+                loading={duplicateCleanupLoading}
+                disabled={!duplicateData || duplicateData.duplicate_count === 0}
+                onClick={handleCleanupDuplicates}
+              >
+                保留最新并删除旧资料
+              </Button>
+            </Space>
+          )}
+        >
+          <div className="learning-duplicate-panel">
+            <Alert
+              type="info"
+              showIcon
+              message="只按标准化资源标题查找重复项，不扫描描述，也不会把同一资源的多个链接误判为重复。"
+            />
+            <Space wrap>
+              <span>重复标题组：<strong>{duplicateData?.group_count || 0}</strong></span>
+              <span>待删除旧资料：<strong>{duplicateData?.duplicate_count || 0}</strong></span>
+              <Switch
+                checked={duplicateDeleteRemote}
+                onChange={setDuplicateDeleteRemote}
+                checkedChildren="同时清理托管网盘"
+                unCheckedChildren="保留网盘文件"
+              />
+            </Space>
+            <Table
+              rowKey="id"
+              size="small"
+              loading={duplicateLoading}
+              pagination={{ pageSize: 10 }}
+              dataSource={duplicateData?.groups.flatMap((group) => group.items.map((item) => ({ ...item, duplicate_group: group.title }))) || []}
+              locale={{ emptyText: duplicateLoading ? '正在扫描…' : '没有找到重复资料' }}
+              columns={[
+                { title: '重复标题组', dataIndex: 'duplicate_group', width: 240, ellipsis: true },
+                { title: '资源标题', dataIndex: 'display_title', ellipsis: true },
+                { title: '来源时间', dataIndex: 'latest_source_at', width: 160, render: (value: string | null, item: { updated_at?: string | null; created_at?: string | null }) => formatServerDateTime(value || item.updated_at || item.created_at, 'YYYY-MM-DD HH:mm', 'Asia/Shanghai') },
+                { title: '处理', dataIndex: 'is_latest', width: 100, render: (isLatest: boolean) => <Tag color={isLatest ? 'green' : 'default'}>{isLatest ? '保留' : '删除旧项'}</Tag> },
+                { title: '远端', dataIndex: 'remote_cleanup_available', width: 110, render: (available: boolean) => available ? <Tag color="orange">可清理</Tag> : <Tag>无托管目录</Tag> },
+              ]}
+            />
+          </div>
+        </Modal>
+      ) : null}
 
       {isAdmin && overview ? (
         <Modal

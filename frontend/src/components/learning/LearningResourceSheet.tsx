@@ -1,5 +1,5 @@
-import { CheckOutlined, CloseOutlined, DeleteOutlined, EditOutlined, ExportOutlined, ReloadOutlined } from '@ant-design/icons'
-import { Popconfirm } from 'antd'
+import { CheckOutlined, CloseOutlined, DeleteOutlined, EditOutlined, ExportOutlined, MoreOutlined, ReloadOutlined } from '@ant-design/icons'
+import { Dropdown } from 'antd'
 import type { CSSProperties } from 'react'
 import { formatServerDateTime } from '@/utils/dateTime'
 import { cleanLearningSheetText } from '@/utils/learningResources'
@@ -26,7 +26,7 @@ interface LearningResourceSheetProps {
   onCancelEditing: () => void
   onEditDraftChange: (field: keyof LearningResourceEditDraft, value: string) => void
   onSaveEditing: (resource: LearningResource) => void
-  onDeleteRow: (resource: LearningResource) => void
+  onDeleteRow: (resource: LearningResource, deleteRemoteResource: boolean) => void
   onRetry: (resource: LearningResource) => void
 }
 
@@ -224,24 +224,37 @@ const LearningResourceSheet = ({
                           重试
                         </button>
                       ) : null}
-                      <Popconfirm
-                        title="确认删除这条资源？"
-                        description="只删除本项目中的学习资料记录，不删除网盘远端文件。"
-                        okText="删除"
-                        cancelText="取消"
-                        okButtonProps={{ danger: true }}
-                        onConfirm={() => void onDeleteRow(resource)}
+                      <Dropdown
+                        trigger={['click']}
+                        menu={{
+                          items: [
+                            {
+                              key: 'record-only',
+                              label: '仅删除系统记录',
+                              icon: <DeleteOutlined />,
+                            },
+                            ...(resource.remote_cleanup_available
+                              ? [{
+                                key: 'record-and-remote',
+                                label: '删除记录并清理网盘',
+                                icon: <DeleteOutlined />,
+                                danger: true,
+                              }]
+                              : []),
+                          ],
+                          onClick: ({ key }) => onDeleteRow(resource, key === 'record-and-remote'),
+                        }}
                       >
                         <button
                           type="button"
                           className="learning-sheet-action-button learning-sheet-action-button-danger"
                           disabled={maintenanceBusyId === resource.id}
-                          aria-label="删除资源"
+                          aria-label="更多删除操作"
                         >
-                          <DeleteOutlined />
-                          删除
+                          <MoreOutlined />
+                          更多
                         </button>
-                      </Popconfirm>
+                      </Dropdown>
                     </div>
                   )}
                 </div>

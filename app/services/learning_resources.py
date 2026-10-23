@@ -5,7 +5,7 @@ import io
 import re
 import unicodedata
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any, Iterable
 
 from sqlalchemy import desc, or_
@@ -42,6 +42,7 @@ from app.services.pan_transfer.constants import normalize_transfer_platform
 from app.services.link_check.constants import PLATFORM_QUARK
 from app.services.link_check.parser import detect_platform_from_url, is_http_url, normalize_candidate_url
 from app.services.pan_transfer.queue import refresh_pan_transfer_batch_summary
+from app.services.pan_transfer.providers import decrypt_account_credential, get_pan_transfer_provider
 from app.utils.channel_utils import normalize_channel_username
 
 
@@ -1784,6 +1785,15 @@ def _delete_transfer_batch_records(
         )
     if not batch_item_ids and not (delete_batches and batch_ids):
         return {"deleted_batches": 0}
+    affected_batch_ids = {int(batch_id) for batch_id in batch_ids if int(batch_id) > 0}
+    if batch_item_ids:
+        affected_batch_ids.update(
+            int(batch_id)
+            for (batch_id,) in session.query(PanTransferBatchItem.batch_id)
+            .filter(PanTransferBatchItem.id.in_(sorted(batch_item_ids)))
+            .all()
+            if batch_id is not None
+        )
 
     batch_scope_filters = []
     if batch_item_ids:
@@ -1828,7 +1838,142 @@ def _delete_transfer_batch_records(
             .filter(PanTransferBatch.id.in_(sorted(batch_ids)))
             .delete(synchronize_session=False)
         )
+    elif affected_batch_ids:
+        for batch_id in sorted(affected_batch_ids):
+            if session.get(PanTransferBatch, batch_id) is not None:
+                refresh_pan_transfer_batch_summary(session, batch_id=batch_id)
     return {"deleted_batches": deleted_batches}
+
+
+def _learning_remote_target_from_batch_item(item: PanTransferBatchItem) -> dict[str, Any] | None:
+    extra_json = dict(item.extra_json or {})
+    staging_snapshot = dict(extra_json.get("staging_snapshot") or {})
+    if not staging_snapshot:
+        return None
+    staging_root = normalize_relative_path(str(staging_snapshot.get("root") or ""))
+    staging_folder_name = str(staging_snapshot.get("folder_name") or "").strip()
+    if not staging_root or not staging_folder_name or item.target_account_id is None:
+        return None
+    return {
+        "account_id": int(item.target_account_id),
+        "platform": str(item.platform or "").strip(),
+        "staging_root": staging_root,
+        "staging_folder_name": staging_folder_name,
+        "staging_folder_id": str(staging_snapshot.get("folder_id") or "").strip() or None,
+    }
+
+
+def _learning_remote_targets(
+    session: Session,
+    *,
+    resource_ids: Iterable[int],
+) -> list[dict[str, Any]]:
+    normalized_ids = sorted({int(resource_id) for resource_id in resource_ids if int(resource_id) > 0})
+    if not normalized_ids:
+        return []
+    jobs = session.query(LearningResourceTransferJob).filter(
+        LearningResourceTransferJob.resource_id.in_(normalized_ids),
+        LearningResourceTransferJob.batch_item_id.isnot(None),
+    ).all()
+    batch_item_ids = {int(job.batch_item_id) for job in jobs if job.batch_item_id}
+    batch_items = {
+        int(item.id): item
+        for item in session.query(PanTransferBatchItem)
+        .filter(PanTransferBatchItem.id.in_(sorted(batch_item_ids)))
+        .all()
+    } if batch_item_ids else {}
+    targets: list[dict[str, Any]] = []
+    seen: set[tuple[int, int, str, str, str, str | None]] = set()
+    for job in jobs:
+        if job.batch_item_id is None:
+            continue
+        item = batch_items.get(int(job.batch_item_id))
+        if item is None:
+            continue
+        target = _learning_remote_target_from_batch_item(item)
+        if target is None:
+            continue
+        target["resource_id"] = int(job.resource_id)
+        target_key = (
+            int(job.resource_id),
+            int(target["account_id"]),
+            str(target["platform"]),
+            str(target["staging_root"]),
+            str(target["staging_folder_name"]),
+            target["staging_folder_id"],
+        )
+        if target_key in seen:
+            continue
+        seen.add(target_key)
+        targets.append(target)
+    return targets
+
+
+def _learning_remote_resource_ids(session: Session, resource_ids: Iterable[int]) -> set[int]:
+    return {
+        int(target["resource_id"])
+        for target in _learning_remote_targets(session, resource_ids=resource_ids)
+    }
+
+
+def _ensure_learning_resources_not_processing(session: Session, resource_ids: Iterable[int]) -> None:
+    normalized_ids = sorted({int(resource_id) for resource_id in resource_ids if int(resource_id) > 0})
+    if not normalized_ids:
+        return
+    jobs = session.query(LearningResourceTransferJob).filter(
+        LearningResourceTransferJob.resource_id.in_(normalized_ids),
+    ).all()
+    active_item_ids = {int(job.batch_item_id) for job in jobs if job.batch_item_id}
+    if not active_item_ids:
+        return
+    active_items = session.query(PanTransferBatchItem).filter(
+        PanTransferBatchItem.id.in_(sorted(active_item_ids)),
+    ).all()
+    active_titles = [
+        str(item.short_title or "未命名资源")
+        for item in active_items
+        if str(item.transfer_status or "") in {"queued", "transferring"} or str(item.locked_by or "").strip()
+    ]
+    if active_titles:
+        raise ValueError(f"资源正在转存，暂时不能删除：{'、'.join(active_titles[:3])}")
+
+
+async def _delete_learning_remote_targets(
+    session: Session,
+    *,
+    resource_ids: Iterable[int],
+) -> dict[str, int]:
+    targets = _learning_remote_targets(session, resource_ids=resource_ids)
+    result = {
+        "remote_deleted": 0,
+        "remote_already_missing": 0,
+        "remote_recycle_bin_cleared": 0,
+    }
+    if not targets:
+        return result
+
+    for target in targets:
+        account = session.get(PanTransferAccount, int(target["account_id"]))
+        if account is None:
+            raise LookupError(f"转存账号不存在：{target['account_id']}")
+        if not bool(account.is_enabled):
+            raise ValueError(f"转存账号已停用，无法删除远端资源：{account.account_name}")
+        provider = get_pan_transfer_provider(str(target["platform"] or account.platform or ""))
+        delete_result = await provider.delete_staging_target(
+            credential_value=decrypt_account_credential(account),
+            account_name=str(account.account_name or ""),
+            staging_root=str(target["staging_root"]),
+            staging_folder_name=str(target["staging_folder_name"]),
+            staging_folder_id=target["staging_folder_id"],
+            purge_after_delete=provider.platform == PLATFORM_QUARK,
+        )
+        if delete_result.deleted:
+            result["remote_deleted"] += 1
+        if delete_result.already_missing:
+            result["remote_already_missing"] += 1
+        if delete_result.recycle_bin_cleared:
+            result["remote_recycle_bin_cleared"] += 1
+    return result
 
 
 def _delete_learning_resources_by_ids(session: Session, resource_ids: Iterable[int]) -> dict[str, int]:
@@ -1846,16 +1991,16 @@ def _delete_learning_resources_by_ids(session: Session, resource_ids: Iterable[i
     ).all()
     batch_item_ids = {int(job.batch_item_id) for job in jobs if job.batch_item_id}
     batch_ids = {int(job.batch_id) for job in jobs if job.batch_id}
+    deleted_jobs = int(
+        session.query(LearningResourceTransferJob)
+        .filter(LearningResourceTransferJob.resource_id.in_(sorted(normalized_ids)))
+        .delete(synchronize_session=False)
+    )
     batch_stats = _delete_transfer_batch_records(
         session,
         batch_item_ids=batch_item_ids,
         batch_ids=set(),
         delete_batches=False,
-    )
-    deleted_jobs = int(
-        session.query(LearningResourceTransferJob)
-        .filter(LearningResourceTransferJob.resource_id.in_(sorted(normalized_ids)))
-        .delete(synchronize_session=False)
     )
     deleted_links = int(
         session.query(LearningResourceLink)
@@ -1912,12 +2057,176 @@ def _delete_learning_resources_by_ids(session: Session, resource_ids: Iterable[i
     }
 
 
-def delete_learning_resource(session: Session, *, resource_id: int) -> dict[str, int]:
+async def delete_learning_resource(
+    session: Session,
+    *,
+    resource_id: int,
+    delete_remote_resource: bool = False,
+) -> dict[str, int | bool]:
     ensure_runtime_storage_tables()
     resource = session.get(LearningResourceItem, int(resource_id))
     if resource is None:
         raise LookupError("学习资料不存在")
-    result = _delete_learning_resources_by_ids(session, [int(resource.id)])
+    resource_ids = [int(resource.id)]
+    _ensure_learning_resources_not_processing(session, resource_ids)
+    result: dict[str, int | bool] = {
+        "remote_delete_requested": bool(delete_remote_resource),
+        "remote_deleted": 0,
+        "remote_already_missing": 0,
+        "remote_recycle_bin_cleared": 0,
+    }
+    if delete_remote_resource:
+        result.update(await _delete_learning_remote_targets(session, resource_ids=resource_ids))
+    result.update(_delete_learning_resources_by_ids(session, resource_ids))
+    session.flush()
+    return result
+
+
+def _learning_resource_sort_key(item: LearningResourceItem) -> tuple[datetime, datetime, int]:
+    effective_at = item.latest_source_at or item.updated_at or item.created_at or datetime.min
+    return (
+        effective_at,
+        item.updated_at or datetime.min,
+        int(item.id),
+    )
+
+
+def _duplicate_learning_resource_rows(session: Session) -> dict[str, list[dict[str, Any]]]:
+    rows = (
+        session.query(LearningResourceItem, LearningResourceCategory, LearningResourceLink, Message)
+        .join(
+            LearningResourceCategory,
+            LearningResourceCategory.id == LearningResourceItem.primary_category_id,
+            isouter=True,
+        )
+        .join(
+            LearningResourceLink,
+            (LearningResourceLink.resource_id == LearningResourceItem.id)
+            & LearningResourceLink.is_primary.is_(True),
+            isouter=True,
+        )
+        .join(Message, Message.id == LearningResourceItem.latest_source_message_id, isouter=True)
+        .all()
+    )
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for item, category, link, message in rows:
+        title = str(item.display_title or "").strip()
+        if not title or title == "未命名资源":
+            continue
+        normalized_title = str(item.normalized_title or normalize_learning_title(title)).strip()
+        if not normalized_title:
+            continue
+        group = groups.setdefault(normalized_title, [])
+        if any(int(existing["item"].id) == int(item.id) for existing in group):
+            continue
+        group.append({
+            "item": item,
+            "category": category,
+            "link": link,
+            "message": message,
+        })
+    return {key: values for key, values in groups.items() if len(values) > 1}
+
+
+def _serialize_learning_duplicate_item(
+    session: Session,
+    row: dict[str, Any],
+    *,
+    is_latest: bool,
+    remote_cleanup_available: bool,
+) -> dict[str, Any]:
+    item = row["item"]
+    serialized = _serialize_admin_learning_item(
+        session,
+        item,
+        row["category"],
+        row["link"],
+        row["message"],
+    )
+    serialized.update({
+        "created_at": item.created_at,
+        "is_latest": is_latest,
+        "remote_cleanup_available": remote_cleanup_available,
+    })
+    return serialized
+
+
+def list_duplicate_learning_resources(session: Session) -> dict[str, Any]:
+    ensure_runtime_storage_tables()
+    duplicate_rows = _duplicate_learning_resource_rows(session)
+    duplicate_resource_ids = [
+        int(row["item"].id)
+        for rows in duplicate_rows.values()
+        for row in rows
+    ]
+    remote_resource_ids = _learning_remote_resource_ids(session, duplicate_resource_ids)
+    groups: list[dict[str, Any]] = []
+    duplicate_count = 0
+    for normalized_title, rows in sorted(duplicate_rows.items()):
+        ordered_rows = sorted(rows, key=lambda row: _learning_resource_sort_key(row["item"]), reverse=True)
+        keep_item = ordered_rows[0]["item"]
+        items = [
+            _serialize_learning_duplicate_item(
+                session,
+                row,
+                is_latest=int(row["item"].id) == int(keep_item.id),
+                remote_cleanup_available=int(row["item"].id) in remote_resource_ids,
+            )
+            for row in ordered_rows
+        ]
+        groups.append({
+            "normalized_title": normalized_title,
+            "title": str(keep_item.display_title or "未命名资源"),
+            "keep_resource_id": int(keep_item.id),
+            "items": items,
+        })
+        duplicate_count += max(0, len(items) - 1)
+    return {
+        "groups": groups,
+        "group_count": len(groups),
+        "duplicate_count": duplicate_count,
+    }
+
+
+async def cleanup_duplicate_learning_resources(
+    session: Session,
+    *,
+    delete_remote_resources: bool = False,
+) -> dict[str, Any]:
+    ensure_runtime_storage_tables()
+    duplicate_groups = _duplicate_learning_resource_rows(session)
+    stale_ids: list[int] = []
+    group_keep_ids: list[tuple[str, int]] = []
+    for normalized_title, rows in duplicate_groups.items():
+        ordered_rows = sorted(rows, key=lambda row: _learning_resource_sort_key(row["item"]), reverse=True)
+        keep_id = int(ordered_rows[0]["item"].id)
+        group_keep_ids.append((normalized_title, keep_id))
+        stale_ids.extend(int(row["item"].id) for row in ordered_rows[1:])
+
+    _ensure_learning_resources_not_processing(session, stale_ids)
+    result: dict[str, Any] = {
+        "groups_processed": len(group_keep_ids),
+        "deleted_resources": 0,
+        "skipped_resources": 0,
+        "remote_delete_requested": bool(delete_remote_resources),
+        "remote_deleted": 0,
+        "remote_already_missing": 0,
+        "remote_recycle_bin_cleared": 0,
+        "failures": [],
+    }
+    for resource_id in stale_ids:
+        try:
+            with session.begin_nested():
+                if delete_remote_resources:
+                    remote_result = await _delete_learning_remote_targets(session, resource_ids=[resource_id])
+                    for key in ("remote_deleted", "remote_already_missing", "remote_recycle_bin_cleared"):
+                        result[key] += int(remote_result.get(key, 0))
+                local_result = _delete_learning_resources_by_ids(session, [resource_id])
+                result["deleted_resources"] += int(local_result["deleted_resources"])
+                session.flush()
+        except Exception as exc:
+            result["skipped_resources"] += 1
+            result["failures"].append({"resource_id": resource_id, "error": str(exc)})
     session.flush()
     return result
 
@@ -2136,11 +2445,16 @@ def count_public_learning_resources(
 
 
 def _serialize_admin_learning_item(
+    session: Session,
     item: LearningResourceItem,
     category: LearningResourceCategory | None,
     link: LearningResourceLink | None,
     message: Message | None,
+    *,
+    remote_cleanup_available: bool | None = None,
 ) -> dict[str, Any]:
+    if remote_cleanup_available is None:
+        remote_cleanup_available = int(item.id) in _learning_remote_resource_ids(session, [int(item.id)])
     return {
         "id": int(item.id),
         "display_title": _clean_import_text(item.display_title, max_length=255),
@@ -2156,6 +2470,8 @@ def _serialize_admin_learning_item(
         "source_channel_key": str(item.source_channel_key or ""),
         "latest_source_at": item.latest_source_at if item.latest_source_message_id is not None else None,
         "updated_at": item.updated_at,
+        "created_at": item.created_at,
+        "remote_cleanup_available": remote_cleanup_available,
     }
 
 
@@ -2193,7 +2509,18 @@ def list_admin_learning_items(
     if category_slug and category_slug not in {"all", ""}:
         query = query.filter(LearningResourceCategory.slug == str(category_slug).strip())
     rows = query.offset(max(0, int(offset or 0))).limit(max(1, min(int(limit or 50), 100))).all()
-    return [_serialize_admin_learning_item(item, category, link, message) for item, category, link, message in rows]
+    remote_resource_ids = _learning_remote_resource_ids(session, [int(item.id) for item, _, _, _ in rows])
+    return [
+        _serialize_admin_learning_item(
+            session,
+            item,
+            category,
+            link,
+            message,
+            remote_cleanup_available=int(item.id) in remote_resource_ids,
+        )
+        for item, category, link, message in rows
+    ]
 
 
 def count_admin_learning_items(
@@ -2234,7 +2561,11 @@ def get_admin_learning_item(session: Session, resource_id: int) -> dict[str, Any
     )
     if row is None:
         return None
-    return _serialize_admin_learning_item(*row)
+    return _serialize_admin_learning_item(
+        session,
+        *row,
+        remote_cleanup_available=int(row[0].id) in _learning_remote_resource_ids(session, [int(row[0].id)]),
+    )
 
 
 def list_learning_admin_overview(session: Session) -> dict[str, Any]:
@@ -2367,6 +2698,7 @@ __all__ = [
     "classify_learning_message",
     "count_admin_learning_items",
     "count_public_learning_resources",
+    "cleanup_duplicate_learning_resources",
     "confirm_learning_import",
     "delete_all_imported_learning_resources",
     "delete_learning_resource",
@@ -2375,6 +2707,7 @@ __all__ = [
     "get_learning_channel_config",
     "is_learning_channel_enabled",
     "list_admin_learning_items",
+    "list_duplicate_learning_resources",
     "list_learning_admin_overview",
     "list_public_learning_categories",
     "list_public_learning_resources",

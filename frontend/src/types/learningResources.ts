@@ -18,6 +18,7 @@ export interface LearningResource {
   latest_source_at?: string | null
   updated_at?: string | null
   created_at?: string | null
+  remote_cleanup_available?: boolean
 }
 
 export interface LearningResourceListResponse {
@@ -78,6 +79,8 @@ export interface LearningAdminItem {
   source_channel_key: string
   latest_source_at?: string | null
   updated_at?: string | null
+  created_at?: string | null
+  remote_cleanup_available?: boolean
 }
 
 export interface LearningAdminListResponse {
@@ -85,6 +88,48 @@ export interface LearningAdminListResponse {
   total: number
   page: number
   page_size: number
+}
+
+export interface LearningResourceDeleteResult {
+  deleted_resources: number
+  deleted_links: number
+  deleted_transfer_jobs: number
+  deleted_import_jobs?: number
+  deleted_batches: number
+  deleted_categories: number
+  remote_delete_requested?: boolean
+  remote_deleted?: number
+  remote_already_missing?: number
+  remote_recycle_bin_cleared?: number
+}
+
+export interface LearningDuplicateItem extends LearningAdminItem {
+  created_at?: string | null
+  is_latest: boolean
+}
+
+export interface LearningDuplicateGroup {
+  normalized_title: string
+  title: string
+  keep_resource_id: number
+  items: LearningDuplicateItem[]
+}
+
+export interface LearningDuplicateListResponse {
+  groups: LearningDuplicateGroup[]
+  group_count: number
+  duplicate_count: number
+}
+
+export interface LearningDuplicateCleanupResult {
+  groups_processed: number
+  deleted_resources: number
+  skipped_resources: number
+  remote_delete_requested: boolean
+  remote_deleted: number
+  remote_already_missing: number
+  remote_recycle_bin_cleared: number
+  failures: Array<{ resource_id?: number; error: string }>
 }
 
 export interface LearningDirectory {
