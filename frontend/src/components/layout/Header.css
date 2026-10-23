@@ -282,6 +282,7 @@
 @media (orientation: landscape) and (max-height: 500px) {
   .app-header {
     height: 52px;
+    min-height: 52px;
     padding-inline: 12px;
     gap: 8px;
   }
