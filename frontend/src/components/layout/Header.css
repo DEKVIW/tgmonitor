@@ -221,10 +221,6 @@
 }
 
 @media (max-width: 768px) {
-  :root {
-    --header-height: 58px;
-  }
-
   .app-header {
     height: 58px;
     min-height: 58px;
@@ -284,10 +280,6 @@
 }
 
 @media (orientation: landscape) and (max-height: 500px) {
-  :root {
-    --header-height: 52px;
-  }
-
   .app-header {
     height: 52px;
     padding-inline: 12px;
