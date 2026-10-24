@@ -916,7 +916,9 @@ const ResourceOpsTransferCenterMain = () => {
           if (!lastPreviewPayload || selectedPreviewKeys.length <= 0) return
           setBatchCreating(true)
           try {
-            const { page: _page, page_size: _pageSize, ...selectionPayload } = lastPreviewPayload
+            const { page, page_size, ...selectionPayload } = lastPreviewPayload
+            void page
+            void page_size
             const payload: PanTransferBatchCreateRequest = {
               ...selectionPayload,
               selected_link_target_ids: selectedPreviewKeys.map((item) => Number(item)),

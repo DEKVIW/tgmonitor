@@ -115,6 +115,7 @@ class PanTransferProvider:
         share_passcode: str | None,
         share_expire_days: int | None,
         title_hint: str | None,
+        existing_share_task_id: str | None = None,
     ) -> PanTransferShareResult:
         raise NotImplementedError
 

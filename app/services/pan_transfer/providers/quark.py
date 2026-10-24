@@ -581,6 +581,7 @@ class _QuarkClient:
         return payload
 
     async def wait_task(self, *, task_id: str, retries: int = 50) -> dict[str, Any]:
+        last_payload: dict[str, Any] = {}
         for retry_index in range(retries):
             payload = await self._request_json(
                 "GET",
@@ -595,13 +596,17 @@ class _QuarkClient:
                     "__t": str(int(random.random() * 10000000000000)),
                 },
             )
+            last_payload = dict(payload or {})
             data = payload.get("data") or {}
             status = int(data.get("status") or 0)
             share_id = str(data.get("share_id") or "").strip()
             if str(payload.get("message") or "").lower() == "ok" and (status == 2 or bool(share_id)):
                 return payload
             await asyncio.sleep(0.8)
-        raise PanTransferProviderError("Quark task did not finish in time")
+        raise PanTransferProviderError(
+            "Quark task did not finish in time",
+            payload={"task_id": task_id, "last_payload": last_payload},
+        )
 
     async def create_share_task(
         self,
@@ -654,7 +659,10 @@ class _QuarkClient:
             if share_id:
                 return share_id
             await asyncio.sleep(0.8)
-        raise PanTransferProviderError("Quark share task did not return share_id", payload=last_payload)
+        raise PanTransferProviderError(
+            "Quark share task did not return share_id",
+            payload={"task_id": task_id, "last_payload": last_payload},
+        )
 
     async def publish_share(self, *, share_id: str) -> tuple[str, str | None]:
         payload = await self._request_json(
@@ -1067,6 +1075,7 @@ class QuarkPanTransferProvider(PanTransferProvider):
         share_passcode: str | None,
         share_expire_days: int | None,
         title_hint: str | None,
+        existing_share_task_id: str | None = None,
     ) -> PanTransferShareResult:
         del account_name
         async with _QuarkClient(credential_value) as client:
@@ -1106,18 +1115,32 @@ class QuarkPanTransferProvider(PanTransferProvider):
                 else:
                     share_target_fallback_reason = fallback_reason or "unique content root was not found"
 
-            share_task_id = await client.create_share_task(
-                fid=share_target_id,
-                title=share_target_name,
-                share_mode=share_mode,
-                share_passcode=share_passcode,
-                share_expire_days=share_expire_days,
-            )
-            task_payload = await client.wait_task(task_id=share_task_id, retries=60)
-            share_id = str((task_payload.get("data") or {}).get("share_id") or "").strip()
-            if not share_id:
-                share_id = await client.get_share_id(task_id=share_task_id, retries=12)
-            new_share_url, resolved_passcode = await client.publish_share(share_id=share_id)
+            share_task_id = str(existing_share_task_id or "").strip()
+            if not share_task_id:
+                share_task_id = await client.create_share_task(
+                    fid=share_target_id,
+                    title=share_target_name,
+                    share_mode=share_mode,
+                    share_passcode=share_passcode,
+                    share_expire_days=share_expire_days,
+                )
+            try:
+                task_payload = await client.wait_task(task_id=share_task_id, retries=180)
+                share_id = str((task_payload.get("data") or {}).get("share_id") or "").strip()
+                if not share_id:
+                    share_id = await client.get_share_id(task_id=share_task_id, retries=12)
+                new_share_url, resolved_passcode = await client.publish_share(share_id=share_id)
+            except PanTransferProviderError as exc:
+                raise PanTransferProviderError(
+                    str(exc),
+                    retryable=exc.retryable,
+                    payload={"task_id": share_task_id, **dict(exc.payload or {})},
+                ) from exc
+            except Exception as exc:
+                raise PanTransferProviderError(
+                    "Quark share task publishing failed",
+                    payload={"task_id": share_task_id},
+                ) from exc
             return PanTransferShareResult(
                 new_share_url=new_share_url,
                 share_title=share_target_name,

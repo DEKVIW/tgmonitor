@@ -25,6 +25,7 @@ from .constants import (
     PAN_TRANSFER_ITEM_STATUS_PROCESSING,
     PAN_TRANSFER_ITEM_STATUS_QUEUED,
     PAN_TRANSFER_ITEM_STATUS_RETRY_WAIT,
+    PAN_TRANSFER_VALIDATION_STATUS_INVALID,
 )
 
 
@@ -281,13 +282,37 @@ def reset_pan_transfer_batch_items(
     normalized_item_ids = dedupe_ints(item_ids or [])
     if normalized_item_ids:
         query = query.filter(PanTransferBatchItem.id.in_(normalized_item_ids))
-    rows = query.filter(PanTransferBatchItem.transfer_status == PAN_TRANSFER_ITEM_STATUS_FAILED).all()
+    rows = query.filter(
+        PanTransferBatchItem.transfer_status.in_(
+            [PAN_TRANSFER_ITEM_STATUS_FAILED, PAN_TRANSFER_ITEM_STATUS_RETRY_WAIT]
+        )
+    ).all()
     if not rows:
         return 0
     now = utcnow()
     for row in rows:
         row.transfer_status = PAN_TRANSFER_ITEM_STATUS_QUEUED
-        if str(row.new_share_url or "").strip():
+        validation_was_invalid = str(row.validation_status or "").strip().lower() == PAN_TRANSFER_VALIDATION_STATUS_INVALID
+        if validation_was_invalid:
+            extra_json = dict(row.extra_json or {})
+            invalid_share_snapshot = dict(extra_json.get("invalid_share_snapshot") or {})
+            previous_share_url = (
+                str(row.new_share_url or "").strip()
+                or str(invalid_share_snapshot.get("share_url") or "").strip()
+                or None
+            )
+            extra_json["share_retry_reset"] = {
+                "reset_at": now.isoformat() + "Z",
+                "reason": "previous_share_validation_invalid",
+                "previous_share_url": previous_share_url,
+            }
+            row.extra_json = extra_json
+            row.new_share_url = None
+            row.new_link_target_id = None
+            row.share_status = "pending"
+            row.validation_status = "pending"
+            row.replacement_status = "pending"
+        elif str(row.new_share_url or "").strip():
             row.share_status = "shared"
             row.validation_status = "pending"
             row.replacement_status = "pending"

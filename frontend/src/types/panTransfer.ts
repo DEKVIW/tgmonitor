@@ -260,6 +260,7 @@ export interface PanTransferFollowTaskSyncSelectionGroup {
 export interface PanTransferFollowTaskSyncRequest {
   source_kind?: 'current' | 'candidate' | string
   sync_mode?: 'standard' | 'incremental' | 'replace_all' | string
+  external_source_url?: string | null
   selected_entries?: PanTransferFollowTaskSyncSelectionEntry[]
   selection_groups?: PanTransferFollowTaskSyncSelectionGroup[]
   selection_parent_entry_id?: string | null

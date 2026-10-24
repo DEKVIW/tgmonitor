@@ -5,7 +5,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.models.models import LearningResourceTransferJob, LinkTarget, PanTransferAccount, PanTransferBatch, PanTransferBatchItem, ensure_runtime_storage_tables
+from app.models.models import LearningResourceTransferJob, LinkTarget, PanTransferAccount, PanTransferBatch, PanTransferBatchItem, PanTransferSyncTask, ensure_runtime_storage_tables
 from app.services.learning_automation import is_learning_target_enabled
 
 from .common import (
@@ -25,7 +25,6 @@ from .constants import (
     PAN_TRANSFER_SHARE_STATUS_FAILED,
     PAN_TRANSFER_SHARE_STATUS_PENDING,
     PAN_TRANSFER_SHARE_STATUS_SHARED,
-    PAN_TRANSFER_VALIDATION_STATUS_ERROR,
     PAN_TRANSFER_VALIDATION_STATUS_INVALID,
     PAN_TRANSFER_VALIDATION_STATUS_PENDING,
 )
@@ -137,16 +136,68 @@ def _get_share_request(item: PanTransferBatchItem) -> dict[str, Any] | None:
     if not isinstance(share_request, dict):
         return None
     share_mode = str(share_request.get("share_mode") or "").strip().lower()
-    if not share_mode:
+    if not share_mode and not str(share_request.get("existing_share_task_id") or "").strip():
         return None
     normalized = dict(share_request)
+    normalized["share_mode"] = share_mode or "public"
     normalized["share_target_mode"] = _normalize_share_target_mode(normalized.get("share_target_mode"))
     return normalized
 
 
-def _get_follow_sync_context(item: PanTransferBatchItem) -> dict[str, Any] | None:
-    raw_value = dict(item.extra_json or {}).get("follow_sync_context")
-    return dict(raw_value) if isinstance(raw_value, dict) else None
+def _get_follow_sync_context(session: Session, item: PanTransferBatchItem) -> dict[str, Any] | None:
+    extra_json = dict(item.extra_json or {})
+    raw_value = extra_json.get("follow_sync_context")
+    item_context = dict(raw_value) if isinstance(raw_value, dict) else {}
+    batch = session.get(PanTransferBatch, int(item.batch_id))
+    if batch is None or str(batch.batch_type or "") != "follow_sync":
+        return item_context or None
+
+    request_json = dict(batch.request_json or {})
+    merged_context = {
+        key: value
+        for key, value in request_json.items()
+        if key in {
+            "follow_task_id",
+            "trigger_mode",
+            "source_kind",
+            "sync_mode",
+            "source_link_target_id",
+            "source_url",
+            "external_source_url",
+            "source_link_status",
+            "existing_share_url",
+            "share_target_mode",
+            "reuse_existing_share_if_valid",
+            "clear_existing_contents",
+            "publish_record_id",
+            "update_publish_record",
+            "preferred_target_relative_path",
+            "target_relative_path_source",
+            "selection_target_relative_paths",
+            "source_metadata_promotion",
+        }
+    }
+    merged_context.update(item_context)
+    follow_task_id = merged_context.get("follow_task_id")
+    try:
+        normalized_follow_task_id = int(follow_task_id) if follow_task_id is not None else None
+    except (TypeError, ValueError):
+        normalized_follow_task_id = None
+    if normalized_follow_task_id is not None:
+        task = session.get(PanTransferSyncTask, normalized_follow_task_id)
+        if task is not None:
+            merged_context.setdefault("existing_share_url", str(task.current_share_url or "").strip() or None)
+            merged_context.setdefault("share_target_mode", str(task.share_target_mode or "resource_dir"))
+            merged_context.setdefault("reuse_existing_share_if_valid", True)
+    return merged_context or None
+
+
+def _should_reuse_existing_share(*, follow_sync_context: dict[str, Any] | None, existing_share_url: str | None) -> bool:
+    return bool(follow_sync_context is not None and str(existing_share_url or "").strip())
+
+
+def _share_validation_is_explicitly_invalid(validation_result: dict[str, Any] | None) -> bool:
+    return str((validation_result or {}).get("status") or "").strip().lower() == PAN_TRANSFER_VALIDATION_STATUS_INVALID
 
 
 def _get_source_selection(item: PanTransferBatchItem) -> dict[str, Any] | None:
@@ -314,7 +365,7 @@ async def _process_pan_transfer_item_async(
 
     staging_snapshot = _get_staging_snapshot(item)
     share_request = _get_share_request(item)
-    follow_sync_context = _get_follow_sync_context(item)
+    follow_sync_context = _get_follow_sync_context(session, item)
     source_selection = _get_source_selection(item)
     selection_groups = list((source_selection or {}).get("selection_groups") or [])
     selection_parent_path = selection_groups[0].get("parent_path") if len(selection_groups) == 1 else None
@@ -356,11 +407,23 @@ async def _process_pan_transfer_item_async(
             )
             try:
                 _commit_before_external_call(session)
+                transfer_source_url = str(
+                    (follow_sync_context or {}).get("external_source_url")
+                    or (follow_sync_context or {}).get("source_url")
+                    or source_target.original_url
+                    or item.original_url
+                    or ""
+                ).strip()
+                transfer_source_passcode = (
+                    None
+                    if (follow_sync_context or {}).get("external_source_url")
+                    else str(source_target.passcode or "").strip() or None
+                )
                 transfer_result = await provider.transfer_to_staging(
                     credential_value=credential_value,
                     account_name=str(account.account_name or ""),
-                    original_url=str(source_target.original_url or item.original_url or ""),
-                    original_passcode=str(source_target.passcode or "").strip() or None,
+                    original_url=transfer_source_url,
+                    original_passcode=transfer_source_passcode,
                     staging_root=staging_root,
                     staging_folder_name=staging_folder_name,
                     title_hint=str(share_request.get("title_hint") or "") or None,
@@ -494,12 +557,9 @@ async def _process_pan_transfer_item_async(
         requested_existing_share_url = (
             str((follow_sync_context or {}).get("existing_share_url") or "").strip() or None
         )
-        can_reuse_existing_share = (
-            follow_sync_context is not None
-            and bool(follow_sync_context.get("reuse_existing_share_if_valid"))
-            and bool(requested_existing_share_url)
-            and _normalize_share_target_mode((follow_sync_context or {}).get("share_target_mode")) == SHARE_TARGET_RESOURCE_DIR
-            and _normalize_share_target_mode(requested_share_target_mode) == SHARE_TARGET_RESOURCE_DIR
+        can_reuse_existing_share = _should_reuse_existing_share(
+            follow_sync_context=follow_sync_context,
+            existing_share_url=requested_existing_share_url,
         )
 
         reused_existing_share = False
@@ -523,15 +583,23 @@ async def _process_pan_transfer_item_async(
                     item=item,
                     stage="share",
                     level="warning",
-                    message=f"Existing share URL check failed, will create a new share instead: {_describe_exception(exc)}",
+                    message=f"Existing share URL check failed; no new share will be created until validation succeeds: {_describe_exception(exc)}",
                     payload={
                         "existing_share_url": requested_existing_share_url,
                         **_extract_error_payload(exc),
                     },
                 )
+                raise PanTransferProviderError(
+                    "Existing share URL validation failed; retrying without creating a new share",
+                    retryable=True,
+                    payload={
+                        "existing_share_url": requested_existing_share_url,
+                        **_extract_error_payload(exc),
+                    },
+                ) from exc
             else:
                 reuse_validation_status = str(reuse_validation_result.get("status") or "").strip().lower()
-                if reuse_validation_status not in {PAN_TRANSFER_VALIDATION_STATUS_INVALID, PAN_TRANSFER_VALIDATION_STATUS_ERROR}:
+                if not _share_validation_is_explicitly_invalid(reuse_validation_result):
                     item.new_share_url = requested_existing_share_url
                     item.share_status = PAN_TRANSFER_SHARE_STATUS_SHARED
                     _mark_account_validation(
@@ -616,6 +684,7 @@ async def _process_pan_transfer_item_async(
                     share_passcode=str((share_request or {}).get("share_passcode") or "").strip() or None,
                     share_expire_days=(share_request or {}).get("share_expire_days"),
                     title_hint=str((share_request or {}).get("title_hint") or "") or None,
+                    existing_share_task_id=str((share_request or {}).get("existing_share_task_id") or "").strip() or None,
                 )
             except Exception as exc:
                 error_detail = _describe_exception(exc)
@@ -629,6 +698,18 @@ async def _process_pan_transfer_item_async(
                     "share_target_mode": requested_share_target_mode,
                     **_extract_error_payload(exc),
                 }
+                share_task_id = str(error_payload.get("task_id") or "").strip()
+                if share_task_id:
+                    _merge_extra_json(
+                        item,
+                        {
+                            "share_task_id": share_task_id,
+                            "share_request": {
+                                **dict(share_request or {}),
+                                "existing_share_task_id": share_task_id,
+                            },
+                        },
+                    )
                 _mark_account_validation(
                     account,
                     ok=False,
@@ -732,6 +813,34 @@ async def _process_pan_transfer_item_async(
         payload=dict(validation_result),
     )
     if item.validation_status == PAN_TRANSFER_VALIDATION_STATUS_INVALID:
+        invalid_share_url = str(item.new_share_url or "").strip() or None
+        _merge_extra_json(
+            item,
+            {
+                "invalid_share_snapshot": {
+                    "share_url": invalid_share_url,
+                    "validation_result": dict(validation_result),
+                    "recorded_at": _iso_utc_now(),
+                }
+            },
+        )
+        item.new_share_url = None
+        item.new_link_target_id = None
+        item.share_status = PAN_TRANSFER_SHARE_STATUS_PENDING
+        item.replacement_status = PAN_TRANSFER_REPLACEMENT_STATUS_PENDING
+        session.add(item)
+        session.flush()
+        append_pan_transfer_execution_log(
+            session,
+            item=item,
+            stage="share",
+            level="warning",
+            message="Share URL is explicitly invalid; preserved staging directory for share-only retry",
+            payload={
+                "invalid_share_url": invalid_share_url,
+                "validation_result": dict(validation_result),
+            },
+        )
         raise PanTransferProviderError(
             validation_result.get("detail_message") or "new share URL validation failed",
             retryable=True,

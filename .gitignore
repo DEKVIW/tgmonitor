@@ -65,3 +65,4 @@ telegram_sessions/
 !/tests/test_backup_retention_default.py
 !/tests/test_resource_identity_parser.py
 !/tests/test_media_wall_service.py
+!/tests/test_pan_transfer_follow_share_reuse.py

@@ -1248,6 +1248,7 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
   const [manualPreviewLoading, setManualPreviewLoading] = useState(false)
   const [manualSyncSourceKind, setManualSyncSourceKind] = useState<FollowSyncSourceKind>('current')
   const [manualSyncMode, setManualSyncMode] = useState<FollowSyncMode>('incremental')
+  const [manualExternalSourceUrl, setManualExternalSourceUrl] = useState('')
   const [manualReplaceConfirmed, setManualReplaceConfirmed] = useState(false)
   const [manualPreviewData, setManualPreviewData] = useState<PanTransferLinkDirectoryPreviewResponse | null>(null)
   const [manualPreviewTrail, setManualPreviewTrail] = useState<DirectoryTrailItem[]>([])
@@ -1307,6 +1308,7 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
 
   const resetManualSyncState = () => {
     setManualSyncMode('incremental')
+    setManualExternalSourceUrl('')
     setManualReplaceConfirmed(false)
     setManualPreviewData(null)
     setManualPreviewTrail([])
@@ -1320,9 +1322,11 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
   const loadManualPreview = async (
     task: PanTransferFollowTaskItem,
     sourceKind: FollowSyncSourceKind,
-    trail: DirectoryTrailItem[]
+    trail: DirectoryTrailItem[],
+    sourceUrlOverride?: string
   ) => {
-    const sourceUrl = resolveSourceUrl(task, sourceKind)
+    const externalSourceUrl = String(sourceUrlOverride || manualExternalSourceUrl || '').trim()
+    const sourceUrl = externalSourceUrl || resolveSourceUrl(task, sourceKind)
     if (!sourceUrl) {
       message.error(sourceKind === 'candidate' ? '当前没有可用的候选原链' : '当前原链为空')
       return
@@ -1337,9 +1341,18 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
         entry_name: current?.label || undefined,
       })
       setManualPreviewData(response)
-      setManualPreviewTrail(buildDirectoryTrail(DIRECTORY_ROOT_LABELS[sourceKind], trail, response))
-      setManualSelectedRowKeys([])
-      setManualSelectedEntries([])
+      setManualPreviewTrail(buildDirectoryTrail(externalSourceUrl ? '外部分享' : DIRECTORY_ROOT_LABELS[sourceKind], trail, response))
+      if (externalSourceUrl && !response.truncated) {
+        setManualSelectedEntries(response.items)
+        setManualSelectedRowKeys(
+          response.items.map(
+            (entry) => entry.entry_id || entry.path || `${entry.name}-${entry.is_dir ? 'dir' : 'file'}`
+          )
+        )
+      } else {
+        setManualSelectedRowKeys([])
+        setManualSelectedEntries([])
+      }
     } catch (error) {
       message.error(getErrorMessage(error, '加载源目录失败'))
     } finally {
@@ -1782,6 +1795,7 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
       const response = await createPanTransferFollowSyncBatch(detailTask.id, {
         source_kind: manualSyncSourceKind,
         sync_mode: manualSyncMode,
+        external_source_url: manualSyncMode === 'replace_all' ? manualExternalSourceUrl.trim() || null : null,
         selected_entries: manualSelectionEntries,
         selection_parent_entry_id: manualPreviewData?.current_entry_id || null,
         selection_parent_path: manualPreviewData?.current_path || null,
@@ -2747,17 +2761,7 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
                       onChange={(value) => setAutomationDraftMode(value as FollowAutomationMode)}
                     />
                     <div className="resource-ops-follow-chip-row">
-                      <Checkbox
-                        checked={activeSettingsDraft.automation.reuse_existing_share_if_valid}
-                        onChange={(event) =>
-                          updateAutomationDraft((automation) => ({
-                            ...automation,
-                            reuse_existing_share_if_valid: event.target.checked,
-                          }))
-                        }
-                      >
-                        优先复用有效分享
-                      </Checkbox>
+                      <Tag color="success">有效分享始终复用，明确失效后才创建新分享</Tag>
                       <Checkbox
                         checked={activeSettingsDraft.automation.update_publish_record}
                         onChange={(event) =>
@@ -2779,7 +2783,7 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
                       <Tag color={normalizeFollowAutomationMode(activeSettingsDraft.automation.mode) === 'auto_replace_all' ? 'warning' : 'processing'}>
                         {getFollowAutomationModeText(activeSettingsDraft.automation.mode)}
                       </Tag>
-                      <Tag color={activeSettingsDraft.automation.reuse_existing_share_if_valid ? 'success' : 'default'}>优先复用有效分享</Tag>
+                      <Tag color="success">有效分享始终复用</Tag>
                     </div>
                     <small className="resource-ops-follow-automation-summary">{automationDraftSummary}</small>
                   </div>
@@ -3353,6 +3357,7 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
                     onChange={(value) => {
                       const nextSourceKind = value as FollowSyncSourceKind
                       setManualSyncSourceKind(nextSourceKind)
+                      setManualExternalSourceUrl('')
                       if (!detailTask) return
                       void loadManualPreview(detailTask, nextSourceKind, [
                         { key: 'root', label: DIRECTORY_ROOT_LABELS[nextSourceKind] },
@@ -3372,8 +3377,16 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
                       { label: '全量替换', value: 'replace_all' },
                     ]}
                     onChange={(value) => {
-                      setManualSyncMode(value as FollowSyncMode)
+                      const nextMode = value as FollowSyncMode
+                      setManualSyncMode(nextMode)
                       setManualReplaceConfirmed(false)
+                      if (nextMode !== 'replace_all') {
+                        setManualExternalSourceUrl('')
+                        setManualPreviewData(null)
+                        setManualPreviewTrail([])
+                        setManualSelectedRowKeys([])
+                        setManualSelectedEntries([])
+                      }
                     }}
                   />
                   <small>
@@ -3390,7 +3403,15 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
 
                 <div className="resource-ops-follow-sync-meta">
                   <span>当前来源链接</span>
-                  {resolveSourceUrl(detailTask, manualSyncSourceKind) ? (
+                  {manualSyncMode === 'replace_all' && manualExternalSourceUrl.trim() ? (
+                    <Link
+                      href={manualExternalSourceUrl.trim()}
+                      target="_blank"
+                      title={manualExternalSourceUrl.trim()}
+                    >
+                      {manualExternalSourceUrl.trim()}
+                    </Link>
+                  ) : resolveSourceUrl(detailTask, manualSyncSourceKind) ? (
                     <Link
                       href={resolveSourceUrl(detailTask, manualSyncSourceKind)}
                       target="_blank"
@@ -3405,11 +3426,42 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
 
                 {manualSyncMode === 'replace_all' ? (
                   <>
+                    <div className="resource-ops-follow-sync-meta">
+                      <span>外部分享链接（可选）</span>
+                      <Input
+                        value={manualExternalSourceUrl}
+                        placeholder="填写管理员整理的夸克或百度分享链接"
+                        onChange={(event) => {
+                          setManualExternalSourceUrl(event.target.value)
+                          setManualPreviewData(null)
+                          setManualPreviewTrail([])
+                          setManualSelectedRowKeys([])
+                          setManualSelectedEntries([])
+                        }}
+                      />
+                      <Button
+                        size="small"
+                        loading={manualPreviewLoading}
+                        disabled={!manualExternalSourceUrl.trim()}
+                        onClick={() => {
+                          if (!detailTask) return
+                          void loadManualPreview(
+                            detailTask,
+                            manualSyncSourceKind,
+                            [{ key: 'root', label: '外部分享' }],
+                            manualExternalSourceUrl.trim()
+                          )
+                        }}
+                      >
+                        读取外部目录并全选
+                      </Button>
+                      <small>仅用于本次全量替换，不会修改追更原链、候选记录或作品信息。</small>
+                    </div>
                     <Alert
                       type="error"
                       showIcon
                       message="全量替换是高风险操作"
-                      description="会先清空当前资源目录，再导入所选内容。如果导入失败，现有目录可能暂时为空，所以这个模式不会默认启用。"
+                      description="会先清空当前资源目录，再导入当前来源或外部分享目录的全部已读取内容。如果导入失败，现有目录可能暂时为空，所以这个模式不会默认启用。"
                     />
                     <Checkbox
                       checked={manualReplaceConfirmed}

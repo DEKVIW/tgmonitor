@@ -14,6 +14,7 @@ from app.models.models import (
     ensure_runtime_storage_tables,
 )
 from app.services.resource_identity import compare_follow_candidate, parse_resource_identity
+from app.services.link_check.parser import detect_platform_from_url, normalize_candidate_url
 
 from .common import FOLLOW_TARGET_PATH_INFERENCE_VERSION, normalize_relative_path, utcnow
 from .constants import (
@@ -26,6 +27,7 @@ from .constants import (
     PAN_TRANSFER_SHARE_STATUS_PENDING,
     PAN_TRANSFER_VALIDATION_STATUS_PENDING,
 )
+from .directory_preview import preview_pan_transfer_link_directory
 from .follow_tasks import (
     PAN_TRANSFER_SYNC_STATE_CANDIDATE_FOUND,
     PAN_TRANSFER_SYNC_STATE_ERROR,
@@ -72,6 +74,19 @@ def _normalize_sync_mode(value: Any) -> str:
     return normalized
 
 
+def _normalize_external_source_url(value: Any, *, expected_platform: str) -> str | None:
+    normalized = _normalize_text(value, max_length=2048) or None
+    if not normalized:
+        return None
+    normalized = normalize_candidate_url(normalized)
+    if not normalized:
+        raise ValueError("external_source_url is invalid")
+    detected_platform = str(detect_platform_from_url(normalized) or "").strip().lower()
+    if detected_platform != str(expected_platform or "").strip().lower():
+        raise ValueError("external_source_url platform does not match the follow task")
+    return normalized
+
+
 def _normalize_target_relative_path(value: Any) -> str | None:
     parts = [part for part in str(value or "").replace("\\", "/").split("/") if part.strip()]
     if not parts:
@@ -86,6 +101,11 @@ def _build_follow_sync_source_metadata_promotion(
     sync_mode: str,
     source_message_snapshot: dict[str, Any] | None,
 ) -> dict[str, Any]:
+    if source_kind == "external":
+        return {
+            "promote": False,
+            "reason": "external_manual_replace",
+        }
     if source_kind != "candidate":
         return {
             "promote": True,
@@ -661,6 +681,8 @@ def _resolve_follow_sync_source_link_status(
     item: PanTransferBatchItem | None = None,
     extra_json: dict[str, Any] | None = None,
 ) -> str | None:
+    if source_kind == "external":
+        return "external"
     if source_kind == "current":
         task_status = _normalize_follow_sync_link_status(getattr(task, "source_link_status", None))
         item_status = _normalize_follow_sync_link_status(getattr(item, "latest_link_health", None))
@@ -706,11 +728,20 @@ async def create_pan_transfer_follow_sync_batch(
 
     source_kind = _normalize_source_kind((payload or {}).get("source_kind"))
     sync_mode = _normalize_sync_mode((payload or {}).get("sync_mode"))
+    external_source_url = _normalize_external_source_url(
+        (payload or {}).get("external_source_url"),
+        expected_platform=str(task.platform or ""),
+    )
+    if external_source_url and sync_mode != "replace_all":
+        raise ValueError("external_source_url is only supported for replace_all mode")
     source_target, source_url, source_message_snapshot = _resolve_follow_sync_source(
         session,
         task=task,
-        source_kind=source_kind,
+        source_kind="current" if external_source_url else source_kind,
     )
+    if external_source_url:
+        source_kind = "external"
+        source_url = external_source_url
     if not source_url:
         raise ValueError("source_url cannot be empty")
     source_metadata_promotion = _build_follow_sync_source_metadata_promotion(
@@ -730,6 +761,26 @@ async def create_pan_transfer_follow_sync_batch(
 
     path_strategy, resolved_paths = _resolve_follow_sync_paths(task)
     source_selection = _normalize_source_selection(payload, sync_mode=sync_mode)
+    if external_source_url:
+        external_preview = await preview_pan_transfer_link_directory(url=external_source_url)
+        if bool(external_preview.get("truncated")):
+            raise ValueError("external share directory is too large to replace safely")
+        external_items = [
+            dict(item)
+            for item in list(external_preview.get("items") or [])
+            if isinstance(item, dict) and str(item.get("name") or "").strip()
+        ]
+        if not external_items:
+            raise ValueError("external share directory is empty")
+        source_selection = _normalize_source_selection(
+            {
+                "selection_parent_entry_id": external_preview.get("current_entry_id"),
+                "selection_parent_path": external_preview.get("current_path"),
+                "selection_parent_name": external_preview.get("current_name"),
+                "selected_entries": external_items,
+            },
+            sync_mode=sync_mode,
+        )
     preferred_target_relative_path: str | None = None
     target_relative_path_source = "not_applicable"
     if sync_mode == "incremental":
@@ -773,7 +824,7 @@ async def create_pan_transfer_follow_sync_batch(
     confirm_full_replace = bool((payload or {}).get("confirm_full_replace"))
     if sync_mode == "replace_all" and not confirm_full_replace:
         raise ValueError("confirm_full_replace is required for replace_all mode")
-    reuse_existing_share_if_valid = bool((payload or {}).get("reuse_existing_share_if_valid", True))
+    reuse_existing_share_if_valid = True
     update_publish_record = bool((payload or {}).get("update_publish_record", True))
     trigger_mode = _normalize_text((payload or {}).get("trigger_mode"), max_length=32).lower() or "manual"
     clear_existing_contents = sync_mode == "replace_all"
@@ -793,7 +844,10 @@ async def create_pan_transfer_follow_sync_batch(
             "sync_mode": sync_mode,
             "source_link_target_id": int(source_target.id),
             "source_url": source_url,
+            "external_source_url": external_source_url,
             "source_link_status": source_link_status,
+            "existing_share_url": _normalize_text(task.current_share_url) or None,
+            "share_target_mode": _normalize_text(task.share_target_mode, max_length=32) or "resource_dir",
             "reuse_existing_share_if_valid": reuse_existing_share_if_valid,
             "update_publish_record": update_publish_record,
             "confirm_full_replace": confirm_full_replace,
@@ -855,6 +909,7 @@ async def create_pan_transfer_follow_sync_batch(
                 "sync_mode": sync_mode,
                 "source_link_target_id": int(source_target.id),
                 "source_url": source_url,
+                "external_source_url": external_source_url,
                 "source_link_status": source_link_status,
                 "clear_existing_contents": clear_existing_contents,
                 "reuse_existing_share_if_valid": reuse_existing_share_if_valid,

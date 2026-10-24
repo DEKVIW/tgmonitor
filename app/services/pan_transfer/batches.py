@@ -70,7 +70,10 @@ def _serialize_batch(batch: PanTransferBatch) -> dict[str, Any]:
         "finished_at": batch.finished_at,
         "created_at": batch.created_at,
         "updated_at": batch.updated_at,
-        "can_retry": bool(int(batch.failed_item_count or 0) > 0),
+        "can_retry": bool(
+            int(batch.failed_item_count or 0) > 0
+            or int(summary.get("retry_wait_count") or 0) > 0
+        ),
         "can_delete": active_count <= 0,
         "can_cancel": status == PAN_TRANSFER_BATCH_STATUS_RUNNING and active_count > 0,
     }
