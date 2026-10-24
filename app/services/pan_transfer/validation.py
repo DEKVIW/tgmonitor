@@ -5,6 +5,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.models.models import PanTransferAccount
+from app.services.link_check.cache import LinkCheckResultCache
 from app.services.link_check.validator import LinkValidator
 
 from .common import utcnow
@@ -86,7 +87,10 @@ async def validate_pan_transfer_account(
 
 
 async def validate_share_url(url: str) -> dict[str, Any]:
-    validator = LinkValidator()
+    validator = LinkValidator(
+        result_cache=LinkCheckResultCache(max_entries=1000),
+        use_history=False,
+    )
     result = await validator.check_single_link(url)
     is_valid = result.get("is_valid")
     if is_valid is True:

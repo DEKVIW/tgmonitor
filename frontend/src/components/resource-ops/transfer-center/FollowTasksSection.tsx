@@ -3237,7 +3237,7 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
                         一键全量替换
                       </Button>
                       <Button danger ghost onClick={() => void runRuleAction(detailTask, 'replace_all')}>
-                        手动点选替换
+                        外部链接 / 手动替换
                       </Button>
                     </div>
                   </div>

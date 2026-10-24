@@ -645,6 +645,14 @@ async def _process_pan_transfer_item_async(
                     )
                     reused_existing_share = True
                 else:
+                    _merge_extra_json(
+                        item,
+                        {
+                            "existing_share_validation": dict(reuse_validation_result or {}),
+                        },
+                    )
+                    session.add(item)
+                    session.flush()
                     append_pan_transfer_execution_log(
                         session,
                         item=item,
@@ -708,6 +716,13 @@ async def _process_pan_transfer_item_async(
                                 **dict(share_request or {}),
                                 "existing_share_task_id": share_task_id,
                             },
+                        },
+                    )
+                if isinstance(exc, PanTransferProviderError) and not exc.retryable:
+                    _merge_extra_json(
+                        item,
+                        {
+                            "share_task_terminal_failure": True,
                         },
                     )
                 _mark_account_validation(

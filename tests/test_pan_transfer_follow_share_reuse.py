@@ -18,6 +18,7 @@ from app.services.pan_transfer.constants import (
 )
 from app.services.pan_transfer.queue import reset_pan_transfer_batch_items
 from app.services.pan_transfer.worker import _share_validation_is_explicitly_invalid, _should_reuse_existing_share
+from app.services.pan_transfer.providers.quark import _QuarkClient
 
 
 def test_follow_sync_reuses_existing_share_for_both_target_modes() -> None:
@@ -116,3 +117,22 @@ def test_retry_reset_keeps_staging_snapshot_for_share_only_recovery() -> None:
     assert row.validation_status == PAN_TRANSFER_VALIDATION_STATUS_PENDING
     assert row.extra_json["staging_snapshot"]["folder_id"] == "folder-314-12"
     assert row.extra_json["share_retry_reset"]["previous_share_url"] == "https://pan.quark.cn/s/invalid-new-share"
+
+
+@pytest.mark.asyncio
+async def test_quark_task_terminal_failure_does_not_wait_until_timeout() -> None:
+    client = _QuarkClient("cookie")
+
+    async def request_json(*args, **kwargs):
+        return {
+            "code": 41026,
+            "message": "没有可分享的文件",
+            "data": {"status": 3, "task_id": "task-1"},
+        }
+
+    client._request_json = request_json
+    with pytest.raises(Exception) as exc_info:
+        await client.wait_task(task_id="task-1", retries=180)
+
+    assert "没有可分享的文件" in str(exc_info.value)
+    assert getattr(exc_info.value, "retryable", True) is False

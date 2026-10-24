@@ -292,9 +292,10 @@ def reset_pan_transfer_batch_items(
     now = utcnow()
     for row in rows:
         row.transfer_status = PAN_TRANSFER_ITEM_STATUS_QUEUED
+        extra_json = dict(row.extra_json or {})
+        terminal_share_failure = bool(extra_json.get("share_task_terminal_failure"))
         validation_was_invalid = str(row.validation_status or "").strip().lower() == PAN_TRANSFER_VALIDATION_STATUS_INVALID
         if validation_was_invalid:
-            extra_json = dict(row.extra_json or {})
             invalid_share_snapshot = dict(extra_json.get("invalid_share_snapshot") or {})
             previous_share_url = (
                 str(row.new_share_url or "").strip()
@@ -321,6 +322,14 @@ def reset_pan_transfer_batch_items(
             row.validation_status = "pending"
             row.replacement_status = "pending"
             row.new_link_target_id = None
+        if terminal_share_failure:
+            share_request = dict(extra_json.get("share_request") or {})
+            share_request.pop("existing_share_task_id", None)
+            extra_json.pop("share_task_id", None)
+            extra_json.pop("share_task_terminal_failure", None)
+            if share_request:
+                extra_json["share_request"] = share_request
+            row.extra_json = extra_json
         row.next_retry_at = None
         row.locked_by = None
         row.locked_at = None

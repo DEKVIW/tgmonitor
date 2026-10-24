@@ -602,6 +602,18 @@ class _QuarkClient:
             share_id = str(data.get("share_id") or "").strip()
             if str(payload.get("message") or "").lower() == "ok" and (status == 2 or bool(share_id)):
                 return payload
+            if status in {3, 4} or int(payload.get("code") or 0) not in {0, 200}:
+                error_message = str(payload.get("message") or "").strip() or f"Quark task failed: status={status}"
+                raise PanTransferProviderError(
+                    error_message,
+                    retryable=False,
+                    payload={
+                        "task_id": task_id,
+                        "last_payload": dict(payload or {}),
+                        "quark_task_status": status,
+                        "quark_task_code": payload.get("code"),
+                    },
+                )
             await asyncio.sleep(0.8)
         raise PanTransferProviderError(
             "Quark task did not finish in time",

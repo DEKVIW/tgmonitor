@@ -1372,6 +1372,15 @@ def handle_follow_sync_item_failure(
         and transfer_materialized
     )
     waiting_for_retry = _normalize_text(item.transfer_status, max_length=32).lower() == PAN_TRANSFER_ITEM_STATUS_RETRY_WAIT
+    existing_share_validation = dict(dict(item.extra_json or {}).get("existing_share_validation") or {})
+    existing_share_url = normalize_candidate_url(context.get("existing_share_url"))
+    current_share_url = normalize_candidate_url(task.current_share_url)
+    existing_share_is_invalid = bool(
+        existing_share_url
+        and current_share_url
+        and existing_share_url == current_share_url
+        and _normalize_text(existing_share_validation.get("status"), max_length=32).lower() == "invalid"
+    )
     materialized_update_state: dict[str, Any] = {}
     if should_record_materialized:
         materialized_update_state = _update_follow_task_materialized_update_state_from_sync(
@@ -1393,12 +1402,24 @@ def handle_follow_sync_item_failure(
             selected_count=materialized_selected_count,
         )
 
+    if existing_share_is_invalid:
+        task.current_share_status = "invalid"
     if waiting_for_retry:
         task.task_state = PAN_TRANSFER_SYNC_STATE_SYNC_QUEUED
         task.last_change_type = "sync_retry_wait"
     else:
-        task.task_state = PAN_TRANSFER_SYNC_STATE_SHARE_INVALID if should_record_materialized else PAN_TRANSFER_SYNC_STATE_ERROR
-        task.last_change_type = "materialized_share_failed" if should_record_materialized else (PAN_TRANSFER_SYNC_STATE_CANDIDATE_FOUND if source_kind == "candidate" else "sync_failed")
+        task.task_state = (
+            PAN_TRANSFER_SYNC_STATE_SHARE_INVALID
+            if should_record_materialized or existing_share_is_invalid
+            else PAN_TRANSFER_SYNC_STATE_ERROR
+        )
+        task.last_change_type = (
+            "materialized_share_failed"
+            if should_record_materialized
+            else "share_invalid"
+            if existing_share_is_invalid
+            else (PAN_TRANSFER_SYNC_STATE_CANDIDATE_FOUND if source_kind == "candidate" else "sync_failed")
+        )
     task.last_error_message = _normalize_text(error_message, max_length=2000) or task.last_error_message
     task.updated_by = _normalize_text(worker_name, max_length=128) or task.updated_by
     extra_json = dict(task.extra_json or {})
@@ -1407,6 +1428,7 @@ def handle_follow_sync_item_failure(
     last_sync["error_message"] = _normalize_text(error_message, max_length=2000) or None
     last_sync["source_metadata_promotion"] = source_metadata_promotion
     last_sync["materialized_update_state"] = materialized_update_state or None
+    last_sync["existing_share_invalid"] = existing_share_is_invalid
     extra_json["last_sync"] = last_sync
     task.extra_json = extra_json
     if trigger_mode == "automation":
