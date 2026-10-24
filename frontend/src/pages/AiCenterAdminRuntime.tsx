@@ -135,14 +135,8 @@ const ROUTE_TEST_PRESETS: Record<string, AiCenterRouteTestRequest> = {
   },
   pan_transfer_follow_identity_extract: {
     system_prompt:
-      '请从输入内容中抽取追更身份，输出 JSON：core_title, aliases, year, season, current_episode, confidence, reason。',
+      '请从输入内容中抽取追更身份，输出 JSON：core_title, release_year, season, latest_episode, content_type, reason。',
     user_prompt: '任务标题：月鳞绮纪(2026) 60FPS S01E01-E22；来源标题：月鳞绮纪‎ (2026) DV HQ 60帧 /集 更22集',
-  },
-  pan_transfer_follow_candidate_judge: {
-    system_prompt:
-      '请判断候选消息是否与当前任务属于同一作品且更新更晚，输出 JSON：same_work, is_newer, candidate_episode, current_episode, confidence, reason。',
-    user_prompt:
-      '当前任务：月鳞绮纪(2026) 60FPS S01E01-E22\n候选消息：月鳞绮纪‎ (2026) DV HQ 60帧 5.1 /集 更23集',
   },
 }
 

@@ -2376,8 +2376,9 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
         {detailTask ? (
           <div className="resource-ops-transfer-drawer-stack">
             <Descriptions
+              className="resource-ops-follow-overview"
               size="small"
-              column={2}
+              column={1}
               bordered
               items={[
                 {

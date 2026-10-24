@@ -109,7 +109,11 @@ TRAILING_PERSON_LIST_PATTERN = re.compile(
 CJK_PATTERN = re.compile(r"[\u4e00-\u9fff]")
 ASCII_PATTERN = re.compile(r"[A-Za-z]")
 META_KEYWORD_PATTERN = re.compile(
-    r"(?:更新|更至?|全集|完结|4K|8K|HDR|DV|WEB-?|AMZN|ATVP|HMAX|MAX|杜比|内封|字幕|高码|臻彩|剧情|爱情|悬疑|犯罪|国漫|动画|综艺|多国字幕)",
+    r"(?:更新|更至?|全集|完结|4K|8K|HDR|DV|WEB-?|AMZN|ATVP|HMAX|MAX|杜比|内封|字幕|高码|臻彩|类型|主演|演员|导演|剧情|爱情|悬疑|犯罪|古装|战争|历史|真人秀|综艺|动画|国漫|国创|奇幻|冒险|多国字幕)",
+    re.IGNORECASE,
+)
+GENERIC_METADATA_KEY_PATTERN = re.compile(
+    r"^(?:更新|更至?|全集|完结|4k|8k|hdr|dv|web|amzn|atvp|hmax|max|杜比|内封|字幕|高码|臻彩|类型|主演|演员|导演|剧情|爱情|悬疑|犯罪|古装|战争|历史|真人秀|综艺|动画|国漫|国创|奇幻|冒险|多国字幕)+$",
     re.IGNORECASE,
 )
 GENERIC_IDENTITY_KEYS = frozenset({
@@ -153,7 +157,11 @@ def normalize_match_key(value: Any) -> str:
 
 def is_meaningful_identity_key(value: Any) -> bool:
     key = normalize_match_key(value)
-    return bool(key and key not in GENERIC_IDENTITY_KEYS)
+    return bool(
+        key
+        and key not in GENERIC_IDENTITY_KEYS
+        and not GENERIC_METADATA_KEY_PATTERN.fullmatch(key)
+    )
 
 
 def _dedupe_texts(values: Iterable[str], *, max_items: int = 6, max_length: int = 120) -> list[str]:

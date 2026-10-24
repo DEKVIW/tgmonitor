@@ -42,6 +42,69 @@ class ResourceIdentityParserTests(unittest.TestCase):
         self.assertFalse(decision.is_same_work)
         self.assertFalse(decision.should_promote)
 
+    def test_metadata_words_do_not_become_shared_aliases(self) -> None:
+        tracked = parse_resource_identity(
+            "尚公主 (2026) 更至04集 60帧 类型: 剧情/爱情/古装 主演: 孟子义/李昀锐"
+        )
+        candidate = parse_resource_identity(
+            "嫁金钗 (2026) 更至16集 60帧 类型: 剧情/爱情/古装 主演: 田曦薇/闫桉"
+        )
+
+        self.assertEqual(tracked.core_title, "尚公主")
+        self.assertEqual(candidate.core_title, "嫁金钗")
+        self.assertNotIn("古装 主演", tracked.aliases)
+        self.assertNotIn("古装 主演", candidate.aliases)
+        self.assertNotIn("古装 主演", tracked.search_queries)
+        self.assertFalse(compare_follow_candidate(tracked, candidate).is_same_work)
+
+    def test_same_core_title_replaces_same_episode_source(self) -> None:
+        tracked = parse_resource_identity("尚公主 (2026) 更至04集")
+        candidate = parse_resource_identity("尚公主 2026 更新04集 60帧")
+
+        decision = compare_follow_candidate(tracked, candidate)
+
+        self.assertTrue(decision.is_same_work)
+        self.assertFalse(decision.should_promote)
+        self.assertTrue(decision.same_episode_replace)
+
+    def test_same_core_title_promotes_newer_episode(self) -> None:
+        tracked = parse_resource_identity("尚公主 (2026) 更至04集")
+        candidate = parse_resource_identity("尚公主 2026 更新05集")
+
+        decision = compare_follow_candidate(tracked, candidate)
+
+        self.assertTrue(decision.is_same_work)
+        self.assertTrue(decision.is_newer)
+        self.assertTrue(decision.should_promote)
+
+    def test_same_core_title_skips_older_episode(self) -> None:
+        tracked = parse_resource_identity("尚公主 (2026) 更至04集")
+        candidate = parse_resource_identity("尚公主 2026 更新03集")
+
+        decision = compare_follow_candidate(tracked, candidate)
+
+        self.assertTrue(decision.is_same_work)
+        self.assertFalse(decision.should_promote)
+        self.assertFalse(decision.same_episode_replace)
+
+    def test_core_title_suffix_is_not_the_same_work(self) -> None:
+        tracked = parse_resource_identity("尚公主 (2026) 更至04集")
+        candidate = parse_resource_identity("尚公主外传 (2026) 更至08集")
+
+        decision = compare_follow_candidate(tracked, candidate)
+
+        self.assertFalse(decision.is_same_work)
+        self.assertFalse(decision.should_promote)
+
+    def test_same_core_title_with_different_year_is_not_the_same_work(self) -> None:
+        tracked = parse_resource_identity("边水往事 (2024) 更至16集")
+        candidate = parse_resource_identity("边水往事 (2026) 更至18集")
+
+        decision = compare_follow_candidate(tracked, candidate)
+
+        self.assertFalse(decision.is_same_work)
+        self.assertFalse(decision.should_promote)
+
 
 if __name__ == "__main__":
     unittest.main()

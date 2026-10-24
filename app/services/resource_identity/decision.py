@@ -6,24 +6,13 @@ from .models import FollowCandidateDecision, ParsedResourceIdentity
 from .parser import is_meaningful_identity_key, normalize_match_key
 
 
-def _identity_keys(identity: ParsedResourceIdentity | None) -> list[str]:
-    if identity is None:
-        return []
-    keys = [key for key in identity.normalized_keys if is_meaningful_identity_key(key)]
-    if not keys and identity.core_title and is_meaningful_identity_key(identity.core_title):
-        keys.append(normalize_match_key(identity.core_title))
-    return [key for key in keys if key]
-
-
-def _keys_match(left: str, right: str) -> bool:
-    if not left or not right:
-        return False
-    if left == right:
-        return True
-    shorter, longer = (left, right) if len(left) <= len(right) else (right, left)
-    if len(shorter) < 3:
-        return False
-    return shorter in longer
+def _core_title_key(identity: ParsedResourceIdentity | None) -> str:
+    if identity is None or not identity.is_target_work:
+        return ""
+    core_title = identity.core_title
+    if not core_title or not is_meaningful_identity_key(core_title):
+        return ""
+    return normalize_match_key(core_title)
 
 
 def compare_follow_candidate(
@@ -53,32 +42,40 @@ def compare_follow_candidate(
             debug={"tracked": tracked.to_dict(), "candidate": candidate.to_dict()},
         )
 
-    tracked_keys = _identity_keys(tracked)
-    candidate_keys = _identity_keys(candidate)
-    key_match = any(_keys_match(left, right) for left in tracked_keys for right in candidate_keys)
+    tracked_core_title = _core_title_key(tracked)
+    candidate_core_title = _core_title_key(candidate)
+    if not tracked_core_title or not candidate_core_title or tracked_core_title != candidate_core_title:
+        return FollowCandidateDecision(
+            is_same_work=False,
+            is_newer=False,
+            should_promote=False,
+            confidence=0.99 if tracked_core_title and candidate_core_title else 0.25,
+            reason="rule_core_title_mismatch" if tracked_core_title and candidate_core_title else "rule_core_title_missing",
+            debug={"tracked": tracked.to_dict(), "candidate": candidate.to_dict()},
+        )
+
+    release_year_compatible = (
+        tracked.release_year is None
+        or candidate.release_year is None
+        or tracked.release_year == candidate.release_year
+    )
     season_compatible = (
         tracked.season is None
         or candidate.season is None
         or tracked.season == candidate.season
     )
 
-    if not key_match:
-        if tracked.needs_ai_review or candidate.needs_ai_review:
-            return FollowCandidateDecision(
-                is_same_work=False,
-                is_newer=False,
-                should_promote=False,
-                needs_ai_review=True,
-                confidence=0.45,
-                reason="rule_core_title_mismatch_needs_ai",
-                debug={"tracked": tracked.to_dict(), "candidate": candidate.to_dict()},
-            )
+    if not release_year_compatible:
         return FollowCandidateDecision(
             is_same_work=False,
             is_newer=False,
             should_promote=False,
-            confidence=0.25,
-            reason="rule_core_title_mismatch",
+            confidence=0.97,
+            reason="rule_release_year_mismatch",
+            current_episode=tracked.episode,
+            candidate_episode=candidate.episode,
+            current_issue_no=tracked.issue_no,
+            candidate_issue_no=candidate.issue_no,
             debug={"tracked": tracked.to_dict(), "candidate": candidate.to_dict()},
         )
 
@@ -172,12 +169,7 @@ def compare_follow_candidate(
             debug={"tracked": tracked.to_dict(), "candidate": candidate.to_dict()},
         )
 
-    message_time_is_newer = bool(
-        tracked_message_time is not None
-        and candidate_message_time is not None
-        and candidate_message_time > tracked_message_time
-    )
-    needs_ai_review = tracked.needs_ai_review or candidate.needs_ai_review or message_time_is_newer
+    needs_ai_review = tracked.needs_ai_review or candidate.needs_ai_review
     return FollowCandidateDecision(
         is_same_work=True,
         is_newer=False,

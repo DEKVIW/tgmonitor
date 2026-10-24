@@ -102,39 +102,13 @@ def _build_follow_sync_source_metadata_promotion(
             "reason": "missing_current_source",
         }
 
-    extra_json = dict(task.extra_json or {})
-    candidate_assessment = dict(extra_json.get("candidate_assessment") or {})
     candidate_title = (
         _normalize_text(dict(source_message_snapshot or {}).get("title"), max_length=255)
         or _normalize_text(task.last_candidate_title, max_length=255)
         or None
     )
-    if candidate_assessment:
-        same_work = _normalize_optional_bool(candidate_assessment.get("is_same_work"))
-        is_newer = _normalize_optional_bool(candidate_assessment.get("is_newer"))
-        if same_work is True and is_newer is True:
-            return {
-                "promote": True,
-                "reason": _normalize_text(candidate_assessment.get("reason"), max_length=64) or "candidate_assessment_newer",
-                "assessment_source": "candidate_assessment",
-                "current_episode": _normalize_optional_int(candidate_assessment.get("current_episode")),
-                "candidate_episode": _normalize_optional_int(candidate_assessment.get("candidate_episode")),
-                "current_issue_no": _normalize_text(candidate_assessment.get("current_issue_no"), max_length=32) or None,
-                "candidate_issue_no": _normalize_text(candidate_assessment.get("candidate_issue_no"), max_length=32) or None,
-                "candidate_title": candidate_title,
-            }
-        if same_work is True and (bool(candidate_assessment.get("same_episode_replace")) or is_newer is False):
-            return {
-                "promote": False,
-                "reason": _normalize_text(candidate_assessment.get("reason"), max_length=64) or "candidate_assessment_not_newer",
-                "assessment_source": "candidate_assessment",
-                "current_episode": _normalize_optional_int(candidate_assessment.get("current_episode")),
-                "candidate_episode": _normalize_optional_int(candidate_assessment.get("candidate_episode")),
-                "current_issue_no": _normalize_text(candidate_assessment.get("current_issue_no"), max_length=32) or None,
-                "candidate_issue_no": _normalize_text(candidate_assessment.get("candidate_issue_no"), max_length=32) or None,
-                "candidate_title": candidate_title,
-            }
 
+    extra_json = dict(task.extra_json or {})
     identity_snapshot = dict(extra_json.get("identity_snapshot") or {})
     current_source_snapshot = dict(extra_json.get("source_message_snapshot") or {})
     tracked_title = (
@@ -147,7 +121,6 @@ def _build_follow_sync_source_metadata_promotion(
     if tracked_title and candidate_title:
         tracked_identity = parse_resource_identity(
             tracked_title,
-            alternate_titles=list(identity_snapshot.get("reference_titles") or [])[:4],
         )
         candidate_identity = parse_resource_identity(
             candidate_title,

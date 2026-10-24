@@ -79,7 +79,6 @@ PAN_TRANSFER_SYNC_CANDIDATE_LOOKBACK_DAYS = 3
 PAN_TRANSFER_SYNC_MIN_CANDIDATE_LOOKBACK_DAYS = 1
 PAN_TRANSFER_SYNC_MAX_CANDIDATE_LOOKBACK_DAYS = 90
 PAN_TRANSFER_FOLLOW_IDENTITY_ROUTE_KEY = "pan_transfer_follow_identity_extract"
-PAN_TRANSFER_FOLLOW_CANDIDATE_JUDGE_ROUTE_KEY = "pan_transfer_follow_candidate_judge"
 PAN_TRANSFER_FOLLOW_MAX_RECALL_CANDIDATES = 6
 PAN_TRANSFER_FOLLOW_MAX_JUDGE_CANDIDATES = 3
 PAN_TRANSFER_FOLLOW_MAX_SEARCH_QUERIES = 4
@@ -965,13 +964,9 @@ def _follow_state_matches_source_origin(
     state_identity = parse_resource_identity(state_title)
     if not origin_identity.is_target_work or not state_identity.is_target_work:
         return normalize_match_key(origin_title) == normalize_match_key(state_title)
-    origin_keys = {
-        normalize_match_key(value)
-        for value in [origin_identity.core_title, *origin_identity.aliases]
-        if normalize_match_key(value)
-    }
+    origin_key = normalize_match_key(origin_identity.core_title)
     state_core = normalize_match_key(state_identity.core_title)
-    return bool(state_core and state_core in origin_keys)
+    return bool(origin_key and state_core and state_core == origin_key)
 
 
 def _get_follow_task_applied_update_state(task: PanTransferSyncTask) -> dict[str, Any]:
@@ -1873,13 +1868,12 @@ def _build_follow_identity_user_prompt_v2(task: PanTransferSyncTask) -> str:
     }
     return (
         "Extract a follow-tracking identity from the current resource title.\n"
-        "Return JSON only with keys: core_title, aliases, release_year, season, latest_episode, content_type, search_queries, reason.\n"
+        "Return JSON only with keys: core_title, release_year, season, latest_episode, content_type, reason.\n"
         "Rules:\n"
         "1. Use resource_title as the only identity input.\n"
         "2. core_title should keep only the work name itself and strip year, resolution, frame rate, episode range, actor list, and update copy.\n"
-        "3. aliases should contain only compact alternate names for the same work, without noisy metadata.\n"
-        "4. search_queries should be ordered from strict to loose for in-site recall, with at most 4 items.\n"
-        "5. latest_episode should only be filled when the current resource title clearly shows the latest episode; otherwise use null.\n"
+        "3. Do not infer aliases, actors, genres, tags, or description text as part of the work identity.\n"
+        "4. latest_episode should only be filled when the current resource title clearly shows the latest episode; otherwise use null.\n"
         f"{_normalize_log_payload(payload)}"
     )
 
@@ -1890,7 +1884,7 @@ def _extract_follow_identity_with_ai(session: Session, *, task: PanTransferSyncT
         route_key=PAN_TRANSFER_FOLLOW_IDENTITY_ROUTE_KEY,
         system_prompt=(
             "你是追更同步的资源身份提取助手。"
-            "你要从资源标题中提取作品核心标题和召回关键词。"
+            "你要只从资源标题中提取作品核心标题和集数线索。"
             "必须只返回 JSON 对象，不要输出解释。"
         ),
         user_prompt=_build_follow_identity_user_prompt_v2(task),
@@ -1907,27 +1901,15 @@ def _extract_follow_identity_with_ai(session: Session, *, task: PanTransferSyncT
     core_title = _clean_follow_title(parsed.get("core_title"))
     if not core_title or not _is_follow_identity_component_from_title(core_title, resource_title):
         raise ValueError("identity route returned an empty core title")
-    aliases = _dedupe_texts(
-        [
-            core_title,
-            *[
-                alias
-                for alias in list(parsed.get("aliases") or [])
-                if _is_follow_identity_component_from_title(alias, resource_title)
-            ],
-        ],
-        max_items=6,
-    )
-    search_queries = _build_follow_identity_search_queries(core_title, *aliases)
     return {
         "resource_title": resource_title,
         "core_title": core_title,
-        "aliases": aliases,
+        "aliases": [],
         "release_year": _normalize_optional_int(parsed.get("release_year")),
         "season": _normalize_optional_int(parsed.get("season")),
         "latest_episode": _normalize_optional_int(parsed.get("latest_episode")),
         "content_type": _normalize_text(parsed.get("content_type"), max_length=32) or None,
-        "search_queries": search_queries,
+        "search_queries": _build_follow_identity_search_queries(core_title),
         "reference_titles": [resource_title] if resource_title else [],
         "reference_message_time": _serialize_json_value(_get_follow_reference_message_time(task, {})),
         "reason": _normalize_text(parsed.get("reason"), max_length=255) or "ai_identity_extract",
@@ -1947,16 +1929,12 @@ def _ensure_follow_task_identity_snapshot(
     current_resource_title = _resolve_follow_task_resource_title(task)
     existing_resource_title = _normalize_text(existing.get("resource_title"), max_length=255)
     rule_snapshot, rule_identity = _build_follow_identity_rule_snapshot(task)
-    rule_identity_keys = {
-        normalize_match_key(value)
-        for value in [rule_identity.core_title, *rule_identity.aliases]
-        if normalize_match_key(value)
-    }
+    rule_identity_key = normalize_match_key(rule_identity.core_title)
     existing_core_key = normalize_match_key(existing.get("core_title"))
     if (
         existing_core_key
         and existing_resource_title == current_resource_title
-        and existing_core_key in rule_identity_keys
+        and existing_core_key == rule_identity_key
     ):
         sanitized_existing = dict(existing)
         for key in (
@@ -3755,11 +3733,12 @@ def _list_follow_candidates_by_work(
         latest_ref.message_timestamp.desc().nullslast(),
         LinkTarget.last_seen_at.desc(),
         LinkTarget.id.desc(),
-    ).limit(int(candidate_policy["max_recall_candidates"]))
+    ).limit(PAN_TRANSFER_FOLLOW_RECALL_CANDIDATES_LIMIT)
     return [
-        _build_follow_candidate_payload(row)
-        for row in query.all()
-    ]
+        candidate
+        for candidate in (_build_follow_candidate_payload(row) for row in query.all())
+        if _follow_candidate_title_matches_task(task, snapshot, candidate.get("title"))
+    ][: int(candidate_policy["max_recall_candidates"])]
 
 
 def _build_follow_candidate_search_queries(task: PanTransferSyncTask, snapshot: dict[str, Any]) -> list[str]:
@@ -3774,10 +3753,29 @@ def _build_follow_candidate_search_queries(task: PanTransferSyncTask, snapshot: 
     if not source_title:
         return []
     source_identity = parse_resource_identity(source_title)
-    return _build_follow_identity_search_queries(
-        source_identity.core_title or source_title,
-        *(source_identity.aliases or []),
+    if not source_identity.core_title:
+        return []
+    return _build_follow_identity_search_queries(source_identity.core_title, max_items=1)
+
+
+def _follow_candidate_title_matches_task(
+    task: PanTransferSyncTask,
+    snapshot: dict[str, Any],
+    candidate_title: Any,
+) -> bool:
+    origin_snapshot = _normalize_source_message_snapshot(
+        _normalize_follow_source_origin(_get_task_extra_section(task, "source_origin")).get("source_message_snapshot")
     )
+    source_title = (
+        _normalize_text(origin_snapshot.get("title"), max_length=255)
+        or _normalize_text(snapshot.get("resource_title"), max_length=255)
+        or _resolve_follow_task_resource_title(task)
+    )
+    if not source_title:
+        return False
+    source_identity = parse_resource_identity(source_title)
+    candidate_identity = parse_resource_identity(candidate_title)
+    return bool(compare_follow_candidate(source_identity, candidate_identity).is_same_work)
 
 
 def _list_follow_candidates_by_identity(
@@ -3832,11 +3830,12 @@ def _list_follow_candidates_by_identity(
         latest_ref.message_timestamp.desc().nullslast(),
         LinkTarget.last_seen_at.desc(),
         LinkTarget.id.desc(),
-    ).limit(int(candidate_policy["max_recall_candidates"]))
+    ).limit(PAN_TRANSFER_FOLLOW_RECALL_CANDIDATES_LIMIT)
     return [
-        _build_follow_candidate_payload(row)
-        for row in query.all()
-    ]
+        candidate
+        for candidate in (_build_follow_candidate_payload(row) for row in query.all())
+        if _follow_candidate_title_matches_task(task, snapshot, candidate.get("title"))
+    ][: int(candidate_policy["max_recall_candidates"])]
 
 
 def _get_follow_reference_message_time(task: PanTransferSyncTask, snapshot: dict[str, Any]) -> datetime | None:
@@ -3848,100 +3847,6 @@ def _get_follow_reference_message_time(task: PanTransferSyncTask, snapshot: dict
     if parsed is not None:
         return parsed
     return None
-
-
-def _build_follow_candidate_judge_user_prompt_v2(
-    task: PanTransferSyncTask,
-    *,
-    snapshot: dict[str, Any],
-    candidate: dict[str, Any],
-) -> str:
-    effective_snapshot = _apply_follow_materialized_update_state_to_snapshot(
-        task,
-        _apply_follow_applied_update_state_to_snapshot(task, snapshot),
-    )
-    source_origin = _normalize_follow_source_origin(_get_task_extra_section(task, "source_origin"))
-    origin_snapshot = _normalize_source_message_snapshot(source_origin.get("source_message_snapshot"))
-    tracked_resource_title = (
-        _normalize_text(origin_snapshot.get("title"), max_length=255)
-        or _normalize_text(effective_snapshot.get("resource_title"), max_length=255)
-        or _resolve_follow_task_resource_title(task)
-    )
-    tracked_identity = parse_resource_identity(tracked_resource_title)
-    payload = {
-        "tracked_resource": {
-            "platform": _normalize_text(task.platform, max_length=64) or None,
-            "resource_title": tracked_resource_title,
-            "core_title": tracked_identity.core_title,
-            "aliases": list(tracked_identity.aliases or []),
-            "release_year": effective_snapshot.get("release_year"),
-            "season": effective_snapshot.get("season"),
-            "latest_episode": effective_snapshot.get("latest_episode"),
-            "latest_issue": effective_snapshot.get("latest_issue"),
-            "is_complete": effective_snapshot.get("is_complete"),
-            "search_queries": list(tracked_identity.search_queries or []),
-        },
-        "candidate": {
-            "title": _normalize_text(candidate.get("title"), max_length=255) or None,
-        },
-    }
-    return (
-        "Decide whether this candidate source should be promoted for follow sync.\n"
-        "Return JSON only with keys: is_same_work, is_newer, should_promote, confidence, current_episode, candidate_episode, reason.\n"
-        "Rules:\n"
-        "1. First determine whether the candidate is the same work.\n"
-        "2. should_promote can be true only when it is the same work and clearly newer than the tracked resource.\n"
-        "3. Treat title formatting differences as the same work when the core work identity still matches.\n"
-        "4. Prefer episode progress as the main newer signal.\n"
-        "5. If current_episode equals candidate_episode, it is not newer and should_promote must be false.\n"
-        "6. Same-episode candidates can replace a link, but they must never be promoted as a newer follow source.\n"
-        f"{_normalize_log_payload(payload)}"
-    )
-
-
-def _judge_follow_candidate_with_ai(
-    session: Session,
-    *,
-    task: PanTransferSyncTask,
-    snapshot: dict[str, Any],
-    candidate: dict[str, Any],
-) -> dict[str, Any]:
-    route_result = execute_text_route(
-        session,
-        route_key=PAN_TRANSFER_FOLLOW_CANDIDATE_JUDGE_ROUTE_KEY,
-        system_prompt=(
-            "你是追更候选裁决助手。"
-            "你只负责判断候选是不是同一作品，以及是不是比当前资源更新。"
-            "必须只返回 JSON。"
-        ),
-        user_prompt=_build_follow_candidate_judge_user_prompt_v2(task, snapshot=snapshot, candidate=candidate),
-        metadata={
-            "source": "pan_transfer_follow_candidate_judge",
-            "task_id": int(task.id),
-            "candidate_link_target_id": int(candidate.get("link_target_id") or 0),
-        },
-    )
-    parsed = extract_json_object_from_text(route_result.text)
-    if not isinstance(parsed, dict):
-        raise ValueError("candidate judge route did not return a JSON object")
-    same_work = _normalize_optional_bool(parsed.get("is_same_work"))
-    is_newer = _normalize_optional_bool(parsed.get("is_newer"))
-    should_promote = _normalize_optional_bool(parsed.get("should_promote"))
-    if same_work is None or is_newer is None or should_promote is None:
-        raise ValueError("candidate judge route returned invalid booleans")
-    assessment = {
-        "is_same_work": same_work,
-        "is_newer": is_newer,
-        "should_promote": should_promote,
-        "confidence": _normalize_follow_confidence(parsed.get("confidence")),
-        "current_episode": _normalize_optional_int(parsed.get("current_episode")),
-        "candidate_episode": _normalize_optional_int(parsed.get("candidate_episode")),
-        "reason": _normalize_text(parsed.get("reason"), max_length=255) or "ai_candidate_judge",
-        "judge_source": "ai",
-        "used_model": _normalize_text(route_result.model_id, max_length=255) or None,
-        "used_api_mode": _normalize_text(route_result.used_api_mode, max_length=64) or None,
-    }
-    return _apply_follow_candidate_hard_rules(assessment)
 
 
 def _build_follow_candidate_recall_snapshot(
@@ -4147,11 +4052,6 @@ def _apply_follow_task_state_without_candidate(task: PanTransferSyncTask) -> Non
 def _build_follow_identity_rule_snapshot(task: PanTransferSyncTask) -> tuple[dict[str, Any], Any]:
     resource_title = _resolve_follow_task_resource_title(task)
     identity = parse_resource_identity(resource_title)
-    aliases = [
-        alias
-        for alias in list(identity.aliases or [])
-        if _is_follow_identity_component_from_title(alias, resource_title)
-    ]
     reference_titles = [resource_title] if resource_title else []
     source_message_snapshot = _normalize_source_message_snapshot(_get_task_extra_section(task, "source_message_snapshot"))
     reference_message_time = _serialize_json_value(
@@ -4162,16 +4062,13 @@ def _build_follow_identity_rule_snapshot(task: PanTransferSyncTask) -> tuple[dic
         "core_title": _normalize_text(identity.core_title, max_length=255)
         or _clean_follow_title(resource_title)
         or resource_title,
-        "aliases": _dedupe_texts(aliases, max_items=6, max_length=255),
+        "aliases": [],
         "release_year": identity.release_year,
         "season": identity.season,
         "latest_episode": identity.episode,
         "latest_issue": identity.issue_no,
         "content_type": _normalize_text(identity.content_type, max_length=32) or None,
-        "search_queries": _build_follow_identity_search_queries(
-            identity.core_title or resource_title,
-            *aliases,
-        ),
+        "search_queries": _build_follow_identity_search_queries(identity.core_title, max_items=1),
         "reference_titles": reference_titles,
         "reference_message_time": reference_message_time,
         "reason": _normalize_text(identity.reason, max_length=255) or "rule_title_parse",
@@ -4193,7 +4090,7 @@ def _build_follow_identity_fallback(task: PanTransferSyncTask) -> dict[str, Any]
     return snapshot
 
 
-def _judge_follow_candidate_fallback(
+def _evaluate_follow_candidate_rules(
     task: PanTransferSyncTask,
     *,
     snapshot: dict[str, Any],
@@ -4242,106 +4139,14 @@ def _judge_follow_candidate_fallback(
     return assessment
 
 
-def _apply_follow_candidate_hard_rules(
-    assessment: dict[str, Any] | None,
-    *,
-    fallback_assessment: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    normalized = dict(assessment or {})
-    fallback = dict(fallback_assessment or {})
-    original_is_newer = _normalize_optional_bool(normalized.get("is_newer"))
-    original_should_promote = _normalize_optional_bool(normalized.get("should_promote"))
-
-    same_work = _normalize_optional_bool(normalized.get("is_same_work"))
-    fallback_same_work = _normalize_optional_bool(fallback.get("is_same_work"))
-    if same_work is None and fallback_same_work is not None:
-        same_work = fallback_same_work
-        normalized["is_same_work"] = same_work
-
-    current_episode = _normalize_optional_int(normalized.get("current_episode"))
-    candidate_episode = _normalize_optional_int(normalized.get("candidate_episode"))
-    if current_episode is None:
-        current_episode = _normalize_optional_int(fallback.get("current_episode"))
-        if current_episode is not None:
-            normalized["current_episode"] = current_episode
-    if candidate_episode is None:
-        candidate_episode = _normalize_optional_int(fallback.get("candidate_episode"))
-        if candidate_episode is not None:
-            normalized["candidate_episode"] = candidate_episode
-
-    current_issue = _normalize_text(normalized.get("current_issue_no"), max_length=32) or _normalize_text(
-        fallback.get("current_issue_no"),
-        max_length=32,
-    )
-    candidate_issue = _normalize_text(normalized.get("candidate_issue_no"), max_length=32) or _normalize_text(
-        fallback.get("candidate_issue_no"),
-        max_length=32,
-    )
-    if current_issue:
-        normalized["current_issue_no"] = current_issue
-    if candidate_issue:
-        normalized["candidate_issue_no"] = candidate_issue
-
-    guard_reason = None
-    if same_work is not True:
-        normalized["is_newer"] = False
-        normalized["should_promote"] = False
-        if original_should_promote is True or original_is_newer is True:
-            guard_reason = "rule_guard_not_same_work"
-    else:
-        if current_issue and candidate_issue and current_issue == candidate_issue:
-            normalized["is_newer"] = False
-            normalized["should_promote"] = False
-            normalized["same_episode_replace"] = True
-            guard_reason = "rule_guard_same_issue"
-        if current_episode is not None and candidate_episode is not None:
-            if candidate_episode == current_episode:
-                normalized["is_newer"] = False
-                normalized["should_promote"] = False
-                normalized["same_episode_replace"] = True
-                guard_reason = "rule_guard_same_episode"
-            elif candidate_episode < current_episode:
-                normalized["is_newer"] = False
-                normalized["should_promote"] = False
-                guard_reason = "rule_guard_older_episode"
-        if _normalize_optional_bool(normalized.get("is_newer")) is False:
-            normalized["should_promote"] = False
-
-    if guard_reason:
-        normalized["rule_guard_reason"] = guard_reason
-        normalized["reason"] = guard_reason
-
-    return normalized
-
-
 def _assess_follow_candidate(
-    session: Session,
     *,
     task: PanTransferSyncTask,
     snapshot: dict[str, Any],
     candidate: dict[str, Any],
     recall_snapshot: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    assessment = _judge_follow_candidate_fallback(task, snapshot=snapshot, candidate=candidate)
-    rule_assessment = dict(assessment)
-    if bool(assessment.get("needs_ai_review")) and not bool(dict(assessment.get("candidate_identity") or {}).get("should_skip_ai")):
-        try:
-            ai_assessment = _judge_follow_candidate_with_ai(session, task=task, snapshot=snapshot, candidate=candidate)
-        except Exception as exc:
-            logger.warning(
-                "follow candidate judge fell back task_id=%s candidate=%s error=%s",
-                int(task.id),
-                int(candidate.get("link_target_id") or 0),
-                _normalize_text(exc, max_length=1000) or type(exc).__name__,
-            )
-            assessment["judge_error"] = _normalize_text(exc, max_length=500) or type(exc).__name__
-        else:
-            ai_assessment["tracked_identity"] = assessment.get("tracked_identity")
-            ai_assessment["candidate_identity"] = assessment.get("candidate_identity")
-            ai_assessment["rule_reason"] = assessment.get("reason")
-            ai_assessment["needs_ai_review"] = False
-            assessment = ai_assessment
-    assessment = _apply_follow_candidate_hard_rules(assessment, fallback_assessment=rule_assessment)
+    assessment = _evaluate_follow_candidate_rules(task, snapshot=snapshot, candidate=candidate)
     assessment["checked_at"] = _serialize_json_value(utcnow())
     assessment["candidate_link_target_id"] = _normalize_optional_int(candidate.get("link_target_id"))
     assessment["candidate_title"] = _normalize_text(candidate.get("title"), max_length=255) or None
@@ -4387,7 +4192,6 @@ def _pick_follow_candidate(
     same_episode_assessment: dict[str, Any] | None = None
     for candidate in recalled_candidates[: int(candidate_policy["max_judge_candidates"])]:
         assessment = _assess_follow_candidate(
-            session,
             task=task,
             snapshot=snapshot,
             candidate=candidate,
@@ -5185,7 +4989,6 @@ async def _process_pan_transfer_follow_task_async(
         ).lower() or "unknown"
         if _is_healthy_link_status(normalized_existing_candidate_status):
             existing_candidate_assessment = _assess_follow_candidate(
-                session,
                 task=task,
                 snapshot=identity_snapshot,
                 candidate=existing_candidate_payload,

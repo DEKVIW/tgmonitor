@@ -934,6 +934,21 @@
   border-radius: 16px;
 }
 
+.resource-ops-follow-overview .ant-descriptions-view table {
+  table-layout: fixed;
+}
+
+.resource-ops-follow-overview .ant-descriptions-item-label {
+  width: 132px;
+  white-space: nowrap;
+}
+
+.resource-ops-follow-overview .ant-descriptions-item-content {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 .resource-ops-follow-sync-card .ant-card-body {
   display: flex;
   flex-direction: column;

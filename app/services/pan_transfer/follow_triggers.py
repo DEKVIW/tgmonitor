@@ -14,7 +14,7 @@ from app.models.models import (
     PanTransferSyncTask,
     ensure_runtime_storage_tables,
 )
-from app.services.resource_identity import compare_follow_candidate, parse_resource_identity
+from app.services.resource_identity import compare_follow_candidate, normalize_match_key, parse_resource_identity
 
 from .common import utcnow
 from .follow_tasks import (
@@ -209,11 +209,11 @@ def _pending_candidate_blocks_trigger(
     candidate_identity = parse_resource_identity(candidate_title)
     if not pending_identity.is_target_work or not candidate_identity.is_target_work:
         return False
-    if not any(
-        left and right and (left == right or left in right or right in left)
-        for left in pending_identity.normalized_keys
-        for right in candidate_identity.normalized_keys
-    ):
+    pending_core_title = _normalize_text(pending_identity.core_title, max_length=255)
+    candidate_core_title = _normalize_text(candidate_identity.core_title, max_length=255)
+    if not pending_core_title or not candidate_core_title:
+        return False
+    if normalize_match_key(pending_core_title) != normalize_match_key(candidate_core_title):
         return False
     if pending_identity.season is not None and candidate_identity.season is not None:
         if pending_identity.season != candidate_identity.season:

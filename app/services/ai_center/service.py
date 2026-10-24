@@ -58,13 +58,13 @@ AI_EMPTY_RESPONSE_MARKERS = (
 AI_ROUTE_CAPABILITY_DEFAULTS: dict[str, list[str]] = {
     "resource_ops_title_extract": ["title_extraction", "chinese", "low_latency"],
     "pan_transfer_follow_identity_extract": ["structured_output", "entity_extraction", "chinese"],
-    "pan_transfer_follow_candidate_judge": ["structured_output", "reasoning", "chinese"],
 }
 AI_ROUTE_GOAL_DEFAULTS: dict[str, str] = {
     "resource_ops_title_extract": AI_ROUTE_OPTIMIZATION_GOAL_SPEED,
     "pan_transfer_follow_identity_extract": AI_ROUTE_OPTIMIZATION_GOAL_STABILITY,
-    "pan_transfer_follow_candidate_judge": AI_ROUTE_OPTIMIZATION_GOAL_QUALITY,
 }
+
+RETIRED_AI_ROUTE_KEYS = ("pan_transfer_follow_candidate_judge",)
 
 AI_ROUTE_SEEDS: tuple[dict[str, Any], ...] = (
     {
@@ -76,13 +76,7 @@ AI_ROUTE_SEEDS: tuple[dict[str, Any], ...] = (
     {
         "route_key": "pan_transfer_follow_identity_extract",
         "display_name": "追更身份提取",
-        "description": "供追更同步创建与巡检调用，抽取核心剧名、别名、年份、季集线索。",
-        "output_mode": AI_ROUTE_OUTPUT_MODE_JSON,
-    },
-    {
-        "route_key": "pan_transfer_follow_candidate_judge",
-        "display_name": "追更候选判断",
-        "description": "供追更同步巡检调用，判断候选消息是否同作品且是否较当前资源更新。",
+        "description": "供追更同步创建与巡检调用，从资源标题中抽取核心剧名、年份、季集线索。",
         "output_mode": AI_ROUTE_OUTPUT_MODE_JSON,
     },
 )
@@ -1137,6 +1131,40 @@ def _ensure_route_seed_rows(session: Session) -> None:
     session.flush()
 
 
+def _remove_retired_route_rows(session: Session) -> None:
+    retired_routes = (
+        session.query(AiRouteProfile)
+        .filter(AiRouteProfile.route_key.in_(RETIRED_AI_ROUTE_KEYS))
+        .all()
+    )
+    route_ids = [int(row.id) for row in retired_routes]
+    step_ids = [
+        int(step_id)
+        for (step_id,) in session.query(AiRouteStep.id)
+        .filter(AiRouteStep.route_profile_id.in_(route_ids))
+        .all()
+    ] if route_ids else []
+    if route_ids:
+        session.query(AiCallEvent).filter(AiCallEvent.route_profile_id.in_(route_ids)).delete(
+            synchronize_session=False
+        )
+    if step_ids:
+        session.query(AiCallEvent).filter(AiCallEvent.route_step_id.in_(step_ids)).delete(
+            synchronize_session=False
+        )
+    session.query(AiCallEvent).filter(AiCallEvent.route_key.in_(RETIRED_AI_ROUTE_KEYS)).delete(
+        synchronize_session=False
+    )
+    if route_ids:
+        session.query(AiRouteStep).filter(AiRouteStep.route_profile_id.in_(route_ids)).delete(
+            synchronize_session=False
+        )
+    session.query(AiRouteProfile).filter(AiRouteProfile.route_key.in_(RETIRED_AI_ROUTE_KEYS)).delete(
+        synchronize_session=False
+    )
+    session.flush()
+
+
 def _migrate_legacy_resource_ops_provider_if_needed(session: Session) -> None:
     provider_count = int(session.query(func.count(AiProviderConfig.id)).scalar() or 0)
     if provider_count > 0:
@@ -1221,6 +1249,7 @@ def _migrate_legacy_resource_ops_provider_if_needed(session: Session) -> None:
 
 def ensure_ai_center_seeded(session: Session) -> None:
     ensure_runtime_storage_tables()
+    _remove_retired_route_rows(session)
     _ensure_route_seed_rows(session)
     _migrate_legacy_resource_ops_provider_if_needed(session)
 
