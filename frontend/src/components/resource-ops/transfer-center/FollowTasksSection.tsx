@@ -1280,6 +1280,7 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
   const [manualPreviewTrail, setManualPreviewTrail] = useState<DirectoryTrailItem[]>([])
   const [manualSelectedRowKeys, setManualSelectedRowKeys] = useState<Key[]>([])
   const [manualSelectedEntries, setManualSelectedEntries] = useState<PanTransferLinkDirectoryEntry[]>([])
+  const [externalSourceEditorOpen, setExternalSourceEditorOpen] = useState(false)
   const [directoryOpen, setDirectoryOpen] = useState(false)
   const [directoryLoading, setDirectoryLoading] = useState(false)
   const [directoryTitle, setDirectoryTitle] = useState('')
@@ -1482,6 +1483,10 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
     }, 4000)
     return () => window.clearInterval(timer)
   }, [detailData, detailOpen, isActive, isPageVisible, pagination.page, pagination.pageSize, statusFilter, tasks])
+
+  useEffect(() => {
+    setExternalSourceEditorOpen(false)
+  }, [detailData?.task.id])
 
   useEffect(() => {
     if (!detailOpen) {
@@ -2090,6 +2095,8 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
   const activeExternalSources: PanTransferFollowTaskExternalSource[] = activeSettingsDraft
     ? getConfiguredExternalSources(activeSettingsDraft)
     : []
+  const activeSourceMode = activeSettingsDraft?.automation.source_mode || 'system'
+  const externalSourceEditorVisible = activeSourceMode === 'external_preferred' || externalSourceEditorOpen
   const showSystemSuggestionAction: boolean = false
   const preferredManualSourceKind: FollowSyncSourceKind = hasCandidate ? 'candidate' : 'current'
   const detailRecommendedSourceLabel = formatFollowSourceKind(
@@ -2799,14 +2806,24 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
                         <strong>{activeAutomationMeta.riskLabel}</strong>
                       </div>
                     </div>
-                    <div className="resource-ops-follow-automation-source-panel">
-                      <div className="resource-ops-follow-sync-meta">
-                        <span>更新来源</span>
-                        <small>外部分享只作为转存来源，不会写入追更原链、候选记录或前台消息。</small>
+                    <div className={`resource-ops-follow-automation-source-panel resource-ops-follow-automation-source-panel--${activeSourceMode === 'external_preferred' ? 'external' : 'system'}`}>
+                      <div className="resource-ops-follow-automation-source-head">
+                        <div className="resource-ops-follow-sync-meta">
+                          <span>更新来源</span>
+                          <small>
+                            {activeSourceMode === 'external_preferred'
+                              ? '优先按外部分享查找更新，所有外部来源不可用时自动回退系统资源动态。'
+                              : '仅使用系统资源动态中的消息作为更新来源，外部分享不会参与自动同步。'}
+                          </small>
+                        </div>
+                        <Tag color={activeSourceMode === 'external_preferred' ? 'processing' : 'default'}>
+                          {activeSourceMode === 'external_preferred' ? '外部优先' : '系统来源'}
+                        </Tag>
                       </div>
                       <Segmented
                         block
                         value={activeSettingsDraft.automation.source_mode || 'system'}
+                        className="resource-ops-follow-source-mode-switch"
                         options={[
                           { label: '系统资源动态', value: 'system' },
                           { label: '外部分享优先', value: 'external_preferred' },
@@ -2818,76 +2835,124 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
                           }))
                         }
                       />
-                      <Space direction="vertical" size={8} style={{ width: '100%', marginTop: 10 }}>
-                        {(activeSettingsDraft.automation.external_sources || []).map((source, index) => {
-                          const status = (detailAutomation.external_source_statuses || []).find(
-                            (item) => String(item.url || '').trim() === String(source.url || '').trim(),
-                          )
-                          const statusText = status
-                            ? status.status === 'valid'
-                              ? '最近可用'
-                              : status.status === 'not_ready'
-                                ? '等待目录更新'
-                                : status.status === 'transient_error'
-                                  ? '临时异常，待重试'
-                                  : '不可用，已尝试后续来源'
-                            : '尚未检查'
-                          return (
-                            <Space key={`${source.url}-${index}`} align="start" className="resource-ops-follow-external-source-row">
-                              <Input
-                                value={source.url}
-                                placeholder="填写同平台外部分享链接"
-                                onChange={(event) => {
-                                  const next = [...(activeSettingsDraft.automation.external_sources || [])]
-                                  next[index] = { ...source, url: event.target.value }
-                                  updateExternalSourcesDraft(next)
-                                }}
-                                className="resource-ops-follow-external-source-url"
-                              />
-                              <InputNumber
-                                min={1}
-                                max={999}
-                                value={source.priority}
-                                addonBefore="优先级"
-                                onChange={(value) => {
-                                  const next = [...(activeSettingsDraft.automation.external_sources || [])]
-                                  next[index] = { ...source, priority: Number(value || index + 1) }
-                                  updateExternalSourcesDraft(next)
-                                }}
-                                style={{ width: 150 }}
-                              />
-                              <Checkbox
-                                checked={source.enabled}
-                                onChange={(event) => {
-                                  const next = [...(activeSettingsDraft.automation.external_sources || [])]
-                                  next[index] = { ...source, enabled: event.target.checked }
-                                  updateExternalSourcesDraft(next)
-                                }}
-                              >
-                                启用
-                              </Checkbox>
-                              <Tooltip title="移除外部分享">
-                                <Button
-                                  danger
-                                  type="text"
-                                  icon={<DeleteOutlined />}
-                                  onClick={() =>
-                                    updateExternalSourcesDraft(
-                                      (activeSettingsDraft.automation.external_sources || []).filter((_, itemIndex) => itemIndex !== index),
-                                    )
-                                  }
-                                />
-                              </Tooltip>
-                              <Tag color={status?.status === 'valid' ? 'success' : status?.status === 'invalid' ? 'error' : 'default'}>
-                                {statusText}
-                              </Tag>
-                            </Space>
-                          )
-                        })}
-                        <Button type="dashed" icon={<PlusOutlined />} onClick={addExternalSourceDraft}>
-                          添加外部分享
-                        </Button>
-                      </Space>
+                      {externalSourceEditorVisible ? (
+                        <div className="resource-ops-follow-external-source-editor">
+                          <div className="resource-ops-follow-external-source-editor-head">
+                            <div className="resource-ops-follow-sync-meta">
+                              <span>外部分享来源</span>
+                              <small>按优先级依次尝试；仅在外部来源不可用时回退到系统资源动态。</small>
+                            </div>
+                            <Button type="dashed" icon={<PlusOutlined />} onClick={addExternalSourceDraft}>
+                              添加外部分享
+                            </Button>
+                          </div>
+                          <div className="resource-ops-follow-external-source-table-wrap">
+                            <div className="resource-ops-follow-external-source-table" role="table" aria-label="外部分享来源">
+                              <div className="resource-ops-follow-external-source-table-row resource-ops-follow-external-source-table-row--head" role="row">
+                                <span role="columnheader">优先级</span>
+                                <span role="columnheader">外部分享链接</span>
+                                <span role="columnheader">状态</span>
+                                <span role="columnheader">启用</span>
+                                <span role="columnheader">操作</span>
+                              </div>
+                              {(activeSettingsDraft.automation.external_sources || []).map((source, index) => {
+                                const status = (detailAutomation.external_source_statuses || []).find(
+                                  (item) => String(item.url || '').trim() === String(source.url || '').trim(),
+                                )
+                                const statusText = status
+                                  ? status.status === 'valid'
+                                    ? '最近可用'
+                                    : status.status === 'not_ready'
+                                      ? '等待目录更新'
+                                      : status.status === 'transient_error'
+                                        ? '临时异常，待重试'
+                                        : '不可用，已尝试后续来源'
+                                  : '尚未检查'
+                                return (
+                                  <div key={`${source.url}-${index}`} className="resource-ops-follow-external-source-table-row" role="row">
+                                    <div className="resource-ops-follow-external-source-priority" role="cell">
+                                      <InputNumber
+                                        min={1}
+                                        max={999}
+                                        value={source.priority}
+                                        onChange={(value) => {
+                                          const next = [...(activeSettingsDraft.automation.external_sources || [])]
+                                          next[index] = { ...source, priority: Number(value || index + 1) }
+                                          updateExternalSourcesDraft(next)
+                                        }}
+                                        aria-label={`第 ${index + 1} 个外部来源优先级`}
+                                      />
+                                    </div>
+                                    <div className="resource-ops-follow-external-source-url" role="cell">
+                                      <Input
+                                        value={source.url}
+                                        placeholder="填写同平台外部分享链接"
+                                        onChange={(event) => {
+                                          const next = [...(activeSettingsDraft.automation.external_sources || [])]
+                                          next[index] = { ...source, url: event.target.value }
+                                          updateExternalSourcesDraft(next)
+                                        }}
+                                        aria-label={`第 ${index + 1} 个外部分享链接`}
+                                      />
+                                    </div>
+                                    <div className="resource-ops-follow-external-source-status" role="cell">
+                                      <Tag color={status?.status === 'valid' ? 'success' : status?.status === 'invalid' ? 'error' : 'default'}>
+                                        {statusText}
+                                      </Tag>
+                                    </div>
+                                    <div className="resource-ops-follow-external-source-enabled" role="cell">
+                                      <Checkbox
+                                        checked={source.enabled}
+                                        onChange={(event) => {
+                                          const next = [...(activeSettingsDraft.automation.external_sources || [])]
+                                          next[index] = { ...source, enabled: event.target.checked }
+                                          updateExternalSourcesDraft(next)
+                                        }}
+                                      >
+                                        启用
+                                      </Checkbox>
+                                    </div>
+                                    <div className="resource-ops-follow-external-source-action" role="cell">
+                                      <Tooltip title="移除外部分享">
+                                        <Button
+                                          danger
+                                          type="text"
+                                          icon={<DeleteOutlined />}
+                                          aria-label={`移除第 ${index + 1} 个外部分享`}
+                                          onClick={() =>
+                                            updateExternalSourcesDraft(
+                                              (activeSettingsDraft.automation.external_sources || []).filter((_, itemIndex) => itemIndex !== index),
+                                            )
+                                          }
+                                        />
+                                      </Tooltip>
+                                    </div>
+                                  </div>
+                                )
+                              })}
+                              {(activeSettingsDraft.automation.external_sources || []).length <= 0 ? (
+                                <div className="resource-ops-follow-external-source-empty">暂未配置外部分享，点击右上角添加。</div>
+                              ) : null}
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="resource-ops-follow-external-source-collapsed">
+                          <div className="resource-ops-follow-sync-meta">
+                            <span>外部分享配置</span>
+                            <small>
+                              {activeExternalSources.length > 0
+                                ? `已保存 ${activeExternalSources.length} 个外部来源，当前不会参与自动同步。`
+                                : '尚未配置外部来源；切换为外部分享优先后可添加。'}
+                            </small>
+                          </div>
+                          {activeExternalSources.length > 0 ? (
+                            <Button type="link" size="small" onClick={() => setExternalSourceEditorOpen(true)}>
+                              管理外部来源
+                            </Button>
+                          ) : null}
+                        </div>
+                      )}
                     </div>
                     <Tabs
                       size="small"
