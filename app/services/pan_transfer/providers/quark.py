@@ -98,7 +98,7 @@ def _normalize_selection_group(raw_value: dict[str, Any] | None) -> dict[str, An
         )
     if not normalized_entries:
         return None
-    return {
+    normalized_group = {
         "parent_entry_id": str(raw.get("parent_entry_id") or "").strip() or None,
         "parent_path": str(raw.get("parent_path") or "").strip() or None,
         "parent_name": str(raw.get("parent_name") or "").strip() or None,
@@ -106,6 +106,11 @@ def _normalize_selection_group(raw_value: dict[str, Any] | None) -> dict[str, An
         "selected_entries": normalized_entries,
         "selected_count": len(normalized_entries),
     }
+    for key in ("replace_existing_entry_ids", "replace_existing_names"):
+        values = sorted({str(value).strip() for value in list(raw.get(key) or []) if str(value).strip()})
+        if values:
+            normalized_group[key] = values
+    return normalized_group
 
 
 def _normalize_source_selection(raw_value: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -1014,8 +1019,39 @@ class QuarkPanTransferProvider(PanTransferProvider):
                     continue
                 target_relative_path = _normalize_target_relative_path(selection_group.get("target_relative_path"))
                 target_parent_id = await ensure_target_parent_id(target_relative_path)
+                if not clear_existing_contents:
+                    replacement_ids = {
+                        str(value).strip()
+                        for value in list(selection_group.get("replace_existing_entry_ids") or [])
+                        if str(value).strip()
+                    }
+                    replacement_names = {
+                        str(value).strip()
+                        for value in list(selection_group.get("replace_existing_names") or [])
+                        if str(value).strip()
+                    }
+                    if replacement_ids or replacement_names:
+                        replacement_rows = await client.list_dir_all(parent_id=target_parent_id)
+                        delete_ids = [
+                            str(row.get("fid") or "").strip()
+                            for row in replacement_rows
+                            if str(row.get("fid") or "").strip()
+                            and not bool(row.get("dir"))
+                            and (
+                                str(row.get("fid") or "").strip() in replacement_ids
+                                or str(row.get("file_name") or "").strip() in replacement_names
+                            )
+                        ]
+                        if delete_ids:
+                            await client.delete_entries(file_ids=delete_ids)
+                        target_rows = await client.list_dir_all(parent_id=target_parent_id)
+                    else:
+                        target_rows = None
+                else:
+                    target_rows = None
                 if normalized_selection is not None and not clear_existing_contents:
-                    target_rows = await client.list_dir_all(parent_id=target_parent_id)
+                    if target_rows is None:
+                        target_rows = await client.list_dir_all(parent_id=target_parent_id)
                     selected_share_items, skipped_names = _filter_existing_quark_rows(
                         selected_share_items,
                         target_rows=target_rows,

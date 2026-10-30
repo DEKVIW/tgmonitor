@@ -62,8 +62,8 @@ from .queue import refresh_pan_transfer_batch_summary
 
 def _normalize_source_kind(value: Any) -> str:
     normalized = _normalize_text(value, max_length=32).lower() or "current"
-    if normalized not in {"current", "candidate"}:
-        raise ValueError("source_kind must be current or candidate")
+    if normalized not in {"current", "candidate", "external"}:
+        raise ValueError("source_kind must be current, candidate, or external")
     return normalized
 
 
@@ -115,6 +115,13 @@ def _build_follow_sync_source_metadata_promotion(
         return {
             "promote": True,
             "reason": "candidate_non_incremental",
+        }
+    candidate_assessment = dict(dict(task.extra_json or {}).get("candidate_assessment") or {})
+    if bool(candidate_assessment.get("quality_upgrade")):
+        return {
+            "promote": True,
+            "reason": "candidate_same_episode_higher_quality",
+            "quality_upgrade": True,
         }
     if not (_normalize_optional_int(task.source_link_target_id) or _normalize_text(task.source_url)):
         return {
@@ -304,7 +311,7 @@ def _normalize_selection_group_payload(raw_value: dict[str, Any] | None) -> dict
             )
     if not normalized_entries:
         return None
-    return {
+    normalized_group = {
         "parent_entry_id": _normalize_text(
             raw.get("selection_parent_entry_id") or raw.get("parent_entry_id"),
             max_length=255,
@@ -324,6 +331,25 @@ def _normalize_selection_group_payload(raw_value: dict[str, Any] | None) -> dict
         "selected_entries": normalized_entries,
         "selected_count": len(normalized_entries),
     }
+    replacement_ids = sorted(
+        {
+            _normalize_text(value, max_length=255)
+            for value in list(raw.get("replace_existing_entry_ids") or [])
+            if _normalize_text(value, max_length=255)
+        }
+    )
+    replacement_names = sorted(
+        {
+            _normalize_text(value, max_length=255)
+            for value in list(raw.get("replace_existing_names") or [])
+            if _normalize_text(value, max_length=255)
+        }
+    )
+    if replacement_ids:
+        normalized_group["replace_existing_entry_ids"] = replacement_ids
+    if replacement_names:
+        normalized_group["replace_existing_names"] = replacement_names
+    return normalized_group
 
 
 def _normalize_source_selection(payload: dict[str, Any] | None, *, sync_mode: str) -> dict[str, Any] | None:
@@ -732,8 +758,10 @@ async def create_pan_transfer_follow_sync_batch(
         (payload or {}).get("external_source_url"),
         expected_platform=str(task.platform or ""),
     )
-    if external_source_url and sync_mode != "replace_all":
-        raise ValueError("external_source_url is only supported for replace_all mode")
+    if source_kind == "external" and not external_source_url:
+        raise ValueError("external source kind requires external_source_url")
+    if external_source_url and sync_mode == "standard":
+        raise ValueError("external_source_url requires incremental or replace_all mode")
     source_target, source_url, source_message_snapshot = _resolve_follow_sync_source(
         session,
         task=task,
@@ -761,7 +789,7 @@ async def create_pan_transfer_follow_sync_batch(
 
     path_strategy, resolved_paths = _resolve_follow_sync_paths(task)
     source_selection = _normalize_source_selection(payload, sync_mode=sync_mode)
-    if external_source_url:
+    if external_source_url and sync_mode == "replace_all":
         external_preview = await preview_pan_transfer_link_directory(url=external_source_url)
         if bool(external_preview.get("truncated")):
             raise ValueError("external share directory is too large to replace safely")
@@ -922,6 +950,7 @@ async def create_pan_transfer_follow_sync_batch(
                 "target_relative_path_source": target_relative_path_source,
                 "selection_target_relative_paths": selection_target_relative_paths,
                 "source_metadata_promotion": source_metadata_promotion,
+                "external_source_url": external_source_url,
             },
             "source_selection": source_selection,
         },

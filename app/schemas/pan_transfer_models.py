@@ -418,9 +418,22 @@ class PanTransferFollowTaskInspectionSchedule(PanTransferBaseModel):
         return self
 
 
+class PanTransferFollowTaskExternalSource(PanTransferBaseModel):
+    url: str = Field(min_length=1, max_length=2048)
+    priority: int = Field(default=100, ge=1, le=999)
+    enabled: bool = True
+
+    @field_validator("url")
+    @classmethod
+    def validate_external_source_url(cls, value: str) -> str:
+        return _normalize_text(value, field_name="url")
+
+
 class PanTransferFollowTaskAutomationConfig(PanTransferBaseModel):
     enabled: bool = False
     mode: str = Field(default="auto_incremental", max_length=64)
+    source_mode: str = Field(default="system", max_length=32)
+    external_sources: list[PanTransferFollowTaskExternalSource] = Field(default_factory=list)
     reuse_existing_share_if_valid: bool = True
     update_publish_record: bool = True
     origin_mode_available: bool = True
@@ -434,6 +447,9 @@ class PanTransferFollowTaskAutomationConfig(PanTransferBaseModel):
     last_auto_sync_mode: str | None = Field(default=None, max_length=32)
     last_auto_result: str | None = Field(default=None, max_length=64)
     last_auto_batch_id: int | None = None
+    active_external_source_url: str | None = Field(default=None, max_length=2048)
+    last_external_result: str | None = Field(default=None, max_length=32)
+    external_source_statuses: list[dict] = Field(default_factory=list)
 
 
 class PanTransferFollowTaskAppliedUpdateState(PanTransferBaseModel):
@@ -494,6 +510,8 @@ class PanTransferFollowTaskSyncSelectionGroup(PanTransferBaseModel):
     target_relative_path: str | None = Field(default=None, max_length=1024)
     selected_entries: list[PanTransferFollowTaskSyncSelectionEntry] = Field(default_factory=list)
     selected_count: int = Field(default=0, ge=0)
+    replace_existing_entry_ids: list[str] = Field(default_factory=list, max_length=512)
+    replace_existing_names: list[str] = Field(default_factory=list, max_length=512)
 
     @field_validator("parent_entry_id", "parent_path", "parent_name", "target_relative_path")
     @classmethod
@@ -520,6 +538,18 @@ class PanTransferFollowTaskSyncSelectionGroup(PanTransferBaseModel):
             normalized.append(entry)
         return normalized
 
+    @field_validator("replace_existing_entry_ids", "replace_existing_names")
+    @classmethod
+    def validate_replacement_values(cls, value: list[str], info) -> list[str]:
+        normalized = sorted(
+            {
+                _normalize_text(item, field_name=info.field_name)
+                for item in value
+                if str(item or "").strip()
+            }
+        )
+        return normalized
+
     @model_validator(mode="after")
     def validate_selection_group_payload(self) -> "PanTransferFollowTaskSyncSelectionGroup":
         self.selected_count = len(self.selected_entries)
@@ -544,7 +574,7 @@ class PanTransferFollowTaskSyncRequest(PanTransferBaseModel):
     def validate_follow_sync_mode_fields(cls, value: str, info) -> str:
         normalized = _normalize_text(value, field_name=info.field_name).lower()
         allowed_map = {
-            "source_kind": {"current", "candidate"},
+            "source_kind": {"current", "candidate", "external"},
             "sync_mode": {"standard", "incremental", "replace_all"},
         }
         if normalized not in allowed_map[info.field_name]:
@@ -585,8 +615,12 @@ class PanTransferFollowTaskSyncRequest(PanTransferBaseModel):
 
     @model_validator(mode="after")
     def validate_follow_sync_payload(self) -> "PanTransferFollowTaskSyncRequest":
-        if self.external_source_url and self.sync_mode != "replace_all":
-            raise ValueError("external_source_url is only supported for replace_all mode")
+        if self.external_source_url and self.source_kind != "external":
+            raise ValueError("external_source_url requires source_kind=external")
+        if self.source_kind == "external" and not self.external_source_url:
+            raise ValueError("external source_kind requires external_source_url")
+        if self.source_kind == "external" and self.sync_mode == "standard":
+            raise ValueError("external source requires incremental or replace_all mode")
         if self.selection_groups:
             self.selected_entries = []
         if self.sync_mode == "standard":
@@ -667,6 +701,7 @@ class PanTransferFollowTaskCandidateAssessment(PanTransferBaseModel):
     is_newer: bool | None = None
     should_promote: bool | None = None
     same_episode_replace: bool | None = None
+    quality_upgrade: bool | None = None
     candidate_origin: str | None = None
     confidence: float | None = None
     current_episode: int | None = None

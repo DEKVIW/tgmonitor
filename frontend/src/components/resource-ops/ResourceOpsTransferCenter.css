@@ -1188,6 +1188,32 @@
   gap: 10px;
 }
 
+.resource-ops-follow-automation-source-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 2px;
+}
+
+.resource-ops-follow-external-source-row {
+  display: flex;
+  width: 100%;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.resource-ops-follow-external-source-url {
+  flex: 1 1 280px;
+  min-width: 0;
+}
+
+@media (max-width: 720px) {
+  .resource-ops-follow-external-source-row .ant-input-number,
+  .resource-ops-follow-external-source-row .ant-tag {
+    flex: 1 1 auto;
+  }
+}
+
 .resource-ops-follow-automation-facts--compact {
   grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
 }

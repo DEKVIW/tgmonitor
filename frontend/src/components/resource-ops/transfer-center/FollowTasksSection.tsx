@@ -10,9 +10,10 @@ import {
   LinkOutlined,
   PauseCircleOutlined,
   PlayCircleOutlined,
+  PlusOutlined,
   SearchOutlined,
 } from '@ant-design/icons'
-import { Alert, Button, Card, Checkbox, Collapse, Descriptions, Drawer, Dropdown, Empty, Input, InputNumber, Modal, Segmented, Space, Table, Tabs, Tag, TimePicker, Tooltip, Typography, message } from 'antd'
+import { Alert, Button, Card, Checkbox, Collapse, Descriptions, Drawer, Dropdown, Empty, Input, InputNumber, Modal, Segmented, Select, Space, Table, Tabs, Tag, TimePicker, Tooltip, Typography, message } from 'antd'
 import type { MenuProps } from 'antd'
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table'
 
@@ -39,6 +40,7 @@ import type {
   PanTransferFollowTaskInspectionSchedule,
   PanTransferFollowTaskItem,
   PanTransferFollowTaskLogItem,
+  PanTransferFollowTaskExternalSource,
   PanTransferFollowTaskSyncSelectionEntry,
   PanTransferLinkDirectoryEntry,
   PanTransferLinkDirectoryPreviewResponse,
@@ -58,7 +60,7 @@ type FollowTasksSectionProps = {
 }
 
 type FollowStatusFilter = 'all' | 'active' | 'paused'
-type FollowSyncSourceKind = 'current' | 'candidate'
+type FollowSyncSourceKind = 'current' | 'candidate' | 'external'
 type FollowSyncMode = 'incremental' | 'replace_all'
 type FollowAutomationMode = 'stable_origin_incremental' | 'auto_incremental' | 'auto_replace_all'
 type DirectoryTrailItem = {
@@ -116,6 +118,7 @@ const FOLLOW_RULE_TONE: Record<string, { color: string; label: string }> = {
 const DIRECTORY_ROOT_LABELS: Record<FollowSyncSourceKind, string> = {
   current: '当前原链',
   candidate: '候选原链',
+  external: '外部分享',
 }
 
 const DEFAULT_FOLLOW_LOOKBACK_DAYS = 3
@@ -147,6 +150,8 @@ const parseFollowWeekdaysInput = (value: string) => {
 const DEFAULT_FOLLOW_AUTOMATION_CONFIG: PanTransferFollowTaskAutomationConfig = {
   enabled: false,
   mode: 'auto_incremental',
+  source_mode: 'system',
+  external_sources: [],
   reuse_existing_share_if_valid: true,
   update_publish_record: true,
   origin_mode_available: true,
@@ -160,6 +165,9 @@ const DEFAULT_FOLLOW_AUTOMATION_CONFIG: PanTransferFollowTaskAutomationConfig = 
   last_auto_sync_mode: null,
   last_auto_result: null,
   last_auto_batch_id: null,
+  active_external_source_url: null,
+  last_external_result: null,
+  external_source_statuses: [],
 }
 
 const DEFAULT_FOLLOW_APPLIED_UPDATE_STATE: PanTransferFollowTaskAppliedUpdateState = {
@@ -239,7 +247,11 @@ const formatFollowLogStatus = (value: unknown) => {
 }
 
 const formatFollowSourceKind = (value: unknown) =>
-  String(value || '').trim().toLowerCase() === 'candidate' ? '候选原链' : '当前原链'
+  String(value || '').trim().toLowerCase() === 'candidate'
+    ? '候选原链'
+    : String(value || '').trim().toLowerCase() === 'external'
+      ? '外部分享'
+      : '当前原链'
 
 const formatFollowSyncMode = (value: unknown) => {
   const normalized = String(value || '').trim().toLowerCase()
@@ -829,8 +841,13 @@ const getFollowAutomation = (
   return {
     ...merged,
     mode: normalizeFollowAutomationMode(merged.mode),
+    source_mode: String(merged.source_mode || 'system').trim().toLowerCase() || 'system',
+    external_sources: Array.isArray(merged.external_sources) ? merged.external_sources : [],
   }
 }
+
+const getConfiguredExternalSources = (task: Pick<PanTransferFollowTaskItem, 'automation'> | { automation?: Partial<PanTransferFollowTaskAutomationConfig> | null }) =>
+  getFollowAutomation(task).external_sources || []
 
 const areAutomationConfigsEqual = (
   left: PanTransferFollowTaskAutomationConfig,
@@ -838,6 +855,8 @@ const areAutomationConfigsEqual = (
 ) =>
   left.enabled === right.enabled &&
   normalizeFollowAutomationMode(left.mode) === normalizeFollowAutomationMode(right.mode) &&
+  String(left.source_mode || 'system') === String(right.source_mode || 'system') &&
+  JSON.stringify(left.external_sources || []) === JSON.stringify(right.external_sources || []) &&
   Boolean(left.reuse_existing_share_if_valid) === Boolean(right.reuse_existing_share_if_valid) &&
   Boolean(left.update_publish_record) === Boolean(right.update_publish_record)
 
@@ -846,9 +865,13 @@ const getAutomationSummary = (task: Pick<PanTransferFollowTaskItem, 'automation'
   if (automation.enabled) {
     const details = [
       `模式 ${getFollowAutomationModeText(automation.mode)}`,
+      automation.source_mode === 'external_preferred'
+        ? `来源策略 外部优先（${automation.external_sources?.length || 0} 个来源）`
+        : '来源策略 系统资源动态',
       automation.last_auto_source_kind ? `最近来源 ${formatFollowSourceKind(automation.last_auto_source_kind)}` : '',
       automation.last_auto_sync_mode ? `最近动作 ${formatFollowSyncMode(automation.last_auto_sync_mode)}` : '',
       automation.last_auto_result ? `最近结果 ${getFollowAutomationResultText(automation.last_auto_result)}` : '',
+      automation.last_external_result ? `外部来源 ${automation.last_external_result}` : '',
       automation.last_auto_batch_id ? `最近批次 #${automation.last_auto_batch_id}` : '',
       automation.last_auto_sync_at ? `最近自动同步 ${formatDateTime(automation.last_auto_sync_at)}` : '',
       automation.last_auto_check_at ? `最近自动巡检 ${formatDateTime(automation.last_auto_check_at)}` : '',
@@ -1052,6 +1075,9 @@ const buildFollowSettingsDraft = (task: PanTransferFollowTaskItem): FollowTaskSe
 const getFollowCandidateAssessmentSummary = (record: PanTransferFollowTaskItem) => {
   const assessment = record.candidate_assessment
   const judgeLabel = getFollowJudgeSourceLabel(assessment.judge_source)
+  if (assessment.quality_upgrade) {
+    return `${judgeLabel}判定为同作品同集数的更高画质版本，将只替换对应集文件`
+  }
   if (assessment.same_episode_replace) {
     return `${judgeLabel}判定为同作品同集数更新，当前更适合只替换来源链接，不提升为新的追更来源`
   }
@@ -1307,8 +1333,10 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
   }
 
   const resetManualSyncState = () => {
+    const configuredSource = activeExternalSources[0]
     setManualSyncMode('incremental')
-    setManualExternalSourceUrl('')
+    setManualSyncSourceKind('current')
+    setManualExternalSourceUrl(configuredSource?.url || '')
     setManualReplaceConfirmed(false)
     setManualPreviewData(null)
     setManualPreviewTrail([])
@@ -1316,8 +1344,10 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
     setManualSelectedEntries([])
   }
 
-  const resolveSourceUrl = (task: PanTransferFollowTaskItem, sourceKind: FollowSyncSourceKind) =>
-    sourceKind === 'candidate' ? task.last_candidate_url || '' : task.source_url || ''
+  const resolveSourceUrl = (task: PanTransferFollowTaskItem, sourceKind: FollowSyncSourceKind) => {
+    if (sourceKind === 'external') return manualExternalSourceUrl.trim()
+    return sourceKind === 'candidate' ? task.last_candidate_url || '' : task.source_url || ''
+  }
 
   const loadManualPreview = async (
     task: PanTransferFollowTaskItem,
@@ -1325,10 +1355,18 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
     trail: DirectoryTrailItem[],
     sourceUrlOverride?: string
   ) => {
-    const externalSourceUrl = String(sourceUrlOverride || manualExternalSourceUrl || '').trim()
+    const externalSourceUrl = sourceKind === 'external'
+      ? String(sourceUrlOverride || manualExternalSourceUrl || '').trim()
+      : ''
     const sourceUrl = externalSourceUrl || resolveSourceUrl(task, sourceKind)
     if (!sourceUrl) {
-      message.error(sourceKind === 'candidate' ? '当前没有可用的候选原链' : '当前原链为空')
+      message.error(
+        sourceKind === 'candidate'
+          ? '当前没有可用的候选原链'
+          : sourceKind === 'external'
+            ? '请先在自动同步中配置并选择外部分享'
+            : '当前原链为空'
+      )
       return
     }
     setManualPreviewLoading(true)
@@ -1341,8 +1379,8 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
         entry_name: current?.label || undefined,
       })
       setManualPreviewData(response)
-      setManualPreviewTrail(buildDirectoryTrail(externalSourceUrl ? '外部分享' : DIRECTORY_ROOT_LABELS[sourceKind], trail, response))
-      if (externalSourceUrl && !response.truncated) {
+      setManualPreviewTrail(buildDirectoryTrail(DIRECTORY_ROOT_LABELS[sourceKind], trail, response))
+      if (sourceKind === 'external' && !response.truncated) {
         setManualSelectedEntries(response.items)
         setManualSelectedRowKeys(
           response.items.map(
@@ -1396,12 +1434,17 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
     initialSyncMode: FollowSyncMode = 'incremental'
   ) => {
     const nextSourceKind =
-      initialSourceKind === 'candidate' && task.last_candidate_url ? 'candidate' : 'current'
+      initialSourceKind === 'candidate' && task.last_candidate_url
+        ? 'candidate'
+        : initialSourceKind === 'external' && activeExternalSources.length > 0
+          ? 'external'
+          : 'current'
     resetManualSyncState()
     setManualSyncSourceKind(nextSourceKind)
+    setManualExternalSourceUrl(activeExternalSources[0]?.url || '')
     setManualSyncMode(initialSyncMode)
     setManualSyncOpen(true)
-    await loadManualPreview(task, nextSourceKind, [{ key: 'root', label: DIRECTORY_ROOT_LABELS[nextSourceKind] }])
+    await loadManualPreview(task, nextSourceKind, [{ key: 'root', label: DIRECTORY_ROOT_LABELS[nextSourceKind] }], activeExternalSources[0]?.url)
   }
 
   useEffect(() => {
@@ -1795,7 +1838,7 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
       const response = await createPanTransferFollowSyncBatch(detailTask.id, {
         source_kind: manualSyncSourceKind,
         sync_mode: manualSyncMode,
-        external_source_url: manualSyncMode === 'replace_all' ? manualExternalSourceUrl.trim() || null : null,
+        external_source_url: manualSyncSourceKind === 'external' ? manualExternalSourceUrl.trim() || null : null,
         selected_entries: manualSelectionEntries,
         selection_parent_entry_id: manualPreviewData?.current_entry_id || null,
         selection_parent_path: manualPreviewData?.current_path || null,
@@ -2029,6 +2072,9 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
   const activeOriginModeReasonLabel =
     activeOriginModeReason ? FOLLOW_AUTOMATION_STOP_REASON_LABELS[activeOriginModeReason] || activeOriginModeReason : ''
   const activeAutomationMeta = getFollowAutomationModeMeta(activeAutomationMode)
+  const activeSourceStrategyLabel = activeSettingsDraft?.automation.source_mode === 'external_preferred'
+    ? '外部优先，异常时回退系统来源'
+    : activeAutomationMeta.sourceStrategy
   const activeAutomationAvailable = activeAutomationMode !== 'stable_origin_incremental' || activeOriginModeAvailable
   const activeAutomationStatusLabel = !activeSettingsDraft?.automation.enabled
     ? '自动关闭'
@@ -2041,6 +2087,9 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
       ? 'success'
       : 'warning'
   const detailRuleTone = detailTask ? getFollowRuleTone(detailTask) : FOLLOW_RULE_TONE.info
+  const activeExternalSources: PanTransferFollowTaskExternalSource[] = activeSettingsDraft
+    ? getConfiguredExternalSources(activeSettingsDraft)
+    : []
   const showSystemSuggestionAction: boolean = false
   const preferredManualSourceKind: FollowSyncSourceKind = hasCandidate ? 'candidate' : 'current'
   const detailRecommendedSourceLabel = formatFollowSourceKind(
@@ -2127,6 +2176,30 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
       ...automation,
       mode,
     }))
+  const updateExternalSourcesDraft = (sources: PanTransferFollowTaskExternalSource[]) => {
+    updateAutomationDraft((automation) => ({
+      ...automation,
+      external_sources: sources,
+      source_mode:
+        sources.length <= 0
+          ? 'system'
+          : String(automation.source_mode || 'system') === 'external_preferred'
+            ? 'external_preferred'
+            : automation.source_mode || 'system',
+    }))
+  }
+  const addExternalSourceDraft = () => {
+    if (!activeSettingsDraft) return
+    const sources = [...(activeSettingsDraft.automation.external_sources || [])]
+    updateExternalSourcesDraft([
+      ...sources,
+      {
+        url: '',
+        priority: (sources.length + 1) * 10,
+        enabled: true,
+      },
+    ])
+  }
   const automationModeOptions = [
     {
       title: '智能增量',
@@ -2715,7 +2788,7 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
                     <div className="resource-ops-follow-automation-facts">
                       <div className="resource-ops-follow-automation-fact">
                         <span>来源策略</span>
-                        <strong>{activeAutomationMeta.sourceStrategy}</strong>
+                        <strong>{activeSourceStrategyLabel}</strong>
                       </div>
                       <div className="resource-ops-follow-automation-fact">
                         <span>同步动作</span>
@@ -2725,6 +2798,96 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
                         <span>风险级别</span>
                         <strong>{activeAutomationMeta.riskLabel}</strong>
                       </div>
+                    </div>
+                    <div className="resource-ops-follow-automation-source-panel">
+                      <div className="resource-ops-follow-sync-meta">
+                        <span>更新来源</span>
+                        <small>外部分享只作为转存来源，不会写入追更原链、候选记录或前台消息。</small>
+                      </div>
+                      <Segmented
+                        block
+                        value={activeSettingsDraft.automation.source_mode || 'system'}
+                        options={[
+                          { label: '系统资源动态', value: 'system' },
+                          { label: '外部分享优先', value: 'external_preferred' },
+                        ]}
+                        onChange={(value) =>
+                          updateAutomationDraft((automation) => ({
+                            ...automation,
+                            source_mode: value as 'system' | 'external_preferred',
+                          }))
+                        }
+                      />
+                      <Space direction="vertical" size={8} style={{ width: '100%', marginTop: 10 }}>
+                        {(activeSettingsDraft.automation.external_sources || []).map((source, index) => {
+                          const status = (detailAutomation.external_source_statuses || []).find(
+                            (item) => String(item.url || '').trim() === String(source.url || '').trim(),
+                          )
+                          const statusText = status
+                            ? status.status === 'valid'
+                              ? '最近可用'
+                              : status.status === 'not_ready'
+                                ? '等待目录更新'
+                                : status.status === 'transient_error'
+                                  ? '临时异常，待重试'
+                                  : '不可用，已尝试后续来源'
+                            : '尚未检查'
+                          return (
+                            <Space key={`${source.url}-${index}`} align="start" className="resource-ops-follow-external-source-row">
+                              <Input
+                                value={source.url}
+                                placeholder="填写同平台外部分享链接"
+                                onChange={(event) => {
+                                  const next = [...(activeSettingsDraft.automation.external_sources || [])]
+                                  next[index] = { ...source, url: event.target.value }
+                                  updateExternalSourcesDraft(next)
+                                }}
+                                className="resource-ops-follow-external-source-url"
+                              />
+                              <InputNumber
+                                min={1}
+                                max={999}
+                                value={source.priority}
+                                addonBefore="优先级"
+                                onChange={(value) => {
+                                  const next = [...(activeSettingsDraft.automation.external_sources || [])]
+                                  next[index] = { ...source, priority: Number(value || index + 1) }
+                                  updateExternalSourcesDraft(next)
+                                }}
+                                style={{ width: 150 }}
+                              />
+                              <Checkbox
+                                checked={source.enabled}
+                                onChange={(event) => {
+                                  const next = [...(activeSettingsDraft.automation.external_sources || [])]
+                                  next[index] = { ...source, enabled: event.target.checked }
+                                  updateExternalSourcesDraft(next)
+                                }}
+                              >
+                                启用
+                              </Checkbox>
+                              <Tooltip title="移除外部分享">
+                                <Button
+                                  danger
+                                  type="text"
+                                  icon={<DeleteOutlined />}
+                                  onClick={() =>
+                                    updateExternalSourcesDraft(
+                                      (activeSettingsDraft.automation.external_sources || []).filter((_, itemIndex) => itemIndex !== index),
+                                    )
+                                  }
+                                />
+                              </Tooltip>
+                              <Tag color={status?.status === 'valid' ? 'success' : status?.status === 'invalid' ? 'error' : 'default'}>
+                                {statusText}
+                              </Tag>
+                            </Space>
+                          )
+                        })}
+                        <Button type="dashed" icon={<PlusOutlined />} onClick={addExternalSourceDraft}>
+                          添加外部分享
+                        </Button>
+                      </Space>
                     </div>
                     <Tabs
                       size="small"
@@ -3353,18 +3516,50 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
                     options={[
                       { label: '当前原链', value: 'current' },
                       { label: '候选原链', value: 'candidate', disabled: !hasCandidate },
+                      { label: '已配置外部分享', value: 'external', disabled: activeExternalSources.length <= 0 },
                     ]}
                     onChange={(value) => {
                       const nextSourceKind = value as FollowSyncSourceKind
                       setManualSyncSourceKind(nextSourceKind)
-                      setManualExternalSourceUrl('')
+                      const nextExternalUrl = nextSourceKind === 'external' ? activeExternalSources[0]?.url || '' : ''
+                      setManualExternalSourceUrl(nextExternalUrl)
+                      setManualPreviewData(null)
+                      setManualPreviewTrail([])
+                      setManualSelectedRowKeys([])
+                      setManualSelectedEntries([])
                       if (!detailTask) return
                       void loadManualPreview(detailTask, nextSourceKind, [
                         { key: 'root', label: DIRECTORY_ROOT_LABELS[nextSourceKind] },
-                      ])
+                      ], nextExternalUrl)
                     }}
                   />
-                  <small>{manualSyncSourceKind === 'candidate' ? '会从最新候选原链导入选中的内容。' : '会从当前已绑定原链导入选中的内容。'}</small>
+                  <small>
+                    {manualSyncSourceKind === 'candidate'
+                      ? '会从最新候选原链导入选中的内容。'
+                      : manualSyncSourceKind === 'external'
+                        ? '从自动同步中已配置的外部分享读取内容，不会改写追更原链。'
+                        : '会从当前已绑定原链导入选中的内容。'}
+                  </small>
+                  {manualSyncSourceKind === 'external' ? (
+                    <Select
+                      value={manualExternalSourceUrl || undefined}
+                      placeholder="选择已配置的外部分享"
+                      options={activeExternalSources.map((source) => ({
+                        label: `优先级 ${source.priority} · ${source.url}`,
+                        value: source.url,
+                      }))}
+                      onChange={(value) => {
+                        setManualExternalSourceUrl(value)
+                        setManualPreviewData(null)
+                        setManualPreviewTrail([])
+                        setManualSelectedRowKeys([])
+                        setManualSelectedEntries([])
+                        if (!detailTask) return
+                        void loadManualPreview(detailTask, 'external', [{ key: 'root', label: '外部分享' }], value)
+                      }}
+                      style={{ width: '100%', marginTop: 8 }}
+                    />
+                  ) : null}
                 </div>
 
                 <div className="resource-ops-follow-sync-meta">
@@ -3380,7 +3575,7 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
                       const nextMode = value as FollowSyncMode
                       setManualSyncMode(nextMode)
                       setManualReplaceConfirmed(false)
-                      if (nextMode !== 'replace_all') {
+                      if (nextMode !== 'replace_all' && manualSyncSourceKind !== 'external') {
                         setManualExternalSourceUrl('')
                         setManualPreviewData(null)
                         setManualPreviewTrail([])
@@ -3403,7 +3598,7 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
 
                 <div className="resource-ops-follow-sync-meta">
                   <span>当前来源链接</span>
-                  {manualSyncMode === 'replace_all' && manualExternalSourceUrl.trim() ? (
+                  {manualSyncSourceKind === 'external' && manualExternalSourceUrl.trim() ? (
                     <Link
                       href={manualExternalSourceUrl.trim()}
                       target="_blank"
@@ -3426,42 +3621,11 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
 
                 {manualSyncMode === 'replace_all' ? (
                   <>
-                    <div className="resource-ops-follow-sync-meta">
-                      <span>外部分享链接（可选）</span>
-                      <Input
-                        value={manualExternalSourceUrl}
-                        placeholder="填写管理员整理的夸克或百度分享链接"
-                        onChange={(event) => {
-                          setManualExternalSourceUrl(event.target.value)
-                          setManualPreviewData(null)
-                          setManualPreviewTrail([])
-                          setManualSelectedRowKeys([])
-                          setManualSelectedEntries([])
-                        }}
-                      />
-                      <Button
-                        size="small"
-                        loading={manualPreviewLoading}
-                        disabled={!manualExternalSourceUrl.trim()}
-                        onClick={() => {
-                          if (!detailTask) return
-                          void loadManualPreview(
-                            detailTask,
-                            manualSyncSourceKind,
-                            [{ key: 'root', label: '外部分享' }],
-                            manualExternalSourceUrl.trim()
-                          )
-                        }}
-                      >
-                        读取外部目录并全选
-                      </Button>
-                      <small>仅用于本次全量替换，不会修改追更原链、候选记录或作品信息。</small>
-                    </div>
                     <Alert
                       type="error"
                       showIcon
                       message="全量替换是高风险操作"
-                      description="会先清空当前资源目录，再导入当前来源或外部分享目录的全部已读取内容。如果导入失败，现有目录可能暂时为空，所以这个模式不会默认启用。"
+                      description="会先清空当前资源目录，再导入已选来源目录的全部内容。如果导入失败，现有目录可能暂时为空，所以提交前必须确认。外部分享必须先在自动同步中配置。"
                     />
                     <Checkbox
                       checked={manualReplaceConfirmed}

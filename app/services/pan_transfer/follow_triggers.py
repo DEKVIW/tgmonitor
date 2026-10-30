@@ -28,10 +28,13 @@ from .follow_tasks import (
     _apply_follow_snapshot_progress_to_identity,
     _get_task_automation_config,
     _get_task_extra_section,
+    _get_follow_external_sources,
+    _uses_follow_external_source,
     _normalize_optional_int,
     _normalize_text,
     _resolve_follow_task_resource_title,
 )
+from .quality import quality_sort_key
 
 
 FOLLOW_TRIGGER_EVENT_TYPE_MESSAGE_LINK_RECEIVED = "message_link_received"
@@ -147,8 +150,18 @@ def evaluate_follow_trigger(
     result = decision.to_dict()
     result["tracked_identity"] = tracked_identity.to_dict()
     result["candidate_identity"] = candidate_identity.to_dict()
+    tracked_title = _resolve_follow_task_resource_title(task) or str(
+        _get_task_extra_section(task, "source_message_snapshot").get("title") or ""
+    )
+    quality_upgrade = bool(
+        decision.same_episode_replace
+        and quality_sort_key(candidate_title) > quality_sort_key(tracked_title)
+    )
+    result["quality_upgrade"] = quality_upgrade
+    if quality_upgrade:
+        result["reason"] = "rule_same_episode_higher_quality"
     result["triggerable"] = bool(
-        decision.should_promote
+        (decision.should_promote or quality_upgrade)
         and not decision.needs_ai_review
         and not tracked_identity.needs_ai_review
         and not candidate_identity.needs_ai_review
@@ -233,6 +246,7 @@ def _queue_task_from_trigger(
     assessment: Mapping[str, Any],
     event: PanTransferFollowTriggerEvent,
     now: datetime,
+    external_preferred: bool = False,
 ) -> None:
     extra_json = dict(task.extra_json or {})
     candidate_snapshot = dict(candidate)
@@ -258,15 +272,22 @@ def _queue_task_from_trigger(
         "candidate_title": candidate.get("title"),
         "candidate_episode": assessment.get("candidate_episode"),
         "triggered_at": _serialize_datetime(now),
+        "source_mode": "external_preferred" if external_preferred else "system",
     }
     task.extra_json = extra_json
     task.task_state = PAN_TRANSFER_SYNC_STATE_QUEUED
     task.next_check_at = now
     task.last_change_type = "realtime_trigger"
-    task.last_candidate_link_target_id = int(candidate["link_target_id"])
-    task.last_candidate_url = str(candidate["url"])
-    task.last_candidate_title = str(candidate.get("title") or "")
-    task.last_candidate_message_time = candidate.get("latest_message_time")
+    if external_preferred:
+        task.last_candidate_link_target_id = None
+        task.last_candidate_url = None
+        task.last_candidate_title = None
+        task.last_candidate_message_time = None
+    else:
+        task.last_candidate_link_target_id = int(candidate["link_target_id"])
+        task.last_candidate_url = str(candidate["url"])
+        task.last_candidate_title = str(candidate.get("title") or "")
+        task.last_candidate_message_time = candidate.get("latest_message_time")
     session.add(task)
     session.flush()
     _append_follow_task_log(
@@ -279,6 +300,7 @@ def _queue_task_from_trigger(
             "message_id": int(event.message_id),
             "candidate": candidate_snapshot,
             "assessment": dict(assessment),
+            "source_mode": "external_preferred" if external_preferred else "system",
         },
     )
 
@@ -385,10 +407,20 @@ def process_next_pan_transfer_follow_trigger_event(session: Session, *, worker_n
                 deferred_task_ids.append(task_id)
                 continue
             candidates = _list_message_candidates(session, message=message, task=task)
+            external_preferred = _uses_follow_external_source(task)
+            if external_preferred:
+                candidates = [
+                    {
+                        "message_id": int(message.id),
+                        "title": candidate_title,
+                        "latest_message_time": getattr(message, "timestamp", None),
+                        "source_mode": "external_preferred",
+                    }
+                ]
             if not candidates:
                 ignored_task_ids.append(task_id)
                 continue
-            if _pending_candidate_blocks_trigger(task, candidate=candidates[0]):
+            if not external_preferred and _pending_candidate_blocks_trigger(task, candidate=candidates[0]):
                 ignored_task_ids.append(task_id)
                 continue
             _queue_task_from_trigger(
@@ -398,6 +430,7 @@ def process_next_pan_transfer_follow_trigger_event(session: Session, *, worker_n
                 assessment=assessment,
                 event=event,
                 now=now,
+                external_preferred=external_preferred,
             )
             queued_task_ids.append(task_id)
 

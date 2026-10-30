@@ -206,8 +206,11 @@ def _get_source_selection(item: PanTransferBatchItem) -> dict[str, Any] | None:
         return None
     raw_groups = raw_value.get("selection_groups")
     if isinstance(raw_groups, list) and raw_groups:
-        normalized_groups = [
-            {
+        normalized_groups = []
+        for group in raw_groups:
+            if not isinstance(group, dict) or not isinstance(group.get("selected_entries"), list) or not list(group.get("selected_entries") or []):
+                continue
+            normalized_group = {
                 "parent_entry_id": str(group.get("parent_entry_id") or "").strip() or None,
                 "parent_path": str(group.get("parent_path") or "").strip() or None,
                 "parent_name": str(group.get("parent_name") or "").strip() or None,
@@ -215,9 +218,11 @@ def _get_source_selection(item: PanTransferBatchItem) -> dict[str, Any] | None:
                 "selected_entries": [dict(row or {}) for row in list(group.get("selected_entries") or []) if isinstance(row, dict)],
                 "selected_count": int(group.get("selected_count") or len(list(group.get("selected_entries") or [])) or 0),
             }
-            for group in raw_groups
-            if isinstance(group, dict) and isinstance(group.get("selected_entries"), list) and list(group.get("selected_entries") or [])
-        ]
+            for key in ("replace_existing_entry_ids", "replace_existing_names"):
+                values = [str(value).strip() for value in list(group.get(key) or []) if str(value).strip()]
+                if values:
+                    normalized_group[key] = sorted(set(values))
+            normalized_groups.append(normalized_group)
         if normalized_groups:
             return {
                 "selection_groups": normalized_groups,
