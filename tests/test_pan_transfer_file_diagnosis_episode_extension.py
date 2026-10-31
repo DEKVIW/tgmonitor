@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import unittest
+from datetime import datetime, timedelta
+from types import SimpleNamespace
 
 from app.services.pan_transfer.file_diagnosis import (
     _DiagnosisStats,
@@ -10,10 +12,12 @@ from app.services.pan_transfer.file_diagnosis import (
     _extract_episode_numbers_quick,
     _full_parse_entry,
     _infer_target_relative_path,
+    _pick_best_entry,
     _prepare_quick_entries,
     _select_full_parse_candidates,
 )
 from app.services.pan_transfer.follow_sync import _augment_source_selection_target_relative_path
+from app.services.pan_transfer.follow_sync import _extract_follow_sync_materialized_episode_numbers
 
 
 class FileDiagnosisEpisodeExtensionTests(unittest.TestCase):
@@ -118,6 +122,124 @@ class FileDiagnosisEpisodeExtensionTests(unittest.TestCase):
     def test_quality_metadata_digits_are_not_guessed_as_episode_numbers(self) -> None:
         self.assertEqual(_extract_episode_numbers_quick("4KHQHDR10 无人在意.mp4"), [])
         self.assertEqual(_extract_episode_numbers_quick("光阴之外 HDR10 4K.mp4"), [])
+
+    def test_theatre_archive_without_filename_episode_is_not_selected(self) -> None:
+        entry = _FileEntry(
+            side="source",
+            name="2026.2160p.WEB-DL.H265.AAC-PanWEB.zip",
+            entry_id="theatre",
+            path="/遮天 [更新至187集]/剧场版/2026.2160p.WEB-DL.H265.AAC-PanWEB.zip",
+            parent_entry_id="theatre-dir",
+            parent_path="/遮天 [更新至187集]/剧场版",
+            parent_name="剧场版",
+            relative_parent_path="遮天 [更新至187集]/剧场版",
+            updated_at=None,
+            size_bytes=1024 * 1024 * 1024 * 20,
+            extension=".zip",
+            scan_order=1,
+        )
+        stats = _DiagnosisStats()
+
+        videos = _prepare_quick_entries(
+            [entry],
+            stats=stats,
+            tracked_keys=_build_tracked_keys({"resource_title": "遮天"}),
+            tracked_episode=186,
+        )
+
+        self.assertEqual(videos, [])
+
+    def test_numbered_disguised_file_uses_filename_episode(self) -> None:
+        entry = _FileEntry(
+            side="source",
+            name="187.zip",
+            entry_id="episode-187",
+            path="/遮天 [更新至186集]/187.zip",
+            parent_entry_id="source-dir",
+            parent_path="/遮天 [更新至186集]",
+            parent_name="遮天 [更新至186集]",
+            relative_parent_path="遮天 [更新至186集]",
+            updated_at=None,
+            size_bytes=None,
+            extension=".zip",
+            scan_order=1,
+        )
+        stats = _DiagnosisStats()
+        tracked_keys = _build_tracked_keys({"resource_title": "遮天"})
+
+        videos = _prepare_quick_entries(
+            [entry],
+            stats=stats,
+            tracked_keys=tracked_keys,
+            tracked_episode=186,
+        )
+        _full_parse_entry(videos[0], tracked_keys=tracked_keys, tracked_season=None)
+
+        self.assertEqual(videos[0].quick_episode_numbers, [187])
+        self.assertEqual(videos[0].episode_numbers, [187])
+        self.assertTrue(videos[0].accepted)
+
+    def test_same_episode_selection_does_not_use_file_size(self) -> None:
+        now = datetime(2026, 4, 18, 12, 0, 0)
+        newer_smaller = _FileEntry(
+            side="source",
+            name="遮天 S01E187 1080p.mp4",
+            entry_id="newer",
+            path="/遮天 S01E187 1080p.mp4",
+            parent_entry_id=None,
+            parent_path=None,
+            parent_name=None,
+            relative_parent_path=None,
+            updated_at=now,
+            size_bytes=1,
+            extension=".mp4",
+            scan_order=1,
+            episode_numbers=[187],
+            quick_episode_numbers=[187],
+            accepted=True,
+        )
+        older_larger = _FileEntry(
+            side="source",
+            name="剧场版 2026.2160p.zip",
+            entry_id="older",
+            path="/剧场版 2026.2160p.zip",
+            parent_entry_id=None,
+            parent_path=None,
+            parent_name=None,
+            relative_parent_path=None,
+            updated_at=now - timedelta(days=1),
+            size_bytes=1024 * 1024 * 1024 * 100,
+            extension=".zip",
+            scan_order=2,
+            episode_numbers=[187],
+            quick_episode_numbers=[187],
+            accepted=True,
+        )
+
+        self.assertIs(_pick_best_entry([newer_smaller, older_larger]), newer_smaller)
+
+    def test_materialized_progress_does_not_read_episode_from_parent_path(self) -> None:
+        item = SimpleNamespace(
+            extra_json={
+                "source_selection": {
+                    "selection_groups": [
+                        {
+                            "selected_entries": [
+                                {
+                                    "name": "2026.2160p.WEB-DL.H265.AAC-PanWEB.zip",
+                                    "path": "/遮天 [更新至187集]/剧场版/2026.2160p.WEB-DL.H265.AAC-PanWEB.zip",
+                                }
+                            ]
+                        }
+                    ]
+                }
+            }
+        )
+
+        episodes, selected_count = _extract_follow_sync_materialized_episode_numbers(item)
+
+        self.assertEqual(episodes, [])
+        self.assertEqual(selected_count, 1)
 
     def test_candidate_range_recommends_episode_after_current_anchor(self) -> None:
         file_names = [

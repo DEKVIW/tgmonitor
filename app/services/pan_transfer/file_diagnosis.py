@@ -222,6 +222,8 @@ def _is_video_name(name: str) -> bool:
     _, extension = _split_name_and_extension(name)
     if extension in _VIDEO_EXTENSIONS:
         return True
+    if extension in _DISGUISED_VIDEO_EXTENSIONS:
+        return bool(_extract_episode_numbers_quick(name))
     normalized = _normalize_text(name, max_length=255)
     if not normalized or _NO_EPISODE_HINT_PATTERN.search(normalized):
         return False
@@ -284,7 +286,8 @@ def _expand_episode_range(start: int, end: int) -> list[int]:
 
 def _extract_episode_numbers_quick(text: str) -> list[int]:
     normalized = _normalize_text(text, max_length=500)
-    if _split_name_and_extension(normalized)[1] in _VIDEO_EXTENSIONS:
+    extension = _split_name_and_extension(normalized)[1]
+    if extension in _VIDEO_EXTENSIONS or extension in _DISGUISED_VIDEO_EXTENSIONS:
         normalized = _split_name_and_extension(normalized)[0]
     if not normalized or _NO_EPISODE_HINT_PATTERN.search(normalized):
         return []
@@ -378,7 +381,7 @@ def _is_likely_disguised_video_entry(
     if not normalized_parse_title or _NO_EPISODE_HINT_PATTERN.search(normalized_parse_title):
         return False
 
-    episode_numbers = _extract_episode_numbers_quick(quick_parse_title)
+    episode_numbers = _extract_episode_numbers_quick(stem)
     if not episode_numbers:
         return False
     if not any(abs(int(value) - tracked_episode) <= _DISGUISED_VIDEO_MAX_EPISODE_DISTANCE for value in episode_numbers):
@@ -405,8 +408,6 @@ def _full_parse_entry(entry: _FileEntry, *, tracked_keys: set[str], tracked_seas
     # episode labels are not evidence for each individual file.
     file_episode_numbers = _extract_episode_numbers_quick(entry.name)
     resolved_episodes = list(file_episode_numbers or entry.quick_episode_numbers)
-    if not file_episode_numbers and identity.episode and identity.episode not in resolved_episodes:
-        resolved_episodes.append(int(identity.episode))
     resolved_episodes = sorted({int(value) for value in resolved_episodes if int(value) > 0})
     match_score = _score_title_match(entry, tracked_keys=tracked_keys)
     if identity.core_title and identity.normalized_keys:
@@ -489,8 +490,8 @@ def _pick_best_entry(entries: list[_FileEntry]) -> _FileEntry:
             quality_sort_key(item.quality_tags),
             float(item.title_match_score or 0.0),
             float(item.confidence or 0.0),
-            float(item.size_bytes or 0),
             updated_ts,
+            -int(item.scan_order or 0),
         )
 
     return max(entries, key=sort_key)
@@ -1101,14 +1102,12 @@ def _prepare_quick_entries(
             is_disguised_video = True
         else:
             continue
-        # An explicit episode in the filename is authoritative. Directory names
-        # often describe the newest episode in a whole collection (for example,
-        # "更新至156集") and must not turn a file named S01E142 into E156.
+        # Only the filename supplies episode evidence. Directory names can
+        # describe a collection's latest episode and must not relabel a file.
         file_episode_numbers = _extract_episode_numbers_quick(entry.name)
-        quick_parse_title = _build_parse_title(entry)
         entry.is_video = True
-        entry.quick_episode_numbers = file_episode_numbers or _extract_episode_numbers_quick(quick_parse_title)
-        entry.quick_season = _extract_entry_context_season(entry) or _extract_semantic_season_quick(quick_parse_title)
+        entry.quick_episode_numbers = file_episode_numbers
+        entry.quick_season = _extract_entry_context_season(entry)
         entry.quality_tags = _extract_quality_tags(entry.name)
         if is_disguised_video:
             entry.parse_reason = "disguised_extension"
