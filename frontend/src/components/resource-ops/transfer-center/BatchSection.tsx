@@ -54,7 +54,8 @@ const normalizeTitleText = (value?: string | null) =>
     .trim()
     .toLowerCase()
     .replace(/[\s\u3000]+/g, '')
-    .replace(/[()（）\[\]【】\-_.,:;!?'"]/g, '')
+    .replace(/[()（）【】\-_.,:;!?'"]/g, '')
+    .replace(/[\u005b\u005d]/g, '')
 
 const shouldHideSubtitle = (mainTitle?: string | null, subtitle?: string | null) => {
   const normalizedMain = normalizeTitleText(mainTitle)
@@ -313,17 +314,19 @@ const BatchSection = ({
     [visibleBatchExecutionLogs]
   )
 
-  const selectedFailedCount = useMemo(() => {
+  const selectedRetryableCount = useMemo(() => {
     if (!detailData || selectedItemKeys.length <= 0) return 0
     const selectedSet = new Set(selectedItemKeys.map((item) => Number(item)))
-    return detailData.items.filter((item) => selectedSet.has(item.id) && item.transfer_status === 'failed').length
+    return detailData.items.filter(
+      (item) => selectedSet.has(item.id) && ['failed', 'retry_wait'].includes(item.transfer_status)
+    ).length
   }, [detailData, selectedItemKeys])
 
-  const selectedFailedItemIds = useMemo(() => {
+  const selectedRetryableItemIds = useMemo(() => {
     if (!detailData || selectedItemKeys.length <= 0) return []
     const selectedSet = new Set(selectedItemKeys.map((item) => Number(item)))
     return detailData.items
-      .filter((item) => selectedSet.has(item.id) && item.transfer_status === 'failed')
+      .filter((item) => selectedSet.has(item.id) && ['failed', 'retry_wait'].includes(item.transfer_status))
       .map((item) => item.id)
   }, [detailData, selectedItemKeys])
 
@@ -433,7 +436,7 @@ const BatchSection = ({
           ) : null}
           {record.can_retry ? (
             <Button size="small" loading={retryingBatchId === record.id} onClick={() => onRetry(record.id)}>
-              重试失败项
+              立即重试待处理项
             </Button>
           ) : null}
           {record.can_delete ? (
@@ -553,7 +556,7 @@ const BatchSection = ({
       fixed: 'right',
       render: (_, record) => {
         const canCreateFollow = Boolean(record.original_url)
-        const canRetry = record.transfer_status === 'failed' && detailData
+        const canRetry = ['failed', 'retry_wait'].includes(record.transfer_status) && detailData
         if (!canRetry && !canCreateFollow) {
           return <Text type="secondary">-</Text>
         }
@@ -669,11 +672,11 @@ const BatchSection = ({
                   onClick={() =>
                     onRetry(
                       detailData.batch.id,
-                      selectedFailedCount > 0 ? selectedFailedItemIds : undefined
+                      selectedRetryableCount > 0 ? selectedRetryableItemIds : undefined
                     )
                   }
                 >
-                  {selectedFailedCount > 0 ? `重试所选失败项 (${selectedFailedCount})` : '重试全部失败项'}
+                  {selectedRetryableCount > 0 ? `立即重试所选项 (${selectedRetryableCount})` : '立即重试待处理项'}
                 </Button>
               ) : null}
               <Button disabled={selectedItemKeys.length <= 0} loading={bulkCreatingFollow} onClick={onBulkCreateFollow}>
@@ -715,9 +718,11 @@ const BatchSection = ({
                 <small>已完成转存并通过回写</small>
               </div>
               <div className="resource-ops-transfer-summary-item">
-                <span>失败</span>
-                <strong>{detailData.batch.failed_item_count}</strong>
-                <small>可在这里重试失败项</small>
+                <span>失败 / 待重试</span>
+                <strong>
+                  {detailData.batch.failed_item_count} / {getBatchSummary(detailData.batch).retryWait}
+                </strong>
+                <small>失败项和等待重试项都可立即重试</small>
               </div>
               <div className="resource-ops-transfer-summary-item">
                 <span>排队 / 处理中</span>
@@ -736,7 +741,11 @@ const BatchSection = ({
               <div className="resource-ops-transfer-summary-item">
                 <span>当前选择</span>
                 <strong>{selectedItemKeys.length}</strong>
-                <small>{selectedFailedCount > 0 ? `其中失败项 ${selectedFailedCount} 条，可直接重试` : '可用于批量发布或转为追更任务'}</small>
+                <small>
+                  {selectedRetryableCount > 0
+                    ? `其中可立即重试 ${selectedRetryableCount} 条`
+                    : '可用于批量发布或转为追更任务'}
+                </small>
               </div>
             </div>
 

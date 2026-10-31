@@ -221,7 +221,15 @@ class QuarkChecker(BaseChecker):
             detail_data = detail_payload.get("data") if isinstance(detail_payload.get("data"), dict) else {}
             file_list = detail_data.get("list")
             detail_success = _is_success_flag(detail_payload.get("code")) and _is_success_flag(detail_payload.get("status"))
-            if detail_success and (file_list is not None or detail_message.lower() == "ok"):
+            if detail_success and isinstance(file_list, list):
+                if not file_list:
+                    return self.invalid_result(
+                        target,
+                        error="Quark share directory is empty or its contents were deleted",
+                        response_time=response_time,
+                        status_code=detail_status,
+                        meta={"empty_share_directory": True},
+                    )
                 return self.valid_result(
                     target,
                     response_time=response_time,

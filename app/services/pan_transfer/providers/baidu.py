@@ -1060,7 +1060,9 @@ class BaiduPanTransferProvider(PanTransferProvider):
         share_passcode: str | None,
         share_expire_days: int | None,
         title_hint: str | None,
+        existing_share_task_id: str | None = None,
     ) -> PanTransferShareResult:
+        del existing_share_task_id
         del account_name
         final_share_passcode = share_passcode if share_mode == "private" else None
         async with _BaiduClient(credential_value) as client:

@@ -529,6 +529,7 @@ class PanTransferFollowTaskSyncSelectionGroup(PanTransferBaseModel):
 class PanTransferFollowTaskSyncRequest(PanTransferBaseModel):
     source_kind: str = Field(default="current", min_length=1, max_length=32)
     sync_mode: str = Field(default="standard", min_length=1, max_length=32)
+    external_source_url: str | None = Field(default=None, max_length=2048)
     selected_entries: list[PanTransferFollowTaskSyncSelectionEntry] = Field(default_factory=list)
     selection_groups: list[PanTransferFollowTaskSyncSelectionGroup] = Field(default_factory=list)
     selection_parent_entry_id: str | None = Field(default=None, max_length=255)
@@ -557,6 +558,13 @@ class PanTransferFollowTaskSyncRequest(PanTransferBaseModel):
             return None
         return _normalize_text(value, field_name=info.field_name, allow_empty=True) or None
 
+    @field_validator("external_source_url")
+    @classmethod
+    def validate_external_source_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _normalize_text(value, field_name="external_source_url", allow_empty=True) or None
+
     @field_validator("selected_entries")
     @classmethod
     def validate_selected_entries(
@@ -577,6 +585,8 @@ class PanTransferFollowTaskSyncRequest(PanTransferBaseModel):
 
     @model_validator(mode="after")
     def validate_follow_sync_payload(self) -> "PanTransferFollowTaskSyncRequest":
+        if self.external_source_url and self.sync_mode != "replace_all":
+            raise ValueError("external_source_url is only supported for replace_all mode")
         if self.selection_groups:
             self.selected_entries = []
         if self.sync_mode == "standard":

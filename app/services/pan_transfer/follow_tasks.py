@@ -1404,7 +1404,7 @@ def _build_task_automation_config(raw_value: Any) -> dict[str, Any]:
     return {
         "enabled": bool(raw.get("enabled")),
         "mode": _normalize_follow_automation_mode(raw.get("mode")),
-        "reuse_existing_share_if_valid": bool(raw.get("reuse_existing_share_if_valid", True)),
+        "reuse_existing_share_if_valid": True,
         "update_publish_record": bool(raw.get("update_publish_record", True)),
         "stop_reason": _normalize_text(raw.get("stop_reason"), max_length=64) or None,
         "stopped_at": _serialize_json_value(_parse_datetime(raw.get("stopped_at")) or raw.get("stopped_at")),
@@ -2681,7 +2681,7 @@ async def _auto_refresh_follow_task_share_if_needed(
     validation_result: Mapping[str, Any] | None,
 ) -> bool:
     current_status = _normalize_text(task.current_share_status, max_length=32).lower()
-    if current_status not in {"invalid", "error"}:
+    if current_status != "invalid":
         return False
 
     now = utcnow()
@@ -4942,7 +4942,7 @@ async def _process_pan_transfer_follow_task_async(
         level="warning" if task.current_share_status in {"invalid", "error"} else "info",
         payload=dict(share_status),
     )
-    if task.current_share_status in {"invalid", "error"}:
+    if task.current_share_status == "invalid":
         refreshed = await _auto_refresh_follow_task_share_if_needed(
             session,
             task=task,
