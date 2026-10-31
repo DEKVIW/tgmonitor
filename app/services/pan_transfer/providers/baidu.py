@@ -149,7 +149,7 @@ def _normalize_selection_group(raw_value: dict[str, Any] | None) -> dict[str, An
         )
     if not normalized_entries:
         return None
-    return {
+    normalized_group = {
         "parent_entry_id": str(raw.get("parent_entry_id") or "").strip() or None,
         "parent_path": str(raw.get("parent_path") or "").strip() or None,
         "parent_name": str(raw.get("parent_name") or "").strip() or None,
@@ -157,6 +157,11 @@ def _normalize_selection_group(raw_value: dict[str, Any] | None) -> dict[str, An
         "selected_entries": normalized_entries,
         "selected_count": len(normalized_entries),
     }
+    for key in ("replace_existing_entry_ids", "replace_existing_names"):
+        values = sorted({str(value).strip() for value in list(raw.get(key) or []) if str(value).strip()})
+        if values:
+            normalized_group[key] = values
+    return normalized_group
 
 
 def _normalize_source_selection(raw_value: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -971,8 +976,41 @@ class BaiduPanTransferProvider(PanTransferProvider):
                 if target_relative_path:
                     group_target_path = f"{target_path.rstrip('/')}/{target_relative_path}"
                     await ensure_path_exists(group_target_path)
+                target_rows = None
+                if not clear_existing_contents:
+                    replacement_ids = {
+                        str(value).strip()
+                        for value in list(selection_group.get("replace_existing_entry_ids") or [])
+                        if str(value).strip()
+                    }
+                    replacement_names = {
+                        str(value).strip()
+                        for value in list(selection_group.get("replace_existing_names") or [])
+                        if str(value).strip()
+                    }
+                    if replacement_ids or replacement_names:
+                        replacement_rows = await client.list_dir(group_target_path, bdstoken=bdstoken)
+                        if isinstance(replacement_rows, int):
+                            raise PanTransferProviderError(
+                                f"Baidu failed to inspect target directory before quality replacement: errno {replacement_rows}"
+                            )
+                        delete_paths = [
+                            str(row.get("path") or "").strip()
+                            for row in replacement_rows
+                            if str(row.get("path") or "").strip()
+                            and int(row.get("isdir") or 0) != 1
+                            and (
+                                str(row.get("fs_id") or "").strip() in replacement_ids
+                                or str(row.get("server_filename") or "").strip() in replacement_names
+                            )
+                        ]
+                        if delete_paths:
+                            await client.delete_files(paths=delete_paths, bdstoken=bdstoken)
+                        target_rows = await client.list_dir(group_target_path, bdstoken=bdstoken)
+                    else:
+                        target_rows = None
                 if normalized_selection is not None and not clear_existing_contents:
-                    existing_target_rows = await client.list_dir(group_target_path, bdstoken=bdstoken)
+                    existing_target_rows = target_rows if target_rows is not None else await client.list_dir(group_target_path, bdstoken=bdstoken)
                     if isinstance(existing_target_rows, int):
                         raise PanTransferProviderError(
                             f"Baidu failed to inspect target directory {group_target_path}: errno {existing_target_rows}"

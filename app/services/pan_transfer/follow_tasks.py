@@ -30,12 +30,14 @@ from app.services.ai_center import execute_text_route, extract_json_object_from_
 from app.services.resource_identity import compare_follow_candidate, normalize_match_key, parse_resource_identity
 from app.services.resource_ops import get_work_binding_lookup
 from app.services.media_wall import delete_items_for_sync_task
+from app.services.link_check.parser import detect_platform_from_url, normalize_candidate_url
 
 from .common import DEFAULT_SHARE_TARGET_MODE, generate_share_passcode, normalize_relative_path, utcnow
 from .providers import decrypt_account_credential, get_pan_transfer_provider
 from .providers.base import PanTransferProviderError
 from .replacement import _ensure_link_target_for_url, replace_link_target_references_with_url, rewrite_message_link_ref_with_url
 from .validation import validate_share_url
+from .quality import quality_sort_key
 
 
 logger = logging.getLogger(__name__)
@@ -89,6 +91,9 @@ PAN_TRANSFER_FOLLOW_JUDGE_CANDIDATES_LIMIT = 12
 PAN_TRANSFER_FOLLOW_AUTOMATION_MODE_STABLE_ORIGIN_INCREMENTAL = "stable_origin_incremental"
 PAN_TRANSFER_FOLLOW_AUTOMATION_MODE_AUTO_INCREMENTAL = "auto_incremental"
 PAN_TRANSFER_FOLLOW_AUTOMATION_MODE_AUTO_REPLACE_ALL = "auto_replace_all"
+PAN_TRANSFER_FOLLOW_SOURCE_MODE_SYSTEM = "system"
+PAN_TRANSFER_FOLLOW_SOURCE_MODE_EXTERNAL_PREFERRED = "external_preferred"
+PAN_TRANSFER_FOLLOW_MAX_EXTERNAL_SOURCES = 8
 PAN_TRANSFER_FOLLOW_AUTOMATION_STOP_SOURCE_INVALID = "source_invalid"
 PAN_TRANSFER_FOLLOW_AUTOMATION_STOP_SOURCE_SWITCHED = "source_switched"
 PAN_TRANSFER_FOLLOW_AUTOMATION_STOP_STRUCTURE_CONFLICT = "structure_conflict"
@@ -540,8 +545,12 @@ def _get_follow_source_readiness_retry(task: PanTransferSyncTask) -> dict[str, A
     except (TypeError, ValueError):
         attempt_count = 0
     return {
+        "source_kind": _normalize_text(raw.get("source_kind"), max_length=32).lower() or None,
         "candidate_link_target_id": _normalize_optional_int(raw.get("candidate_link_target_id")),
         "candidate_url": _normalize_text(raw.get("candidate_url"), max_length=2048) or None,
+        "source_url_override": normalize_candidate_url(
+            _normalize_text(raw.get("source_url_override"), max_length=2048)
+        ) or None,
         "attempt_count": attempt_count,
         "next_retry_at": _parse_datetime(raw.get("next_retry_at")),
         "last_stop_reason": _normalize_text(raw.get("last_stop_reason"), max_length=64) or None,
@@ -553,6 +562,8 @@ def _clear_follow_source_readiness_retry(task: PanTransferSyncTask) -> None:
 
 
 def _source_readiness_retry_matches_candidate(task: PanTransferSyncTask, retry: dict[str, Any]) -> bool:
+    if retry.get("source_kind") == "external":
+        return bool(_normalize_text(retry.get("source_url_override")))
     candidate_link_target_id = _normalize_optional_int(task.last_candidate_link_target_id)
     retry_link_target_id = _normalize_optional_int(retry.get("candidate_link_target_id"))
     if candidate_link_target_id is not None and retry_link_target_id is not None:
@@ -576,6 +587,8 @@ def _schedule_follow_source_readiness_retry(
     *,
     stop_reason: str,
     now: datetime,
+    source_kind: str = "candidate",
+    source_url_override: str | None = None,
 ) -> dict[str, Any] | None:
     retry = _get_follow_source_readiness_retry(task)
     attempt_count = retry["attempt_count"] if _source_readiness_retry_matches_candidate(task, retry) else 0
@@ -585,8 +598,12 @@ def _schedule_follow_source_readiness_retry(
         return None
     next_retry_at = now + timedelta(minutes=PAN_TRANSFER_FOLLOW_SOURCE_READINESS_RETRY_DELAY_MINUTES)
     payload = {
+        "source_kind": _normalize_text(source_kind, max_length=32).lower() or "candidate",
         "candidate_link_target_id": _normalize_optional_int(task.last_candidate_link_target_id),
         "candidate_url": _normalize_text(task.last_candidate_url, max_length=2048) or None,
+        "source_url_override": normalize_candidate_url(
+            _normalize_text(source_url_override, max_length=2048)
+        ) or None,
         "attempt_count": next_attempt,
         "next_retry_at": next_retry_at,
         "last_stop_reason": _normalize_text(stop_reason, max_length=64) or None,
@@ -607,6 +624,9 @@ def _get_follow_diagnosis_retry(task: PanTransferSyncTask) -> dict[str, Any]:
         "candidate_url": _normalize_text(raw.get("candidate_url"), max_length=2048) or None,
         "source_link_target_id": _normalize_optional_int(raw.get("source_link_target_id")),
         "source_url": _normalize_text(raw.get("source_url"), max_length=2048) or None,
+        "source_url_override": normalize_candidate_url(
+            _normalize_text(raw.get("source_url_override"), max_length=2048)
+        ) or None,
         "attempt_count": attempt_count,
         "next_retry_at": _parse_datetime(raw.get("next_retry_at")),
         "last_error": _normalize_text(raw.get("last_error"), max_length=1000) or None,
@@ -619,6 +639,8 @@ def _clear_follow_diagnosis_retry(task: PanTransferSyncTask) -> None:
 
 
 def _diagnosis_retry_matches_task(task: PanTransferSyncTask, retry: dict[str, Any]) -> bool:
+    if retry.get("source_kind") == "external":
+        return bool(_normalize_text(retry.get("source_url_override")))
     if retry.get("source_kind") == "current":
         source_link_target_id = _normalize_optional_int(task.source_link_target_id)
         retry_link_target_id = _normalize_optional_int(retry.get("source_link_target_id"))
@@ -662,6 +684,7 @@ def _schedule_follow_diagnosis_retry(
     source_kind: str,
     error: BaseException,
     now: datetime,
+    source_url_override: str | None = None,
 ) -> dict[str, Any] | None:
     retry = _get_follow_diagnosis_retry(task)
     attempt_count = retry["attempt_count"] if _diagnosis_retry_matches_task(task, retry) else 0
@@ -679,6 +702,9 @@ def _schedule_follow_diagnosis_retry(
         "candidate_url": _normalize_text(task.last_candidate_url, max_length=2048) or None,
         "source_link_target_id": _normalize_optional_int(task.source_link_target_id),
         "source_url": _normalize_text(task.source_url, max_length=2048) or None,
+        "source_url_override": normalize_candidate_url(
+            _normalize_text(source_url_override, max_length=2048)
+        ) or None,
         "attempt_count": next_attempt,
         "max_retries": PAN_TRANSFER_FOLLOW_DIAGNOSIS_MAX_RETRIES,
         "next_retry_at": now + timedelta(minutes=delay_minutes),
@@ -773,7 +799,7 @@ def _build_follow_current_share_identity_snapshot(
 
 
 def _get_follow_task_current_share_identity(task: PanTransferSyncTask) -> dict[str, Any]:
-    extra_json = dict(task.extra_json or {})
+    extra_json = dict(getattr(task, "extra_json", None) or {})
     return _normalize_follow_current_share_identity(extra_json.get("current_share_identity"))
 
 
@@ -861,6 +887,8 @@ def _follow_applied_update_state_compare_key(value: Mapping[str, Any] | None) ->
         "issue_no": _normalize_text(normalized.get("issue_no"), max_length=32) or None,
         "is_completed": _normalize_optional_bool(normalized.get("is_completed")),
         "locked": bool(_normalize_optional_bool(normalized.get("locked"))),
+        "updated_at": _serialize_json_value(_parse_datetime(normalized.get("updated_at")))
+        or _normalize_text(normalized.get("updated_at")),
     }
 
 
@@ -1018,11 +1046,129 @@ def _get_follow_task_applied_update_state(task: PanTransferSyncTask) -> dict[str
     )
 
 
+def _merge_follow_applied_update_state_with_materialized_state(
+    applied_state: Mapping[str, Any] | None,
+    materialized_state: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    current = _normalize_follow_applied_update_state(applied_state)
+    materialized = _normalize_follow_materialized_update_state(materialized_state)
+    if not materialized or _normalize_optional_bool(current.get("locked")) is True:
+        return current
+
+    next_values = dict(current)
+    materialized_episode = _normalize_optional_int(materialized.get("episode"))
+    current_episode = _normalize_optional_int(current.get("episode"))
+    if materialized_episode is not None and (
+        current_episode is None or materialized_episode > current_episode
+    ):
+        next_values["episode"] = materialized_episode
+
+    if _normalize_optional_int(next_values.get("season")) is None:
+        materialized_season = _normalize_optional_int(materialized.get("season"))
+        if materialized_season is not None:
+            next_values["season"] = materialized_season
+    if not _normalize_text(next_values.get("issue_no"), max_length=32):
+        materialized_issue = _normalize_text(materialized.get("issue_no"), max_length=32)
+        if materialized_issue:
+            next_values["issue_no"] = materialized_issue
+    if _normalize_optional_bool(materialized.get("is_completed")) is True:
+        next_values["is_completed"] = True
+
+    materialized_updated_at = _parse_datetime(materialized.get("updated_at"))
+    current_updated_at = _parse_datetime(current.get("updated_at"))
+    if materialized_updated_at is not None and (
+        current_updated_at is None or materialized_updated_at > current_updated_at
+    ):
+        next_values["updated_at"] = materialized_updated_at
+        materialized_updated_by = _normalize_text(materialized.get("updated_by"), max_length=128) or None
+        if materialized_updated_by:
+            next_values["updated_by"] = materialized_updated_by
+
+    return _build_follow_applied_update_state(
+        resource_title=next_values.get("resource_title"),
+        core_title=next_values.get("core_title"),
+        season=next_values.get("season"),
+        episode=next_values.get("episode"),
+        issue_no=next_values.get("issue_no"),
+        is_completed=next_values.get("is_completed"),
+        source=next_values.get("source") or "auto",
+        locked=next_values.get("locked"),
+        updated_at=next_values.get("updated_at"),
+        updated_by=next_values.get("updated_by"),
+    )
+
+
+def _get_follow_task_effective_applied_update_state(
+    task: PanTransferSyncTask,
+    *,
+    materialized_state: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    current = _get_follow_task_applied_update_state(task)
+    materialized = (
+        materialized_state
+        if materialized_state is not None
+        else _get_follow_task_materialized_update_state(task)
+    )
+    return _merge_follow_applied_update_state_with_materialized_state(current, materialized)
+
+
+def reconcile_follow_task_progress_state(
+    task: PanTransferSyncTask,
+    *,
+    updated_by: str | None,
+) -> tuple[dict[str, Any], bool]:
+    current = _get_follow_task_applied_update_state(task)
+    effective = _get_follow_task_effective_applied_update_state(task)
+    if _follow_applied_update_state_compare_key(current) == _follow_applied_update_state_compare_key(effective):
+        return current, False
+    next_state = dict(effective)
+    materialized_state = _get_follow_task_materialized_update_state(task)
+    next_state["updated_at"] = _serialize_json_value(
+        _parse_datetime(materialized_state.get("updated_at")) or utcnow()
+    )
+    next_state["updated_by"] = _normalize_text(updated_by, max_length=128) or None
+    _set_task_extra_section(task, "applied_update_state", _normalize_follow_applied_update_state(next_state))
+    if next_state["updated_by"]:
+        task.updated_by = next_state["updated_by"]
+    return _get_follow_task_applied_update_state(task), True
+
+
+def _build_follow_task_display_identity_snapshot(
+    task: PanTransferSyncTask,
+    snapshot: Mapping[str, Any] | None,
+    applied_state: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    next_snapshot = dict(snapshot or {})
+    if not next_snapshot:
+        return next_snapshot
+
+    effective_state = _normalize_follow_applied_update_state(applied_state)
+    if not effective_state:
+        return next_snapshot
+    if _normalize_optional_bool(effective_state.get("locked")) is True:
+        progress_state = effective_state
+    else:
+        progress_state = _get_follow_task_effective_applied_update_state(task)
+
+    episode = _normalize_optional_int(progress_state.get("episode"))
+    existing_episode = _normalize_optional_int(next_snapshot.get("latest_episode"))
+    if episode is not None and (existing_episode is None or episode > existing_episode):
+        next_snapshot["latest_episode"] = episode
+    issue_no = _normalize_text(progress_state.get("issue_no"), max_length=32) or None
+    if issue_no:
+        next_snapshot["latest_issue"] = issue_no
+    is_completed = _normalize_optional_bool(progress_state.get("is_completed"))
+    if is_completed is not None:
+        next_snapshot["is_complete"] = is_completed
+    return next_snapshot
+
+
 def _update_follow_task_applied_update_state_from_sync(
     task: PanTransferSyncTask,
     *,
     current_share_identity: Mapping[str, Any] | None,
     source_metadata_promotion: Mapping[str, Any] | None,
+    materialized_update_state: Mapping[str, Any] | None = None,
     synced_at: datetime | None,
     updated_by: str | None,
 ) -> dict[str, Any]:
@@ -1051,6 +1197,10 @@ def _update_follow_task_applied_update_state_from_sync(
         locked=persisted.get("locked"),
         updated_at=synced_at or utcnow(),
         updated_by=updated_by,
+    )
+    next_state = _merge_follow_applied_update_state_with_materialized_state(
+        next_state,
+        materialized_update_state,
     )
     if next_state:
         _set_task_extra_section(task, "applied_update_state", next_state)
@@ -1267,6 +1417,40 @@ def _apply_follow_materialized_update_state_to_snapshot(
     return next_snapshot
 
 
+def _apply_follow_current_progress_state_to_snapshot(
+    task: PanTransferSyncTask,
+    snapshot: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    next_snapshot = _apply_follow_materialized_update_state_to_snapshot(
+        task,
+        _apply_follow_applied_update_state_to_snapshot(task, snapshot),
+    )
+    applied_state = _get_follow_task_applied_update_state(task)
+    materialized_state = _get_follow_task_materialized_update_state(task)
+    if _normalize_optional_bool(applied_state.get("locked")) is True:
+        progress_state = dict(applied_state)
+    else:
+        progress_state = {**applied_state, **materialized_state}
+
+    for key in ("resource_title", "core_title"):
+        value = _normalize_text(progress_state.get(key), max_length=255)
+        if value:
+            next_snapshot[key] = value
+    season = _normalize_optional_int(progress_state.get("season"))
+    if season is not None:
+        next_snapshot["season"] = season
+    episode = _normalize_optional_int(progress_state.get("episode"))
+    if episode is not None:
+        next_snapshot["latest_episode"] = episode
+    issue_no = _normalize_text(progress_state.get("issue_no"), max_length=32) or None
+    if issue_no:
+        next_snapshot["latest_issue"] = issue_no
+    is_complete = _normalize_optional_bool(progress_state.get("is_completed"))
+    if is_complete is not None:
+        next_snapshot["is_complete"] = is_complete
+    return next_snapshot
+
+
 def _apply_follow_snapshot_progress_to_identity(identity: Any, *, snapshot: Mapping[str, Any] | None) -> Any:
     effective_snapshot = dict(snapshot or {})
     season = _normalize_optional_int(effective_snapshot.get("season"))
@@ -1399,11 +1583,84 @@ def _normalize_follow_automation_mode(value: Any) -> str:
     return normalized
 
 
+def _normalize_follow_external_sources(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    normalized: list[dict[str, Any]] = []
+    seen_urls: set[str] = set()
+    for index, raw in enumerate(value):
+        if not isinstance(raw, dict):
+            continue
+        url = normalize_candidate_url(_normalize_text(raw.get("url"), max_length=2048))
+        if not url or url in seen_urls:
+            continue
+        try:
+            priority = max(1, min(999, int(raw.get("priority") or (index + 1) * 10)))
+        except (TypeError, ValueError):
+            priority = (index + 1) * 10
+        normalized.append(
+            {
+                "url": url,
+                "priority": priority,
+                "enabled": bool(raw.get("enabled", True)),
+            }
+        )
+        seen_urls.add(url)
+        if len(normalized) >= PAN_TRANSFER_FOLLOW_MAX_EXTERNAL_SOURCES:
+            break
+    normalized.sort(key=lambda item: (int(item["priority"]), str(item["url"])))
+    return normalized
+
+
+def _get_follow_external_sources(task: PanTransferSyncTask) -> list[dict[str, Any]]:
+    automation = _get_task_automation_config(task)
+    return [
+        source
+        for source in list(automation.get("external_sources") or [])
+        if isinstance(source, dict) and bool(source.get("enabled")) and _normalize_text(source.get("url"))
+    ]
+
+
+def _uses_follow_external_source(task: PanTransferSyncTask) -> bool:
+    automation = _get_task_automation_config(task)
+    return (
+        _normalize_text(automation.get("source_mode"), max_length=32).lower()
+        == PAN_TRANSFER_FOLLOW_SOURCE_MODE_EXTERNAL_PREFERRED
+        and bool(_get_follow_external_sources(task))
+    )
+
+
+def _validate_follow_external_source_configuration(
+    *,
+    task_platform: str | None,
+    automation: Mapping[str, Any],
+) -> None:
+    expected_platform = _normalize_text(task_platform, max_length=64).lower()
+    for external_source in list(automation.get("external_sources") or []):
+        external_url = _normalize_text(external_source.get("url"), max_length=2048)
+        detected_platform = _normalize_text(detect_platform_from_url(external_url), max_length=64).lower()
+        if expected_platform and detected_platform != expected_platform:
+            raise ValueError("external source platform must match the follow task platform")
+    if (
+        automation.get("source_mode") == PAN_TRANSFER_FOLLOW_SOURCE_MODE_EXTERNAL_PREFERRED
+        and not automation.get("external_sources")
+    ):
+        raise ValueError("external preferred mode requires at least one external source")
+
+
 def _build_task_automation_config(raw_value: Any) -> dict[str, Any]:
     raw = dict(raw_value or {}) if isinstance(raw_value, dict) else {}
+    source_mode = _normalize_text(raw.get("source_mode"), max_length=32).lower()
+    if source_mode not in {
+        PAN_TRANSFER_FOLLOW_SOURCE_MODE_SYSTEM,
+        PAN_TRANSFER_FOLLOW_SOURCE_MODE_EXTERNAL_PREFERRED,
+    }:
+        source_mode = PAN_TRANSFER_FOLLOW_SOURCE_MODE_SYSTEM
     return {
         "enabled": bool(raw.get("enabled")),
         "mode": _normalize_follow_automation_mode(raw.get("mode")),
+        "source_mode": source_mode,
+        "external_sources": _normalize_follow_external_sources(raw.get("external_sources")),
         "reuse_existing_share_if_valid": True,
         "update_publish_record": bool(raw.get("update_publish_record", True)),
         "stop_reason": _normalize_text(raw.get("stop_reason"), max_length=64) or None,
@@ -1415,6 +1672,15 @@ def _build_task_automation_config(raw_value: Any) -> dict[str, Any]:
         "last_auto_sync_mode": _normalize_text(raw.get("last_auto_sync_mode"), max_length=32).lower() or None,
         "last_auto_result": _normalize_text(raw.get("last_auto_result"), max_length=64).lower() or None,
         "last_auto_batch_id": _normalize_optional_int(raw.get("last_auto_batch_id")),
+        "active_external_source_url": normalize_candidate_url(
+            _normalize_text(raw.get("active_external_source_url"), max_length=2048)
+        ) or None,
+        "last_external_result": _normalize_text(raw.get("last_external_result"), max_length=32).lower() or None,
+        "external_source_statuses": [
+            dict(item)
+            for item in list(raw.get("external_source_statuses") or [])[:PAN_TRANSFER_FOLLOW_MAX_EXTERNAL_SOURCES]
+            if isinstance(item, dict)
+        ],
     }
 
 
@@ -1450,6 +1716,9 @@ def _set_follow_task_automation_state(
     last_auto_sync_mode: str | None | object = _UNSET,
     last_auto_result: str | None | object = _UNSET,
     last_auto_batch_id: int | None | object = _UNSET,
+    active_external_source_url: str | None | object = _UNSET,
+    last_external_result: str | None | object = _UNSET,
+    external_source_statuses: list[dict[str, Any]] | None | object = _UNSET,
 ) -> dict[str, Any]:
     current = _get_task_automation_config(task)
     updated = dict(current)
@@ -1473,6 +1742,18 @@ def _set_follow_task_automation_state(
         updated["last_auto_result"] = _normalize_text(last_auto_result, max_length=64).lower() or None
     if last_auto_batch_id is not _UNSET:
         updated["last_auto_batch_id"] = _normalize_optional_int(last_auto_batch_id)
+    if active_external_source_url is not _UNSET:
+        updated["active_external_source_url"] = normalize_candidate_url(
+            _normalize_text(active_external_source_url, max_length=2048)
+        ) or None
+    if last_external_result is not _UNSET:
+        updated["last_external_result"] = _normalize_text(last_external_result, max_length=32).lower() or None
+    if external_source_statuses is not _UNSET:
+        updated["external_source_statuses"] = [
+            dict(item)
+            for item in list(external_source_statuses or [])[:PAN_TRANSFER_FOLLOW_MAX_EXTERNAL_SOURCES]
+            if isinstance(item, dict)
+        ]
     if updated.get("enabled"):
         updated["stop_reason"] = None
         updated["stopped_at"] = None
@@ -1611,13 +1892,20 @@ def _build_follow_candidate_latest_ref_subquery(
 
 
 def _resolve_follow_task_resource_title(task: PanTransferSyncTask) -> str:
+    materialized_state = _get_follow_task_materialized_update_state(task)
+    applied_state = _get_follow_task_applied_update_state(task)
+    current_share_identity = _get_follow_task_current_share_identity(task)
     source_origin = _normalize_follow_source_origin(_get_task_extra_section(task, "source_origin"))
     source_origin_snapshot = _normalize_source_message_snapshot(source_origin.get("source_message_snapshot"))
     source_message_snapshot = _normalize_source_message_snapshot(_get_task_extra_section(task, "source_message_snapshot"))
+    for state in (materialized_state, applied_state, current_share_identity):
+        current_title = _normalize_text(state.get("resource_title"), max_length=255)
+        if current_title:
+            return current_title
     return (
         _normalize_text(source_origin_snapshot.get("title"), max_length=255)
-        or _normalize_text(task.work_title, max_length=255)
         or _normalize_text(source_message_snapshot.get("title"), max_length=255)
+        or _normalize_text(task.work_title, max_length=255)
         or _normalize_text(task.topic_title, max_length=255)
         or _normalize_text(task.task_name, max_length=255)
         or f"resource_{int(task.id)}"
@@ -2892,8 +3180,13 @@ def _serialize_follow_task(row: PanTransferSyncTask) -> dict[str, Any]:
     extra_json = dict(row.extra_json or {})
     publish_binding = dict(extra_json.get("publish_binding") or {})
     last_sync = dict(extra_json.get("last_sync") or {})
-    identity_snapshot = dict(extra_json.get("identity_snapshot") or {})
-    applied_update_state = _get_follow_task_applied_update_state(row)
+    raw_identity_snapshot = dict(extra_json.get("identity_snapshot") or {})
+    applied_update_state = _get_follow_task_effective_applied_update_state(row)
+    identity_snapshot = _build_follow_task_display_identity_snapshot(
+        row,
+        raw_identity_snapshot,
+        applied_update_state,
+    )
     materialized_update_state = _get_follow_task_materialized_update_state(row)
     candidate_assessment = dict(extra_json.get("candidate_assessment") or {})
     candidate_recall = dict(extra_json.get("candidate_recall") or {})
@@ -3193,6 +3486,11 @@ def create_pan_transfer_follow_task_from_batch_item(
     current_share_status = _normalize_text(share_validation.get("status"), max_length=32).lower() or (
         _normalize_text(item.latest_link_health, max_length=32).lower() if current_share_url == source_url else "unknown"
     )
+    automation_config = _build_follow_task_creation_automation((payload or {}).get("automation"))
+    _validate_follow_external_source_configuration(
+        task_platform=item.platform,
+        automation=automation_config,
+    )
     publish_record = (
         session.query(PanTransferPublishRecord)
         .filter(PanTransferPublishRecord.source_batch_item_id == int(item.id))
@@ -3253,7 +3551,7 @@ def create_pan_transfer_follow_task_from_batch_item(
             "path_strategy": path_strategy,
             "resolved_paths": resolved_paths,
             "publish_binding": _build_follow_publish_binding_snapshot(publish_record),
-            "automation": _build_follow_task_creation_automation((payload or {}).get("automation")),
+            "automation": automation_config,
             "candidate_policy": candidate_policy,
             PAN_TRANSFER_FOLLOW_INSPECTION_SCHEDULE_KEY: inspection_schedule,
             "created_from_batch_item": {
@@ -3413,6 +3711,10 @@ def update_pan_transfer_follow_task_settings(
             **(dict(raw_automation) if isinstance(raw_automation, dict) else {}),
         }
         next_automation = _build_task_automation_config(merged_automation)
+        _validate_follow_external_source_configuration(
+            task_platform=task.platform,
+            automation=next_automation,
+        )
         if bool(next_automation.get("enabled")):
             next_automation["stop_reason"] = None
             next_automation["stopped_at"] = None
@@ -3746,9 +4048,9 @@ def _build_follow_candidate_search_queries(task: PanTransferSyncTask, snapshot: 
         _normalize_follow_source_origin(_get_task_extra_section(task, "source_origin")).get("source_message_snapshot")
     )
     source_title = (
-        _normalize_text(origin_snapshot.get("title"), max_length=255)
+        _resolve_follow_task_resource_title(task)
         or _normalize_text(snapshot.get("resource_title"), max_length=255)
-        or _resolve_follow_task_resource_title(task)
+        or _normalize_text(origin_snapshot.get("title"), max_length=255)
     )
     if not source_title:
         return []
@@ -3767,9 +4069,9 @@ def _follow_candidate_title_matches_task(
         _normalize_follow_source_origin(_get_task_extra_section(task, "source_origin")).get("source_message_snapshot")
     )
     source_title = (
-        _normalize_text(origin_snapshot.get("title"), max_length=255)
+        _resolve_follow_task_resource_title(task)
         or _normalize_text(snapshot.get("resource_title"), max_length=255)
-        or _resolve_follow_task_resource_title(task)
+        or _normalize_text(origin_snapshot.get("title"), max_length=255)
     )
     if not source_title:
         return False
@@ -4096,16 +4398,13 @@ def _evaluate_follow_candidate_rules(
     snapshot: dict[str, Any],
     candidate: dict[str, Any],
 ) -> dict[str, Any]:
-    effective_snapshot = _apply_follow_materialized_update_state_to_snapshot(
-        task,
-        _apply_follow_applied_update_state_to_snapshot(task, snapshot),
-    )
+    effective_snapshot = _apply_follow_current_progress_state_to_snapshot(task, snapshot)
     source_origin = _normalize_follow_source_origin(_get_task_extra_section(task, "source_origin"))
     origin_snapshot = _normalize_source_message_snapshot(source_origin.get("source_message_snapshot"))
     tracked_resource_title = (
-        _normalize_text(origin_snapshot.get("title"), max_length=255)
+        _resolve_follow_task_resource_title(task)
         or _normalize_text(effective_snapshot.get("resource_title"), max_length=255)
-        or _resolve_follow_task_resource_title(task)
+        or _normalize_text(origin_snapshot.get("title"), max_length=255)
     )
     tracked_identity = parse_resource_identity(
         tracked_resource_title,
@@ -4136,6 +4435,14 @@ def _evaluate_follow_candidate_rules(
     assessment = decision.to_dict()
     assessment["tracked_identity"] = tracked_identity.to_dict()
     assessment["candidate_identity"] = candidate_identity.to_dict()
+    quality_upgrade = bool(
+        decision.same_episode_replace
+        and quality_sort_key(candidate_title) > quality_sort_key(tracked_resource_title)
+    )
+    assessment["quality_upgrade"] = quality_upgrade
+    if quality_upgrade:
+        assessment["should_promote"] = True
+        assessment["reason"] = "rule_same_episode_higher_quality"
     return assessment
 
 
@@ -4199,7 +4506,7 @@ def _pick_follow_candidate(
         )
         last_assessment = assessment
         is_same_episode_candidate = _is_same_episode_follow_replacement_candidate(assessment)
-        if assessment.get("should_promote"):
+        if assessment.get("should_promote") or assessment.get("quality_upgrade"):
             _mark_follow_candidate_recall_item(
                 recall_snapshot,
                 candidate=candidate,
@@ -4239,6 +4546,8 @@ def _pick_follow_candidate(
 
 def _is_same_episode_follow_replacement_candidate(assessment: dict[str, Any] | None) -> bool:
     if not isinstance(assessment, dict):
+        return False
+    if bool(assessment.get("quality_upgrade")):
         return False
     if bool(assessment.get("same_episode_replace")):
         return True
@@ -4563,6 +4872,111 @@ def _commit_before_external_call(session: Session) -> None:
         session.commit()
 
 
+async def _diagnose_follow_external_sources(
+    session: Session,
+    *,
+    task: PanTransferSyncTask,
+    sources: list[dict[str, Any]],
+    worker_name: str,
+) -> dict[str, Any]:
+    from .file_diagnosis import diagnose_pan_transfer_follow_task_files
+
+    statuses: list[dict[str, Any]] = []
+    for source in sources:
+        source_url = normalize_candidate_url(_normalize_text(source.get("url"), max_length=2048))
+        if not source_url:
+            continue
+        try:
+            diagnosis = await diagnose_pan_transfer_follow_task_files(
+                session,
+                task_id=int(task.id),
+                source_kind="external",
+                source_url_override=source_url,
+                operator=worker_name,
+            )
+        except Exception as exc:
+            error_message = _normalize_text(exc, max_length=1000) or type(exc).__name__
+            if _is_retryable_follow_diagnosis_error(exc):
+                statuses.append(
+                    {
+                        "url": source_url,
+                        "priority": int(source.get("priority") or 100),
+                        "status": "transient_error",
+                        "last_error": error_message,
+                    }
+                )
+                return {
+                    "diagnosis": None,
+                    "source_url": source_url,
+                    "statuses": statuses,
+                    "retry_error": exc,
+                    "fallback": False,
+                }
+            statuses.append(
+                {
+                    "url": source_url,
+                    "priority": int(source.get("priority") or 100),
+                    "status": "invalid",
+                    "last_error": error_message,
+                }
+            )
+            continue
+
+        summary = dict(diagnosis.get("summary") or {})
+        stop_reason = _normalize_text(summary.get("stop_reason"), max_length=64).lower()
+        statuses.append(
+            {
+                "url": source_url,
+                "priority": int(source.get("priority") or 100),
+                "status": "not_ready" if stop_reason == "no_source_video" else "valid",
+                "last_error": None,
+            }
+        )
+        return {
+            "diagnosis": diagnosis,
+            "source_url": source_url,
+            "statuses": statuses,
+            "retry_error": None,
+            "not_ready": stop_reason == "no_source_video",
+            "fallback": False,
+        }
+
+    return {
+        "diagnosis": None,
+        "source_url": None,
+        "statuses": statuses,
+        "retry_error": None,
+        "fallback": True,
+    }
+
+
+async def _diagnose_follow_source_once(
+    session: Session,
+    *,
+    task: PanTransferSyncTask,
+    source_kind: str,
+    source_url_override: str | None,
+    worker_name: str,
+) -> tuple[dict[str, Any] | None, BaseException | None]:
+    from .file_diagnosis import diagnose_pan_transfer_follow_task_files
+
+    try:
+        return (
+            await diagnose_pan_transfer_follow_task_files(
+                session,
+                task_id=int(task.id),
+                source_kind=source_kind,
+                source_url_override=source_url_override,
+                operator=worker_name,
+            ),
+            None,
+        )
+    except Exception as exc:
+        if not _is_retryable_follow_diagnosis_error(exc):
+            raise
+        return None, exc
+
+
 async def _handle_follow_task_automation(
     session: Session,
     *,
@@ -4575,13 +4989,136 @@ async def _handle_follow_task_automation(
         return
 
     mode = _normalize_follow_automation_mode(automation.get("mode"))
-    if mode == PAN_TRANSFER_FOLLOW_AUTOMATION_MODE_STABLE_ORIGIN_INCREMENTAL:
+    external_sources = _get_follow_external_sources(task) if _uses_follow_external_source(task) else []
+    if mode == PAN_TRANSFER_FOLLOW_AUTOMATION_MODE_STABLE_ORIGIN_INCREMENTAL and not external_sources:
         await _handle_follow_task_origin_automation(session, task=task, worker_name=worker_name)
         return
 
     sync_mode = _get_follow_task_automation_sync_mode(mode)
     now = utcnow()
-    source_kind = _resolve_follow_task_automation_source_kind(task)
+    source_kind = None
+    external_source_url: str | None = None
+    diagnosis: dict[str, Any] | None = None
+    if external_sources:
+        _commit_before_external_call(session)
+        external_result = await _diagnose_follow_external_sources(
+            session,
+            task=task,
+            sources=external_sources,
+            worker_name=worker_name,
+        )
+        statuses = list(external_result.get("statuses") or [])
+        retry_error = external_result.get("retry_error")
+        if retry_error is not None:
+            retry_payload = _schedule_follow_diagnosis_retry(
+                task,
+                source_kind="external",
+                source_url_override=str(external_result.get("source_url") or "") or None,
+                error=retry_error,
+                now=now,
+            )
+            if retry_payload is not None:
+                _set_follow_task_automation_state(
+                    task,
+                    enabled=True,
+                    cooldown_until=None,
+                    last_auto_check_at=now,
+                    last_auto_source_kind="external",
+                    last_auto_sync_mode=sync_mode,
+                    last_auto_result="diagnosis_retry",
+                    last_auto_batch_id=None,
+                    active_external_source_url=external_result.get("source_url"),
+                    last_external_result="transient_error",
+                    external_source_statuses=statuses,
+                )
+                task.task_state = PAN_TRANSFER_SYNC_STATE_IDLE
+                task.last_error_message = retry_payload["last_error"]
+                session.add(task)
+                session.flush()
+                _append_follow_task_log(
+                    session,
+                    task=task,
+                    stage="external_source",
+                    level="warning",
+                    message="External source check encountered a transient error; retry scheduled",
+                    payload={
+                        "source_url": external_result.get("source_url"),
+                        "retry_attempt": retry_payload["attempt_count"],
+                        "max_retries": retry_payload["max_retries"],
+                        "next_retry_at": retry_payload["next_retry_at"],
+                        "statuses": statuses,
+                    },
+                )
+                return
+        if external_result.get("diagnosis") is not None:
+            source_kind = "external"
+            external_source_url = str(external_result.get("source_url") or "") or None
+            diagnosis = dict(external_result["diagnosis"])
+            _clear_follow_diagnosis_retry(task)
+            _set_follow_task_automation_state(
+                task,
+                enabled=True,
+                active_external_source_url=external_source_url,
+                last_external_result="not_ready" if external_result.get("not_ready") else "valid",
+                external_source_statuses=statuses,
+            )
+            if external_result.get("not_ready"):
+                retry_payload = _schedule_follow_source_readiness_retry(
+                    task,
+                    stop_reason="no_source_video",
+                    now=now,
+                    source_kind="external",
+                    source_url_override=external_source_url,
+                )
+                if retry_payload is not None:
+                    _set_follow_task_automation_state(
+                        task,
+                        enabled=True,
+                        cooldown_until=None,
+                        last_auto_check_at=now,
+                        last_auto_source_kind="external",
+                        last_auto_sync_mode=sync_mode,
+                        last_auto_result="source_not_ready_retry",
+                        last_auto_batch_id=None,
+                        active_external_source_url=external_source_url,
+                        last_external_result="not_ready",
+                        external_source_statuses=statuses,
+                    )
+                    session.add(task)
+                    session.flush()
+                    _append_follow_task_log(
+                        session,
+                        task=task,
+                        stage="external_source",
+                        level="warning",
+                        message="External source is valid but target files are not ready; deferred retry scheduled",
+                        payload={
+                            "source_url": external_source_url,
+                            "retry_attempt": retry_payload["attempt_count"],
+                            "max_retries": PAN_TRANSFER_FOLLOW_SOURCE_READINESS_MAX_RETRIES,
+                            "next_retry_at": retry_payload["next_retry_at"],
+                        },
+                    )
+                    return
+        else:
+            _set_follow_task_automation_state(
+                task,
+                enabled=True,
+                active_external_source_url=None,
+                last_external_result="fallback_system",
+                external_source_statuses=statuses,
+            )
+            _append_follow_task_log(
+                session,
+                task=task,
+                stage="external_source",
+                level="warning",
+                message="All configured external sources are unavailable; falling back to the system source",
+                payload={"statuses": statuses},
+            )
+
+    if source_kind is None:
+        source_kind = _resolve_follow_task_automation_source_kind(task)
     if source_kind is None:
         _clear_follow_diagnosis_retry(task)
         _set_follow_task_automation_state(
@@ -4612,62 +5149,61 @@ async def _handle_follow_task_automation(
         )
         return
 
-    from .file_diagnosis import diagnose_pan_transfer_follow_task_files
     from .follow_sync import create_pan_transfer_follow_sync_batch
 
-    _commit_before_external_call(session)
-    try:
-        diagnosis = await diagnose_pan_transfer_follow_task_files(
-            session,
-            task_id=int(task.id),
-            source_kind=source_kind,
-            operator=worker_name,
-        )
-    except Exception as exc:
-        if not _is_retryable_follow_diagnosis_error(exc):
-            raise
-        retry_payload = _schedule_follow_diagnosis_retry(
-            task,
-            source_kind=source_kind,
-            error=exc,
-            now=now,
-        )
-        if retry_payload is None:
-            raise
-        _set_follow_task_automation_state(
-            task,
-            enabled=True,
-            cooldown_until=None,
-            last_auto_check_at=now,
-            last_auto_source_kind=source_kind,
-            last_auto_sync_mode=sync_mode,
-            last_auto_result="diagnosis_retry",
-            last_auto_batch_id=None,
-        )
-        task.task_state = (
-            PAN_TRANSFER_SYNC_STATE_CANDIDATE_FOUND
-            if source_kind == "candidate"
-            else PAN_TRANSFER_SYNC_STATE_IDLE
-        )
-        task.last_error_message = retry_payload["last_error"]
-        session.add(task)
-        session.flush()
-        _append_follow_task_log(
+    if diagnosis is None:
+        _commit_before_external_call(session)
+        diagnosis, diagnosis_error = await _diagnose_follow_source_once(
             session,
             task=task,
-            stage="diagnosis",
-            level="warning",
-            message="Follow task diagnosis encountered a transient network error; retry scheduled",
-            payload={
-                "source_kind": source_kind,
-                "error_type": retry_payload["last_error_type"],
-                "error": retry_payload["last_error"],
-                "retry_attempt": retry_payload["attempt_count"],
-                "max_retries": retry_payload["max_retries"],
-                "next_retry_at": retry_payload["next_retry_at"],
-            },
+            source_kind=source_kind,
+            source_url_override=external_source_url if source_kind == "external" else None,
+            worker_name=worker_name,
         )
-        return
+        if diagnosis_error is not None:
+            retry_payload = _schedule_follow_diagnosis_retry(
+                task,
+                source_kind=source_kind,
+                source_url_override=external_source_url if source_kind == "external" else None,
+                error=diagnosis_error,
+                now=now,
+            )
+            if retry_payload is None:
+                raise diagnosis_error
+            _set_follow_task_automation_state(
+                task,
+                enabled=True,
+                cooldown_until=None,
+                last_auto_check_at=now,
+                last_auto_source_kind=source_kind,
+                last_auto_sync_mode=sync_mode,
+                last_auto_result="diagnosis_retry",
+                last_auto_batch_id=None,
+            )
+            task.task_state = (
+                PAN_TRANSFER_SYNC_STATE_CANDIDATE_FOUND
+                if source_kind == "candidate"
+                else PAN_TRANSFER_SYNC_STATE_IDLE
+            )
+            task.last_error_message = retry_payload["last_error"]
+            session.add(task)
+            session.flush()
+            _append_follow_task_log(
+                session,
+                task=task,
+                stage="diagnosis",
+                level="warning",
+                message="Follow task diagnosis encountered a transient network error; retry scheduled",
+                payload={
+                    "source_kind": source_kind,
+                    "error_type": retry_payload["last_error_type"],
+                    "error": retry_payload["last_error"],
+                    "retry_attempt": retry_payload["attempt_count"],
+                    "max_retries": retry_payload["max_retries"],
+                    "next_retry_at": retry_payload["next_retry_at"],
+                },
+            )
+            return
     _clear_follow_diagnosis_retry(task)
     summary = dict(diagnosis.get("summary") or {})
     stop_reason = _normalize_text(summary.get("stop_reason"), max_length=64).lower()
@@ -4749,6 +5285,7 @@ async def _handle_follow_task_automation(
             task_id=int(task.id),
             payload={
                 "source_kind": source_kind,
+                "external_source_url": external_source_url,
                 "sync_mode": sync_mode,
                 "selection_groups": selection_groups,
                 "confirm_full_replace": True,
@@ -4857,6 +5394,7 @@ async def _handle_follow_task_automation(
         task_id=int(task.id),
         payload={
             "source_kind": source_kind,
+            "external_source_url": external_source_url,
             "sync_mode": sync_mode,
             "selection_groups": selection_groups,
             "preferred_target_relative_path": _normalize_text(

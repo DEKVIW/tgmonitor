@@ -10,13 +10,14 @@ import pytest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from app.schemas.pan_transfer_models import PanTransferFollowTaskSyncRequest
+from app.schemas.pan_transfer_models import PanTransferFollowTaskCandidateAssessment, PanTransferFollowTaskSyncRequest
 from app.services.pan_transfer.constants import (
     PAN_TRANSFER_ITEM_STATUS_QUEUED,
     PAN_TRANSFER_ITEM_STATUS_RETRY_WAIT,
     PAN_TRANSFER_VALIDATION_STATUS_PENDING,
 )
 from app.services.pan_transfer.queue import reset_pan_transfer_batch_items
+from app.services.pan_transfer.follow_tasks import _validate_follow_external_source_configuration
 from app.services.pan_transfer.worker import _share_validation_is_explicitly_invalid, _should_reuse_existing_share
 from app.services.pan_transfer.providers.quark import _QuarkClient
 
@@ -53,9 +54,9 @@ def test_only_explicitly_invalid_share_validation_allows_new_share() -> None:
     )
 
 
-def test_external_source_is_only_allowed_for_full_replace() -> None:
+def test_external_source_is_allowed_for_incremental_and_full_replace() -> None:
     payload = {
-        "source_kind": "current",
+        "source_kind": "external",
         "sync_mode": "replace_all",
         "external_source_url": "https://pan.quark.cn/s/external-share",
         "confirm_full_replace": True,
@@ -64,14 +65,56 @@ def test_external_source_is_only_allowed_for_full_replace() -> None:
     request = PanTransferFollowTaskSyncRequest(**payload)
     assert request.external_source_url == payload["external_source_url"]
 
-    with pytest.raises(ValueError, match="external_source_url"):
+    incremental_request = PanTransferFollowTaskSyncRequest(
+        **{
+            **payload,
+            "sync_mode": "incremental",
+            "confirm_full_replace": False,
+            "selected_entries": [],
+            "selection_groups": [
+                {
+                    "selected_entries": [{"name": "episode-01-4k.mkv", "is_dir": False}],
+                    "replace_existing_entry_ids": ["old-file-1"],
+                    "replace_existing_names": ["episode-01.mkv"],
+                }
+            ],
+        }
+    )
+    assert incremental_request.source_kind == "external"
+    assert incremental_request.selection_groups[0].replace_existing_entry_ids == ["old-file-1"]
+    assert incremental_request.selection_groups[0].replace_existing_names == ["episode-01.mkv"]
+
+    with pytest.raises(ValueError, match="source_kind"):
         PanTransferFollowTaskSyncRequest(
             **{
                 **payload,
-                "sync_mode": "incremental",
-                "confirm_full_replace": False,
+                "source_kind": "current",
             }
         )
+
+
+def test_external_source_configuration_requires_matching_platform() -> None:
+    config = {
+        "source_mode": "external_preferred",
+        "external_sources": [{"url": "https://pan.quark.cn/s/example", "priority": 1, "enabled": True}],
+    }
+
+    _validate_follow_external_source_configuration(task_platform="夸克网盘", automation=config)
+
+    with pytest.raises(ValueError, match="platform"):
+        _validate_follow_external_source_configuration(task_platform="百度网盘", automation=config)
+
+    with pytest.raises(ValueError, match="at least one"):
+        _validate_follow_external_source_configuration(
+            task_platform="夸克网盘",
+            automation={"source_mode": "external_preferred", "external_sources": []},
+        )
+
+
+def test_candidate_assessment_preserves_quality_upgrade_flag() -> None:
+    assessment = PanTransferFollowTaskCandidateAssessment(quality_upgrade=True)
+
+    assert assessment.quality_upgrade is True
 
 
 def test_retry_reset_keeps_staging_snapshot_for_share_only_recovery() -> None:

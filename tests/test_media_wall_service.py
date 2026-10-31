@@ -94,6 +94,41 @@ class MediaWallServiceTests(unittest.TestCase):
         self.assertEqual(progress["episode"], 13)
         self.assertEqual(_get_content_updated_at(task).isoformat(), "2026-10-22T12:00:00")
 
+    def test_media_wall_prefers_materialized_episode_over_stale_applied_state(self) -> None:
+        task = SimpleNamespace(
+            status="active",
+            task_state="idle",
+            current_share_status="valid",
+            last_checked_at=None,
+            extra_json={
+                "source_origin": {
+                    "source_message_snapshot": {
+                        "title": "凡人修仙传 (2026) 更197",
+                    }
+                },
+                "applied_update_state": {
+                    "resource_title": "凡人修仙传 (2026) 更197",
+                    "episode": 197,
+                    "updated_at": "2026-10-31T01:00:00",
+                },
+                "materialized_update_state": {
+                    "resource_title": "凡人修仙传 (2026) 更198",
+                    "episode": 198,
+                    "episode_numbers": [197, 198],
+                    "updated_at": "2026-10-31T01:01:00",
+                },
+            },
+            last_candidate_title=None,
+            work_title="凡人修仙传",
+            topic_title="凡人修仙传",
+            task_name="凡人修仙传",
+        )
+
+        progress = _build_progress(task)
+
+        self.assertEqual(progress["episode"], 198)
+        self.assertEqual(progress["label"], "更新至第 198 集")
+
     @patch("app.services.media_wall._now", return_value=datetime(2026, 10, 22, 13, 0, 0))
     def test_media_wall_shows_recent_completed_follow_state(self, _mock_now) -> None:
         task = SimpleNamespace(

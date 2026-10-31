@@ -29,6 +29,7 @@ from .follow_tasks import (
 from .providers import decrypt_account_credential
 from .providers.baidu import _BaiduClient, _extract_share_access_context
 from .providers.quark import _QuarkClient, _extract_passcode, _extract_pwd_id
+from .quality import extract_quality_tags, quality_sort_key
 
 
 _VIDEO_EXTENSIONS = {
@@ -62,24 +63,6 @@ _DISGUISED_EPISODE_STEM_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-_RESOLUTION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("8K", re.compile(r"\b(?:8K|4320P)\b", re.IGNORECASE)),
-    ("4K", re.compile(r"\b(?:4K|2160P|UHD)\b", re.IGNORECASE)),
-    ("1080P", re.compile(r"\b1080P\b", re.IGNORECASE)),
-    ("720P", re.compile(r"\b720P\b", re.IGNORECASE)),
-)
-_QUALITY_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("DV", re.compile(r"\bDV\b", re.IGNORECASE)),
-    ("HDR", re.compile(r"\bHDR(?:10\+?)?\b", re.IGNORECASE)),
-    ("60FPS", re.compile(r"\b60FPS\b", re.IGNORECASE)),
-    ("H265", re.compile(r"\b(?:H\.?265|HEVC|X265)\b", re.IGNORECASE)),
-    ("H264", re.compile(r"\b(?:H\.?264|X264|AVC)\b", re.IGNORECASE)),
-    ("10BIT", re.compile(r"\b10BIT\b", re.IGNORECASE)),
-    ("FLAC", re.compile(r"\bFLAC\b", re.IGNORECASE)),
-    ("HIFI", re.compile(r"\bHIFI\b", re.IGNORECASE)),
-    ("DTS", re.compile(r"\bDTS\b", re.IGNORECASE)),
-    ("DDP5.1", re.compile(r"\b(?:DDP|DD)\s*5\.1\b", re.IGNORECASE)),
-)
 _SEMANTIC_SEASON_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"(?<![A-Za-z0-9])Season\s*0*([1-9][0-9]?)(?!\d)", re.IGNORECASE),
     re.compile(r"第\s*([零一二三四五六七八九十百两\d]{1,4})\s*季"),
@@ -250,12 +233,7 @@ def _is_video_name(name: str) -> bool:
 
 
 def _extract_quality_tags(text: str) -> list[str]:
-    tags: list[str] = []
-    normalized = _normalize_text(text, max_length=500)
-    for label, pattern in _RESOLUTION_PATTERNS + _QUALITY_PATTERNS:
-        if pattern.search(normalized):
-            tags.append(label)
-    return tags
+    return extract_quality_tags(_normalize_text(text, max_length=500))
 
 
 def _extract_leading_quality_episode(text: str) -> tuple[bool, int | None]:
@@ -503,21 +481,12 @@ def _serialize_file_entry(entry: _FileEntry) -> dict[str, Any]:
 
 
 def _pick_best_entry(entries: list[_FileEntry]) -> _FileEntry:
-    def sort_key(item: _FileEntry) -> tuple[int, int, int, float, float, float, int]:
-        resolution_rank = 0
-        if "8K" in item.quality_tags:
-            resolution_rank = 4
-        elif "4K" in item.quality_tags:
-            resolution_rank = 3
-        elif "1080P" in item.quality_tags:
-            resolution_rank = 2
-        elif "720P" in item.quality_tags:
-            resolution_rank = 1
+    def sort_key(item: _FileEntry) -> tuple[Any, ...]:
         updated_ts = int(item.updated_at.timestamp()) if item.updated_at is not None else 0
         return (
             1 if item.parse_level == "full" else 0,
             1 if item.accepted else 0,
-            resolution_rank,
+            quality_sort_key(item.quality_tags),
             float(item.title_match_score or 0.0),
             float(item.confidence or 0.0),
             float(item.size_bytes or 0),
@@ -685,7 +654,12 @@ async def infer_follow_task_target_relative_path(
     }
 
 
-def _build_sync_selection_groups(entries: list[_FileEntry], *, target_relative_path: str | None) -> list[dict[str, Any]]:
+def _build_sync_selection_groups(
+    entries: list[_FileEntry],
+    *,
+    target_relative_path: str | None,
+    replace_entries_by_path: dict[str, list[_FileEntry]] | None = None,
+) -> list[dict[str, Any]]:
     grouped: dict[tuple[str | None, str | None, str | None, str | None], list[_FileEntry]] = {}
     for entry in entries:
         group_key = (
@@ -714,16 +688,22 @@ def _build_sync_selection_groups(entries: list[_FileEntry], *, target_relative_p
             )
         if not normalized_entries:
             continue
-        selection_groups.append(
-            {
-                "parent_entry_id": parent_entry_id,
-                "parent_path": parent_path,
-                "parent_name": parent_name,
-                "target_relative_path": relative_path,
-                "selected_entries": normalized_entries,
-                "selected_count": len(normalized_entries),
-            }
-        )
+        replacement_entries = list((replace_entries_by_path or {}).get(relative_path or "") or [])
+        selection_group = {
+            "parent_entry_id": parent_entry_id,
+            "parent_path": parent_path,
+            "parent_name": parent_name,
+            "target_relative_path": relative_path,
+            "selected_entries": normalized_entries,
+            "selected_count": len(normalized_entries),
+        }
+        replacement_ids = sorted({str(entry.entry_id) for entry in replacement_entries if entry.entry_id})
+        replacement_names = sorted({entry.name for entry in replacement_entries if entry.name})
+        if replacement_ids:
+            selection_group["replace_existing_entry_ids"] = replacement_ids
+        if replacement_names:
+            selection_group["replace_existing_names"] = replacement_names
+        selection_groups.append(selection_group)
     selection_groups.sort(
         key=lambda item: (
             _normalize_text(item.get("target_relative_path")),
@@ -1577,16 +1557,19 @@ async def diagnose_pan_transfer_follow_task_files(
     *,
     task_id: int,
     source_kind: str = "candidate",
+    source_url_override: str | None = None,
     near_episode_window: int = _DEFAULT_NEAR_EPISODE_WINDOW,
     operator: str | None = None,
 ) -> dict[str, Any]:
     ensure_runtime_storage_tables()
     task = _get_follow_task(session, task_id=task_id)
     normalized_source_kind = _normalize_text(source_kind, max_length=32).lower() or "candidate"
-    if normalized_source_kind not in {"current", "candidate"}:
-        raise ValueError("source_kind must be current or candidate")
+    if normalized_source_kind not in {"current", "candidate", "external"}:
+        raise ValueError("source_kind must be current, candidate, or external")
     if normalized_source_kind == "candidate" and not _normalize_text(task.last_candidate_url):
         raise ValueError("current task has no candidate source to diagnose")
+    if normalized_source_kind == "external" and not _normalize_text(source_url_override):
+        raise ValueError("external source diagnosis requires source_url_override")
     normalized_window = int(max(1, min(int(near_episode_window or _DEFAULT_NEAR_EPISODE_WINDOW), 30)))
 
     account = session.get(PanTransferAccount, int(task.target_account_id or 0))
@@ -1602,7 +1585,13 @@ async def diagnose_pan_transfer_follow_task_files(
     tracked_keys = _build_tracked_keys(snapshot)
     materialized_update_state = _get_follow_task_materialized_update_state(task)
     materialized_episode_numbers = _collect_follow_task_materialized_episode_numbers(task)
-    source_url = _normalize_text(task.last_candidate_url if normalized_source_kind == "candidate" else task.source_url)
+    source_url = _normalize_text(
+        source_url_override
+        if normalized_source_kind == "external"
+        else task.last_candidate_url
+        if normalized_source_kind == "candidate"
+        else task.source_url
+    )
     if not source_url:
         raise ValueError("source url is empty")
 
@@ -1721,16 +1710,70 @@ async def diagnose_pan_transfer_follow_task_files(
         accepted_only=False,
     )
     inferred_target_relative_path = _infer_target_relative_path(relevant_target_entries, anchor_episode=anchor_episode)
+    quality_upgrade_episode_numbers: set[int] = set()
+    candidate_assessment = dict(dict(task.extra_json or {}).get("candidate_assessment") or {})
+    if bool(candidate_assessment.get("quality_upgrade")):
+        candidate_episode = _normalize_optional_int(candidate_assessment.get("candidate_episode"))
+        if candidate_episode is not None:
+            source_by_episode: dict[int, list[_FileEntry]] = {}
+            target_by_episode: dict[int, list[_FileEntry]] = {}
+            for entry in source_video_entries:
+                if not entry.accepted:
+                    continue
+                for episode in _entry_episode_numbers(entry):
+                    source_by_episode.setdefault(int(episode), []).append(entry)
+            for entry in target_video_entries:
+                if not entry.accepted:
+                    continue
+                for episode in _entry_episode_numbers(entry):
+                    target_by_episode.setdefault(int(episode), []).append(entry)
+            source_entries_for_episode = source_by_episode.get(int(candidate_episode), [])
+            target_entries_for_episode = target_by_episode.get(int(candidate_episode), [])
+            if source_entries_for_episode:
+                source_quality = max(
+                    quality_sort_key(entry.quality_tags)
+                    for entry in source_entries_for_episode
+                )
+                target_quality = max(
+                    (quality_sort_key(entry.quality_tags) for entry in target_entries_for_episode),
+                    default=(0, 0, 0, 0, 0, 0),
+                )
+                if source_quality > target_quality:
+                    quality_upgrade_episode_numbers.add(int(candidate_episode))
     recommended_entries, recommended_episode_numbers, stop_reason = _build_recommended_entries(
         source_video_entries,
-        anchor_episode=anchor_episode,
+        anchor_episode=(
+            max(0, int(anchor_episode or 0) - 1)
+            if quality_upgrade_episode_numbers
+            else anchor_episode
+        ),
         inferred_target_relative_path=inferred_target_relative_path,
-        existing_episode_numbers=materialized_episode_numbers,
+        existing_episode_numbers=(
+            [
+                episode
+                for episode in materialized_episode_numbers
+                if episode not in quality_upgrade_episode_numbers
+            ]
+            if quality_upgrade_episode_numbers
+            else materialized_episode_numbers
+        ),
     )
     stats.stop_reason = stop_reason
+    replacement_entries_by_path: dict[str, list[_FileEntry]] = {}
+    if quality_upgrade_episode_numbers:
+        for entry in target_video_entries:
+            if not entry.accepted:
+                continue
+            if not quality_upgrade_episode_numbers.intersection(_entry_episode_numbers(entry)):
+                continue
+            replacement_entries_by_path.setdefault(
+                _normalize_relative_path_hint(entry.relative_parent_path) or "",
+                [],
+            ).append(entry)
     selection_groups = _build_sync_selection_groups(
         recommended_entries,
         target_relative_path=inferred_target_relative_path,
+        replace_entries_by_path=replacement_entries_by_path,
     )
     plan_preview = _build_plan_preview(
         recommended_entries,
@@ -1765,6 +1808,7 @@ async def diagnose_pan_transfer_follow_task_files(
         materialized_update_state=materialized_update_state,
         materialized_episode_numbers=materialized_episode_numbers,
     )
+    summary["quality_upgrade_episode_numbers"] = sorted(quality_upgrade_episode_numbers)
 
     extra_json = dict(task.extra_json or {})
     extra_json["last_file_diagnosis"] = {

@@ -192,6 +192,8 @@ export interface PanTransferFollowTaskInspectionSchedule {
 export interface PanTransferFollowTaskAutomationConfig {
   enabled: boolean
   mode: string
+  source_mode?: 'system' | 'external_preferred' | string
+  external_sources?: PanTransferFollowTaskExternalSource[]
   reuse_existing_share_if_valid: boolean
   update_publish_record: boolean
   origin_mode_available?: boolean
@@ -205,6 +207,15 @@ export interface PanTransferFollowTaskAutomationConfig {
   last_auto_sync_mode?: string | null
   last_auto_result?: string | null
   last_auto_batch_id?: number | null
+  active_external_source_url?: string | null
+  last_external_result?: string | null
+  external_source_statuses?: Array<Record<string, unknown>>
+}
+
+export interface PanTransferFollowTaskExternalSource {
+  url: string
+  priority: number
+  enabled: boolean
 }
 
 export interface PanTransferFollowTaskAppliedUpdateState {
@@ -255,10 +266,12 @@ export interface PanTransferFollowTaskSyncSelectionGroup {
   target_relative_path?: string | null
   selected_entries: PanTransferFollowTaskSyncSelectionEntry[]
   selected_count: number
+  replace_existing_entry_ids?: string[]
+  replace_existing_names?: string[]
 }
 
 export interface PanTransferFollowTaskSyncRequest {
-  source_kind?: 'current' | 'candidate' | string
+  source_kind?: 'current' | 'candidate' | 'external' | string
   sync_mode?: 'standard' | 'incremental' | 'replace_all' | string
   external_source_url?: string | null
   selected_entries?: PanTransferFollowTaskSyncSelectionEntry[]
@@ -352,6 +365,7 @@ export interface PanTransferFollowTaskCandidateAssessment {
   queries: string[]
   validation_status?: string | null
   validation_detail_message?: string | null
+  quality_upgrade?: boolean | null
 }
 
 export interface PanTransferFollowTaskRuleAssessment {
@@ -452,7 +466,7 @@ export interface PanTransferFollowTaskSyncResponse {
 }
 
 export interface PanTransferFollowTaskFileDiagnosisRequest {
-  source_kind?: 'current' | 'candidate' | string
+  source_kind?: 'current' | 'candidate' | 'external' | string
   near_episode_window?: number
 }
 
