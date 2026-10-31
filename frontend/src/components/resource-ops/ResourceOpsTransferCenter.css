@@ -1250,7 +1250,7 @@
 
 .resource-ops-follow-external-source-table-row {
   display: grid;
-  grid-template-columns: 96px minmax(300px, 1fr) 120px 86px 52px;
+  grid-template-columns: 96px minmax(300px, 1fr) 120px 86px 88px;
   align-items: center;
   min-height: 58px;
   column-gap: 12px;
@@ -1291,7 +1291,24 @@
 
 .resource-ops-follow-external-source-action {
   display: flex;
+  align-items: center;
+  gap: 2px;
   justify-content: center;
+}
+
+.resource-ops-follow-sync-manual-fixed-source {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+}
+
+.resource-ops-follow-sync-manual-fixed-source .ant-tag {
+  margin-inline-end: 0;
+}
+
+.resource-ops-follow-sync-manual-fixed-source small {
+  color: rgba(15, 23, 42, 0.56);
 }
 
 .resource-ops-follow-external-source-action .ant-btn {

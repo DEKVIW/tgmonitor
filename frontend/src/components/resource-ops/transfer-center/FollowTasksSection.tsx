@@ -12,8 +12,9 @@ import {
   PlayCircleOutlined,
   PlusOutlined,
   SearchOutlined,
+  SyncOutlined,
 } from '@ant-design/icons'
-import { Alert, Button, Card, Checkbox, Collapse, Descriptions, Drawer, Dropdown, Empty, Input, InputNumber, Modal, Segmented, Select, Space, Table, Tabs, Tag, TimePicker, Tooltip, Typography, message } from 'antd'
+import { Alert, Button, Card, Checkbox, Collapse, Descriptions, Drawer, Dropdown, Empty, Input, InputNumber, Modal, Segmented, Space, Table, Tabs, Tag, TimePicker, Tooltip, Typography, message } from 'antd'
 import type { MenuProps } from 'antd'
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table'
 
@@ -1432,20 +1433,27 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
   const openManualSyncModal = async (
     task: PanTransferFollowTaskItem,
     initialSourceKind: FollowSyncSourceKind = 'current',
-    initialSyncMode: FollowSyncMode = 'incremental'
+    initialSyncMode: FollowSyncMode = 'incremental',
+    initialExternalSourceUrl?: string,
   ) => {
+    const requestedExternalSourceUrl = String(initialExternalSourceUrl || activeExternalSources[0]?.url || '').trim()
     const nextSourceKind =
       initialSourceKind === 'candidate' && task.last_candidate_url
         ? 'candidate'
-        : initialSourceKind === 'external' && activeExternalSources.length > 0
+        : initialSourceKind === 'external' && requestedExternalSourceUrl
           ? 'external'
           : 'current'
     resetManualSyncState()
     setManualSyncSourceKind(nextSourceKind)
-    setManualExternalSourceUrl(activeExternalSources[0]?.url || '')
+    setManualExternalSourceUrl(requestedExternalSourceUrl)
     setManualSyncMode(initialSyncMode)
     setManualSyncOpen(true)
-    await loadManualPreview(task, nextSourceKind, [{ key: 'root', label: DIRECTORY_ROOT_LABELS[nextSourceKind] }], activeExternalSources[0]?.url)
+    await loadManualPreview(
+      task,
+      nextSourceKind,
+      [{ key: 'root', label: DIRECTORY_ROOT_LABELS[nextSourceKind] }],
+      nextSourceKind === 'external' ? requestedExternalSourceUrl : undefined,
+    )
   }
 
   useEffect(() => {
@@ -2913,19 +2921,33 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
                                       </Checkbox>
                                     </div>
                                     <div className="resource-ops-follow-external-source-action" role="cell">
-                                      <Tooltip title="移除外部分享">
-                                        <Button
-                                          danger
-                                          type="text"
-                                          icon={<DeleteOutlined />}
-                                          aria-label={`移除第 ${index + 1} 个外部分享`}
-                                          onClick={() =>
-                                            updateExternalSourcesDraft(
-                                              (activeSettingsDraft.automation.external_sources || []).filter((_, itemIndex) => itemIndex !== index),
-                                            )
-                                          }
-                                        />
-                                      </Tooltip>
+                                      <Space size={2}>
+                                        <Tooltip title="使用此来源全量替换">
+                                          <Button
+                                            type="text"
+                                            icon={<SyncOutlined />}
+                                            disabled={!String(source.url || '').trim()}
+                                            aria-label={`使用第 ${index + 1} 个外部分享全量替换`}
+                                            onClick={() => {
+                                              if (!detailTask) return
+                                              void openManualSyncModal(detailTask, 'external', 'replace_all', source.url)
+                                            }}
+                                          />
+                                        </Tooltip>
+                                        <Tooltip title="移除外部分享">
+                                          <Button
+                                            danger
+                                            type="text"
+                                            icon={<DeleteOutlined />}
+                                            aria-label={`移除第 ${index + 1} 个外部分享`}
+                                            onClick={() =>
+                                              updateExternalSourcesDraft(
+                                                (activeSettingsDraft.automation.external_sources || []).filter((_, itemIndex) => itemIndex !== index),
+                                              )
+                                            }
+                                          />
+                                        </Tooltip>
+                                      </Space>
                                     </div>
                                   </div>
                                 )
@@ -3465,7 +3487,7 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
                         一键全量替换
                       </Button>
                       <Button danger ghost onClick={() => void runRuleAction(detailTask, 'replace_all')}>
-                        外部链接 / 手动替换
+                        手动点选替换
                       </Button>
                     </div>
                   </div>
@@ -3575,29 +3597,34 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
               <Card size="small" title="处理配置" className="resource-ops-follow-sync-card">
                 <div className="resource-ops-follow-sync-meta">
                   <span>来源选择</span>
-                  <Segmented
-                    block
-                    value={manualSyncSourceKind}
-                    options={[
-                      { label: '当前原链', value: 'current' },
-                      { label: '候选原链', value: 'candidate', disabled: !hasCandidate },
-                      { label: '已配置外部分享', value: 'external', disabled: activeExternalSources.length <= 0 },
-                    ]}
-                    onChange={(value) => {
-                      const nextSourceKind = value as FollowSyncSourceKind
-                      setManualSyncSourceKind(nextSourceKind)
-                      const nextExternalUrl = nextSourceKind === 'external' ? activeExternalSources[0]?.url || '' : ''
-                      setManualExternalSourceUrl(nextExternalUrl)
-                      setManualPreviewData(null)
-                      setManualPreviewTrail([])
-                      setManualSelectedRowKeys([])
-                      setManualSelectedEntries([])
-                      if (!detailTask) return
-                      void loadManualPreview(detailTask, nextSourceKind, [
-                        { key: 'root', label: DIRECTORY_ROOT_LABELS[nextSourceKind] },
-                      ], nextExternalUrl)
-                    }}
-                  />
+                  {manualSyncSourceKind === 'external' ? (
+                    <div className="resource-ops-follow-sync-manual-fixed-source">
+                      <Tag color="processing">外部分享来源</Tag>
+                      <small>已从上方来源表选择；如需更换，请返回来源表操作。</small>
+                    </div>
+                  ) : (
+                    <Segmented
+                      block
+                      value={manualSyncSourceKind}
+                      options={[
+                        { label: '当前原链', value: 'current' },
+                        { label: '候选原链', value: 'candidate', disabled: !hasCandidate },
+                      ]}
+                      onChange={(value) => {
+                        const nextSourceKind = value as FollowSyncSourceKind
+                        setManualSyncSourceKind(nextSourceKind)
+                        setManualExternalSourceUrl('')
+                        setManualPreviewData(null)
+                        setManualPreviewTrail([])
+                        setManualSelectedRowKeys([])
+                        setManualSelectedEntries([])
+                        if (!detailTask) return
+                        void loadManualPreview(detailTask, nextSourceKind, [
+                          { key: 'root', label: DIRECTORY_ROOT_LABELS[nextSourceKind] },
+                        ])
+                      }}
+                    />
+                  )}
                   <small>
                     {manualSyncSourceKind === 'candidate'
                       ? '会从最新候选原链导入选中的内容。'
@@ -3605,26 +3632,6 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
                         ? '从自动同步中已配置的外部分享读取内容，不会改写追更原链。'
                         : '会从当前已绑定原链导入选中的内容。'}
                   </small>
-                  {manualSyncSourceKind === 'external' ? (
-                    <Select
-                      value={manualExternalSourceUrl || undefined}
-                      placeholder="选择已配置的外部分享"
-                      options={activeExternalSources.map((source) => ({
-                        label: `优先级 ${source.priority} · ${source.url}`,
-                        value: source.url,
-                      }))}
-                      onChange={(value) => {
-                        setManualExternalSourceUrl(value)
-                        setManualPreviewData(null)
-                        setManualPreviewTrail([])
-                        setManualSelectedRowKeys([])
-                        setManualSelectedEntries([])
-                        if (!detailTask) return
-                        void loadManualPreview(detailTask, 'external', [{ key: 'root', label: '外部分享' }], value)
-                      }}
-                      style={{ width: '100%', marginTop: 8 }}
-                    />
-                  ) : null}
                 </div>
 
                 <div className="resource-ops-follow-sync-meta">
@@ -3690,7 +3697,7 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
                       type="error"
                       showIcon
                       message="全量替换是高风险操作"
-                      description="会先清空当前资源目录，再导入已选来源目录的全部内容。如果导入失败，现有目录可能暂时为空，所以提交前必须确认。外部分享必须先在自动同步中配置。"
+                      description="会先清空当前资源目录，再导入已选来源目录的全部内容。如果导入失败，现有目录可能暂时为空，所以提交前必须确认。"
                     />
                     <Checkbox
                       checked={manualReplaceConfirmed}
