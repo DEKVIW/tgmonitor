@@ -887,6 +887,8 @@ def _follow_applied_update_state_compare_key(value: Mapping[str, Any] | None) ->
         "issue_no": _normalize_text(normalized.get("issue_no"), max_length=32) or None,
         "is_completed": _normalize_optional_bool(normalized.get("is_completed")),
         "locked": bool(_normalize_optional_bool(normalized.get("locked"))),
+        "updated_at": _serialize_json_value(_parse_datetime(normalized.get("updated_at")))
+        or _normalize_text(normalized.get("updated_at")),
     }
 
 
@@ -1044,11 +1046,129 @@ def _get_follow_task_applied_update_state(task: PanTransferSyncTask) -> dict[str
     )
 
 
+def _merge_follow_applied_update_state_with_materialized_state(
+    applied_state: Mapping[str, Any] | None,
+    materialized_state: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    current = _normalize_follow_applied_update_state(applied_state)
+    materialized = _normalize_follow_materialized_update_state(materialized_state)
+    if not materialized or _normalize_optional_bool(current.get("locked")) is True:
+        return current
+
+    next_values = dict(current)
+    materialized_episode = _normalize_optional_int(materialized.get("episode"))
+    current_episode = _normalize_optional_int(current.get("episode"))
+    if materialized_episode is not None and (
+        current_episode is None or materialized_episode > current_episode
+    ):
+        next_values["episode"] = materialized_episode
+
+    if _normalize_optional_int(next_values.get("season")) is None:
+        materialized_season = _normalize_optional_int(materialized.get("season"))
+        if materialized_season is not None:
+            next_values["season"] = materialized_season
+    if not _normalize_text(next_values.get("issue_no"), max_length=32):
+        materialized_issue = _normalize_text(materialized.get("issue_no"), max_length=32)
+        if materialized_issue:
+            next_values["issue_no"] = materialized_issue
+    if _normalize_optional_bool(materialized.get("is_completed")) is True:
+        next_values["is_completed"] = True
+
+    materialized_updated_at = _parse_datetime(materialized.get("updated_at"))
+    current_updated_at = _parse_datetime(current.get("updated_at"))
+    if materialized_updated_at is not None and (
+        current_updated_at is None or materialized_updated_at > current_updated_at
+    ):
+        next_values["updated_at"] = materialized_updated_at
+        materialized_updated_by = _normalize_text(materialized.get("updated_by"), max_length=128) or None
+        if materialized_updated_by:
+            next_values["updated_by"] = materialized_updated_by
+
+    return _build_follow_applied_update_state(
+        resource_title=next_values.get("resource_title"),
+        core_title=next_values.get("core_title"),
+        season=next_values.get("season"),
+        episode=next_values.get("episode"),
+        issue_no=next_values.get("issue_no"),
+        is_completed=next_values.get("is_completed"),
+        source=next_values.get("source") or "auto",
+        locked=next_values.get("locked"),
+        updated_at=next_values.get("updated_at"),
+        updated_by=next_values.get("updated_by"),
+    )
+
+
+def _get_follow_task_effective_applied_update_state(
+    task: PanTransferSyncTask,
+    *,
+    materialized_state: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    current = _get_follow_task_applied_update_state(task)
+    materialized = (
+        materialized_state
+        if materialized_state is not None
+        else _get_follow_task_materialized_update_state(task)
+    )
+    return _merge_follow_applied_update_state_with_materialized_state(current, materialized)
+
+
+def reconcile_follow_task_progress_state(
+    task: PanTransferSyncTask,
+    *,
+    updated_by: str | None,
+) -> tuple[dict[str, Any], bool]:
+    current = _get_follow_task_applied_update_state(task)
+    effective = _get_follow_task_effective_applied_update_state(task)
+    if _follow_applied_update_state_compare_key(current) == _follow_applied_update_state_compare_key(effective):
+        return current, False
+    next_state = dict(effective)
+    materialized_state = _get_follow_task_materialized_update_state(task)
+    next_state["updated_at"] = _serialize_json_value(
+        _parse_datetime(materialized_state.get("updated_at")) or utcnow()
+    )
+    next_state["updated_by"] = _normalize_text(updated_by, max_length=128) or None
+    _set_task_extra_section(task, "applied_update_state", _normalize_follow_applied_update_state(next_state))
+    if next_state["updated_by"]:
+        task.updated_by = next_state["updated_by"]
+    return _get_follow_task_applied_update_state(task), True
+
+
+def _build_follow_task_display_identity_snapshot(
+    task: PanTransferSyncTask,
+    snapshot: Mapping[str, Any] | None,
+    applied_state: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    next_snapshot = dict(snapshot or {})
+    if not next_snapshot:
+        return next_snapshot
+
+    effective_state = _normalize_follow_applied_update_state(applied_state)
+    if not effective_state:
+        return next_snapshot
+    if _normalize_optional_bool(effective_state.get("locked")) is True:
+        progress_state = effective_state
+    else:
+        progress_state = _get_follow_task_effective_applied_update_state(task)
+
+    episode = _normalize_optional_int(progress_state.get("episode"))
+    existing_episode = _normalize_optional_int(next_snapshot.get("latest_episode"))
+    if episode is not None and (existing_episode is None or episode > existing_episode):
+        next_snapshot["latest_episode"] = episode
+    issue_no = _normalize_text(progress_state.get("issue_no"), max_length=32) or None
+    if issue_no:
+        next_snapshot["latest_issue"] = issue_no
+    is_completed = _normalize_optional_bool(progress_state.get("is_completed"))
+    if is_completed is not None:
+        next_snapshot["is_complete"] = is_completed
+    return next_snapshot
+
+
 def _update_follow_task_applied_update_state_from_sync(
     task: PanTransferSyncTask,
     *,
     current_share_identity: Mapping[str, Any] | None,
     source_metadata_promotion: Mapping[str, Any] | None,
+    materialized_update_state: Mapping[str, Any] | None = None,
     synced_at: datetime | None,
     updated_by: str | None,
 ) -> dict[str, Any]:
@@ -1077,6 +1197,10 @@ def _update_follow_task_applied_update_state_from_sync(
         locked=persisted.get("locked"),
         updated_at=synced_at or utcnow(),
         updated_by=updated_by,
+    )
+    next_state = _merge_follow_applied_update_state_with_materialized_state(
+        next_state,
+        materialized_update_state,
     )
     if next_state:
         _set_task_extra_section(task, "applied_update_state", next_state)
@@ -3056,8 +3180,13 @@ def _serialize_follow_task(row: PanTransferSyncTask) -> dict[str, Any]:
     extra_json = dict(row.extra_json or {})
     publish_binding = dict(extra_json.get("publish_binding") or {})
     last_sync = dict(extra_json.get("last_sync") or {})
-    identity_snapshot = dict(extra_json.get("identity_snapshot") or {})
-    applied_update_state = _get_follow_task_applied_update_state(row)
+    raw_identity_snapshot = dict(extra_json.get("identity_snapshot") or {})
+    applied_update_state = _get_follow_task_effective_applied_update_state(row)
+    identity_snapshot = _build_follow_task_display_identity_snapshot(
+        row,
+        raw_identity_snapshot,
+        applied_update_state,
+    )
     materialized_update_state = _get_follow_task_materialized_update_state(row)
     candidate_assessment = dict(extra_json.get("candidate_assessment") or {})
     candidate_recall = dict(extra_json.get("candidate_recall") or {})

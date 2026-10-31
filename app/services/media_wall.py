@@ -272,23 +272,30 @@ def _build_progress(task: PanTransferSyncTask | None) -> dict[str, Any]:
     if task is None:
         return {"episode": None, "label": "暂无追更进度", "task_state": None, "share_status": None}
 
-    states = (
-        _get_trusted_follow_state(task, "applied_update_state"),
-        _get_trusted_follow_state(task, "materialized_update_state"),
-        _get_trusted_follow_identity_snapshot(task),
-    )
-    episode = None
-    progress_state: dict[str, Any] = {}
-    for state in states:
-        episode = _extract_episode(state)
-        if episode is not None:
-            progress_state = state
-            break
+    applied_state = _get_trusted_follow_state(task, "applied_update_state")
+    materialized_state = _get_trusted_follow_state(task, "materialized_update_state")
+    if _is_follow_state_locked(applied_state):
+        states = (applied_state,)
+    else:
+        states = tuple(
+            sorted(
+                (applied_state, materialized_state),
+                key=lambda state: _extract_episode(state) or 0,
+                reverse=True,
+            )
+        )
+    episode = _extract_episode(states[0]) if states else None
+    progress_state: dict[str, Any] = states[0] if episode is not None else {}
     identity = None
     if episode is None:
+        identity_state = _get_trusted_follow_identity_snapshot(task)
         progress_state = next(
-            (state for state in states if _get_follow_state_completion(state) is not None),
-            {},
+            (
+                state
+                for state in (*states, identity_state)
+                if _get_follow_state_completion(state) is not None
+            ),
+            identity_state,
         )
     if episode is None and not progress_state:
         identity = parse_resource_identity(_get_trusted_follow_title(task))
@@ -310,6 +317,13 @@ def _build_progress(task: PanTransferSyncTask | None) -> dict[str, Any]:
         "share_status": task.current_share_status,
         "last_checked_at": task.last_checked_at,
     }
+
+
+def _is_follow_state_locked(state: Any) -> bool:
+    if not isinstance(state, dict):
+        return False
+    raw_value = state.get("locked")
+    return str(raw_value).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _parse_content_updated_at(value: Any) -> datetime | None:

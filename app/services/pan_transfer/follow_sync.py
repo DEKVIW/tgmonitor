@@ -1226,13 +1226,6 @@ def handle_follow_sync_item_success(
         "source_metadata_promotion": source_metadata_promotion,
     }
     task.extra_json = extra_json
-    applied_update_state = _update_follow_task_applied_update_state_from_sync(
-        task,
-        current_share_identity=current_share_identity,
-        source_metadata_promotion=source_metadata_promotion,
-        synced_at=synced_at,
-        updated_by=worker_name,
-    )
     materialized_episode_numbers, materialized_selected_count = _extract_follow_sync_materialized_episode_numbers(item)
     materialized_update_state = _update_follow_task_materialized_update_state_from_sync(
         task,
@@ -1253,6 +1246,14 @@ def handle_follow_sync_item_success(
             or preferred_target_relative_path
         ),
         selected_count=materialized_selected_count,
+    )
+    applied_update_state = _update_follow_task_applied_update_state_from_sync(
+        task,
+        current_share_identity=current_share_identity,
+        source_metadata_promotion=source_metadata_promotion,
+        materialized_update_state=materialized_update_state,
+        synced_at=synced_at,
+        updated_by=worker_name,
     )
     if sync_mode == "incremental" and preferred_target_relative_path:
         _remember_follow_task_target_path(
