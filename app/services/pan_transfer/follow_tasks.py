@@ -4948,12 +4948,6 @@ def _collect_follow_automation_selected_episode_set(groups: list[dict[str, Any]]
                 continue
             filename = _normalize_text(entry.get("name"), max_length=255)
             episodes = _extract_episode_numbers_quick(filename) if filename else []
-            if not episodes:
-                # Some shares use opaque filenames. Only then use the path as a
-                # fallback; explicit filename evidence must always win.
-                episodes = _extract_episode_numbers_quick(
-                    _normalize_text(entry.get("path"), max_length=1024)
-                )
             for episode in episodes:
                 normalized = _normalize_optional_int(episode)
                 if normalized is not None and normalized > 0:

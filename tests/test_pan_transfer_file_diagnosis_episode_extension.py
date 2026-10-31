@@ -18,6 +18,7 @@ from app.services.pan_transfer.file_diagnosis import (
 )
 from app.services.pan_transfer.follow_sync import _augment_source_selection_target_relative_path
 from app.services.pan_transfer.follow_sync import _extract_follow_sync_materialized_episode_numbers
+from app.services.pan_transfer.follow_tasks import _collect_follow_automation_selected_episode_set
 
 
 class FileDiagnosisEpisodeExtensionTests(unittest.TestCase):
@@ -240,6 +241,20 @@ class FileDiagnosisEpisodeExtensionTests(unittest.TestCase):
 
         self.assertEqual(episodes, [])
         self.assertEqual(selected_count, 1)
+
+    def test_automation_selection_does_not_read_episode_from_parent_path(self) -> None:
+        groups = [
+            {
+                "selected_entries": [
+                    {
+                        "name": "2026.2160p.WEB-DL.H265.AAC-PanWEB.zip",
+                        "path": "/遮天 [更新至187集]/剧场版/2026.2160p.WEB-DL.H265.AAC-PanWEB.zip",
+                    }
+                ]
+            }
+        ]
+
+        self.assertEqual(_collect_follow_automation_selected_episode_set(groups), set())
 
     def test_candidate_range_recommends_episode_after_current_anchor(self) -> None:
         file_names = [
