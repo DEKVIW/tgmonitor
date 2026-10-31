@@ -37,6 +37,7 @@ from .follow_tasks import (
     _append_follow_task_log,
     _build_follow_current_share_identity_snapshot,
     _clear_follow_task_candidate_fields,
+    _extract_follow_batch_item_quality_tags,
     _ensure_follow_task_identity_snapshot,
     _get_follow_task,
     _get_latest_link_target_message_snapshot,
@@ -1227,6 +1228,7 @@ def handle_follow_sync_item_success(
     }
     task.extra_json = extra_json
     materialized_episode_numbers, materialized_selected_count = _extract_follow_sync_materialized_episode_numbers(item)
+    materialized_quality_tags = _extract_follow_batch_item_quality_tags(item)
     materialized_update_state = _update_follow_task_materialized_update_state_from_sync(
         task,
         source_snapshot=effective_source_message_snapshot,
@@ -1246,6 +1248,7 @@ def handle_follow_sync_item_success(
             or preferred_target_relative_path
         ),
         selected_count=materialized_selected_count,
+        quality_tags=materialized_quality_tags,
     )
     applied_update_state = _update_follow_task_applied_update_state_from_sync(
         task,
@@ -1392,6 +1395,7 @@ def handle_follow_sync_item_failure(
     )
     failed_at = utcnow()
     materialized_episode_numbers, materialized_selected_count = _extract_follow_sync_materialized_episode_numbers(item)
+    materialized_quality_tags = _extract_follow_batch_item_quality_tags(item)
     transfer_materialized = bool(
         dict(source_metadata_promotion.get("transfer_materialization") or {}).get("materialized")
     )
@@ -1430,6 +1434,7 @@ def handle_follow_sync_item_failure(
             trigger_mode=trigger_mode,
             target_relative_path=preferred_target_relative_path or (selection_target_relative_paths[0] if selection_target_relative_paths else None),
             selected_count=materialized_selected_count,
+            quality_tags=materialized_quality_tags,
         )
 
     if existing_share_is_invalid:

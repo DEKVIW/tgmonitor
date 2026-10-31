@@ -37,7 +37,7 @@ from .providers import decrypt_account_credential, get_pan_transfer_provider
 from .providers.base import PanTransferProviderError
 from .replacement import _ensure_link_target_for_url, replace_link_target_references_with_url, rewrite_message_link_ref_with_url
 from .validation import validate_share_url
-from .quality import quality_sort_key
+from .quality import extract_quality_tags, normalize_quality_tags, quality_sort_key
 
 
 logger = logging.getLogger(__name__)
@@ -840,6 +840,7 @@ def _normalize_follow_applied_update_state(value: Mapping[str, Any] | None) -> d
         "locked": _normalize_optional_bool(raw.get("locked")),
         "updated_at": _serialize_json_value(_parse_datetime(raw.get("updated_at")) or raw.get("updated_at")),
         "updated_by": _normalize_text(raw.get("updated_by"), max_length=128) or None,
+        "quality_tags": normalize_quality_tags(raw.get("quality_tags")),
     }
     return {
         key: item
@@ -860,6 +861,7 @@ def _build_follow_applied_update_state(
     locked: Any = None,
     updated_at: Any = None,
     updated_by: Any = None,
+    quality_tags: Any = None,
 ) -> dict[str, Any]:
     return _normalize_follow_applied_update_state(
         {
@@ -873,6 +875,7 @@ def _build_follow_applied_update_state(
             "locked": locked,
             "updated_at": updated_at,
             "updated_by": updated_by,
+            "quality_tags": quality_tags,
         }
     )
 
@@ -889,6 +892,7 @@ def _follow_applied_update_state_compare_key(value: Mapping[str, Any] | None) ->
         "locked": bool(_normalize_optional_bool(normalized.get("locked"))),
         "updated_at": _serialize_json_value(_parse_datetime(normalized.get("updated_at")))
         or _normalize_text(normalized.get("updated_at")),
+        "quality_tags": normalize_quality_tags(normalized.get("quality_tags")),
     }
 
 
@@ -940,6 +944,111 @@ def _normalize_follow_materialized_update_state(value: Mapping[str, Any] | None)
 def _get_follow_task_materialized_update_state(task: PanTransferSyncTask) -> dict[str, Any]:
     state = _normalize_follow_materialized_update_state(_get_task_extra_section(task, "materialized_update_state"))
     return state if _follow_state_matches_source_origin(task, state) else {}
+
+
+def _extract_follow_batch_item_quality_tags(item: PanTransferBatchItem) -> list[str]:
+    extra_json = dict(item.extra_json or {})
+    source_selection = dict(extra_json.get("source_selection") or {})
+    values: list[str] = []
+    for group in list(source_selection.get("selection_groups") or []):
+        if not isinstance(group, dict):
+            continue
+        for entry in list(group.get("selected_entries") or []):
+            if not isinstance(entry, dict):
+                continue
+            values.extend(
+                value
+                for value in (entry.get("name"), entry.get("path"))
+                if _normalize_text(value, max_length=500)
+            )
+    transfer_payload = dict(extra_json.get("transfer_payload") or {})
+    values.extend(
+        value
+        for value in (
+            transfer_payload.get("title_hint"),
+            extra_json.get("source_message_snapshot", {}).get("title")
+            if isinstance(extra_json.get("source_message_snapshot"), dict)
+            else None,
+            getattr(item, "latest_message_title", None),
+            getattr(item, "short_title", None),
+        )
+        if _normalize_text(value, max_length=500)
+    )
+    tags: list[str] = []
+    for value in values:
+        tags.extend(extract_quality_tags(_normalize_text(value, max_length=500)))
+    return normalize_quality_tags(tags)
+
+
+def _resolve_follow_task_quality_baseline(
+    task: PanTransferSyncTask,
+    *,
+    tracked_resource_title: str | None = None,
+) -> list[str] | str:
+    effective_state = _get_follow_task_effective_applied_update_state(task)
+    quality_tags = normalize_quality_tags(effective_state.get("quality_tags"))
+    if quality_tags:
+        return quality_tags
+    return tracked_resource_title or _normalize_text(effective_state.get("resource_title"), max_length=255)
+
+
+def _restore_follow_task_quality_from_last_sync(
+    session: Session,
+    *,
+    task: PanTransferSyncTask,
+    updated_by: str | None,
+) -> bool:
+    current_state = _get_follow_task_applied_update_state(task)
+    if _normalize_optional_bool(current_state.get("locked")) is True:
+        return False
+    current_tags = normalize_quality_tags(current_state.get("quality_tags"))
+    last_sync = _get_task_extra_section(task, "last_sync")
+    batch_item_id = _normalize_optional_int(last_sync.get("batch_item_id"))
+    if batch_item_id is None:
+        return False
+    item = session.get(PanTransferBatchItem, int(batch_item_id))
+    if item is None or _normalize_text(item.transfer_status, max_length=32).lower() != "completed":
+        return False
+    materialized_tags = _extract_follow_batch_item_quality_tags(item)
+    if not materialized_tags:
+        return False
+
+    quality_baseline = current_tags
+    state_changed = False
+    if not current_tags or quality_sort_key(materialized_tags) > quality_sort_key(current_tags):
+        materialized_state = _get_follow_task_materialized_update_state(task)
+        for section_name, section in (
+            ("applied_update_state", current_state),
+            ("materialized_update_state", materialized_state),
+        ):
+            next_section = dict(section)
+            next_section["quality_tags"] = materialized_tags
+            _set_task_extra_section(task, section_name, next_section)
+        quality_baseline = materialized_tags
+        state_changed = True
+
+    candidate_title = _normalize_text(task.last_candidate_title, max_length=255)
+    candidate_identity = parse_resource_identity(candidate_title) if candidate_title else None
+    effective_state = _get_follow_task_effective_applied_update_state(task)
+    current_episode = _normalize_optional_int(effective_state.get("episode"))
+    candidate_episode = _normalize_optional_int(getattr(candidate_identity, "episode", None))
+    candidate_cleared = False
+    if (
+        candidate_title
+        and current_episode is not None
+        and candidate_episode == current_episode
+        and quality_sort_key(candidate_title) <= quality_sort_key(quality_baseline)
+    ):
+        _clear_follow_task_candidate_fields(task)
+        _apply_follow_task_state_without_candidate(task)
+        candidate_cleared = True
+    if not state_changed and not candidate_cleared:
+        return False
+    if state_changed:
+        task.updated_by = _normalize_text(updated_by, max_length=128) or task.updated_by
+    session.add(task)
+    session.flush()
+    return True
 
 
 def _collect_follow_task_materialized_episode_numbers(task: PanTransferSyncTask) -> list[int]:
@@ -1074,6 +1183,14 @@ def _merge_follow_applied_update_state_with_materialized_state(
     if _normalize_optional_bool(materialized.get("is_completed")) is True:
         next_values["is_completed"] = True
 
+    current_quality_tags = normalize_quality_tags(current.get("quality_tags"))
+    materialized_quality_tags = normalize_quality_tags(materialized.get("quality_tags"))
+    if materialized_quality_tags and (
+        not current_quality_tags
+        or quality_sort_key(materialized_quality_tags) > quality_sort_key(current_quality_tags)
+    ):
+        next_values["quality_tags"] = materialized_quality_tags
+
     materialized_updated_at = _parse_datetime(materialized.get("updated_at"))
     current_updated_at = _parse_datetime(current.get("updated_at"))
     if materialized_updated_at is not None and (
@@ -1095,6 +1212,7 @@ def _merge_follow_applied_update_state_with_materialized_state(
         locked=next_values.get("locked"),
         updated_at=next_values.get("updated_at"),
         updated_by=next_values.get("updated_by"),
+        quality_tags=next_values.get("quality_tags"),
     )
 
 
@@ -1197,6 +1315,7 @@ def _update_follow_task_applied_update_state_from_sync(
         locked=persisted.get("locked"),
         updated_at=synced_at or utcnow(),
         updated_by=updated_by,
+        quality_tags=(materialized_update_state or {}).get("quality_tags"),
     )
     next_state = _merge_follow_applied_update_state_with_materialized_state(
         next_state,
@@ -1225,6 +1344,7 @@ def _update_follow_task_materialized_update_state_from_sync(
     trigger_mode: str | None = None,
     target_relative_path: str | None = None,
     selected_count: int | None = None,
+    quality_tags: Any = None,
 ) -> dict[str, Any]:
     promotion = dict(source_metadata_promotion or {})
     transfer_materialization = dict(promotion.get("transfer_materialization") or {})
@@ -1297,6 +1417,7 @@ def _update_follow_task_materialized_update_state_from_sync(
             "trigger_mode": trigger_mode,
             "target_relative_path": target_relative_path,
             "selected_count": selected_count,
+            "quality_tags": quality_tags,
         }
     )
     if next_state:
@@ -4435,11 +4556,16 @@ def _evaluate_follow_candidate_rules(
     assessment = decision.to_dict()
     assessment["tracked_identity"] = tracked_identity.to_dict()
     assessment["candidate_identity"] = candidate_identity.to_dict()
+    quality_baseline = _resolve_follow_task_quality_baseline(
+        task,
+        tracked_resource_title=tracked_resource_title,
+    )
     quality_upgrade = bool(
         decision.same_episode_replace
-        and quality_sort_key(candidate_title) > quality_sort_key(tracked_resource_title)
+        and quality_sort_key(candidate_title) > quality_sort_key(quality_baseline)
     )
     assessment["quality_upgrade"] = quality_upgrade
+    assessment["tracked_quality_tags"] = normalize_quality_tags(quality_baseline) if not isinstance(quality_baseline, str) else extract_quality_tags(quality_baseline)
     if quality_upgrade:
         assessment["should_promote"] = True
         assessment["reason"] = "rule_same_episode_higher_quality"
@@ -5992,6 +6118,11 @@ def process_next_pan_transfer_follow_task(session: Session, *, worker_name: str)
     )
     if task is None:
         return False
+    _restore_follow_task_quality_from_last_sync(
+        session,
+        task=task,
+        updated_by=worker_name,
+    )
     task_id = int(task.id)
     forced_check = str(task.task_state or "") == PAN_TRANSFER_SYNC_STATE_QUEUED
     source_readiness_retry_at = _get_follow_source_readiness_retry_at(task)

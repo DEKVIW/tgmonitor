@@ -26,14 +26,22 @@ _QUALITY_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("DDP5.1", re.compile(r"(?<![A-Za-z0-9])(?:DDP|DD)\s*5\.1(?![A-Za-z0-9])", re.IGNORECASE)),
 )
 
+QUALITY_TAGS = tuple(label for label, _pattern in _QUALITY_PATTERNS)
+
 
 def extract_quality_tags(text: str | None) -> list[str]:
     normalized = str(text or "")[:500]
     return [label for label, pattern in _QUALITY_PATTERNS if pattern.search(normalized)]
 
 
+def normalize_quality_tags(value: str | Iterable[str] | None) -> list[str]:
+    raw_values = extract_quality_tags(value) if isinstance(value, str) or value is None else value
+    normalized_values = {str(item).strip().upper() for item in raw_values if str(item).strip()}
+    return [label for label in QUALITY_TAGS if label in normalized_values]
+
+
 def quality_sort_key(value: str | Iterable[str] | None) -> tuple[int, int, int, int, int, int]:
-    tags = set(extract_quality_tags(value) if isinstance(value, str) or value is None else value)
+    tags = set(normalize_quality_tags(value))
     resolution_rank = (
         5 if "8K" in tags else
         4 if "4K" in tags else

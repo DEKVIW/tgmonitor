@@ -32,8 +32,10 @@ from .follow_tasks import (
     _normalize_optional_int,
     _normalize_text,
     _resolve_follow_task_resource_title,
+    _resolve_follow_task_quality_baseline,
+    _restore_follow_task_quality_from_last_sync,
 )
-from .quality import quality_sort_key
+from .quality import extract_quality_tags, normalize_quality_tags, quality_sort_key
 
 
 FOLLOW_TRIGGER_EVENT_TYPE_MESSAGE_LINK_RECEIVED = "message_link_received"
@@ -149,11 +151,16 @@ def evaluate_follow_trigger(
     tracked_title = _resolve_follow_task_resource_title(task) or str(
         _get_task_extra_section(task, "source_message_snapshot").get("title") or ""
     )
+    quality_baseline = _resolve_follow_task_quality_baseline(
+        task,
+        tracked_resource_title=tracked_title,
+    )
     quality_upgrade = bool(
         decision.same_episode_replace
-        and quality_sort_key(candidate_title) > quality_sort_key(tracked_title)
+        and quality_sort_key(candidate_title) > quality_sort_key(quality_baseline)
     )
     result["quality_upgrade"] = quality_upgrade
+    result["tracked_quality_tags"] = normalize_quality_tags(quality_baseline) if not isinstance(quality_baseline, str) else extract_quality_tags(quality_baseline)
     if quality_upgrade:
         result["reason"] = "rule_same_episode_higher_quality"
     result["triggerable"] = bool(
@@ -384,6 +391,23 @@ def process_next_pan_transfer_follow_trigger_event(session: Session, *, worker_n
             automation = _get_task_automation_config(task)
             if not bool(automation.get("enabled")):
                 continue
+            quality_state_restored = _restore_follow_task_quality_from_last_sync(
+                session,
+                task=task,
+                updated_by=worker_name,
+            )
+            if quality_state_restored:
+                _append_follow_task_log(
+                    session,
+                    task=task,
+                    stage="candidate",
+                    message="Restored the applied quality baseline from the completed follow-sync batch",
+                    payload={
+                        "quality_tags": list(
+                            _get_task_extra_section(task, "applied_update_state").get("quality_tags") or []
+                        ),
+                    },
+                )
             assessment = evaluate_follow_trigger(
                 task,
                 candidate_title=candidate_title,
