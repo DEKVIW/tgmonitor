@@ -23,8 +23,7 @@ from .follow_tasks import (
     PAN_TRANSFER_SYNC_STATE_SYNC_QUEUED,
     PAN_TRANSFER_SYNC_STATUS_ACTIVE,
     _append_follow_task_log,
-    _apply_follow_applied_update_state_to_snapshot,
-    _apply_follow_materialized_update_state_to_snapshot,
+    _apply_follow_current_progress_state_to_snapshot,
     _apply_follow_snapshot_progress_to_identity,
     _get_task_automation_config,
     _get_task_extra_section,
@@ -122,10 +121,7 @@ def enqueue_follow_trigger_events_for_message_ids(
 
 def _build_tracked_identity(task: PanTransferSyncTask) -> Any:
     snapshot = dict(_get_task_extra_section(task, "identity_snapshot") or {})
-    snapshot = _apply_follow_materialized_update_state_to_snapshot(
-        task,
-        _apply_follow_applied_update_state_to_snapshot(task, snapshot),
-    )
+    snapshot = _apply_follow_current_progress_state_to_snapshot(task, snapshot)
     resource_title = _resolve_follow_task_resource_title(task) or _normalize_text(
         snapshot.get("resource_title"),
         max_length=255,

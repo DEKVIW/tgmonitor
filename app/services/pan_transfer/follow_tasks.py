@@ -799,7 +799,7 @@ def _build_follow_current_share_identity_snapshot(
 
 
 def _get_follow_task_current_share_identity(task: PanTransferSyncTask) -> dict[str, Any]:
-    extra_json = dict(task.extra_json or {})
+    extra_json = dict(getattr(task, "extra_json", None) or {})
     return _normalize_follow_current_share_identity(extra_json.get("current_share_identity"))
 
 
@@ -1293,6 +1293,40 @@ def _apply_follow_materialized_update_state_to_snapshot(
     return next_snapshot
 
 
+def _apply_follow_current_progress_state_to_snapshot(
+    task: PanTransferSyncTask,
+    snapshot: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    next_snapshot = _apply_follow_materialized_update_state_to_snapshot(
+        task,
+        _apply_follow_applied_update_state_to_snapshot(task, snapshot),
+    )
+    applied_state = _get_follow_task_applied_update_state(task)
+    materialized_state = _get_follow_task_materialized_update_state(task)
+    if _normalize_optional_bool(applied_state.get("locked")) is True:
+        progress_state = dict(applied_state)
+    else:
+        progress_state = {**applied_state, **materialized_state}
+
+    for key in ("resource_title", "core_title"):
+        value = _normalize_text(progress_state.get(key), max_length=255)
+        if value:
+            next_snapshot[key] = value
+    season = _normalize_optional_int(progress_state.get("season"))
+    if season is not None:
+        next_snapshot["season"] = season
+    episode = _normalize_optional_int(progress_state.get("episode"))
+    if episode is not None:
+        next_snapshot["latest_episode"] = episode
+    issue_no = _normalize_text(progress_state.get("issue_no"), max_length=32) or None
+    if issue_no:
+        next_snapshot["latest_issue"] = issue_no
+    is_complete = _normalize_optional_bool(progress_state.get("is_completed"))
+    if is_complete is not None:
+        next_snapshot["is_complete"] = is_complete
+    return next_snapshot
+
+
 def _apply_follow_snapshot_progress_to_identity(identity: Any, *, snapshot: Mapping[str, Any] | None) -> Any:
     effective_snapshot = dict(snapshot or {})
     season = _normalize_optional_int(effective_snapshot.get("season"))
@@ -1734,13 +1768,20 @@ def _build_follow_candidate_latest_ref_subquery(
 
 
 def _resolve_follow_task_resource_title(task: PanTransferSyncTask) -> str:
+    materialized_state = _get_follow_task_materialized_update_state(task)
+    applied_state = _get_follow_task_applied_update_state(task)
+    current_share_identity = _get_follow_task_current_share_identity(task)
     source_origin = _normalize_follow_source_origin(_get_task_extra_section(task, "source_origin"))
     source_origin_snapshot = _normalize_source_message_snapshot(source_origin.get("source_message_snapshot"))
     source_message_snapshot = _normalize_source_message_snapshot(_get_task_extra_section(task, "source_message_snapshot"))
+    for state in (materialized_state, applied_state, current_share_identity):
+        current_title = _normalize_text(state.get("resource_title"), max_length=255)
+        if current_title:
+            return current_title
     return (
         _normalize_text(source_origin_snapshot.get("title"), max_length=255)
-        or _normalize_text(task.work_title, max_length=255)
         or _normalize_text(source_message_snapshot.get("title"), max_length=255)
+        or _normalize_text(task.work_title, max_length=255)
         or _normalize_text(task.topic_title, max_length=255)
         or _normalize_text(task.task_name, max_length=255)
         or f"resource_{int(task.id)}"
@@ -3878,9 +3919,9 @@ def _build_follow_candidate_search_queries(task: PanTransferSyncTask, snapshot: 
         _normalize_follow_source_origin(_get_task_extra_section(task, "source_origin")).get("source_message_snapshot")
     )
     source_title = (
-        _normalize_text(origin_snapshot.get("title"), max_length=255)
+        _resolve_follow_task_resource_title(task)
         or _normalize_text(snapshot.get("resource_title"), max_length=255)
-        or _resolve_follow_task_resource_title(task)
+        or _normalize_text(origin_snapshot.get("title"), max_length=255)
     )
     if not source_title:
         return []
@@ -3899,9 +3940,9 @@ def _follow_candidate_title_matches_task(
         _normalize_follow_source_origin(_get_task_extra_section(task, "source_origin")).get("source_message_snapshot")
     )
     source_title = (
-        _normalize_text(origin_snapshot.get("title"), max_length=255)
+        _resolve_follow_task_resource_title(task)
         or _normalize_text(snapshot.get("resource_title"), max_length=255)
-        or _resolve_follow_task_resource_title(task)
+        or _normalize_text(origin_snapshot.get("title"), max_length=255)
     )
     if not source_title:
         return False
@@ -4228,16 +4269,13 @@ def _evaluate_follow_candidate_rules(
     snapshot: dict[str, Any],
     candidate: dict[str, Any],
 ) -> dict[str, Any]:
-    effective_snapshot = _apply_follow_materialized_update_state_to_snapshot(
-        task,
-        _apply_follow_applied_update_state_to_snapshot(task, snapshot),
-    )
+    effective_snapshot = _apply_follow_current_progress_state_to_snapshot(task, snapshot)
     source_origin = _normalize_follow_source_origin(_get_task_extra_section(task, "source_origin"))
     origin_snapshot = _normalize_source_message_snapshot(source_origin.get("source_message_snapshot"))
     tracked_resource_title = (
-        _normalize_text(origin_snapshot.get("title"), max_length=255)
+        _resolve_follow_task_resource_title(task)
         or _normalize_text(effective_snapshot.get("resource_title"), max_length=255)
-        or _resolve_follow_task_resource_title(task)
+        or _normalize_text(origin_snapshot.get("title"), max_length=255)
     )
     tracked_identity = parse_resource_identity(
         tracked_resource_title,
