@@ -130,6 +130,7 @@ class ResourceIdentityParserTests(unittest.TestCase):
     def test_core_title_stops_before_quality_and_metadata_chain(self) -> None:
         cases = {
             "师兄啊师兄 4K更新至165集": ("师兄啊师兄", 165),
+            "牧神记 无标 更新至107集": ("牧神记", 107),
             "尚公主 4K臻彩MAX HDR60fps 内封简繁字幕 更新至20集": ("尚公主", 20),
             "大理寺日志第3季2026 1080 更8": ("大理寺日志", 8),
             "东京复仇者 三天战争篇 東京リベンジャーズ 三天戦争編 (2026) 更至5集": ("东京复仇者 三天战争篇", 5),

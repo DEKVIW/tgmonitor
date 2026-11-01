@@ -20,11 +20,33 @@ from app.services.pan_transfer.queue import reset_pan_transfer_batch_items
 from app.services.pan_transfer.follow_tasks import (
     _extract_follow_task_trigger_quality_tags,
     _evaluate_follow_candidate_rules,
+    _follow_state_matches_source_origin,
     _validate_follow_external_source_configuration,
 )
 from app.services.pan_transfer.follow_sync import _resolve_follow_sync_quality_tags
 from app.services.pan_transfer.worker import _share_validation_is_explicitly_invalid, _should_reuse_existing_share
 from app.services.pan_transfer.providers.quark import _QuarkClient
+
+
+def test_follow_state_prefers_persisted_core_title_over_display_title() -> None:
+    task = SimpleNamespace(
+        extra_json={
+            "source_origin": {
+                "source_message_snapshot": {
+                    "title": "牧神记（2024）高码 更新至104集",
+                }
+            }
+        }
+    )
+
+    assert _follow_state_matches_source_origin(
+        task,
+        {
+            "resource_title": "牧神记 无标 更新至107集",
+            "core_title": "牧神记",
+            "episode": 107,
+        },
+    )
 
 
 def test_follow_sync_reuses_existing_share_for_both_target_modes() -> None:

@@ -196,15 +196,16 @@ def _follow_state_matches_source_origin(
         return False
 
     origin_identity = parse_resource_identity(origin_title)
-    state_identity = parse_resource_identity(state_title)
-    if not origin_identity.is_target_work or not state_identity.is_target_work:
-        return normalize_match_key(origin_title) == normalize_match_key(state_title)
+    state_core_title = _clean_text(state.get("core_title"), max_length=255)
+    state_identity = parse_resource_identity(state_title) if not state_core_title else None
+    if not origin_identity.is_target_work or (state_identity is not None and not state_identity.is_target_work):
+        return normalize_match_key(origin_title) == normalize_match_key(state_core_title or state_title)
     origin_keys = {
         normalize_match_key(value)
         for value in (origin_identity.core_title, *origin_identity.aliases)
         if normalize_match_key(value)
     }
-    state_key = normalize_match_key(state_identity.core_title)
+    state_key = normalize_match_key(state_core_title or getattr(state_identity, "core_title", None))
     return bool(state_key and state_key in origin_keys)
 
 

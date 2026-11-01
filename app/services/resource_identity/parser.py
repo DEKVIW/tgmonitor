@@ -96,7 +96,7 @@ META_CUT_PATTERNS = (
     re.compile(
         r"(?:^|[\s·•|｜/+])(?:4K|8K|720P|1080P?|1440P|2160P?|HDR(?:10(?:\+)?|10bit)?|"
         r"DV|HQ|WEB(?:-DL)?|AMZN|ATVP|HMAX|DSNP|HIFI|FLAC|HEVC|H\.265|60FPS|120FPS|"
-        r"MAX|杜比|臻彩|高码|内封|外封|内嵌|外挂|字幕|简繁(?:字幕)?|多国字幕)",
+        r"MAX|杜比|臻彩|高码|无标|无水印|无台标|无LOGO|内封|外封|内嵌|外挂|字幕|简繁(?:字幕)?|多国字幕)",
         re.IGNORECASE,
     ),
     re.compile(r"(?:^|[\s·•|｜])\d{1,4}\s*集(?:\s|$|[+&|｜])"),
@@ -119,7 +119,7 @@ TRAILING_NOISE_PATTERNS = (
     re.compile(
         r"(?:^|[\s·•|｜/+])(?:4K|8K|720P|1080P?|1440P|2160P?|HDR(?:10(?:\+)?|10bit)?|"
         r"DV|HQ|WEB(?:-DL)?|AMZN|ATVP|HMAX|DSNP|HIFI|FLAC|HEVC|H\.265|60FPS|120FPS|"
-        r"MAX|杜比|臻彩|高码|内封|外封|内嵌|外挂|字幕|简繁(?:字幕)?|多国字幕)",
+        r"MAX|杜比|臻彩|高码|无标|无水印|无台标|无LOGO|内封|外封|内嵌|外挂|字幕|简繁(?:字幕)?|多国字幕)",
         re.IGNORECASE,
     ),
     re.compile(r"(?:^|[\s·•|｜])(?:经典日漫|日漫|国日|国英|日语|英语|韩语|中字|中英|简繁|简中|繁中|多国字幕)$", re.IGNORECASE),
@@ -136,11 +136,11 @@ TRAILING_PERSON_LIST_PATTERN = re.compile(
 CJK_PATTERN = re.compile(r"[\u4e00-\u9fff]")
 ASCII_PATTERN = re.compile(r"[A-Za-z]")
 META_KEYWORD_PATTERN = re.compile(
-    r"(?:更新|更至?|全集|完结|4K|8K|HDR|DV|WEB-?|AMZN|ATVP|HMAX|MAX|杜比|内封|字幕|高码|臻彩|类型|主演|演员|导演|剧情|爱情|悬疑|犯罪|古装|战争|历史|真人秀|综艺|动画|国漫|国创|奇幻|冒险|多国字幕)",
+    r"(?:更新|更至?|全集|完结|4K|8K|HDR|DV|WEB-?|AMZN|ATVP|HMAX|MAX|杜比|内封|字幕|高码|臻彩|无标|无水印|无台标|无LOGO|类型|主演|演员|导演|剧情|爱情|悬疑|犯罪|古装|战争|历史|真人秀|综艺|动画|国漫|国创|奇幻|冒险|多国字幕)",
     re.IGNORECASE,
 )
 GENERIC_METADATA_KEY_PATTERN = re.compile(
-    r"^(?:更新|更至?|全集|完结|年番|季|4k|8k|720p|1080p?|1440p|2160p?|hdr|dv|web|amzn|atvp|hmax|dsnp|max|杜比|内封|外封|内嵌|外挂|字幕|简繁|高码|臻彩|类型|主演|演员|导演|剧情|爱情|悬疑|犯罪|古装|战争|历史|真人秀|综艺|动画|国漫|国创|奇幻|冒险|多国字幕)+$",
+    r"^(?:更新|更至?|全集|完结|年番|季|4k|8k|720p|1080p?|1440p|2160p?|hdr|dv|web|amzn|atvp|hmax|dsnp|max|杜比|内封|外封|内嵌|外挂|字幕|简繁|高码|臻彩|无标|无水印|无台标|无logo|类型|主演|演员|导演|剧情|爱情|悬疑|犯罪|古装|战争|历史|真人秀|综艺|动画|国漫|国创|奇幻|冒险|多国字幕)+$",
     re.IGNORECASE,
 )
 GENERIC_IDENTITY_KEYS = frozenset({

@@ -24,6 +24,7 @@ from app.services.media_wall import (
     _build_import_preview,
     _fingerprint_url,
     _get_content_updated_at,
+    _follow_state_matches_source_origin,
     _invalidate_metadata_cache,
     _metadata_cache,
     _normalize_title,
@@ -93,6 +94,28 @@ class MediaWallServiceTests(unittest.TestCase):
 
         self.assertEqual(progress["episode"], 13)
         self.assertEqual(_get_content_updated_at(task).isoformat(), "2026-10-22T12:00:00")
+
+    def test_media_wall_trusts_persisted_core_title_for_metadata_suffix(self) -> None:
+        task = SimpleNamespace(
+            extra_json={
+                "source_origin": {
+                    "source_message_snapshot": {
+                        "title": "牧神记（2024）高码 更新至104集",
+                    }
+                }
+            }
+        )
+
+        self.assertTrue(
+            _follow_state_matches_source_origin(
+                task,
+                {
+                    "resource_title": "牧神记 无标 更新至107集",
+                    "core_title": "牧神记",
+                    "episode": 107,
+                },
+            )
+        )
 
     def test_media_wall_prefers_materialized_episode_over_stale_applied_state(self) -> None:
         task = SimpleNamespace(
