@@ -63,12 +63,11 @@ const PosterPlaceholder = ({ title }: { title: string }) => (
   </div>
 )
 
-const isProgressRemark = (remark: string | null | undefined, episode: number | null | undefined) => {
-  if (!remark || !episode || !/(更新至|更至)/.test(remark)) {
+const isProgressRemark = (remark: string | null | undefined) => {
+  if (!remark) {
     return false
   }
-  const episodeNumbers = remark.match(/\d+/g) || []
-  return episodeNumbers.some((value) => Number(value) === episode)
+  return /(?:更新至|更至|更新|更|全)\s*(?:第\s*)?\d+\s*集|(?:已完结|完结)/.test(remark)
 }
 
 const getCardProgressLabel = (label: string) => label.replace(/^已完结(?=\s|·|$)/, '完结')
@@ -110,8 +109,9 @@ const MediaWallCard = ({ item, onClick, imageLoading }: { item: MediaWallItem; o
 
 const MediaWallDetail = ({ item, onBack }: { item: MediaWallItem; onBack: () => void }) => {
   const enabledLinks = item.links.filter((link) => link.is_enabled && link.last_status !== 'invalid')
-  const progressLabel = item.progress.label.replace(/\s+/g, '')
-  const showRemarks = item.remarks && !isProgressRemark(item.remarks, item.progress.episode)
+  const detailRemark = isProgressRemark(item.remarks) && item.progress.episode
+    ? item.progress.label
+    : item.remarks
   const metadataRows: Array<[string, string | null | undefined]> = [
     ['类型', item.type_name],
     ['年份', item.year],
@@ -119,8 +119,8 @@ const MediaWallDetail = ({ item, onBack }: { item: MediaWallItem; onBack: () => 
     ['导演', item.director],
     ['主演', item.actor],
   ]
-  if (showRemarks) {
-    metadataRows.push(['备注', item.remarks])
+  if (detailRemark) {
+    metadataRows.push(['备注', detailRemark])
   }
   const visibleMetadataRows = metadataRows.filter((row): row is [string, string] => Boolean(row[1]))
 
@@ -130,7 +130,6 @@ const MediaWallDetail = ({ item, onBack }: { item: MediaWallItem; onBack: () => 
         <div className="media-wall-detail-heading">
           <div className="media-wall-detail-title-row">
             <Title level={1}>{item.display_title}</Title>
-            {item.progress.episode ? <Tag color="blue" className="media-wall-detail-progress-tag">{progressLabel}</Tag> : null}
           </div>
           <Button
             type="text"
