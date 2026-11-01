@@ -37,7 +37,7 @@ from .providers import decrypt_account_credential, get_pan_transfer_provider
 from .providers.base import PanTransferProviderError
 from .replacement import _ensure_link_target_for_url, replace_link_target_references_with_url, rewrite_message_link_ref_with_url
 from .validation import validate_share_url
-from .quality import extract_quality_tags, normalize_quality_tags, quality_sort_key
+from .quality import extract_quality_tags, is_quality_upgrade, normalize_quality_tags
 
 
 logger = logging.getLogger(__name__)
@@ -97,6 +97,7 @@ PAN_TRANSFER_FOLLOW_MAX_EXTERNAL_SOURCES = 8
 PAN_TRANSFER_FOLLOW_AUTOMATION_STOP_SOURCE_INVALID = "source_invalid"
 PAN_TRANSFER_FOLLOW_AUTOMATION_STOP_SOURCE_SWITCHED = "source_switched"
 PAN_TRANSFER_FOLLOW_AUTOMATION_STOP_STRUCTURE_CONFLICT = "structure_conflict"
+PAN_TRANSFER_FOLLOW_SOURCE_NOT_READY_STOP_REASONS = {"no_source_video", "source_episode_not_ready"}
 PAN_TRANSFER_FOLLOW_SHARE_REFRESH_COOLDOWN_MINUTES = 6 * 60
 
 FOLLOW_EPISODE_PATTERNS = (
@@ -948,36 +949,22 @@ def _get_follow_task_materialized_update_state(task: PanTransferSyncTask) -> dic
 
 def _extract_follow_batch_item_quality_tags(item: PanTransferBatchItem) -> list[str]:
     extra_json = dict(item.extra_json or {})
-    source_selection = dict(extra_json.get("source_selection") or {})
-    values: list[str] = []
-    for group in list(source_selection.get("selection_groups") or []):
-        if not isinstance(group, dict):
-            continue
-        for entry in list(group.get("selected_entries") or []):
-            if not isinstance(entry, dict):
-                continue
-            values.extend(
-                value
-                for value in (entry.get("name"), entry.get("path"))
-                if _normalize_text(value, max_length=500)
-            )
-    transfer_payload = dict(extra_json.get("transfer_payload") or {})
-    values.extend(
-        value
-        for value in (
-            transfer_payload.get("title_hint"),
-            extra_json.get("source_message_snapshot", {}).get("title")
-            if isinstance(extra_json.get("source_message_snapshot"), dict)
-            else None,
-            getattr(item, "latest_message_title", None),
-            getattr(item, "short_title", None),
-        )
-        if _normalize_text(value, max_length=500)
+    source_snapshot = extra_json.get("source_message_snapshot")
+    source_title = (
+        source_snapshot.get("title")
+        if isinstance(source_snapshot, dict)
+        else None
     )
-    tags: list[str] = []
-    for value in values:
-        tags.extend(extract_quality_tags(_normalize_text(value, max_length=500)))
-    return normalize_quality_tags(tags)
+    for value in (
+        source_title,
+        getattr(item, "latest_message_title", None),
+        getattr(item, "short_title", None),
+        dict(extra_json.get("transfer_payload") or {}).get("title_hint"),
+    ):
+        normalized = _normalize_text(value, max_length=500)
+        if normalized:
+            return extract_quality_tags(normalized)
+    return []
 
 
 def _resolve_follow_task_quality_baseline(
@@ -1015,7 +1002,7 @@ def _restore_follow_task_quality_from_last_sync(
 
     quality_baseline = current_tags
     state_changed = False
-    if not current_tags or quality_sort_key(materialized_tags) > quality_sort_key(current_tags):
+    if not current_tags or is_quality_upgrade(materialized_tags, current_tags):
         materialized_state = _get_follow_task_materialized_update_state(task)
         for section_name, section in (
             ("applied_update_state", current_state),
@@ -1037,7 +1024,7 @@ def _restore_follow_task_quality_from_last_sync(
         candidate_title
         and current_episode is not None
         and candidate_episode == current_episode
-        and quality_sort_key(candidate_title) <= quality_sort_key(quality_baseline)
+        and not is_quality_upgrade(candidate_title, quality_baseline)
     ):
         _clear_follow_task_candidate_fields(task)
         _apply_follow_task_state_without_candidate(task)
@@ -1187,7 +1174,7 @@ def _merge_follow_applied_update_state_with_materialized_state(
     materialized_quality_tags = normalize_quality_tags(materialized.get("quality_tags"))
     if materialized_quality_tags and (
         not current_quality_tags
-        or quality_sort_key(materialized_quality_tags) > quality_sort_key(current_quality_tags)
+        or is_quality_upgrade(materialized_quality_tags, current_quality_tags)
     ):
         next_values["quality_tags"] = materialized_quality_tags
 
@@ -4562,7 +4549,7 @@ def _evaluate_follow_candidate_rules(
     )
     quality_upgrade = bool(
         decision.same_episode_replace
-        and quality_sort_key(candidate_title) > quality_sort_key(quality_baseline)
+        and is_quality_upgrade(candidate_title, quality_baseline)
     )
     assessment["quality_upgrade"] = quality_upgrade
     assessment["tracked_quality_tags"] = normalize_quality_tags(quality_baseline) if not isinstance(quality_baseline, str) else extract_quality_tags(quality_baseline)
@@ -5048,7 +5035,7 @@ async def _diagnose_follow_external_sources(
             {
                 "url": source_url,
                 "priority": int(source.get("priority") or 100),
-                "status": "not_ready" if stop_reason == "no_source_video" else "valid",
+                "status": "not_ready" if stop_reason in PAN_TRANSFER_FOLLOW_SOURCE_NOT_READY_STOP_REASONS else "valid",
                 "last_error": None,
             }
         )
@@ -5057,7 +5044,7 @@ async def _diagnose_follow_external_sources(
             "source_url": source_url,
             "statuses": statuses,
             "retry_error": None,
-            "not_ready": stop_reason == "no_source_video",
+            "not_ready": stop_reason in PAN_TRANSFER_FOLLOW_SOURCE_NOT_READY_STOP_REASONS,
             "fallback": False,
         }
 
@@ -5327,7 +5314,7 @@ async def _handle_follow_task_automation(
     _clear_follow_diagnosis_retry(task)
     summary = dict(diagnosis.get("summary") or {})
     stop_reason = _normalize_text(summary.get("stop_reason"), max_length=64).lower()
-    if source_kind == "candidate" and stop_reason == "no_source_video":
+    if source_kind == "candidate" and stop_reason in PAN_TRANSFER_FOLLOW_SOURCE_NOT_READY_STOP_REASONS:
         retry_payload = _schedule_follow_source_readiness_retry(
             task,
             stop_reason=stop_reason,

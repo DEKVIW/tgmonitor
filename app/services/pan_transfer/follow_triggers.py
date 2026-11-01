@@ -35,7 +35,7 @@ from .follow_tasks import (
     _resolve_follow_task_quality_baseline,
     _restore_follow_task_quality_from_last_sync,
 )
-from .quality import extract_quality_tags, normalize_quality_tags, quality_sort_key
+from .quality import extract_quality_tags, is_quality_upgrade, normalize_quality_tags
 
 
 FOLLOW_TRIGGER_EVENT_TYPE_MESSAGE_LINK_RECEIVED = "message_link_received"
@@ -157,7 +157,7 @@ def evaluate_follow_trigger(
     )
     quality_upgrade = bool(
         decision.same_episode_replace
-        and quality_sort_key(candidate_title) > quality_sort_key(quality_baseline)
+        and is_quality_upgrade(candidate_title, quality_baseline)
     )
     result["quality_upgrade"] = quality_upgrade
     result["tracked_quality_tags"] = normalize_quality_tags(quality_baseline) if not isinstance(quality_baseline, str) else extract_quality_tags(quality_baseline)

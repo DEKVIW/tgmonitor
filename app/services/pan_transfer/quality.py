@@ -1,4 +1,5 @@
 import re
+from dataclasses import dataclass
 from typing import Iterable
 
 
@@ -27,6 +28,123 @@ _QUALITY_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 )
 
 QUALITY_TAGS = tuple(label for label, _pattern in _QUALITY_PATTERNS)
+
+QUALITY_COMPARISON_UPGRADE = "upgrade"
+QUALITY_COMPARISON_SAME = "same"
+QUALITY_COMPARISON_UNKNOWN = "unknown"
+QUALITY_COMPARISON_DOWNGRADE = "downgrade"
+
+_RESOLUTION_RANKS = {
+    "720P": 1,
+    "1080P": 2,
+    "2K": 3,
+    "4K": 4,
+    "8K": 5,
+}
+_SOURCE_RANKS = {
+    "WEBRIP": 1,
+    "HDTV": 1,
+    "WEB-DL": 2,
+    "BLURAY": 3,
+    "REMUX": 4,
+}
+_DYNAMIC_RANGE_RANKS = {
+    "HDR": 2,
+    "DV": 3,
+}
+_FRAME_RATE_RANKS = {
+    "60FPS": 1,
+    "120FPS": 2,
+}
+_CODEC_RANKS = {
+    "H264": 1,
+    "H265": 2,
+}
+_AUDIO_RANKS = {
+    "HIFI": 1,
+    "DDP5.1": 1,
+    "FLAC": 2,
+    "DTS": 2,
+}
+
+
+@dataclass(frozen=True)
+class QualityProfile:
+    tags: tuple[str, ...]
+    resolution: int | None
+    source: int | None
+    dynamic_range: int | None
+    frame_rate: int | None
+    codec: int | None
+    audio: int | None
+
+
+def build_quality_profile(value: str | Iterable[str] | None) -> QualityProfile:
+    tags = tuple(normalize_quality_tags(value))
+    tag_set = set(tags)
+    return QualityProfile(
+        tags=tags,
+        resolution=max((_RESOLUTION_RANKS[tag] for tag in tag_set if tag in _RESOLUTION_RANKS), default=None),
+        source=max((_SOURCE_RANKS[tag] for tag in tag_set if tag in _SOURCE_RANKS), default=None),
+        dynamic_range=max(
+            (_DYNAMIC_RANGE_RANKS[tag] for tag in tag_set if tag in _DYNAMIC_RANGE_RANKS),
+            default=None,
+        ),
+        frame_rate=max((_FRAME_RATE_RANKS[tag] for tag in tag_set if tag in _FRAME_RATE_RANKS), default=None),
+        codec=max((_CODEC_RANKS[tag] for tag in tag_set if tag in _CODEC_RANKS), default=None),
+        audio=max((_AUDIO_RANKS[tag] for tag in tag_set if tag in _AUDIO_RANKS), default=None),
+    )
+
+
+def compare_quality_profiles(
+    candidate: str | Iterable[str] | None,
+    baseline: str | Iterable[str] | None,
+) -> str:
+    candidate_profile = build_quality_profile(candidate)
+    baseline_profile = build_quality_profile(baseline)
+    if not candidate_profile.tags:
+        return QUALITY_COMPARISON_UNKNOWN
+
+    if not baseline_profile.tags:
+        return (
+            QUALITY_COMPARISON_UPGRADE
+            if candidate_profile.resolution is not None and candidate_profile.resolution >= _RESOLUTION_RANKS["4K"]
+            else QUALITY_COMPARISON_UNKNOWN
+        )
+
+    dimensions = (
+        ("resolution", candidate_profile.resolution, baseline_profile.resolution),
+        ("source", candidate_profile.source, baseline_profile.source),
+        ("dynamic_range", candidate_profile.dynamic_range, baseline_profile.dynamic_range),
+        ("frame_rate", candidate_profile.frame_rate, baseline_profile.frame_rate),
+        ("codec", candidate_profile.codec, baseline_profile.codec),
+        ("audio", candidate_profile.audio, baseline_profile.audio),
+    )
+    for _name, candidate_rank, baseline_rank in dimensions:
+        if candidate_rank is not None and baseline_rank is not None and candidate_rank < baseline_rank:
+            return QUALITY_COMPARISON_DOWNGRADE
+
+    has_improvement = False
+    for name, candidate_rank, baseline_rank in dimensions:
+        if candidate_rank is None:
+            continue
+        if baseline_rank is not None:
+            if candidate_rank > baseline_rank:
+                has_improvement = True
+            continue
+        if name == "resolution" and candidate_rank >= _RESOLUTION_RANKS["4K"]:
+            has_improvement = True
+        elif name != "resolution" and baseline_profile.resolution is not None:
+            has_improvement = True
+
+    return QUALITY_COMPARISON_UPGRADE if has_improvement else QUALITY_COMPARISON_SAME
+
+
+def is_quality_upgrade(
+    candidate: str | Iterable[str] | None,
+    baseline: str | Iterable[str] | None,
+) -> bool:
+    return compare_quality_profiles(candidate, baseline) == QUALITY_COMPARISON_UPGRADE
 
 
 def extract_quality_tags(text: str | None) -> list[str]:

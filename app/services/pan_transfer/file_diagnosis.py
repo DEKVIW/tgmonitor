@@ -29,7 +29,7 @@ from .follow_tasks import (
 from .providers import decrypt_account_credential
 from .providers.baidu import _BaiduClient, _extract_share_access_context
 from .providers.quark import _QuarkClient, _extract_passcode, _extract_pwd_id
-from .quality import extract_quality_tags, quality_sort_key
+from .quality import extract_quality_tags
 
 
 _VIDEO_EXTENSIONS = {
@@ -223,7 +223,7 @@ def _is_video_name(name: str) -> bool:
     if extension in _VIDEO_EXTENSIONS:
         return True
     if extension in _DISGUISED_VIDEO_EXTENSIONS:
-        return bool(_extract_episode_numbers_quick(name))
+        return False
     normalized = _normalize_text(name, max_length=255)
     if not normalized or _NO_EPISODE_HINT_PATTERN.search(normalized):
         return False
@@ -487,7 +487,6 @@ def _pick_best_entry(entries: list[_FileEntry]) -> _FileEntry:
         return (
             1 if item.parse_level == "full" else 0,
             1 if item.accepted else 0,
-            quality_sort_key(item.quality_tags),
             float(item.title_match_score or 0.0),
             float(item.confidence or 0.0),
             updated_ts,
@@ -1711,52 +1710,42 @@ async def diagnose_pan_transfer_follow_task_files(
     inferred_target_relative_path = _infer_target_relative_path(relevant_target_entries, anchor_episode=anchor_episode)
     quality_upgrade_episode_numbers: set[int] = set()
     candidate_assessment = dict(dict(task.extra_json or {}).get("candidate_assessment") or {})
+    quality_upgrade_source_not_ready = False
     if bool(candidate_assessment.get("quality_upgrade")):
         candidate_episode = _normalize_optional_int(candidate_assessment.get("candidate_episode"))
         if candidate_episode is not None:
             source_by_episode: dict[int, list[_FileEntry]] = {}
-            target_by_episode: dict[int, list[_FileEntry]] = {}
             for entry in source_video_entries:
                 if not entry.accepted:
                     continue
                 for episode in _entry_episode_numbers(entry):
                     source_by_episode.setdefault(int(episode), []).append(entry)
-            for entry in target_video_entries:
-                if not entry.accepted:
-                    continue
-                for episode in _entry_episode_numbers(entry):
-                    target_by_episode.setdefault(int(episode), []).append(entry)
             source_entries_for_episode = source_by_episode.get(int(candidate_episode), [])
-            target_entries_for_episode = target_by_episode.get(int(candidate_episode), [])
             if source_entries_for_episode:
-                source_quality = max(
-                    quality_sort_key(entry.quality_tags)
-                    for entry in source_entries_for_episode
-                )
-                target_quality = max(
-                    (quality_sort_key(entry.quality_tags) for entry in target_entries_for_episode),
-                    default=(0, 0, 0, 0, 0, 0),
-                )
-                if source_quality > target_quality:
-                    quality_upgrade_episode_numbers.add(int(candidate_episode))
-    recommended_entries, recommended_episode_numbers, stop_reason = _build_recommended_entries(
-        source_video_entries,
-        anchor_episode=(
-            max(0, int(anchor_episode or 0) - 1)
-            if quality_upgrade_episode_numbers
-            else anchor_episode
-        ),
-        inferred_target_relative_path=inferred_target_relative_path,
-        existing_episode_numbers=(
-            [
-                episode
-                for episode in materialized_episode_numbers
-                if episode not in quality_upgrade_episode_numbers
-            ]
-            if quality_upgrade_episode_numbers
-            else materialized_episode_numbers
-        ),
-    )
+                quality_upgrade_episode_numbers.add(int(candidate_episode))
+            else:
+                quality_upgrade_source_not_ready = True
+    if quality_upgrade_source_not_ready:
+        recommended_entries, recommended_episode_numbers, stop_reason = [], [], "source_episode_not_ready"
+    else:
+        recommended_entries, recommended_episode_numbers, stop_reason = _build_recommended_entries(
+            source_video_entries,
+            anchor_episode=(
+                max(0, int(anchor_episode or 0) - 1)
+                if quality_upgrade_episode_numbers
+                else anchor_episode
+            ),
+            inferred_target_relative_path=inferred_target_relative_path,
+            existing_episode_numbers=(
+                [
+                    episode
+                    for episode in materialized_episode_numbers
+                    if episode not in quality_upgrade_episode_numbers
+                ]
+                if quality_upgrade_episode_numbers
+                else materialized_episode_numbers
+            ),
+        )
     stats.stop_reason = stop_reason
     replacement_entries_by_path: dict[str, list[_FileEntry]] = {}
     if quality_upgrade_episode_numbers:
