@@ -1014,6 +1014,9 @@ const getFollowCurrentShareTitle = (record: PanTransferFollowTaskItem) =>
 const getFollowDisplayResourceTitle = (record: PanTransferFollowTaskItem) =>
   record.publish_record_title || record.current_share_message_title || record.source_message_title || getFollowCurrentShareTitle(record)
 
+const getFollowResourceColumnTitle = (record: PanTransferFollowTaskItem) =>
+  record.work_title || record.identity_snapshot.core_title || record.topic_title || getFollowTaskTitle(record)
+
 const getFollowAppliedUpdateState = (
   task: Pick<PanTransferFollowTaskItem, 'applied_update_state'> | { applied_update_state?: Partial<PanTransferFollowTaskAppliedUpdateState> | null }
 ): PanTransferFollowTaskAppliedUpdateState => ({
@@ -1884,7 +1887,7 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
       width: 220,
       className: 'resource-ops-transfer-col-resource',
       render: (_, record) => {
-        const mainTitle = getFollowDisplayResourceTitle(record)
+        const mainTitle = getFollowResourceColumnTitle(record)
         return (
           <Tooltip title={mainTitle}>
             <div className="resource-ops-transfer-title-cell">

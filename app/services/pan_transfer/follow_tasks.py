@@ -488,7 +488,7 @@ def _build_follow_identity_search_queries(*values: Any, max_items: int = PAN_TRA
 def _is_follow_identity_component_from_title(value: Any, source_title: Any) -> bool:
     component_key = _normalize_match_key(value)
     title_key = _normalize_match_key(source_title)
-    if not component_key or not title_key:
+    if not component_key or not title_key or len(component_key) < 2:
         return False
     return component_key in title_key or title_key in component_key
 
@@ -1617,16 +1617,6 @@ def _current_share_matches_same_episode_assessment(
     normalized_assessment = dict(assessment or {})
     tracked_identity = dict(normalized_assessment.get("tracked_identity") or {})
     candidate_identity = dict(normalized_assessment.get("candidate_identity") or {})
-    expected_season = _normalize_optional_int(tracked_identity.get("season"))
-    candidate_season = _normalize_optional_int(candidate_identity.get("season"))
-    identity_season = _normalize_optional_int(current_share_identity.get("season"))
-    if expected_season is None:
-        expected_season = candidate_season
-    elif candidate_season is not None and candidate_season != expected_season:
-        return False
-    if expected_season is not None and identity_season != expected_season:
-        return False
-
     current_issue = _normalize_text(normalized_assessment.get("current_issue_no"), max_length=32)
     candidate_issue = _normalize_text(normalized_assessment.get("candidate_issue_no"), max_length=32)
     identity_issue = _normalize_text(current_share_identity.get("issue_no"), max_length=32)
@@ -2318,9 +2308,11 @@ def _build_follow_identity_user_prompt_v2(task: PanTransferSyncTask) -> str:
         "Return JSON only with keys: core_title, release_year, season, latest_episode, content_type, reason.\n"
         "Rules:\n"
         "1. Use resource_title as the only identity input.\n"
-        "2. core_title should keep only the work name itself and strip year, resolution, frame rate, episode range, actor list, and update copy.\n"
-        "3. Do not infer aliases, actors, genres, tags, or description text as part of the work identity.\n"
-        "4. latest_episode should only be filled when the current resource title clearly shows the latest episode; otherwise use null.\n"
+        "2. core_title must be the complete work name, not its first character, a category label, an actor, a genre, or a shortened fragment.\n"
+        "3. Strip year, resolution, frame rate, episode range, actor list, and update copy from core_title.\n"
+        "4. Do not infer aliases, actors, genres, tags, descriptions, or a different work from outside the title.\n"
+        "5. If the title does not contain a reliable work name, return core_title as null instead of guessing.\n"
+        "6. latest_episode should only be filled when the current resource title clearly shows the latest episode; otherwise use null.\n"
         f"{_normalize_log_payload(payload)}"
     )
 
@@ -2348,14 +2340,23 @@ def _extract_follow_identity_with_ai(session: Session, *, task: PanTransferSyncT
     core_title = _clean_follow_title(parsed.get("core_title"))
     if not core_title or not _is_follow_identity_component_from_title(core_title, resource_title):
         raise ValueError("identity route returned an empty core title")
+    rule_identity = parse_resource_identity(resource_title)
+    rule_core_key = normalize_match_key(rule_identity.core_title)
+    ai_core_key = normalize_match_key(core_title)
+    if rule_core_key and not rule_identity.needs_ai_review and ai_core_key != rule_core_key:
+        raise ValueError("identity route core title conflicts with deterministic title parsing")
+    rule_episode = _normalize_optional_int(rule_identity.episode)
+    ai_episode = _normalize_optional_int(parsed.get("latest_episode"))
+    if rule_episode is not None and ai_episode is not None and rule_episode != ai_episode:
+        raise ValueError("identity route episode conflicts with deterministic title parsing")
     return {
         "resource_title": resource_title,
         "core_title": core_title,
         "aliases": [],
-        "release_year": _normalize_optional_int(parsed.get("release_year")),
-        "season": _normalize_optional_int(parsed.get("season")),
-        "latest_episode": _normalize_optional_int(parsed.get("latest_episode")),
-        "content_type": _normalize_text(parsed.get("content_type"), max_length=32) or None,
+        "release_year": rule_identity.release_year or _normalize_optional_int(parsed.get("release_year")),
+        "season": rule_identity.season or _normalize_optional_int(parsed.get("season")),
+        "latest_episode": rule_episode or ai_episode,
+        "content_type": rule_identity.content_type or _normalize_text(parsed.get("content_type"), max_length=32) or None,
         "search_queries": _build_follow_identity_search_queries(core_title),
         "reference_titles": [resource_title] if resource_title else [],
         "reference_message_time": _serialize_json_value(_get_follow_reference_message_time(task, {})),

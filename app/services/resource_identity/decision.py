@@ -54,45 +54,6 @@ def compare_follow_candidate(
             debug={"tracked": tracked.to_dict(), "candidate": candidate.to_dict()},
         )
 
-    release_year_compatible = (
-        tracked.release_year is None
-        or candidate.release_year is None
-        or tracked.release_year == candidate.release_year
-    )
-    season_compatible = (
-        tracked.season is None
-        or candidate.season is None
-        or tracked.season == candidate.season
-    )
-
-    if not release_year_compatible:
-        return FollowCandidateDecision(
-            is_same_work=False,
-            is_newer=False,
-            should_promote=False,
-            confidence=0.97,
-            reason="rule_release_year_mismatch",
-            current_episode=tracked.episode,
-            candidate_episode=candidate.episode,
-            current_issue_no=tracked.issue_no,
-            candidate_issue_no=candidate.issue_no,
-            debug={"tracked": tracked.to_dict(), "candidate": candidate.to_dict()},
-        )
-
-    if not season_compatible:
-        return FollowCandidateDecision(
-            is_same_work=False,
-            is_newer=False,
-            should_promote=False,
-            confidence=0.82,
-            reason="rule_season_mismatch",
-            current_episode=tracked.episode,
-            candidate_episode=candidate.episode,
-            current_issue_no=tracked.issue_no,
-            candidate_issue_no=candidate.issue_no,
-            debug={"tracked": tracked.to_dict(), "candidate": candidate.to_dict()},
-        )
-
     if tracked.episode is not None and candidate.episode is not None:
         if candidate.episode > tracked.episode:
             return FollowCandidateDecision(

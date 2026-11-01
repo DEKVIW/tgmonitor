@@ -259,9 +259,6 @@ def _pending_candidate_blocks_trigger(
         return False
     if normalize_match_key(pending_core_title) != normalize_match_key(candidate_core_title):
         return False
-    if pending_identity.season is not None and candidate_identity.season is not None:
-        if pending_identity.season != candidate_identity.season:
-            return False
     if pending_identity.episode is not None and candidate_identity.episode is not None:
         return candidate_identity.episode <= pending_identity.episode
     if pending_identity.issue_sort_value is not None and candidate_identity.issue_sort_value is not None:
