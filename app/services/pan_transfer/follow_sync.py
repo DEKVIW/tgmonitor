@@ -38,6 +38,7 @@ from .follow_tasks import (
     _build_follow_current_share_identity_snapshot,
     _clear_follow_task_candidate_fields,
     _extract_follow_batch_item_quality_tags,
+    _extract_follow_task_trigger_quality_tags,
     _ensure_follow_task_identity_snapshot,
     _get_follow_task,
     _get_latest_link_target_message_snapshot,
@@ -59,6 +60,22 @@ from .follow_tasks import (
 )
 from .publishing import sync_pan_transfer_publish_record_source_url
 from .queue import refresh_pan_transfer_batch_summary
+from .quality import normalize_quality_tags
+
+
+def _resolve_follow_sync_quality_tags(
+    *,
+    source_kind: str,
+    trigger_mode: str,
+    trigger_quality_tags: Any,
+    materialized_quality_tags: Any,
+) -> list[str]:
+    normalized_trigger_tags = normalize_quality_tags(trigger_quality_tags)
+    if source_kind == "external":
+        return normalized_trigger_tags if trigger_mode == "automation" else []
+    if trigger_mode == "automation" and normalized_trigger_tags:
+        return normalized_trigger_tags
+    return normalize_quality_tags(materialized_quality_tags)
 
 
 def _normalize_source_kind(value: Any) -> str:
@@ -776,6 +793,11 @@ async def create_pan_transfer_follow_sync_batch(
         sync_mode=sync_mode,
         source_message_snapshot=source_message_snapshot,
     )
+    trigger_snapshot = dict(task.extra_json or {}).get("realtime_trigger")
+    trigger_snapshot = dict(trigger_snapshot) if isinstance(trigger_snapshot, dict) else {}
+    trigger_quality_tags = _extract_follow_task_trigger_quality_tags(task)
+    trigger_message_id = _normalize_optional_int(trigger_snapshot.get("message_id"))
+    trigger_title = _normalize_text(trigger_snapshot.get("candidate_title"), max_length=255) or None
     source_link_status = (
         _resolve_follow_sync_source_link_status(
             source_kind=source_kind,
@@ -885,6 +907,9 @@ async def create_pan_transfer_follow_sync_batch(
             "path_strategy": path_strategy,
             "resolved_paths": resolved_paths,
             "source_metadata_promotion": source_metadata_promotion,
+            "trigger_message_id": trigger_message_id,
+            "trigger_title": trigger_title,
+            "trigger_quality_tags": trigger_quality_tags,
         },
         result_json={},
         started_at=utcnow(),
@@ -949,6 +974,9 @@ async def create_pan_transfer_follow_sync_batch(
                 "selection_target_relative_paths": selection_target_relative_paths,
                 "source_metadata_promotion": source_metadata_promotion,
                 "external_source_url": external_source_url,
+                "trigger_message_id": trigger_message_id,
+                "trigger_title": trigger_title,
+                "trigger_quality_tags": trigger_quality_tags,
             },
             "source_selection": source_selection,
         },
@@ -1225,7 +1253,14 @@ def handle_follow_sync_item_success(
     }
     task.extra_json = extra_json
     materialized_episode_numbers, materialized_selected_count = _extract_follow_sync_materialized_episode_numbers(item)
-    materialized_quality_tags = _extract_follow_batch_item_quality_tags(item)
+    batch_quality_tags = _extract_follow_batch_item_quality_tags(item)
+    trigger_quality_tags = normalize_quality_tags(context.get("trigger_quality_tags"))
+    materialized_quality_tags = _resolve_follow_sync_quality_tags(
+        source_kind=source_kind,
+        trigger_mode=trigger_mode,
+        trigger_quality_tags=trigger_quality_tags,
+        materialized_quality_tags=batch_quality_tags,
+    )
     materialized_update_state = _update_follow_task_materialized_update_state_from_sync(
         task,
         source_snapshot=effective_source_message_snapshot,
@@ -1313,6 +1348,9 @@ def handle_follow_sync_item_success(
             "source_link_status": _normalize_text(task.source_link_status, max_length=32).lower() or None,
             "source_metadata_promoted": promote_source_metadata,
             "source_metadata_promotion": source_metadata_promotion,
+            "trigger_message_id": _normalize_optional_int(context.get("trigger_message_id")),
+            "trigger_title": _normalize_text(context.get("trigger_title"), max_length=255) or None,
+            "trigger_quality_tags": trigger_quality_tags,
             "applied_update_state": applied_update_state,
             "materialized_update_state": materialized_update_state,
             "automation": automation,

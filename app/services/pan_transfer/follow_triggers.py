@@ -27,7 +27,8 @@ from .follow_tasks import (
     _apply_follow_snapshot_progress_to_identity,
     _get_task_automation_config,
     _get_task_extra_section,
-    _get_follow_external_sources,
+    _is_follow_external_source_authoritative,
+    _follow_task_needs_share_recovery,
     _uses_follow_external_source,
     _normalize_optional_int,
     _normalize_text,
@@ -161,6 +162,33 @@ def evaluate_follow_trigger(
     )
     result["quality_upgrade"] = quality_upgrade
     result["tracked_quality_tags"] = normalize_quality_tags(quality_baseline) if not isinstance(quality_baseline, str) else extract_quality_tags(quality_baseline)
+    same_episode = bool(
+        decision.same_episode_replace
+        or (
+            _normalize_optional_int(result.get("current_episode")) is not None
+            and _normalize_optional_int(result.get("current_episode"))
+            == _normalize_optional_int(result.get("candidate_episode"))
+        )
+    )
+    external_source_authoritative = _is_follow_external_source_authoritative(task)
+    source_recovery = same_episode and _follow_task_needs_share_recovery(task)
+    result["external_source_authoritative"] = external_source_authoritative
+    result["source_recovery"] = source_recovery
+    if source_recovery:
+        result["should_promote"] = True
+        result["triggerable"] = bool(
+            not decision.needs_ai_review
+            and not tracked_identity.needs_ai_review
+            and not candidate_identity.needs_ai_review
+        )
+        result["reason"] = "source_recovery"
+        return result
+    if external_source_authoritative and same_episode and not source_recovery:
+        result["quality_upgrade"] = False
+        result["should_promote"] = False
+        result["triggerable"] = False
+        result["reason"] = "external_source_authoritative_same_episode"
+        return result
     if quality_upgrade:
         result["reason"] = "rule_same_episode_higher_quality"
     result["triggerable"] = bool(
@@ -250,6 +278,7 @@ def _queue_task_from_trigger(
     event: PanTransferFollowTriggerEvent,
     now: datetime,
     external_preferred: bool = False,
+    fallback_candidate: Mapping[str, Any] | None = None,
 ) -> None:
     extra_json = dict(task.extra_json or {})
     candidate_snapshot = dict(candidate)
@@ -281,7 +310,15 @@ def _queue_task_from_trigger(
     task.task_state = PAN_TRANSFER_SYNC_STATE_QUEUED
     task.next_check_at = now
     task.last_change_type = "realtime_trigger"
-    if external_preferred:
+    stored_candidate = dict(fallback_candidate or {})
+    if external_preferred and stored_candidate.get("url"):
+        task.last_candidate_link_target_id = _normalize_optional_int(
+            stored_candidate.get("link_target_id")
+        )
+        task.last_candidate_url = str(stored_candidate.get("url") or "")
+        task.last_candidate_title = str(stored_candidate.get("title") or "")
+        task.last_candidate_message_time = stored_candidate.get("latest_message_time")
+    elif external_preferred:
         task.last_candidate_link_target_id = None
         task.last_candidate_url = None
         task.last_candidate_title = None
@@ -304,6 +341,7 @@ def _queue_task_from_trigger(
             "candidate": candidate_snapshot,
             "assessment": dict(assessment),
             "source_mode": "external_preferred" if external_preferred else "system",
+            "fallback_candidate": stored_candidate or None,
         },
     )
 
@@ -428,6 +466,7 @@ def process_next_pan_transfer_follow_trigger_event(session: Session, *, worker_n
                 continue
             candidates = _list_message_candidates(session, message=message, task=task)
             external_preferred = _uses_follow_external_source(task)
+            fallback_candidate = candidates[0] if candidates else None
             if external_preferred:
                 candidates = [
                     {
@@ -451,6 +490,7 @@ def process_next_pan_transfer_follow_trigger_event(session: Session, *, worker_n
                 event=event,
                 now=now,
                 external_preferred=external_preferred,
+                fallback_candidate=fallback_candidate,
             )
             queued_task_ids.append(task_id)
 

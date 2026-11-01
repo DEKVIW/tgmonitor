@@ -967,6 +967,22 @@ def _extract_follow_batch_item_quality_tags(item: PanTransferBatchItem) -> list[
     return []
 
 
+def _extract_follow_task_trigger_quality_tags(task: PanTransferSyncTask) -> list[str]:
+    extra_json = dict(task.extra_json or {})
+    realtime_trigger = dict(extra_json.get("realtime_trigger") or {})
+    candidate_assessment = dict(extra_json.get("candidate_assessment") or {})
+    for value in (
+        realtime_trigger.get("candidate_title"),
+        candidate_assessment.get("candidate_title"),
+    ):
+        normalized = _normalize_text(value, max_length=500)
+        if normalized:
+            tags = extract_quality_tags(normalized)
+            if tags:
+                return tags
+    return []
+
+
 def _resolve_follow_task_quality_baseline(
     task: PanTransferSyncTask,
     *,
@@ -1736,6 +1752,41 @@ def _uses_follow_external_source(task: PanTransferSyncTask) -> bool:
         == PAN_TRANSFER_FOLLOW_SOURCE_MODE_EXTERNAL_PREFERRED
         and bool(_get_follow_external_sources(task))
     )
+
+
+def _is_follow_external_source_authoritative(task: PanTransferSyncTask) -> bool:
+    """Return whether an external source currently owns same-episode decisions."""
+    if not _uses_follow_external_source(task):
+        return False
+
+    automation = _get_task_automation_config(task)
+    last_external_result = _normalize_text(
+        automation.get("last_external_result"), max_length=32
+    ).lower()
+    if last_external_result in {"fallback_system", "invalid", "error"}:
+        return False
+
+    statuses = [
+        _normalize_text(item.get("status"), max_length=32).lower()
+        for item in list(automation.get("external_source_statuses") or [])
+        if isinstance(item, dict)
+    ]
+    if statuses and any(status in {"valid", "not_ready"} for status in statuses):
+        return True
+    if statuses and all(status in {"invalid", "error"} for status in statuses):
+        return False
+    return True
+
+
+def _follow_task_needs_share_recovery(task: PanTransferSyncTask) -> bool:
+    """Allow a same-episode trigger only when our own share needs recovery."""
+    current_share_url = _normalize_text(getattr(task, "current_share_url", None))
+    if not current_share_url:
+        return False
+    current_share_status = _normalize_text(
+        getattr(task, "current_share_status", None), max_length=32
+    ).lower()
+    return current_share_status in {"invalid", "error"}
 
 
 def _validate_follow_external_source_configuration(
@@ -4553,6 +4604,23 @@ def _evaluate_follow_candidate_rules(
     )
     assessment["quality_upgrade"] = quality_upgrade
     assessment["tracked_quality_tags"] = normalize_quality_tags(quality_baseline) if not isinstance(quality_baseline, str) else extract_quality_tags(quality_baseline)
+    same_episode = bool(
+        decision.same_episode_replace
+        or (
+            _normalize_optional_int(assessment.get("current_episode")) is not None
+            and _normalize_optional_int(assessment.get("current_episode"))
+            == _normalize_optional_int(assessment.get("candidate_episode"))
+        )
+    )
+    external_source_authoritative = _is_follow_external_source_authoritative(task)
+    source_recovery = same_episode and _follow_task_needs_share_recovery(task)
+    assessment["external_source_authoritative"] = external_source_authoritative
+    assessment["source_recovery"] = source_recovery
+    if external_source_authoritative and same_episode and not source_recovery:
+        assessment["quality_upgrade"] = False
+        assessment["should_promote"] = False
+        assessment["reason"] = "external_source_authoritative_same_episode"
+        return assessment
     if quality_upgrade:
         assessment["should_promote"] = True
         assessment["reason"] = "rule_same_episode_higher_quality"
@@ -4659,6 +4727,10 @@ def _pick_follow_candidate(
 
 def _is_same_episode_follow_replacement_candidate(assessment: dict[str, Any] | None) -> bool:
     if not isinstance(assessment, dict):
+        return False
+    if bool(assessment.get("external_source_authoritative")) and not bool(
+        assessment.get("source_recovery")
+    ):
         return False
     if bool(assessment.get("quality_upgrade")):
         return False

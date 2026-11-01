@@ -17,7 +17,12 @@ from app.services.pan_transfer.constants import (
     PAN_TRANSFER_VALIDATION_STATUS_PENDING,
 )
 from app.services.pan_transfer.queue import reset_pan_transfer_batch_items
-from app.services.pan_transfer.follow_tasks import _validate_follow_external_source_configuration
+from app.services.pan_transfer.follow_tasks import (
+    _extract_follow_task_trigger_quality_tags,
+    _evaluate_follow_candidate_rules,
+    _validate_follow_external_source_configuration,
+)
+from app.services.pan_transfer.follow_sync import _resolve_follow_sync_quality_tags
 from app.services.pan_transfer.worker import _share_validation_is_explicitly_invalid, _should_reuse_existing_share
 from app.services.pan_transfer.providers.quark import _QuarkClient
 
@@ -115,6 +120,99 @@ def test_candidate_assessment_preserves_quality_upgrade_flag() -> None:
     assessment = PanTransferFollowTaskCandidateAssessment(quality_upgrade=True)
 
     assert assessment.quality_upgrade is True
+
+
+def test_external_follow_sync_reads_quality_from_realtime_trigger_title() -> None:
+    task = SimpleNamespace(
+        extra_json={
+            "realtime_trigger": {
+                "candidate_title": "吞噬星空 4K 更新至247集",
+            },
+        }
+    )
+
+    assert _extract_follow_task_trigger_quality_tags(task) == ["4K"]
+
+
+def test_external_follow_sync_does_not_infer_quality_from_external_files() -> None:
+    assert _resolve_follow_sync_quality_tags(
+        source_kind="external",
+        trigger_mode="automation",
+        trigger_quality_tags=[],
+        materialized_quality_tags=["4K"],
+    ) == []
+
+    assert _resolve_follow_sync_quality_tags(
+        source_kind="external",
+        trigger_mode="automation",
+        trigger_quality_tags=["4K"],
+        materialized_quality_tags=[],
+    ) == ["4K"]
+
+
+def _build_external_preferred_follow_task(*, external_result: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        id=1,
+        task_name="玉簟秋追更",
+        topic_title="玉簟秋",
+        work_title="玉簟秋",
+        source_url="https://pan.quark.cn/s/system-source",
+        current_share_url="https://pan.quark.cn/s/current-share",
+        current_share_status="valid",
+        extra_json={
+            "identity_snapshot": {
+                "resource_title": "玉簟秋 (2026) 更新34集",
+                "core_title": "玉簟秋",
+                "latest_episode": 34,
+            },
+            "applied_update_state": {
+                "resource_title": "玉簟秋 (2026) 更新34集",
+                "core_title": "玉簟秋",
+                "episode": 34,
+            },
+            "automation": {
+                "enabled": True,
+                "mode": "auto_incremental",
+                "source_mode": "external_preferred",
+                "external_sources": [
+                    {"url": "https://pan.quark.cn/s/external", "priority": 1}
+                ],
+                "last_external_result": external_result,
+                "external_source_statuses": [
+                    {
+                        "url": "https://pan.quark.cn/s/external",
+                        "status": "valid" if external_result == "valid" else "invalid",
+                    }
+                ],
+            },
+        },
+    )
+
+
+def test_external_source_authority_rejects_same_episode_candidate() -> None:
+    assessment = _evaluate_follow_candidate_rules(
+        _build_external_preferred_follow_task(external_result="valid"),
+        snapshot={"resource_title": "玉簟秋 (2026) 更新34集"},
+        candidate={"title": "玉簟秋 (2026) 4K50FPS 更新34集"},
+    )
+
+    assert assessment["external_source_authoritative"] is True
+    assert assessment["source_recovery"] is False
+    assert assessment["quality_upgrade"] is False
+    assert assessment["should_promote"] is False
+    assert assessment["reason"] == "external_source_authoritative_same_episode"
+
+
+def test_external_source_fallback_keeps_system_quality_judgement() -> None:
+    assessment = _evaluate_follow_candidate_rules(
+        _build_external_preferred_follow_task(external_result="fallback_system"),
+        snapshot={"resource_title": "玉簟秋 (2026) 更新34集"},
+        candidate={"title": "玉簟秋 (2026) 4K50FPS 更新34集"},
+    )
+
+    assert assessment["external_source_authoritative"] is False
+    assert assessment["quality_upgrade"] is True
+    assert assessment["should_promote"] is True
 
 
 def test_retry_reset_keeps_staging_snapshot_for_share_only_recovery() -> None:
