@@ -26,6 +26,8 @@ from app.services.pan_transfer.follow_tasks import (
 from app.services.pan_transfer.follow_sync import _resolve_follow_sync_quality_tags
 from app.services.pan_transfer.worker import _share_validation_is_explicitly_invalid, _should_reuse_existing_share
 from app.services.pan_transfer.providers.quark import _QuarkClient
+import app.services.learning_resources as learning_resources
+from app.services.learning_resources import _group_learning_batch_jobs
 
 
 def test_follow_state_prefers_persisted_core_title_over_display_title() -> None:
@@ -47,6 +49,60 @@ def test_follow_state_prefers_persisted_core_title_over_display_title() -> None:
             "episode": 107,
         },
     )
+
+
+def _learning_batch_job(job_id: int, resource_title: str, link_target_id: int):
+    return (
+        SimpleNamespace(id=job_id, source_message_id=1000 + job_id),
+        SimpleNamespace(display_title=resource_title),
+        SimpleNamespace(id=1),
+        SimpleNamespace(id=1),
+        SimpleNamespace(id=link_target_id),
+        SimpleNamespace(id=2000 + job_id),
+    )
+
+
+def test_learning_batch_groups_resources_by_source_link() -> None:
+    groups = _group_learning_batch_jobs(
+        [
+            _learning_batch_job(1, "2027一级建造师", 10),
+            _learning_batch_job(2, "2027监理工程师", 10),
+            _learning_batch_job(3, "2027二级建造师", 10),
+            _learning_batch_job(4, "2027咨询工程师", 10),
+            _learning_batch_job(5, "2027环评工程师", 10),
+            _learning_batch_job(6, "另一条来源", 11),
+        ]
+    )
+
+    assert [[job[0].id for job in group] for group in groups] == [[1, 2, 3, 4, 5], [6]]
+
+
+def test_shared_batch_item_updates_all_learning_jobs() -> None:
+    item = SimpleNamespace(
+        id=10,
+        extra_json={
+            "learning_resource_job_id": 1,
+            "learning_resource_job_ids": [1, 2, 3],
+        },
+    )
+    jobs = [SimpleNamespace(id=1), SimpleNamespace(id=2), SimpleNamespace(id=3)]
+    session = Mock()
+
+    with patch.object(learning_resources, "get_learning_resource_jobs_for_batch_item", return_value=jobs), patch.object(
+        learning_resources,
+        "_sync_learning_resource_after_transfer_single",
+    ) as sync_single:
+        learning_resources.sync_learning_resource_after_transfer(
+            session,
+            item=item,
+            success=True,
+        )
+
+    assert sync_single.call_count == 3
+    assert item.extra_json == {
+        "learning_resource_job_id": 1,
+        "learning_resource_job_ids": [1, 2, 3],
+    }
 
 
 def test_follow_sync_reuses_existing_share_for_both_target_modes() -> None:

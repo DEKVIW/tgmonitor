@@ -41,7 +41,7 @@ from app.services.pan_transfer.common import normalize_relative_path, sanitize_p
 from app.services.pan_transfer.constants import normalize_transfer_platform
 from app.services.link_check.constants import PLATFORM_QUARK
 from app.services.link_check.parser import detect_platform_from_url, is_http_url, normalize_candidate_url
-from app.services.pan_transfer.queue import refresh_pan_transfer_batch_summary
+from app.services.pan_transfer.queue import get_learning_resource_jobs_for_batch_item, refresh_pan_transfer_batch_summary
 from app.services.pan_transfer.providers import decrypt_account_credential, get_pan_transfer_provider
 from app.utils.channel_utils import normalize_channel_username
 
@@ -528,13 +528,16 @@ def confirm_learning_import(
 
     batch_id = None
     if queued:
+        grouped_queued: dict[int, list[tuple[LearningResourceTransferJob, LearningResourceItem, LearningResourceCategory, PanTransferAccount, LinkTarget]]] = {}
+        for queued_job in queued:
+            grouped_queued.setdefault(int(queued_job[4].id), []).append(queued_job)
         batch = PanTransferBatch(
             batch_type="learning_resources",
             source_scope="learning_import",
             status="running",
             created_by=operator,
             total_message_count=0,
-            total_link_target_count=len(queued),
+            total_link_target_count=len(grouped_queued),
             started_at=utcnow(),
             request_json={"import_job_id": int(job.id), "target_account_id": int(account.id), "save_root": root},
             result_json={},
@@ -542,7 +545,9 @@ def confirm_learning_import(
         session.add(batch)
         session.flush()
         batch_id = int(batch.id)
-        for transfer_job, resource, category, target_account, target in queued:
+        for grouped in grouped_queued.values():
+            transfer_job, resource, category, target_account, target = grouped[0]
+            grouped_job_ids = [int(grouped_job[0].id) for grouped_job in grouped]
             item = PanTransferBatchItem(
                 batch_id=int(batch.id),
                 link_target_id=int(target.id),
@@ -551,7 +556,7 @@ def confirm_learning_import(
                 short_title=resource.display_title,
                 original_url=str(target.original_url or ""),
                 source_message_count=0,
-                source_ref_count=0,
+                source_ref_count=len(grouped),
                 latest_message_title=resource.display_title,
                 latest_message_time=resource.latest_source_at,
                 latest_link_health="unknown",
@@ -562,6 +567,9 @@ def confirm_learning_import(
                 max_attempts=3,
                 extra_json={
                     "learning_resource_job_id": int(transfer_job.id),
+                    "learning_resource_job_ids": grouped_job_ids,
+                    "learning_resource_count": len(grouped),
+                    "learning_resource_titles": [str(grouped_job[1].display_title or "") for grouped_job in grouped],
                     "skip_link_replacement": True,
                     "resolved_paths": {
                         "staging_root": normalize_relative_path("/".join(part for part in (root, category.directory_name) if part)),
@@ -570,15 +578,21 @@ def confirm_learning_import(
                         "transfer_layout": "independent",
                         "share_target_mode": "resource_dir",
                     },
-                    "path_strategy": {"item_folder_mode": "original", "share_target_mode": "resource_dir"},
+                    "path_strategy": {
+                        "item_folder_mode": "original",
+                        "share_target_mode": "resource_dir",
+                        "grouped_resource_count": len(grouped),
+                    },
                 },
             )
             session.add(item)
             session.flush()
-            transfer_job.batch_id = int(batch.id)
-            transfer_job.batch_item_id = int(item.id)
-            resource.status = LEARNING_STATUS_TRANSFERRING
-            session.add_all([transfer_job, resource])
+            for grouped_job, grouped_resource, *_ in grouped:
+                grouped_job.batch_id = int(batch.id)
+                grouped_job.batch_item_id = int(item.id)
+                grouped_job.status = LEARNING_JOB_QUEUED
+                grouped_resource.status = LEARNING_STATUS_TRANSFERRING
+                session.add_all([grouped_job, grouped_resource])
         session.flush()
         refresh_pan_transfer_batch_summary(session, batch_id=int(batch.id))
 
@@ -959,19 +973,49 @@ def _find_quark_refs(session: Session, message_id: int) -> list[tuple[MessageLin
     return result
 
 
+def _group_learning_batch_jobs(
+    jobs: list[
+        tuple[
+            LearningResourceTransferJob,
+            LearningResourceItem,
+            LearningResourceCategory,
+            PanTransferAccount,
+            LinkTarget,
+            Message,
+        ]
+    ],
+) -> list[
+    list[
+        tuple[
+            LearningResourceTransferJob,
+            LearningResourceItem,
+            LearningResourceCategory,
+            PanTransferAccount,
+            LinkTarget,
+            Message,
+        ]
+    ]
+]:
+    grouped: dict[int, list[tuple[LearningResourceTransferJob, LearningResourceItem, LearningResourceCategory, PanTransferAccount, LinkTarget, Message]]] = {}
+    for job in jobs:
+        grouped.setdefault(int(job[4].id), []).append(job)
+    return list(grouped.values())
+
+
 def _create_learning_batch(
     session: Session,
     *,
     context: LearningAutomationContext,
     jobs: list[tuple[LearningResourceTransferJob, LearningResourceItem, LearningResourceCategory, PanTransferAccount, LinkTarget, Message]],
 ) -> PanTransferBatch:
+    grouped_jobs = _group_learning_batch_jobs(jobs)
     batch = PanTransferBatch(
         batch_type="learning_resources",
         source_scope="learning_channel",
         status="running",
         created_by="tg-monitor",
         total_message_count=len({int(job.source_message_id) for job, *_ in jobs}),
-        total_link_target_count=len(jobs),
+        total_link_target_count=len(grouped_jobs),
         started_at=utcnow(),
         request_json={
             "channel_key": str(context.channel_key or ""),
@@ -986,7 +1030,9 @@ def _create_learning_batch(
     session.add(batch)
     session.flush()
 
-    for job, resource, category, account, target, message in jobs:
+    for grouped in grouped_jobs:
+        job, resource, category, account, target, message = grouped[0]
+        grouped_job_ids = [int(grouped_job[0].id) for grouped_job in grouped]
         item = PanTransferBatchItem(
             batch_id=int(batch.id),
             link_target_id=int(target.id),
@@ -994,8 +1040,8 @@ def _create_learning_batch(
             platform=PLATFORM_QUARK,
             short_title=resource.display_title,
             original_url=str(target.original_url or ""),
-            source_message_count=1,
-            source_ref_count=1,
+            source_message_count=len({int(grouped_job[0].source_message_id) for grouped_job in grouped if grouped_job[0].source_message_id}),
+            source_ref_count=len(grouped),
             latest_message_title=resource.display_title,
             latest_message_time=message.timestamp,
             latest_link_health="unknown",
@@ -1006,6 +1052,9 @@ def _create_learning_batch(
             max_attempts=3,
             extra_json={
                 "learning_resource_job_id": int(job.id),
+                "learning_resource_job_ids": grouped_job_ids,
+                "learning_resource_count": len(grouped),
+                "learning_resource_titles": [str(grouped_job[1].display_title or "") for grouped_job in grouped],
                 "learning_channel_key": str(context.channel_key or ""),
                 "learning_task_id": int(context.task.id) if context.task.id is not None else None,
                 "learning_target_id": int(context.target.id) if context.target.id is not None else None,
@@ -1034,16 +1083,18 @@ def _create_learning_batch(
                     "transfer_layout": "independent",
                     "item_folder_mode": "original",
                     "share_target_mode": "resource_dir",
+                    "grouped_resource_count": len(grouped),
                 },
             },
         )
         session.add(item)
         session.flush()
-        job.batch_id = int(batch.id)
-        job.batch_item_id = int(item.id)
-        job.status = LEARNING_JOB_QUEUED
-        resource.status = LEARNING_STATUS_TRANSFERRING
-        session.add_all([job, resource])
+        for grouped_job, grouped_resource, *_ in grouped:
+            grouped_job.batch_id = int(batch.id)
+            grouped_job.batch_item_id = int(item.id)
+            grouped_job.status = LEARNING_JOB_QUEUED
+            grouped_resource.status = LEARNING_STATUS_TRANSFERRING
+            session.add_all([grouped_job, grouped_resource])
     session.flush()
     refresh_pan_transfer_batch_summary(session, batch_id=int(batch.id))
     return batch
@@ -1423,7 +1474,7 @@ def enqueue_learning_resources_for_message_ids(
     }
 
 
-def sync_learning_resource_after_transfer(
+def _sync_learning_resource_after_transfer_single(
     session: Session,
     *,
     item: PanTransferBatchItem,
@@ -1598,6 +1649,36 @@ def sync_learning_resource_after_transfer(
 
         refresh_learning_automation_task_health(session, int(task_id))
     session.flush()
+
+
+def sync_learning_resource_after_transfer(
+    session: Session,
+    *,
+    item: PanTransferBatchItem,
+    success: bool,
+    error_message: str | None = None,
+) -> None:
+    learning_jobs = get_learning_resource_jobs_for_batch_item(session, item=item)
+    if not learning_jobs:
+        return
+
+    original_extra_json = dict(item.extra_json or {})
+    try:
+        for job in learning_jobs:
+            item.extra_json = {
+                **original_extra_json,
+                "learning_resource_job_id": int(job.id),
+            }
+            _sync_learning_resource_after_transfer_single(
+                session,
+                item=item,
+                success=success,
+                error_message=error_message,
+            )
+    finally:
+        item.extra_json = original_extra_json
+        session.add(item)
+        session.flush()
 
 
 def retry_learning_resource(session: Session, resource_id: int) -> dict[str, Any]:

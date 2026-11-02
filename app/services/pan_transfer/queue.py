@@ -29,6 +29,27 @@ from .constants import (
 )
 
 
+def get_learning_resource_jobs_for_batch_item(
+    session: Session,
+    *,
+    item: PanTransferBatchItem,
+) -> list[LearningResourceTransferJob]:
+    jobs = (
+        session.query(LearningResourceTransferJob)
+        .filter(LearningResourceTransferJob.batch_item_id == int(item.id))
+        .order_by(LearningResourceTransferJob.id.asc())
+        .all()
+    )
+    if jobs:
+        return jobs
+
+    legacy_job_id = dict(item.extra_json or {}).get("learning_resource_job_id")
+    if not legacy_job_id:
+        return []
+    legacy_job = session.get(LearningResourceTransferJob, int(legacy_job_id))
+    return [legacy_job] if legacy_job is not None else []
+
+
 def refresh_pan_transfer_batch_summary(session: Session, *, batch_id: int) -> PanTransferBatch:
     ensure_runtime_storage_tables()
     batch = session.get(PanTransferBatch, int(batch_id))
@@ -182,7 +203,8 @@ def claim_next_pan_transfer_batch_item(session: Session, *, worker_name: str) ->
         if candidate is None:
             return None
         extra_json = dict(candidate.extra_json or {})
-        if not extra_json.get("learning_resource_job_id"):
+        learning_jobs = get_learning_resource_jobs_for_batch_item(session, item=candidate)
+        if not learning_jobs:
             break
         if is_learning_target_enabled(session, extra_json):
             break
@@ -192,12 +214,9 @@ def claim_next_pan_transfer_batch_item(session: Session, *, worker_name: str) ->
         candidate.locked_at = None
         candidate.started_at = None
         session.add(candidate)
-        job_id = extra_json.get("learning_resource_job_id")
-        if job_id:
-            job = session.get(LearningResourceTransferJob, int(job_id))
-            if job is not None:
-                job.status = "paused"
-                session.add(job)
+        for job in learning_jobs:
+            job.status = "paused"
+            session.add(job)
         session.flush()
         refresh_pan_transfer_batch_summary(session, batch_id=int(candidate.batch_id))
 
@@ -208,12 +227,9 @@ def claim_next_pan_transfer_batch_item(session: Session, *, worker_name: str) ->
     candidate.finished_at = None
     candidate.error_message = None
     session.add(candidate)
-    learning_job_id = dict(candidate.extra_json or {}).get("learning_resource_job_id")
-    if learning_job_id:
-        learning_job = session.get(LearningResourceTransferJob, int(learning_job_id))
-        if learning_job is not None:
-            learning_job.status = "transferring"
-            session.add(learning_job)
+    for learning_job in get_learning_resource_jobs_for_batch_item(session, item=candidate):
+        learning_job.status = "transferring"
+        session.add(learning_job)
     session.flush()
     refresh_pan_transfer_batch_summary(session, batch_id=int(candidate.batch_id))
     return candidate
