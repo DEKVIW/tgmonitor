@@ -102,42 +102,16 @@ def compare_quality_profiles(
 ) -> str:
     candidate_profile = build_quality_profile(candidate)
     baseline_profile = build_quality_profile(baseline)
-    if not candidate_profile.tags:
+    if candidate_profile.resolution is None:
         return QUALITY_COMPARISON_UNKNOWN
 
-    if not baseline_profile.tags:
-        return (
-            QUALITY_COMPARISON_UPGRADE
-            if candidate_profile.resolution is not None and candidate_profile.resolution >= _RESOLUTION_RANKS["4K"]
-            else QUALITY_COMPARISON_UNKNOWN
-        )
-
-    dimensions = (
-        ("resolution", candidate_profile.resolution, baseline_profile.resolution),
-        ("source", candidate_profile.source, baseline_profile.source),
-        ("dynamic_range", candidate_profile.dynamic_range, baseline_profile.dynamic_range),
-        ("frame_rate", candidate_profile.frame_rate, baseline_profile.frame_rate),
-        ("codec", candidate_profile.codec, baseline_profile.codec),
-        ("audio", candidate_profile.audio, baseline_profile.audio),
-    )
-    for _name, candidate_rank, baseline_rank in dimensions:
-        if candidate_rank is not None and baseline_rank is not None and candidate_rank < baseline_rank:
-            return QUALITY_COMPARISON_DOWNGRADE
-
-    has_improvement = False
-    for name, candidate_rank, baseline_rank in dimensions:
-        if candidate_rank is None:
-            continue
-        if baseline_rank is not None:
-            if candidate_rank > baseline_rank:
-                has_improvement = True
-            continue
-        if name == "resolution" and candidate_rank >= _RESOLUTION_RANKS["4K"]:
-            has_improvement = True
-        elif name != "resolution" and baseline_profile.resolution is not None:
-            has_improvement = True
-
-    return QUALITY_COMPARISON_UPGRADE if has_improvement else QUALITY_COMPARISON_SAME
+    if baseline_profile.resolution is None:
+        return QUALITY_COMPARISON_UPGRADE
+    if candidate_profile.resolution < baseline_profile.resolution:
+        return QUALITY_COMPARISON_DOWNGRADE
+    if candidate_profile.resolution > baseline_profile.resolution:
+        return QUALITY_COMPARISON_UPGRADE
+    return QUALITY_COMPARISON_SAME
 
 
 def is_quality_upgrade(
@@ -147,6 +121,16 @@ def is_quality_upgrade(
     return compare_quality_profiles(candidate, baseline) == QUALITY_COMPARISON_UPGRADE
 
 
+def is_resolution_not_lower(
+    candidate: str | Iterable[str] | None,
+    baseline: str | Iterable[str] | None,
+) -> bool:
+    return compare_quality_profiles(candidate, baseline) in {
+        QUALITY_COMPARISON_SAME,
+        QUALITY_COMPARISON_UPGRADE,
+    }
+
+
 def extract_quality_tags(text: str | None) -> list[str]:
     normalized = str(text or "")[:500]
     return [label for label, pattern in _QUALITY_PATTERNS if pattern.search(normalized)]
@@ -154,7 +138,15 @@ def extract_quality_tags(text: str | None) -> list[str]:
 
 def normalize_quality_tags(value: str | Iterable[str] | None) -> list[str]:
     raw_values = extract_quality_tags(value) if isinstance(value, str) or value is None else value
-    normalized_values = {str(item).strip().upper() for item in raw_values if str(item).strip()}
+    normalized_values: set[str] = set()
+    for item in raw_values:
+        normalized = str(item).strip().upper()
+        if not normalized:
+            continue
+        if normalized in QUALITY_TAGS:
+            normalized_values.add(normalized)
+        else:
+            normalized_values.update(extract_quality_tags(normalized))
     return [label for label in QUALITY_TAGS if label in normalized_values]
 
 

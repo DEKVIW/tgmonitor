@@ -37,7 +37,12 @@ from .providers import decrypt_account_credential, get_pan_transfer_provider
 from .providers.base import PanTransferProviderError
 from .replacement import _ensure_link_target_for_url, replace_link_target_references_with_url, rewrite_message_link_ref_with_url
 from .validation import validate_share_url
-from .quality import extract_quality_tags, is_quality_upgrade, normalize_quality_tags
+from .quality import (
+    extract_quality_tags,
+    is_quality_upgrade,
+    is_resolution_not_lower,
+    normalize_quality_tags,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -1819,6 +1824,15 @@ def _uses_follow_external_source(task: PanTransferSyncTask) -> bool:
 def _is_follow_external_source_authoritative(task: PanTransferSyncTask) -> bool:
     """Return whether an external source currently owns same-episode decisions."""
     if not _uses_follow_external_source(task):
+        return False
+
+    realtime_trigger = dict(_get_task_extra_section(task, "realtime_trigger") or {})
+    if (
+        _normalize_text(realtime_trigger.get("source_mode"), max_length=32).lower()
+        == PAN_TRANSFER_FOLLOW_SOURCE_MODE_EXTERNAL_PREFERRED
+        and _normalize_text(getattr(task, "task_state", None), max_length=32).lower()
+        in {PAN_TRANSFER_SYNC_STATE_QUEUED, PAN_TRANSFER_SYNC_STATE_CHECKING}
+    ):
         return False
 
     automation = _get_task_automation_config(task)
@@ -4687,6 +4701,7 @@ def _evaluate_follow_candidate_rules(
     )
     format_upgrade = bool(
         same_episode
+        and is_resolution_not_lower(candidate_title, quality_baseline)
         and _follow_task_needs_playable_format_check(
             task,
             candidate_episode=_normalize_optional_int(assessment.get("candidate_episode")),
@@ -5137,6 +5152,21 @@ def _commit_before_external_call(session: Session) -> None:
         session.commit()
 
 
+def _follow_external_diagnosis_has_actionable_plan(diagnosis: Mapping[str, Any]) -> bool:
+    summary = dict(diagnosis.get("summary") or {})
+    recommended_episode_numbers = _collect_follow_automation_episode_set(
+        summary.get("recommended_episode_numbers")
+    )
+    recommended_selection_groups = list(diagnosis.get("recommended_selection_groups") or [])
+    if recommended_episode_numbers and recommended_selection_groups:
+        return True
+
+    source_episode_numbers = _collect_follow_automation_episode_set(summary.get("source_episode_numbers"))
+    target_episode_numbers = _collect_follow_automation_episode_set(summary.get("target_episode_numbers"))
+    full_selection_groups = list(diagnosis.get("full_selection_groups") or [])
+    return bool(full_selection_groups and source_episode_numbers - target_episode_numbers)
+
+
 async def _diagnose_follow_external_sources(
     session: Session,
     *,
@@ -5161,27 +5191,11 @@ async def _diagnose_follow_external_sources(
             )
         except Exception as exc:
             error_message = _normalize_text(exc, max_length=1000) or type(exc).__name__
-            if _is_retryable_follow_diagnosis_error(exc):
-                statuses.append(
-                    {
-                        "url": source_url,
-                        "priority": int(source.get("priority") or 100),
-                        "status": "transient_error",
-                        "last_error": error_message,
-                    }
-                )
-                return {
-                    "diagnosis": None,
-                    "source_url": source_url,
-                    "statuses": statuses,
-                    "retry_error": exc,
-                    "fallback": False,
-                }
             statuses.append(
                 {
                     "url": source_url,
                     "priority": int(source.get("priority") or 100),
-                    "status": "invalid",
+                    "status": "transient_error" if _is_retryable_follow_diagnosis_error(exc) else "invalid",
                     "last_error": error_message,
                 }
             )
@@ -5189,22 +5203,30 @@ async def _diagnose_follow_external_sources(
 
         summary = dict(diagnosis.get("summary") or {})
         stop_reason = _normalize_text(summary.get("stop_reason"), max_length=64).lower()
+        actionable = _follow_external_diagnosis_has_actionable_plan(diagnosis)
         statuses.append(
             {
                 "url": source_url,
                 "priority": int(source.get("priority") or 100),
-                "status": "not_ready" if stop_reason in PAN_TRANSFER_FOLLOW_SOURCE_NOT_READY_STOP_REASONS else "valid",
+                "status": (
+                    "actionable"
+                    if actionable
+                    else "not_ready"
+                    if stop_reason in PAN_TRANSFER_FOLLOW_SOURCE_NOT_READY_STOP_REASONS
+                    else "stale"
+                ),
                 "last_error": None,
             }
         )
-        return {
-            "diagnosis": diagnosis,
-            "source_url": source_url,
-            "statuses": statuses,
-            "retry_error": None,
-            "not_ready": stop_reason in PAN_TRANSFER_FOLLOW_SOURCE_NOT_READY_STOP_REASONS,
-            "fallback": False,
-        }
+        if actionable:
+            return {
+                "diagnosis": diagnosis,
+                "source_url": source_url,
+                "statuses": statuses,
+                "retry_error": None,
+                "not_ready": False,
+                "fallback": False,
+            }
 
     return {
         "diagnosis": None,
@@ -5212,6 +5234,7 @@ async def _diagnose_follow_external_sources(
         "statuses": statuses,
         "retry_error": None,
         "fallback": True,
+        "fallback_reason": "no_actionable_external_source",
     }
 
 
@@ -5273,48 +5296,6 @@ async def _handle_follow_task_automation(
             worker_name=worker_name,
         )
         statuses = list(external_result.get("statuses") or [])
-        retry_error = external_result.get("retry_error")
-        if retry_error is not None:
-            retry_payload = _schedule_follow_diagnosis_retry(
-                task,
-                source_kind="external",
-                source_url_override=str(external_result.get("source_url") or "") or None,
-                error=retry_error,
-                now=now,
-            )
-            if retry_payload is not None:
-                _set_follow_task_automation_state(
-                    task,
-                    enabled=True,
-                    cooldown_until=None,
-                    last_auto_check_at=now,
-                    last_auto_source_kind="external",
-                    last_auto_sync_mode=sync_mode,
-                    last_auto_result="diagnosis_retry",
-                    last_auto_batch_id=None,
-                    active_external_source_url=external_result.get("source_url"),
-                    last_external_result="transient_error",
-                    external_source_statuses=statuses,
-                )
-                task.task_state = PAN_TRANSFER_SYNC_STATE_IDLE
-                task.last_error_message = retry_payload["last_error"]
-                session.add(task)
-                session.flush()
-                _append_follow_task_log(
-                    session,
-                    task=task,
-                    stage="external_source",
-                    level="warning",
-                    message="External source check encountered a transient error; retry scheduled",
-                    payload={
-                        "source_url": external_result.get("source_url"),
-                        "retry_attempt": retry_payload["attempt_count"],
-                        "max_retries": retry_payload["max_retries"],
-                        "next_retry_at": retry_payload["next_retry_at"],
-                        "statuses": statuses,
-                    },
-                )
-                return
         if external_result.get("diagnosis") is not None:
             source_kind = "external"
             external_source_url = str(external_result.get("source_url") or "") or None
@@ -5324,48 +5305,11 @@ async def _handle_follow_task_automation(
                 task,
                 enabled=True,
                 active_external_source_url=external_source_url,
-                last_external_result="not_ready" if external_result.get("not_ready") else "valid",
+                last_external_result="valid",
                 external_source_statuses=statuses,
             )
-            if external_result.get("not_ready"):
-                retry_payload = _schedule_follow_source_readiness_retry(
-                    task,
-                    stop_reason="no_source_video",
-                    now=now,
-                    source_kind="external",
-                    source_url_override=external_source_url,
-                )
-                if retry_payload is not None:
-                    _set_follow_task_automation_state(
-                        task,
-                        enabled=True,
-                        cooldown_until=None,
-                        last_auto_check_at=now,
-                        last_auto_source_kind="external",
-                        last_auto_sync_mode=sync_mode,
-                        last_auto_result="source_not_ready_retry",
-                        last_auto_batch_id=None,
-                        active_external_source_url=external_source_url,
-                        last_external_result="not_ready",
-                        external_source_statuses=statuses,
-                    )
-                    session.add(task)
-                    session.flush()
-                    _append_follow_task_log(
-                        session,
-                        task=task,
-                        stage="external_source",
-                        level="warning",
-                        message="External source is valid but target files are not ready; deferred retry scheduled",
-                        payload={
-                            "source_url": external_source_url,
-                            "retry_attempt": retry_payload["attempt_count"],
-                            "max_retries": PAN_TRANSFER_FOLLOW_SOURCE_READINESS_MAX_RETRIES,
-                            "next_retry_at": retry_payload["next_retry_at"],
-                        },
-                    )
-                    return
         else:
+            _clear_follow_diagnosis_retry(task)
             _set_follow_task_automation_state(
                 task,
                 enabled=True,
@@ -5378,9 +5322,13 @@ async def _handle_follow_task_automation(
                 task=task,
                 stage="external_source",
                 level="warning",
-                message="All configured external sources are unavailable; falling back to the system source",
-                payload={"statuses": statuses},
+                message="No configured external source has an actionable update; falling back to the system source",
+                payload={
+                    "statuses": statuses,
+                    "fallback_reason": external_result.get("fallback_reason") or "no_actionable_external_source",
+                },
             )
+        _clear_follow_source_readiness_retry(task)
 
     if source_kind is None:
         source_kind = _resolve_follow_task_automation_source_kind(task)

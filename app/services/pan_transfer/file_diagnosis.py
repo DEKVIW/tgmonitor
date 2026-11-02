@@ -32,6 +32,7 @@ from .providers.quark import _QuarkClient, _extract_passcode, _extract_pwd_id
 from .quality import (
     QUALITY_COMPARISON_SAME,
     QUALITY_COMPARISON_UPGRADE,
+    build_quality_profile,
     compare_quality_profiles,
     extract_quality_tags,
     quality_sort_key,
@@ -514,11 +515,13 @@ def _entry_format_rank(entry: _FileEntry) -> int:
 def _format_upgrade_is_not_lower_quality(
     candidate: _FileEntry,
     current: _FileEntry,
+    *,
+    candidate_quality_tags: list[str] | None = None,
 ) -> bool:
-    candidate_tags = list(candidate.quality_tags)
+    candidate_tags = list(candidate.quality_tags) or list(candidate_quality_tags or [])
     current_tags = list(current.quality_tags)
-    if not candidate_tags and not current_tags:
-        return True
+    if build_quality_profile(candidate_tags).resolution is None:
+        return False
     return compare_quality_profiles(candidate_tags, current_tags) in {
         QUALITY_COMPARISON_SAME,
         QUALITY_COMPARISON_UPGRADE,
@@ -1779,9 +1782,11 @@ async def diagnose_pan_transfer_follow_task_files(
             ]
             best_native_entry = _pick_best_entry(native_entries_for_episode) if native_entries_for_episode else None
             best_target_entry = _pick_best_entry(target_entries_for_episode) if target_entries_for_episode else None
+            candidate_title_quality_tags = extract_quality_tags(candidate_assessment.get("candidate_title"))
             if best_native_entry is not None and best_target_entry is not None and _format_upgrade_is_not_lower_quality(
                 best_native_entry,
                 best_target_entry,
+                candidate_quality_tags=candidate_title_quality_tags,
             ):
                 format_upgrade_episode_numbers.add(int(candidate_episode))
             elif not native_entries_for_episode or not target_entries_for_episode:

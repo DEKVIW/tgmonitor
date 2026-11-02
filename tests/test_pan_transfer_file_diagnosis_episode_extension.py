@@ -301,6 +301,58 @@ class FileDiagnosisEpisodeExtensionTests(unittest.TestCase):
 
         self.assertFalse(_format_upgrade_is_not_lower_quality(candidate_1080_video, current_4k_archive))
 
+    def test_playable_format_upgrade_can_use_candidate_title_resolution(self) -> None:
+        current_4k_archive = _FileEntry(
+            side="target",
+            name="22.zip",
+            entry_id="current",
+            path="/22.zip",
+            parent_entry_id=None,
+            parent_path=None,
+            parent_name=None,
+            relative_parent_path=None,
+            updated_at=None,
+            size_bytes=None,
+            scan_order=1,
+            extension=".zip",
+            quality_tags=["4K"],
+            episode_numbers=[22],
+            quick_episode_numbers=[22],
+            accepted=True,
+        )
+        candidate_native_video_without_quality_tag = _FileEntry(
+            side="source",
+            name="22.mkv",
+            entry_id="candidate",
+            path="/22.mkv",
+            parent_entry_id=None,
+            parent_path=None,
+            parent_name=None,
+            relative_parent_path=None,
+            updated_at=None,
+            size_bytes=None,
+            scan_order=2,
+            extension=".mkv",
+            quality_tags=[],
+            episode_numbers=[22],
+            quick_episode_numbers=[22],
+            accepted=True,
+        )
+
+        self.assertTrue(
+            _format_upgrade_is_not_lower_quality(
+                candidate_native_video_without_quality_tag,
+                current_4k_archive,
+                candidate_quality_tags=["4K"],
+            )
+        )
+        self.assertFalse(
+            _format_upgrade_is_not_lower_quality(
+                candidate_native_video_without_quality_tag,
+                current_4k_archive,
+            )
+        )
+
     def test_source_disguised_video_does_not_require_parent_title_match(self) -> None:
         entry = _FileEntry(
             side="source",

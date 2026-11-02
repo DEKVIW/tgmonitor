@@ -2825,7 +2825,7 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
                           <span>更新来源</span>
                           <small>
                             {activeSourceMode === 'external_preferred'
-                              ? '优先按外部分享查找更新，所有外部来源不可用时自动回退系统资源动态。'
+                              ? '优先按外部分享查找更新，本轮没有可执行更新时自动回退系统资源动态。'
                               : '仅使用系统资源动态中的消息作为更新来源，外部分享不会参与自动同步。'}
                           </small>
                         </div>
@@ -2853,7 +2853,7 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
                           <div className="resource-ops-follow-external-source-editor-head">
                             <div className="resource-ops-follow-sync-meta">
                               <span>外部分享来源</span>
-                              <small>按优先级依次尝试；仅在外部来源不可用时回退到系统资源动态。</small>
+                              <small>按优先级依次尝试；本轮没有可执行更新时回退到系统资源动态。</small>
                             </div>
                             <Button type="dashed" icon={<PlusOutlined />} onClick={addExternalSourceDraft}>
                               添加外部分享
@@ -2873,13 +2873,17 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
                                   (item) => String(item.url || '').trim() === String(source.url || '').trim(),
                                 )
                                 const statusText = status
-                                  ? status.status === 'valid'
-                                    ? '最近可用'
-                                    : status.status === 'not_ready'
-                                      ? '等待目录更新'
-                                      : status.status === 'transient_error'
-                                        ? '临时异常，待重试'
-                                        : '不可用，已尝试后续来源'
+                                  ? status.status === 'actionable'
+                                    ? '本轮可执行'
+                                    : status.status === 'stale'
+                                      ? '暂无新集，已尝试后续来源'
+                                      : status.status === 'not_ready'
+                                        ? '暂未准备好，已尝试后续来源'
+                                        : status.status === 'transient_error'
+                                          ? '临时异常，已尝试后续来源'
+                                          : status.status === 'valid'
+                                            ? '最近可用'
+                                            : '不可用，已尝试后续来源'
                                   : '尚未检查'
                                 return (
                                   <div key={`${source.url}-${index}`} className="resource-ops-follow-external-source-table-row" role="row">
@@ -2909,7 +2913,15 @@ const FollowTasksSection = ({ refreshToken, isActive = true }: FollowTasksSectio
                                       />
                                     </div>
                                     <div className="resource-ops-follow-external-source-status" role="cell">
-                                      <Tag color={status?.status === 'valid' ? 'success' : status?.status === 'invalid' ? 'error' : 'default'}>
+                                      <Tag
+                                        color={
+                                          status?.status === 'actionable' || status?.status === 'valid'
+                                            ? 'success'
+                                            : status?.status === 'invalid'
+                                              ? 'error'
+                                              : 'warning'
+                                        }
+                                      >
                                         {statusText}
                                       </Tag>
                                     </div>

@@ -8,7 +8,7 @@ os.environ.setdefault("SECRET_SALT", "test-secret")
 
 import pytest
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from app.schemas.pan_transfer_models import PanTransferFollowTaskCandidateAssessment, PanTransferFollowTaskSyncRequest
 from app.services.pan_transfer.constants import (
@@ -20,12 +20,18 @@ from app.services.pan_transfer.queue import reset_pan_transfer_batch_items
 from app.services.pan_transfer.follow_tasks import (
     _extract_follow_task_trigger_quality_tags,
     _evaluate_follow_candidate_rules,
+    _diagnose_follow_external_sources,
     _follow_state_matches_source_origin,
     _validate_follow_external_source_configuration,
 )
 from app.services.pan_transfer.follow_sync import _resolve_follow_sync_quality_tags
 from app.services.pan_transfer.worker import _share_validation_is_explicitly_invalid, _should_reuse_existing_share
 from app.services.pan_transfer.providers.quark import _QuarkClient
+from app.services.pan_transfer.quality import (
+    QUALITY_COMPARISON_SAME,
+    compare_quality_profiles,
+    is_quality_upgrade,
+)
 import app.services.learning_resources as learning_resources
 from app.services.learning_resources import _group_learning_batch_jobs
 
@@ -291,6 +297,97 @@ def test_external_source_fallback_keeps_system_quality_judgement() -> None:
     assert assessment["external_source_authoritative"] is False
     assert assessment["quality_upgrade"] is True
     assert assessment["should_promote"] is True
+
+
+def test_same_episode_quality_upgrade_uses_resolution_only() -> None:
+    assert compare_quality_profiles(["2160P"], ["4K"]) == QUALITY_COMPARISON_SAME
+    assert is_quality_upgrade(["60FPS", "HIFI"], ["4K", "60FPS"]) is False
+    assert is_quality_upgrade(["1080P"], ["720P"]) is True
+
+
+def test_same_episode_without_resolution_does_not_promote() -> None:
+    assessment = _evaluate_follow_candidate_rules(
+        _build_external_preferred_follow_task(external_result="fallback_system"),
+        snapshot={"resource_title": "玉簟秋 (2026) 更新34集"},
+        candidate={"title": "玉簟秋 (2026) 60FPS HIFI 更新34集"},
+    )
+
+    assert assessment["quality_upgrade"] is False
+    assert assessment["format_upgrade"] is False
+    assert assessment["should_promote"] is False
+
+
+def test_external_quality_trigger_keeps_system_fallback_candidate_during_check() -> None:
+    task = _build_external_preferred_follow_task(external_result="valid")
+    task.task_state = "checking"
+    task.extra_json["realtime_trigger"] = {"source_mode": "external_preferred"}
+
+    assessment = _evaluate_follow_candidate_rules(
+        task,
+        snapshot={"resource_title": "玉簟秋 (2026) 更新34集"},
+        candidate={"title": "玉簟秋 (2026) 4K 更新34集"},
+    )
+
+    assert assessment["external_source_authoritative"] is False
+    assert assessment["quality_upgrade"] is True
+    assert assessment["should_promote"] is True
+
+
+@pytest.mark.asyncio
+async def test_external_sources_skip_stale_source_until_actionable_source() -> None:
+    stale_diagnosis = {
+        "summary": {
+            "recommended_episode_numbers": [],
+            "stop_reason": "gap_before_next_episode",
+        },
+        "recommended_selection_groups": [],
+        "full_selection_groups": [],
+    }
+    actionable_diagnosis = {
+        "summary": {
+            "recommended_episode_numbers": [35],
+            "stop_reason": "contiguous_window_hit",
+        },
+        "recommended_selection_groups": [{"selected_entries": [{"name": "35.mkv"}]}],
+        "full_selection_groups": [],
+    }
+
+    with patch(
+        "app.services.pan_transfer.file_diagnosis.diagnose_pan_transfer_follow_task_files",
+        new=AsyncMock(side_effect=[stale_diagnosis, actionable_diagnosis]),
+    ) as diagnose:
+        result = await _diagnose_follow_external_sources(
+            Mock(),
+            task=SimpleNamespace(id=1),
+            sources=[
+                {"url": "https://pan.quark.cn/s/stale", "priority": 1},
+                {"url": "https://pan.quark.cn/s/actionable", "priority": 2},
+            ],
+            worker_name="test",
+        )
+
+    assert result["source_url"] == "https://pan.quark.cn/s/actionable"
+    assert result["diagnosis"] == actionable_diagnosis
+    assert [item["status"] for item in result["statuses"]] == ["stale", "actionable"]
+    assert diagnose.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_external_source_failure_falls_back_without_retry_error() -> None:
+    with patch(
+        "app.services.pan_transfer.file_diagnosis.diagnose_pan_transfer_follow_task_files",
+        new=AsyncMock(side_effect=ConnectionError("temporary source failure")),
+    ):
+        result = await _diagnose_follow_external_sources(
+            Mock(),
+            task=SimpleNamespace(id=1),
+            sources=[{"url": "https://pan.quark.cn/s/unavailable", "priority": 1}],
+            worker_name="test",
+        )
+
+    assert result["fallback"] is True
+    assert result["retry_error"] is None
+    assert result["statuses"][0]["status"] == "transient_error"
 
 
 def test_retry_reset_keeps_staging_snapshot_for_share_only_recovery() -> None:

@@ -37,7 +37,12 @@ from .follow_tasks import (
     _follow_task_needs_playable_format_check,
     _restore_follow_task_quality_from_last_sync,
 )
-from .quality import extract_quality_tags, is_quality_upgrade, normalize_quality_tags
+from .quality import (
+    extract_quality_tags,
+    is_quality_upgrade,
+    is_resolution_not_lower,
+    normalize_quality_tags,
+)
 
 
 FOLLOW_TRIGGER_EVENT_TYPE_MESSAGE_LINK_RECEIVED = "message_link_received"
@@ -174,6 +179,7 @@ def evaluate_follow_trigger(
     )
     format_upgrade = bool(
         same_episode
+        and is_resolution_not_lower(candidate_title, quality_baseline)
         and _follow_task_needs_playable_format_check(
             task,
             candidate_episode=_normalize_optional_int(result.get("candidate_episode")),
@@ -195,6 +201,15 @@ def evaluate_follow_trigger(
         result["reason"] = "source_recovery"
         return result
     if external_source_authoritative and same_episode and not source_recovery:
+        if quality_upgrade or format_upgrade:
+            result["should_promote"] = True
+            result["triggerable"] = bool(
+                not decision.needs_ai_review
+                and not tracked_identity.needs_ai_review
+                and not candidate_identity.needs_ai_review
+            )
+            result["reason"] = "external_source_authoritative_quality_check"
+            return result
         result["quality_upgrade"] = False
         result["format_upgrade"] = False
         result["should_promote"] = False
