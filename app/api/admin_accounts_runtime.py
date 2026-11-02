@@ -41,7 +41,13 @@ from app.services.account_service import (
     list_user_accounts,
     update_user_account,
 )
-from app.services.linuxdo_auth_service import apply_linuxdo_config, create_linuxdo_batch, get_linuxdo_admin_state, update_linuxdo_batch
+from app.services.linuxdo_auth_service import (
+    apply_linuxdo_config,
+    create_linuxdo_batch,
+    delete_linuxdo_batch,
+    get_linuxdo_admin_state,
+    update_linuxdo_batch,
+)
 
 router = APIRouter(prefix="/api/admin/accounts", tags=["后台用户"])
 
@@ -148,6 +154,19 @@ async def update_linuxdo_batch_api(
 ) -> LinuxDoConfigResponse:
     try:
         data = update_linuxdo_batch(batch_id, payload.model_dump(), updated_by=current_user.get("username"))
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return _build_linuxdo_config_response(data)
+
+
+@router.delete("/linuxdo/batches/{batch_id}", response_model=LinuxDoConfigResponse, summary="Delete LinuxDo admission batch")
+async def delete_linuxdo_batch_api(
+    batch_id: int,
+    current_user: Dict[str, Any] = Depends(get_admin_user),
+) -> LinuxDoConfigResponse:
+    del current_user
+    try:
+        data = delete_linuxdo_batch(batch_id)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     return _build_linuxdo_config_response(data)

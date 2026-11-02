@@ -388,6 +388,11 @@ export const updateLinuxDoBatch = async (
   return response.data
 }
 
+export const deleteLinuxDoBatch = async (batchId: number): Promise<LinuxDoConfigResponse> => {
+  const response = await apiClient.delete<LinuxDoConfigResponse>(`/admin/accounts/linuxdo/batches/${batchId}`)
+  return response.data
+}
+
 export const getAccount = async (username: string): Promise<UserResponse> => {
   const response = await apiClient.get<UserResponse>(`/admin/accounts/${username}`)
   return response.data

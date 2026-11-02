@@ -106,6 +106,7 @@ def _default_storage_values() -> dict[str, Any]:
     return {
         "enabled": False,
         "allow_new_accounts": False,
+        "min_trust_level": 0,
         "client_id": "",
         "client_secret_encrypted": "",
     }
@@ -116,6 +117,7 @@ def _normalize_storage_values(raw_value: Any) -> dict[str, Any]:
     return {
         "enabled": _coerce_bool(payload.get("enabled"), False),
         "allow_new_accounts": _coerce_bool(payload.get("allow_new_accounts"), False),
+        "min_trust_level": _coerce_int(payload.get("min_trust_level"), 0, minimum=0, maximum=4),
         "client_id": _coerce_text(payload.get("client_id"), "", max_length=512),
         "client_secret_encrypted": _coerce_text(payload.get("client_secret_encrypted"), "", max_length=8000),
     }
@@ -265,6 +267,7 @@ def _build_response_values(
     return {
         "enabled": bool(storage_values["enabled"]),
         "allow_new_accounts": bool(storage_values["allow_new_accounts"]),
+        "min_trust_level": int(storage_values["min_trust_level"]),
         "client_id": storage_values["client_id"],
         "client_secret_configured": client_secret_configured,
         "configured": configured,
@@ -346,6 +349,12 @@ def apply_linuxdo_config(values: dict[str, Any], updated_by: str | None = None) 
         merged = dict(current_storage)
         merged["enabled"] = _coerce_bool(payload.get("enabled"), merged["enabled"])
         merged["allow_new_accounts"] = _coerce_bool(payload.get("allow_new_accounts"), merged["allow_new_accounts"])
+        merged["min_trust_level"] = _coerce_int(
+            payload.get("min_trust_level"),
+            merged["min_trust_level"],
+            minimum=0,
+            maximum=4,
+        )
         merged["client_id"] = _coerce_text(payload.get("client_id"), "", max_length=512)
 
         if _coerce_bool(payload.get("clear_client_secret"), False):
@@ -496,6 +505,37 @@ def update_linuxdo_batch(batch_id: int, values: dict[str, Any], *, updated_by: s
         return _load_state_snapshot(session)
 
 
+def delete_linuxdo_batch(batch_id: int) -> dict[str, Any]:
+    ensure_runtime_storage_tables()
+    bootstrap_account_storage()
+    with Session(engine) as session:
+        batch = (
+            session.query(AccountBatch)
+            .filter(
+                AccountBatch.id == batch_id,
+                AccountBatch.provider_scope == LINUXDO_AUTH_PROVIDER,
+            )
+            .first()
+        )
+        if batch is None:
+            raise ValueError(f"linuxdo batch {batch_id} does not exist")
+
+        allocated_accounts = (
+            session.query(func.count(UserAccount.id))
+            .filter(UserAccount.source_batch_id == batch_id)
+            .scalar()
+            or 0
+        )
+        if allocated_accounts:
+            session.query(UserAccount).filter(UserAccount.source_batch_id == batch_id).update(
+                {UserAccount.source_batch_id: None},
+                synchronize_session=False,
+            )
+        session.delete(batch)
+        session.commit()
+        return _load_state_snapshot(session)
+
+
 def _get_configured_storage_values(session: Session) -> dict[str, Any]:
     storage_values = _read_storage_values(session)[1]
     if not storage_values["enabled"]:
@@ -624,6 +664,21 @@ def _fetch_linuxdo_userinfo(*, access_token: str) -> dict[str, Any]:
     if _coerce_bool(user_payload.get("silenced"), False):
         raise ValueError("LinuxDo account is silenced and cannot sign in")
     return user_payload
+
+
+def _validate_linuxdo_trust_level(userinfo: dict[str, Any], *, minimum_level: int) -> int | None:
+    if minimum_level <= 0:
+        return None
+    raw_level = userinfo.get("trust_level")
+    try:
+        trust_level = int(raw_level)
+    except (TypeError, ValueError):
+        raise ValueError("LinuxDo account trust level is unavailable") from None
+    if trust_level < 0 or trust_level > 4:
+        raise ValueError("LinuxDo account trust level is invalid")
+    if trust_level < minimum_level:
+        raise ValueError(f"LinuxDo trust level {trust_level} is below the required level {minimum_level}")
+    return trust_level
 
 
 def _find_linuxdo_identity(session: Session, provider_user_id: str) -> AuthIdentity | None:
@@ -790,6 +845,10 @@ def exchange_linuxdo_code_for_login(
         if identity is None:
             if not storage_values["allow_new_accounts"]:
                 raise ValueError("LinuxDo login currently only allows previously bound accounts")
+            _validate_linuxdo_trust_level(
+                userinfo,
+                minimum_level=int(storage_values["min_trust_level"]),
+            )
             batch, counts = _resolve_admission_batch_for_update(session, now=current_time)
             if batch is None:
                 raise ValueError("No LinuxDo admission batch is currently available")

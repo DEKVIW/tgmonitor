@@ -265,6 +265,7 @@ export interface LinuxDoBatchResponse {
 export interface LinuxDoConfigResponse {
   enabled: boolean
   allow_new_accounts: boolean
+  min_trust_level: number
   client_id: string
   client_secret_configured: boolean
   configured: boolean
@@ -278,6 +279,7 @@ export interface LinuxDoConfigResponse {
 export interface LinuxDoConfigUpdate {
   enabled: boolean
   allow_new_accounts: boolean
+  min_trust_level: number
   client_id: string
   client_secret: string
   clear_client_secret: boolean

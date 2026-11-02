@@ -7,19 +7,30 @@ import {
   Form,
   Input,
   InputNumber,
+  Popconfirm,
   Select,
   Space,
   Switch,
   Table,
   Tag,
+  Tooltip,
   Typography,
   message,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
-import { LockOutlined, PlusOutlined, ReloadOutlined, SaveOutlined } from '@ant-design/icons'
+import {
+  CloseOutlined,
+  DeleteOutlined,
+  EditOutlined,
+  LockOutlined,
+  PlusOutlined,
+  ReloadOutlined,
+  SaveOutlined,
+} from '@ant-design/icons'
 
 import {
   createLinuxDoBatch,
+  deleteLinuxDoBatch,
   getLinuxDoConfig,
   updateLinuxDoBatch,
   updateLinuxDoConfig,
@@ -38,6 +49,7 @@ const { Text } = Typography
 type ConfigFormValues = {
   enabled: boolean
   allow_new_accounts: boolean
+  min_trust_level: number
   client_id: string
   client_secret: string
   clear_client_secret: boolean
@@ -142,6 +154,7 @@ const LinuxDoAccessPanel = () => {
       configForm.setFieldsValue({
         enabled: result.enabled,
         allow_new_accounts: result.allow_new_accounts,
+        min_trust_level: result.min_trust_level,
         client_id: result.client_id || '',
         client_secret: '',
         clear_client_secret: false,
@@ -182,6 +195,11 @@ const LinuxDoAccessPanel = () => {
             : `${currentBatch.remaining_accounts}`,
         tone: currentBatch?.status || 'default',
       },
+      {
+        label: '最低等级',
+        value: config.min_trust_level > 0 ? `L${config.min_trust_level}+` : '不限制',
+        tone: config.min_trust_level > 0 ? 'processing' : 'default',
+      },
     ]
   }, [config, currentBatch])
 
@@ -191,6 +209,7 @@ const LinuxDoAccessPanel = () => {
       const payload: LinuxDoConfigUpdate = {
         enabled: values.enabled,
         allow_new_accounts: values.allow_new_accounts,
+        min_trust_level: Number(values.min_trust_level ?? 0),
         client_id: values.client_id.trim(),
         client_secret: values.client_secret.trim(),
         clear_client_secret: values.clear_client_secret,
@@ -200,6 +219,7 @@ const LinuxDoAccessPanel = () => {
       configForm.setFieldsValue({
         enabled: updated.enabled,
         allow_new_accounts: updated.allow_new_accounts,
+        min_trust_level: updated.min_trust_level,
         client_id: updated.client_id || '',
         client_secret: '',
         clear_client_secret: false,
@@ -266,6 +286,25 @@ const LinuxDoAccessPanel = () => {
     }
   }
 
+  const handleDeleteBatch = async (batch: LinuxDoBatchResponse) => {
+    try {
+      const updated = await deleteLinuxDoBatch(batch.id)
+      setConfig(updated)
+      if (editingBatch?.id === batch.id) {
+        handleResetBatch()
+      } else if (!editingBatch) {
+        batchForm.setFieldsValue(buildBatchFormValues(updated.current_batch))
+      }
+      message.success(
+        batch.allocated_accounts
+          ? `批次已删除，${batch.allocated_accounts} 个账号已保留`
+          : '批次已删除',
+      )
+    } catch (error: any) {
+      message.error(error.response?.data?.detail || '删除批次失败')
+    }
+  }
+
   const columns: ColumnsType<LinuxDoBatchResponse> = [
     {
       title: '批次',
@@ -317,10 +356,40 @@ const LinuxDoAccessPanel = () => {
     {
       title: '操作',
       key: 'action',
+      width: 96,
+      align: 'center',
       render: (_, record) => (
-        <Button type="link" onClick={() => handleEditBatch(record)}>
-          编辑
-        </Button>
+        <Space size={2}>
+          <Tooltip title="编辑批次">
+            <Button
+              type="text"
+              aria-label="编辑批次"
+              icon={<EditOutlined />}
+              onClick={() => handleEditBatch(record)}
+            />
+          </Tooltip>
+          <Popconfirm
+            title="删除这个批次？"
+            description={
+              record.allocated_accounts
+                ? `将解除 ${record.allocated_accounts} 个账号的批次归属，账号和登录权限保留。`
+                : '删除后无法恢复。'
+            }
+            okText="删除"
+            cancelText="取消"
+            okButtonProps={{ danger: true }}
+            onConfirm={() => void handleDeleteBatch(record)}
+          >
+            <Tooltip title="删除批次">
+              <Button
+                type="text"
+                danger
+                aria-label="删除批次"
+                icon={<DeleteOutlined />}
+              />
+            </Tooltip>
+          </Popconfirm>
+        </Space>
       ),
     },
   ]
@@ -331,7 +400,7 @@ const LinuxDoAccessPanel = () => {
         <div>
           <Text strong>LinuxDo 登录</Text>
           <div className="linuxdo-access-summary">
-            这里控制登录按钮是否显示、是否允许新用户接入，以及每一批开放名额的角色和有效期。
+            登录入口与新用户接入规则
           </div>
         </div>
         <Space wrap>
@@ -356,9 +425,9 @@ const LinuxDoAccessPanel = () => {
       <div className="linuxdo-access-layout">
         <section className="linuxdo-access-section">
           <div className="linuxdo-access-section-head">
-            <Text strong>入口与凭据</Text>
+            <Text strong>入口配置</Text>
             <span className="linuxdo-access-section-copy">
-              关闭入口后，登录页不会显示 LinuxDo 按钮；关闭新用户接入后，老绑定账号仍可继续登录。
+              控制登录入口、新用户接入和最低信任等级
             </span>
           </div>
 
@@ -369,6 +438,7 @@ const LinuxDoAccessPanel = () => {
             initialValues={{
               enabled: false,
               allow_new_accounts: false,
+              min_trust_level: 0,
               client_id: '',
               client_secret: '',
               clear_client_secret: false,
@@ -380,6 +450,24 @@ const LinuxDoAccessPanel = () => {
               </Form.Item>
               <Form.Item name="allow_new_accounts" label="允许新用户接入" valuePropName="checked">
                 <Switch size="small" />
+              </Form.Item>
+              <Form.Item
+                name="min_trust_level"
+                label={
+                  <span className="linuxdo-access-label-with-hint">
+                    最低信任等级
+                    <Tooltip title="仅限制新注册账号，已绑定账号不受影响">
+                      <span className="linuxdo-access-label-hint">?</span>
+                    </Tooltip>
+                  </span>
+                }
+              >
+                <Select
+                  options={[0, 1, 2, 3, 4].map((level) => ({
+                    value: level,
+                    label: level === 0 ? '不限制' : `L${level} 及以上`,
+                  }))}
+                />
               </Form.Item>
               <Form.Item name="client_id" label="Client ID">
                 <Input placeholder="填入 LinuxDo OAuth Client ID" />
@@ -426,7 +514,7 @@ const LinuxDoAccessPanel = () => {
                 <span>{editingBatch.batch_name}</span>
                 <small>{editingBatch.batch_code}</small>
               </div>
-              <Button icon={<PlusOutlined />} onClick={handleResetBatch}>
+              <Button icon={<CloseOutlined />} onClick={handleResetBatch}>
                 取消编辑
               </Button>
             </div>

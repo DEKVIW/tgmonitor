@@ -1,5 +1,6 @@
 .linuxdo-access-card {
   border-radius: 24px;
+  overflow: hidden;
 }
 
 .linuxdo-access-header {
@@ -15,18 +16,19 @@
   color: rgba(15, 23, 42, 0.62);
   font-size: 13px;
   line-height: 1.7;
-  max-width: 72ch;
+  max-width: 48ch;
 }
 
 .linuxdo-access-overview {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, max-content));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 12px;
   margin-top: 18px;
 }
 
 .linuxdo-access-overview-item {
   min-width: 0;
+  min-height: 76px;
   padding: 14px 16px;
   border-radius: 18px;
   border: 1px solid rgba(148, 163, 184, 0.18);
@@ -50,12 +52,13 @@
 
 .linuxdo-access-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.08fr);
+  grid-template-columns: minmax(300px, 0.9fr) minmax(0, 1.1fr);
   gap: 16px;
   margin-top: 18px;
 }
 
 .linuxdo-access-section {
+  min-width: 0;
   padding: 20px 22px;
   border-radius: 22px;
   border: 1px solid rgba(148, 163, 184, 0.18);
@@ -85,6 +88,29 @@
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0 14px;
+}
+
+.linuxdo-access-form-grid .ant-form-item {
+  min-width: 0;
+}
+
+.linuxdo-access-label-with-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.linuxdo-access-label-hint {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border: 1px solid rgba(15, 23, 42, 0.22);
+  border-radius: 50%;
+  color: rgba(15, 23, 42, 0.58);
+  font-size: 11px;
+  line-height: 1;
 }
 
 .linuxdo-access-form-grid--batch {
@@ -160,6 +186,24 @@
   min-width: 0;
 }
 
+.linuxdo-access-section--full .ant-table-wrapper {
+  overflow-x: auto;
+}
+
+.linuxdo-access-section--full .ant-table-thead > tr > th {
+  white-space: nowrap;
+}
+
+.linuxdo-access-section--full .ant-table-tbody > tr > td {
+  vertical-align: middle;
+}
+
+.linuxdo-access-section--full .ant-btn.ant-btn-text {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+}
+
 .linuxdo-access-batch-name span {
   color: rgba(15, 23, 42, 0.86);
   font-weight: 600;
@@ -175,6 +219,10 @@
 }
 
 @media (max-width: 1180px) {
+  .linuxdo-access-overview {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
   .linuxdo-access-layout {
     grid-template-columns: 1fr;
   }

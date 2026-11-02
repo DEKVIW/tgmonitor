@@ -460,6 +460,7 @@ class LinuxDoBatchResponse(BaseModel):
 class LinuxDoConfigResponse(BaseModel):
     enabled: bool
     allow_new_accounts: bool
+    min_trust_level: int = Field(default=0, ge=0, le=4)
     client_id: str
     client_secret_configured: bool
     configured: bool
@@ -473,6 +474,7 @@ class LinuxDoConfigResponse(BaseModel):
 class LinuxDoConfigUpdate(BaseModel):
     enabled: bool
     allow_new_accounts: bool
+    min_trust_level: int = Field(default=0, ge=0, le=4)
     client_id: str = Field(default="", max_length=512)
     client_secret: str = Field(default="", max_length=4000)
     clear_client_secret: bool = False
