@@ -29,7 +29,13 @@ from .follow_tasks import (
 from .providers import decrypt_account_credential
 from .providers.baidu import _BaiduClient, _extract_share_access_context
 from .providers.quark import _QuarkClient, _extract_passcode, _extract_pwd_id
-from .quality import extract_quality_tags
+from .quality import (
+    QUALITY_COMPARISON_SAME,
+    QUALITY_COMPARISON_UPGRADE,
+    compare_quality_profiles,
+    extract_quality_tags,
+    quality_sort_key,
+)
 
 
 _VIDEO_EXTENSIONS = {
@@ -58,11 +64,6 @@ _DISGUISED_VIDEO_EXTENSIONS = {
     ".zip",
 }
 _DISGUISED_VIDEO_MAX_EPISODE_DISTANCE = 3
-_DISGUISED_EPISODE_STEM_PATTERN = re.compile(
-    r"^(?:\d{1,4}|E\d{1,4}|EP\d{1,4}|S\d{1,2}E\d{1,4}|第\d{1,4}[集话]?)$",
-    re.IGNORECASE,
-)
-
 _SEMANTIC_SEASON_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"(?<![A-Za-z0-9])Season\s*0*([1-9][0-9]?)(?!\d)", re.IGNORECASE),
     re.compile(r"第\s*([零一二三四五六七八九十百两\d]{1,4})\s*季"),
@@ -364,16 +365,9 @@ def _is_likely_disguised_video_entry(
     tracked_season: int | None,
 ) -> bool:
     stem, extension = _split_name_and_extension(entry.name)
-    normalized_stem = re.sub(r"\s+", "", _normalize_text(stem, max_length=64) or "")
     if extension not in _DISGUISED_VIDEO_EXTENSIONS:
         return False
     if tracked_episode is None or not tracked_keys:
-        return False
-    if not (entry.parent_name or entry.relative_parent_path):
-        return False
-    if not normalized_stem or _DISGUISED_EPISODE_STEM_PATTERN.fullmatch(normalized_stem) is None:
-        return False
-    if _score_title_match(entry, tracked_keys=tracked_keys) <= 0:
         return False
 
     quick_parse_title = _build_parse_title(entry)
@@ -386,6 +380,12 @@ def _is_likely_disguised_video_entry(
         return False
     if not any(abs(int(value) - tracked_episode) <= _DISGUISED_VIDEO_MAX_EPISODE_DISTANCE for value in episode_numbers):
         return False
+
+    if entry.side != "source":
+        if not (entry.parent_name or entry.relative_parent_path):
+            return False
+        if _score_title_match(entry, tracked_keys=tracked_keys) <= 0:
+            return False
 
     quick_season = _extract_entry_context_season(entry) or _extract_semantic_season_quick(quick_parse_title)
     if tracked_season is not None and quick_season is not None and quick_season != tracked_season:
@@ -466,6 +466,7 @@ def _serialize_file_entry(entry: _FileEntry) -> dict[str, Any]:
         "updated_at": entry.updated_at,
         "size_bytes": entry.size_bytes,
         "extension": entry.extension,
+        "format_kind": _entry_format_kind(entry),
         "episode_numbers": list(entry.episode_numbers or entry.quick_episode_numbers),
         "season": entry.season or entry.quick_season,
         "core_title": entry.core_title,
@@ -485,6 +486,8 @@ def _pick_best_entry(entries: list[_FileEntry]) -> _FileEntry:
     def sort_key(item: _FileEntry) -> tuple[Any, ...]:
         updated_ts = int(item.updated_at.timestamp()) if item.updated_at is not None else 0
         return (
+            quality_sort_key(item.quality_tags),
+            _entry_format_rank(item),
             1 if item.parse_level == "full" else 0,
             1 if item.accepted else 0,
             float(item.title_match_score or 0.0),
@@ -494,6 +497,32 @@ def _pick_best_entry(entries: list[_FileEntry]) -> _FileEntry:
         )
 
     return max(entries, key=sort_key)
+
+
+def _entry_format_kind(entry: _FileEntry) -> str:
+    if entry.extension in _VIDEO_EXTENSIONS:
+        return "native_video"
+    if entry.extension in _DISGUISED_VIDEO_EXTENSIONS:
+        return "disguised_video"
+    return "other"
+
+
+def _entry_format_rank(entry: _FileEntry) -> int:
+    return 1 if _entry_format_kind(entry) == "native_video" else 0
+
+
+def _format_upgrade_is_not_lower_quality(
+    candidate: _FileEntry,
+    current: _FileEntry,
+) -> bool:
+    candidate_tags = list(candidate.quality_tags)
+    current_tags = list(current.quality_tags)
+    if not candidate_tags and not current_tags:
+        return True
+    return compare_quality_profiles(candidate_tags, current_tags) in {
+        QUALITY_COMPARISON_SAME,
+        QUALITY_COMPARISON_UPGRADE,
+    }
 
 
 def _infer_target_relative_path(target_entries: list[_FileEntry], *, anchor_episode: int | None) -> str | None:
@@ -684,6 +713,9 @@ def _build_sync_selection_groups(
                     "is_dir": False,
                     "entry_id": entry.entry_id,
                     "path": entry.path,
+                    "format_kind": _entry_format_kind(entry),
+                    "quality_tags": list(entry.quality_tags),
+                    "episode_numbers": list(_entry_episode_numbers(entry)),
                 }
             )
         if not normalized_entries:
@@ -731,6 +763,7 @@ def _build_plan_preview(entries: list[_FileEntry], *, target_relative_path: str 
                 "updated_at": entry.updated_at,
                 "size_bytes": entry.size_bytes,
                 "quality_tags": list(entry.quality_tags),
+                "format_kind": _entry_format_kind(entry),
                 "parse_level": entry.parse_level,
                 "parse_reason": entry.parse_reason,
                 "target_relative_path": entry.target_relative_path or target_relative_path,
@@ -1709,8 +1742,11 @@ async def diagnose_pan_transfer_follow_task_files(
     )
     inferred_target_relative_path = _infer_target_relative_path(relevant_target_entries, anchor_episode=anchor_episode)
     quality_upgrade_episode_numbers: set[int] = set()
+    format_upgrade_episode_numbers: set[int] = set()
     candidate_assessment = dict(dict(task.extra_json or {}).get("candidate_assessment") or {})
     quality_upgrade_source_not_ready = False
+    format_upgrade_source_not_ready = False
+    format_upgrade_not_better = False
     if bool(candidate_assessment.get("quality_upgrade")):
         candidate_episode = _normalize_optional_int(candidate_assessment.get("candidate_episode"))
         if candidate_episode is not None:
@@ -1725,14 +1761,46 @@ async def diagnose_pan_transfer_follow_task_files(
                 quality_upgrade_episode_numbers.add(int(candidate_episode))
             else:
                 quality_upgrade_source_not_ready = True
+    if bool(candidate_assessment.get("format_upgrade")):
+        candidate_episode = _normalize_optional_int(candidate_assessment.get("candidate_episode"))
+        if candidate_episode is not None:
+            native_entries_for_episode = [
+                entry
+                for entry in source_video_entries
+                if entry.accepted
+                and _entry_format_kind(entry) == "native_video"
+                and int(candidate_episode) in _entry_episode_numbers(entry)
+            ]
+            target_entries_for_episode = [
+                entry
+                for entry in target_video_entries
+                if entry.accepted
+                and int(candidate_episode) in _entry_episode_numbers(entry)
+            ]
+            best_native_entry = _pick_best_entry(native_entries_for_episode) if native_entries_for_episode else None
+            best_target_entry = _pick_best_entry(target_entries_for_episode) if target_entries_for_episode else None
+            if best_native_entry is not None and best_target_entry is not None and _format_upgrade_is_not_lower_quality(
+                best_native_entry,
+                best_target_entry,
+            ):
+                format_upgrade_episode_numbers.add(int(candidate_episode))
+            elif not native_entries_for_episode or not target_entries_for_episode:
+                format_upgrade_source_not_ready = True
+            else:
+                format_upgrade_not_better = True
+    replacement_episode_numbers = quality_upgrade_episode_numbers | format_upgrade_episode_numbers
     if quality_upgrade_source_not_ready:
         recommended_entries, recommended_episode_numbers, stop_reason = [], [], "source_episode_not_ready"
+    elif format_upgrade_source_not_ready and not quality_upgrade_episode_numbers:
+        recommended_entries, recommended_episode_numbers, stop_reason = [], [], "source_episode_not_ready"
+    elif format_upgrade_not_better and not quality_upgrade_episode_numbers:
+        recommended_entries, recommended_episode_numbers, stop_reason = [], [], "format_not_better"
     else:
         recommended_entries, recommended_episode_numbers, stop_reason = _build_recommended_entries(
             source_video_entries,
             anchor_episode=(
                 max(0, int(anchor_episode or 0) - 1)
-                if quality_upgrade_episode_numbers
+                if replacement_episode_numbers
                 else anchor_episode
             ),
             inferred_target_relative_path=inferred_target_relative_path,
@@ -1740,19 +1808,19 @@ async def diagnose_pan_transfer_follow_task_files(
                 [
                     episode
                     for episode in materialized_episode_numbers
-                    if episode not in quality_upgrade_episode_numbers
+                    if episode not in replacement_episode_numbers
                 ]
-                if quality_upgrade_episode_numbers
+                if replacement_episode_numbers
                 else materialized_episode_numbers
             ),
         )
     stats.stop_reason = stop_reason
     replacement_entries_by_path: dict[str, list[_FileEntry]] = {}
-    if quality_upgrade_episode_numbers:
+    if replacement_episode_numbers:
         for entry in target_video_entries:
             if not entry.accepted:
                 continue
-            if not quality_upgrade_episode_numbers.intersection(_entry_episode_numbers(entry)):
+            if not replacement_episode_numbers.intersection(_entry_episode_numbers(entry)):
                 continue
             replacement_entries_by_path.setdefault(
                 _normalize_relative_path_hint(entry.relative_parent_path) or "",
@@ -1797,6 +1865,8 @@ async def diagnose_pan_transfer_follow_task_files(
         materialized_episode_numbers=materialized_episode_numbers,
     )
     summary["quality_upgrade_episode_numbers"] = sorted(quality_upgrade_episode_numbers)
+    summary["format_upgrade_episode_numbers"] = sorted(format_upgrade_episode_numbers)
+    summary["format_upgrade_not_better"] = bool(format_upgrade_not_better)
 
     extra_json = dict(task.extra_json or {})
     extra_json["last_file_diagnosis"] = {

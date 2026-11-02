@@ -233,6 +233,8 @@ export interface PanTransferFollowTaskAppliedUpdateState {
 
 export interface PanTransferFollowTaskMaterializedUpdateState extends PanTransferFollowTaskAppliedUpdateState {
   episode_numbers?: number[]
+  format_kinds?: string[]
+  format_kinds_by_episode?: Record<string, string[]>
   status?: string | null
   error_message?: string | null
   batch_id?: number | null
@@ -257,6 +259,9 @@ export interface PanTransferFollowTaskSyncSelectionEntry {
   is_dir: boolean
   entry_id?: string | null
   path?: string | null
+  format_kind?: string | null
+  quality_tags?: string[]
+  episode_numbers?: number[]
 }
 
 export interface PanTransferFollowTaskSyncSelectionGroup {
@@ -366,6 +371,7 @@ export interface PanTransferFollowTaskCandidateAssessment {
   validation_status?: string | null
   validation_detail_message?: string | null
   quality_upgrade?: boolean | null
+  format_upgrade?: boolean | null
 }
 
 export interface PanTransferFollowTaskRuleAssessment {
@@ -482,6 +488,7 @@ export interface PanTransferFollowTaskFileDiagnosisEntry {
   updated_at?: string | null
   size_bytes?: number | null
   extension?: string | null
+  format_kind?: string | null
   episode_numbers: number[]
   season?: number | null
   core_title?: string | null
@@ -505,6 +512,7 @@ export interface PanTransferFollowTaskFileDiagnosisPlanItem {
   updated_at?: string | null
   size_bytes?: number | null
   quality_tags: string[]
+  format_kind?: string | null
   parse_level: string
   parse_reason: string
   target_relative_path?: string | null
@@ -532,6 +540,9 @@ export interface PanTransferFollowTaskFileDiagnosisSummary {
   expansions_used: number
   recommended_entry_count: number
   recommended_episode_numbers: number[]
+  quality_upgrade_episode_numbers: number[]
+  format_upgrade_episode_numbers: number[]
+  format_upgrade_not_better: boolean
   selection_group_count: number
   source_latest_episode?: number | null
   source_episode_numbers: number[]

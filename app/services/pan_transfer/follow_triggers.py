@@ -34,6 +34,7 @@ from .follow_tasks import (
     _normalize_text,
     _resolve_follow_task_resource_title,
     _resolve_follow_task_quality_baseline,
+    _follow_task_needs_playable_format_check,
     _restore_follow_task_quality_from_last_sync,
 )
 from .quality import extract_quality_tags, is_quality_upgrade, normalize_quality_tags
@@ -138,6 +139,7 @@ def evaluate_follow_trigger(
     *,
     candidate_title: str,
     candidate_message_time: datetime | None = None,
+    candidate_link_target_id: int | None = None,
 ) -> dict[str, Any]:
     tracked_identity = _build_tracked_identity(task)
     candidate_identity = parse_resource_identity(candidate_title)
@@ -170,6 +172,15 @@ def evaluate_follow_trigger(
             == _normalize_optional_int(result.get("candidate_episode"))
         )
     )
+    format_upgrade = bool(
+        same_episode
+        and _follow_task_needs_playable_format_check(
+            task,
+            candidate_episode=_normalize_optional_int(result.get("candidate_episode")),
+            candidate_link_target_id=candidate_link_target_id,
+        )
+    )
+    result["format_upgrade"] = format_upgrade
     external_source_authoritative = _is_follow_external_source_authoritative(task)
     source_recovery = same_episode and _follow_task_needs_share_recovery(task)
     result["external_source_authoritative"] = external_source_authoritative
@@ -185,14 +196,18 @@ def evaluate_follow_trigger(
         return result
     if external_source_authoritative and same_episode and not source_recovery:
         result["quality_upgrade"] = False
+        result["format_upgrade"] = False
         result["should_promote"] = False
         result["triggerable"] = False
         result["reason"] = "external_source_authoritative_same_episode"
         return result
     if quality_upgrade:
         result["reason"] = "rule_same_episode_higher_quality"
+    elif format_upgrade:
+        result["should_promote"] = True
+        result["reason"] = "rule_same_episode_playable_format"
     result["triggerable"] = bool(
-        (decision.should_promote or quality_upgrade)
+        (decision.should_promote or quality_upgrade or format_upgrade)
         and not decision.needs_ai_review
         and not tracked_identity.needs_ai_review
         and not candidate_identity.needs_ai_review
@@ -443,10 +458,18 @@ def process_next_pan_transfer_follow_trigger_event(session: Session, *, worker_n
                         ),
                     },
                 )
+            candidates = _list_message_candidates(session, message=message, task=task)
+            external_preferred = _uses_follow_external_source(task)
+            fallback_candidate = candidates[0] if candidates else None
             assessment = evaluate_follow_trigger(
                 task,
                 candidate_title=candidate_title,
                 candidate_message_time=getattr(message, "timestamp", None),
+                candidate_link_target_id=(
+                    None
+                    if external_preferred or not candidates
+                    else _normalize_optional_int(candidates[0].get("link_target_id"))
+                ),
             )
             if not assessment.get("is_same_work"):
                 continue
@@ -461,9 +484,6 @@ def process_next_pan_transfer_follow_trigger_event(session: Session, *, worker_n
             }:
                 deferred_task_ids.append(task_id)
                 continue
-            candidates = _list_message_candidates(session, message=message, task=task)
-            external_preferred = _uses_follow_external_source(task)
-            fallback_candidate = candidates[0] if candidates else None
             if external_preferred:
                 candidates = [
                     {

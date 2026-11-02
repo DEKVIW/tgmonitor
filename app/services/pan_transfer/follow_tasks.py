@@ -932,6 +932,33 @@ def _normalize_follow_materialized_update_state(value: Mapping[str, Any] | None)
         normalized_value = _normalize_text(raw.get(key), max_length=32).lower() or None
         if normalized_value:
             normalized[key] = normalized_value
+    format_kinds = sorted(
+        {
+            _normalize_text(value, max_length=32).lower()
+            for value in list(raw.get("format_kinds") or [])
+            if _normalize_text(value, max_length=32).lower() in {"native_video", "disguised_video"}
+        }
+    )
+    if format_kinds:
+        normalized["format_kinds"] = format_kinds
+    format_kinds_by_episode: dict[str, list[str]] = {}
+    raw_format_kinds_by_episode = raw.get("format_kinds_by_episode")
+    if isinstance(raw_format_kinds_by_episode, Mapping):
+        for raw_episode, raw_kinds in raw_format_kinds_by_episode.items():
+            episode = _normalize_optional_int(raw_episode)
+            if episode is None or episode <= 0:
+                continue
+            kinds = sorted(
+                {
+                    _normalize_text(value, max_length=32).lower()
+                    for value in list(raw_kinds or [])
+                    if _normalize_text(value, max_length=32).lower() in {"native_video", "disguised_video"}
+                }
+            )
+            if kinds:
+                format_kinds_by_episode[str(episode)] = kinds
+    if format_kinds_by_episode:
+        normalized["format_kinds_by_episode"] = format_kinds_by_episode
     target_relative_path = normalize_relative_path(_normalize_text(raw.get("target_relative_path"), max_length=512))
     if target_relative_path:
         normalized["target_relative_path"] = target_relative_path
@@ -949,6 +976,16 @@ def _get_follow_task_materialized_update_state(task: PanTransferSyncTask) -> dic
 
 def _extract_follow_batch_item_quality_tags(item: PanTransferBatchItem) -> list[str]:
     extra_json = dict(item.extra_json or {})
+    source_selection = dict(extra_json.get("source_selection") or {})
+    selected_tags: set[str] = set()
+    for group in list(source_selection.get("selection_groups") or []):
+        if not isinstance(group, dict):
+            continue
+        for entry in list(group.get("selected_entries") or []):
+            if isinstance(entry, dict):
+                selected_tags.update(normalize_quality_tags(entry.get("quality_tags")))
+    if selected_tags:
+        return normalize_quality_tags(selected_tags)
     source_snapshot = extra_json.get("source_message_snapshot")
     source_title = (
         source_snapshot.get("title")
@@ -993,6 +1030,28 @@ def _resolve_follow_task_quality_baseline(
     if quality_tags:
         return quality_tags
     return tracked_resource_title or _normalize_text(effective_state.get("resource_title"), max_length=255)
+
+
+def _follow_task_needs_playable_format_check(
+    task: PanTransferSyncTask,
+    *,
+    candidate_episode: int | None = None,
+    candidate_link_target_id: int | None = None,
+) -> bool:
+    materialized_state = _get_follow_task_materialized_update_state(task)
+    episode = _normalize_optional_int(candidate_episode)
+    format_kinds_by_episode = dict(materialized_state.get("format_kinds_by_episode") or {})
+    if episode is not None and str(episode) in format_kinds_by_episode:
+        format_kinds = set(format_kinds_by_episode.get(str(episode)) or [])
+    else:
+        format_kinds = set(materialized_state.get("format_kinds") or [])
+    if "disguised_video" not in format_kinds or "native_video" in format_kinds:
+        return False
+    candidate_id = _normalize_optional_int(candidate_link_target_id)
+    if candidate_id is None:
+        return False
+    current_source_id = _normalize_optional_int(task.source_link_target_id)
+    return current_source_id is None or candidate_id != current_source_id
 
 
 def _restore_follow_task_quality_from_last_sync(
@@ -1349,6 +1408,8 @@ def _update_follow_task_materialized_update_state_from_sync(
     target_relative_path: str | None = None,
     selected_count: int | None = None,
     quality_tags: Any = None,
+    format_kinds: Any = None,
+    format_kinds_by_episode: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     promotion = dict(source_metadata_promotion or {})
     transfer_materialization = dict(promotion.get("transfer_materialization") or {})
@@ -1422,6 +1483,16 @@ def _update_follow_task_materialized_update_state_from_sync(
             "target_relative_path": target_relative_path,
             "selected_count": selected_count,
             "quality_tags": quality_tags,
+            "format_kinds": sorted(
+                {
+                    *list(persisted.get("format_kinds") or []),
+                    *list(format_kinds or []),
+                }
+            ),
+            "format_kinds_by_episode": {
+                **dict(persisted.get("format_kinds_by_episode") or {}),
+                **dict(format_kinds_by_episode or {}),
+            },
         }
     )
     if next_state:
@@ -4614,18 +4685,31 @@ def _evaluate_follow_candidate_rules(
             == _normalize_optional_int(assessment.get("candidate_episode"))
         )
     )
+    format_upgrade = bool(
+        same_episode
+        and _follow_task_needs_playable_format_check(
+            task,
+            candidate_episode=_normalize_optional_int(assessment.get("candidate_episode")),
+            candidate_link_target_id=_normalize_optional_int(candidate.get("link_target_id")),
+        )
+    )
+    assessment["format_upgrade"] = format_upgrade
     external_source_authoritative = _is_follow_external_source_authoritative(task)
     source_recovery = same_episode and _follow_task_needs_share_recovery(task)
     assessment["external_source_authoritative"] = external_source_authoritative
     assessment["source_recovery"] = source_recovery
     if external_source_authoritative and same_episode and not source_recovery:
         assessment["quality_upgrade"] = False
+        assessment["format_upgrade"] = False
         assessment["should_promote"] = False
         assessment["reason"] = "external_source_authoritative_same_episode"
         return assessment
     if quality_upgrade:
         assessment["should_promote"] = True
         assessment["reason"] = "rule_same_episode_higher_quality"
+    elif format_upgrade:
+        assessment["should_promote"] = True
+        assessment["reason"] = "rule_same_episode_playable_format"
     return assessment
 
 

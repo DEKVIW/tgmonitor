@@ -30,6 +30,8 @@ const STOP_REASON_LABELS: Record<string, string> = {
   gap_before_next_episode: '下一集之前存在断档，系统先停在第一处缺口',
   no_source_video: '来源链接里还没有识别到可用视频文件',
   no_accepted_episode: '来源文件里有视频，但暂时没有识别到可信剧集',
+  source_episode_not_ready: '来源中的目标剧集文件还未准备好，系统会等待后重试',
+  format_not_better: '新来源虽然格式更易播放，但画质不高于当前文件，未执行替换',
 }
 
 const formatDateTime = (value?: string | null) =>

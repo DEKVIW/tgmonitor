@@ -489,6 +489,9 @@ class PanTransferFollowTaskSyncSelectionEntry(PanTransferBaseModel):
     is_dir: bool = False
     entry_id: str | None = Field(default=None, max_length=255)
     path: str | None = Field(default=None, max_length=1024)
+    format_kind: str | None = Field(default=None, max_length=32)
+    quality_tags: list[str] = Field(default_factory=list)
+    episode_numbers: list[int] = Field(default_factory=list)
 
     @field_validator("name")
     @classmethod
@@ -702,6 +705,7 @@ class PanTransferFollowTaskCandidateAssessment(PanTransferBaseModel):
     should_promote: bool | None = None
     same_episode_replace: bool | None = None
     quality_upgrade: bool | None = None
+    format_upgrade: bool | None = None
     candidate_origin: str | None = None
     confidence: float | None = None
     current_episode: int | None = None
@@ -847,6 +851,7 @@ class PanTransferFollowTaskFileDiagnosisEntry(PanTransferBaseModel):
     updated_at: datetime | None = None
     size_bytes: int | None = None
     extension: str | None = None
+    format_kind: str | None = None
     episode_numbers: list[int] = Field(default_factory=list)
     season: int | None = None
     core_title: str | None = None
@@ -870,6 +875,7 @@ class PanTransferFollowTaskFileDiagnosisPlanItem(PanTransferBaseModel):
     updated_at: datetime | None = None
     size_bytes: int | None = None
     quality_tags: list[str] = Field(default_factory=list)
+    format_kind: str | None = None
     parse_level: str
     parse_reason: str
     target_relative_path: str | None = None
@@ -897,6 +903,9 @@ class PanTransferFollowTaskFileDiagnosisSummary(PanTransferBaseModel):
     expansions_used: int = 0
     recommended_entry_count: int = 0
     recommended_episode_numbers: list[int] = Field(default_factory=list)
+    quality_upgrade_episode_numbers: list[int] = Field(default_factory=list)
+    format_upgrade_episode_numbers: list[int] = Field(default_factory=list)
+    format_upgrade_not_better: bool = False
     selection_group_count: int = 0
     source_latest_episode: int | None = None
     source_episode_numbers: list[int] = Field(default_factory=list)

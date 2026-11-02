@@ -10,6 +10,7 @@ from app.services.pan_transfer.file_diagnosis import (
     _build_recommended_entries,
     _build_tracked_keys,
     _extract_episode_numbers_quick,
+    _format_upgrade_is_not_lower_quality,
     _full_parse_entry,
     _infer_target_relative_path,
     _pick_best_entry,
@@ -18,6 +19,7 @@ from app.services.pan_transfer.file_diagnosis import (
 )
 from app.services.pan_transfer.follow_sync import _augment_source_selection_target_relative_path
 from app.services.pan_transfer.follow_sync import _extract_follow_sync_materialized_episode_numbers
+from app.services.pan_transfer.follow_sync import _extract_follow_sync_materialized_format_kinds_by_episode
 from app.services.pan_transfer.follow_tasks import _collect_follow_automation_selected_episode_set
 
 
@@ -219,6 +221,113 @@ class FileDiagnosisEpisodeExtensionTests(unittest.TestCase):
 
         self.assertIs(_pick_best_entry([newer_smaller, older_larger]), newer_smaller)
 
+    def test_same_episode_prefers_explicit_higher_quality_over_native_format(self) -> None:
+        native_1080 = _FileEntry(
+            side="source",
+            name="22.mkv",
+            entry_id="native",
+            path="/22.mkv",
+            parent_entry_id=None,
+            parent_path=None,
+            parent_name=None,
+            relative_parent_path=None,
+            updated_at=None,
+            size_bytes=None,
+            extension=".mkv",
+            scan_order=1,
+            episode_numbers=[22],
+            quick_episode_numbers=[22],
+            quality_tags=["1080P"],
+            accepted=True,
+        )
+        disguised_4k = _FileEntry(
+            side="source",
+            name="S01E22.2160p.HDR.zip",
+            entry_id="disguised",
+            path="/S01E22.2160p.HDR.zip",
+            parent_entry_id=None,
+            parent_path=None,
+            parent_name=None,
+            relative_parent_path=None,
+            updated_at=None,
+            size_bytes=None,
+            extension=".zip",
+            scan_order=2,
+            episode_numbers=[22],
+            quick_episode_numbers=[22],
+            quality_tags=["4K", "HDR"],
+            accepted=True,
+        )
+
+        self.assertIs(_pick_best_entry([native_1080, disguised_4k]), disguised_4k)
+
+    def test_playable_format_upgrade_does_not_lower_quality(self) -> None:
+        current_4k_archive = _FileEntry(
+            side="target",
+            name="22.zip",
+            entry_id="current",
+            path="/22.zip",
+            parent_entry_id=None,
+            parent_path=None,
+            parent_name=None,
+            relative_parent_path=None,
+            updated_at=None,
+            size_bytes=None,
+            scan_order=1,
+            extension=".zip",
+            quality_tags=["4K"],
+            episode_numbers=[22],
+            quick_episode_numbers=[22],
+            accepted=True,
+        )
+        candidate_1080_video = _FileEntry(
+            side="source",
+            name="22.mkv",
+            entry_id="candidate",
+            path="/22.mkv",
+            parent_entry_id=None,
+            parent_path=None,
+            parent_name=None,
+            relative_parent_path=None,
+            updated_at=None,
+            size_bytes=None,
+            scan_order=2,
+            extension=".mkv",
+            quality_tags=["1080P"],
+            episode_numbers=[22],
+            quick_episode_numbers=[22],
+            accepted=True,
+        )
+
+        self.assertFalse(_format_upgrade_is_not_lower_quality(candidate_1080_video, current_4k_archive))
+
+    def test_source_disguised_video_does_not_require_parent_title_match(self) -> None:
+        entry = _FileEntry(
+            side="source",
+            name="2026.S01E22.2160p.HDR.60fps.10bit.DDP5.1-PanWEB.zip",
+            entry_id="episode-22",
+            path="/S 尙厷炷 [更新至22集]/2026.S01E22.2160p.HDR.60fps.10bit.DDP5.1-PanWEB.zip",
+            parent_entry_id="source-dir",
+            parent_path="/S 尙厷炷 [更新至22集]",
+            parent_name="S 尙厷炷 [更新至22集]",
+            relative_parent_path="S 尙厷炷 [更新至22集]",
+            updated_at=None,
+            size_bytes=None,
+            extension=".zip",
+            scan_order=1,
+        )
+        stats = _DiagnosisStats()
+
+        videos = _prepare_quick_entries(
+            [entry],
+            stats=stats,
+            tracked_keys=_build_tracked_keys({"resource_title": "尚公主"}),
+            tracked_episode=22,
+        )
+
+        self.assertEqual([item.quick_episode_numbers for item in videos], [[22]])
+        self.assertEqual(videos[0].quality_tags, ["4K", "HDR", "60FPS", "10BIT", "DDP5.1"])
+
     def test_materialized_progress_does_not_read_episode_from_parent_path(self) -> None:
         item = SimpleNamespace(
             extra_json={
@@ -241,6 +350,36 @@ class FileDiagnosisEpisodeExtensionTests(unittest.TestCase):
 
         self.assertEqual(episodes, [])
         self.assertEqual(selected_count, 1)
+
+    def test_materialized_format_kind_is_recorded_per_episode(self) -> None:
+        item = SimpleNamespace(
+            extra_json={
+                "source_selection": {
+                    "selected_count": 2,
+                    "selection_groups": [
+                        {
+                            "selected_entries": [
+                                {
+                                    "name": "22.zip",
+                                    "format_kind": "disguised_video",
+                                    "episode_numbers": [22],
+                                },
+                                {
+                                    "name": "23.mkv",
+                                    "format_kind": "native_video",
+                                    "episode_numbers": [23],
+                                },
+                            ]
+                        }
+                    ],
+                }
+            }
+        )
+
+        self.assertEqual(
+            _extract_follow_sync_materialized_format_kinds_by_episode(item),
+            {"22": ["disguised_video"], "23": ["native_video"]},
+        )
 
     def test_automation_selection_does_not_read_episode_from_parent_path(self) -> None:
         groups = [

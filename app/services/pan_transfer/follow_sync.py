@@ -141,6 +141,12 @@ def _build_follow_sync_source_metadata_promotion(
             "reason": "candidate_same_episode_higher_quality",
             "quality_upgrade": True,
         }
+    if bool(candidate_assessment.get("format_upgrade")):
+        return {
+            "promote": True,
+            "reason": "candidate_same_episode_playable_format",
+            "format_upgrade": True,
+        }
     if not (_normalize_optional_int(task.source_link_target_id) or _normalize_text(task.source_url)):
         return {
             "promote": True,
@@ -266,12 +272,52 @@ def _extract_follow_sync_materialized_episode_numbers(item: PanTransferBatchItem
             # The selected filename is authoritative for materialized progress.
             # A parent directory can describe the collection's latest episode,
             # but that is not evidence for this individual file.
-            add_from_text(entry.get("name"))
+            explicit_episodes = [
+                _normalize_optional_int(value)
+                for value in list(entry.get("episode_numbers") or [])
+            ]
+            normalized_explicit_episodes = [
+                int(value) for value in explicit_episodes if value is not None and value > 0
+            ]
+            if normalized_explicit_episodes:
+                values.update(normalized_explicit_episodes)
+            else:
+                add_from_text(entry.get("name"))
 
     if not values:
         source_snapshot = dict(extra_json.get("source_message_snapshot") or {})
         add_from_text(source_snapshot.get("title"))
     return sorted(values), int(selected_count)
+
+
+def _extract_follow_sync_materialized_format_kinds(item: PanTransferBatchItem) -> list[str]:
+    by_episode = _extract_follow_sync_materialized_format_kinds_by_episode(item)
+    values = {format_kind for kinds in by_episode.values() for format_kind in kinds}
+    return sorted(values)
+
+
+def _extract_follow_sync_materialized_format_kinds_by_episode(
+    item: PanTransferBatchItem,
+) -> dict[str, list[str]]:
+    extra_json = dict(item.extra_json or {})
+    source_selection = dict(extra_json.get("source_selection") or {})
+    values_by_episode: dict[str, set[str]] = {}
+    for group in list(source_selection.get("selection_groups") or []):
+        if not isinstance(group, dict):
+            continue
+        for entry in list(group.get("selected_entries") or []):
+            if not isinstance(entry, dict):
+                continue
+            format_kind = _normalize_text(entry.get("format_kind"), max_length=32).lower()
+            if format_kind in {"native_video", "disguised_video"}:
+                episodes = {
+                    int(value)
+                    for value in list(entry.get("episode_numbers") or [])
+                    if _normalize_optional_int(value) is not None and int(value) > 0
+                }
+                for episode in episodes:
+                    values_by_episode.setdefault(str(episode), set()).add(format_kind)
+    return {episode: sorted(values) for episode, values in values_by_episode.items()}
 
 
 def _resolve_follow_sync_source_metadata_promotion(
@@ -322,6 +368,13 @@ def _normalize_selection_group_payload(raw_value: dict[str, Any] | None) -> dict
                     "is_dir": is_dir,
                     "entry_id": entry_id,
                     "path": path,
+                    "format_kind": _normalize_text(row.get("format_kind"), max_length=32).lower() or None,
+                    "quality_tags": normalize_quality_tags(row.get("quality_tags")),
+                    "episode_numbers": [
+                        int(value)
+                        for value in list(row.get("episode_numbers") or [])
+                        if _normalize_optional_int(value) is not None and int(value) > 0
+                    ],
                 }
             )
     if not normalized_entries:
@@ -1253,6 +1306,8 @@ def handle_follow_sync_item_success(
     }
     task.extra_json = extra_json
     materialized_episode_numbers, materialized_selected_count = _extract_follow_sync_materialized_episode_numbers(item)
+    materialized_format_kinds = _extract_follow_sync_materialized_format_kinds(item)
+    materialized_format_kinds_by_episode = _extract_follow_sync_materialized_format_kinds_by_episode(item)
     batch_quality_tags = _extract_follow_batch_item_quality_tags(item)
     trigger_quality_tags = normalize_quality_tags(context.get("trigger_quality_tags"))
     materialized_quality_tags = _resolve_follow_sync_quality_tags(
@@ -1281,6 +1336,8 @@ def handle_follow_sync_item_success(
         ),
         selected_count=materialized_selected_count,
         quality_tags=materialized_quality_tags,
+        format_kinds=materialized_format_kinds,
+        format_kinds_by_episode=materialized_format_kinds_by_episode,
     )
     applied_update_state = _update_follow_task_applied_update_state_from_sync(
         task,
@@ -1430,6 +1487,8 @@ def handle_follow_sync_item_failure(
     )
     failed_at = utcnow()
     materialized_episode_numbers, materialized_selected_count = _extract_follow_sync_materialized_episode_numbers(item)
+    materialized_format_kinds = _extract_follow_sync_materialized_format_kinds(item)
+    materialized_format_kinds_by_episode = _extract_follow_sync_materialized_format_kinds_by_episode(item)
     materialized_quality_tags = _extract_follow_batch_item_quality_tags(item)
     transfer_materialized = bool(
         dict(source_metadata_promotion.get("transfer_materialization") or {}).get("materialized")
@@ -1470,6 +1529,8 @@ def handle_follow_sync_item_failure(
             target_relative_path=preferred_target_relative_path or (selection_target_relative_paths[0] if selection_target_relative_paths else None),
             selected_count=materialized_selected_count,
             quality_tags=materialized_quality_tags,
+            format_kinds=materialized_format_kinds,
+            format_kinds_by_episode=materialized_format_kinds_by_episode,
         )
 
     if existing_share_is_invalid:

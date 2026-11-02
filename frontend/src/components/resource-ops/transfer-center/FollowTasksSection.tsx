@@ -209,6 +209,8 @@ const FOLLOW_DIAGNOSIS_STOP_REASON_LABELS: Record<string, string> = {
   gap_before_next_episode: '下一集前存在断档',
   no_source_video: '来源未识别到可用视频文件',
   no_accepted_episode: '来源视频未命中可信剧集',
+  source_episode_not_ready: '来源中的目标剧集文件还未准备好',
+  format_not_better: '新格式画质不高于当前文件，未执行替换',
 }
 
 const LINK_ROOT_LABELS: Record<FollowLinkChip['key'], string> = {
