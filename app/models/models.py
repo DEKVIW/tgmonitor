@@ -478,8 +478,8 @@ class LearningResourceItem(Base):
     status = Column(String(32), nullable=False, default="pending", index=True)
     primary_category_id = Column(Integer, ForeignKey("learning_resource_categories.id"), nullable=True, index=True)
     source_channel_key = Column(String(255), nullable=False, index=True)
-    first_source_message_id = Column(Integer, ForeignKey("messages.id"), nullable=True, index=True)
-    latest_source_message_id = Column(Integer, ForeignKey("messages.id"), nullable=True, index=True)
+    first_source_message_id = Column(Integer, ForeignKey("messages.id", ondelete="SET NULL"), nullable=True, index=True)
+    latest_source_message_id = Column(Integer, ForeignKey("messages.id", ondelete="SET NULL"), nullable=True, index=True)
     latest_source_at = Column(DateTime, nullable=True, index=True)
     last_published_at = Column(DateTime, nullable=True, index=True)
     tags = Column(ARRAY(String), nullable=False, default=list)
@@ -545,7 +545,7 @@ class LearningResourceTransferJob(Base):
     id = Column(Integer, primary_key=True, index=True)
     task_id = Column(Integer, ForeignKey("learning_resource_automation_tasks.id", ondelete="SET NULL"), nullable=True, index=True)
     resource_id = Column(Integer, ForeignKey("learning_resource_items.id", ondelete="CASCADE"), nullable=False, index=True)
-    source_message_id = Column(Integer, ForeignKey("messages.id"), nullable=True, index=True)
+    source_message_id = Column(Integer, ForeignKey("messages.id", ondelete="SET NULL"), nullable=True, index=True)
     source_link_target_id = Column(Integer, ForeignKey("link_targets.id"), nullable=False, index=True)
     target_account_id = Column(Integer, ForeignKey("pan_transfer_accounts.id"), nullable=False, index=True)
     batch_id = Column(Integer, ForeignKey("pan_transfer_batches.id"), nullable=True, index=True)
@@ -1588,6 +1588,7 @@ def _ensure_learning_resource_columns() -> None:
             )
         if engine.dialect.name != "postgresql":
             return
+        _ensure_learning_resource_message_source_constraints(connection)
         if "task_id" not in transfer_job_columns:
             connection.execute(
                 text("ALTER TABLE learning_resource_transfer_jobs ADD COLUMN task_id INTEGER")
@@ -1665,6 +1666,55 @@ def _ensure_learning_resource_columns() -> None:
                     END IF;
                 END $$;
             """)
+        )
+
+
+def _ensure_learning_resource_message_source_constraints(connection) -> None:
+    constraint_specs = (
+        (
+            "learning_resource_items",
+            "first_source_message_id",
+            "learning_resource_items_first_source_message_id_fkey",
+        ),
+        (
+            "learning_resource_items",
+            "latest_source_message_id",
+            "learning_resource_items_latest_source_message_id_fkey",
+        ),
+        (
+            "learning_resource_transfer_jobs",
+            "source_message_id",
+            "learning_resource_transfer_jobs_source_message_id_fkey",
+        ),
+    )
+    for table_name, column_name, constraint_name in constraint_specs:
+        connection.execute(
+            text(
+                f"""
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1
+                        FROM pg_constraint
+                        WHERE conname = '{constraint_name}'
+                          AND confdeltype <> 'n'
+                    ) THEN
+                        ALTER TABLE {table_name} DROP CONSTRAINT {constraint_name};
+                    END IF;
+                    IF NOT EXISTS (
+                        SELECT 1
+                        FROM pg_constraint
+                        WHERE conname = '{constraint_name}'
+                          AND confdeltype = 'n'
+                    ) THEN
+                        ALTER TABLE {table_name}
+                        ADD CONSTRAINT {constraint_name}
+                        FOREIGN KEY ({column_name}) REFERENCES messages(id)
+                        ON DELETE SET NULL;
+                    END IF;
+                END $$;
+                """
+            )
         )
 
 

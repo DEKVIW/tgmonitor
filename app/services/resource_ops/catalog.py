@@ -14,6 +14,9 @@ from app.models.models import (
     LinkClickEvent,
     LinkTarget,
     LinkTargetDailyStat,
+    LearningResourceItem,
+    LearningResourceLink,
+    LearningResourceTransferJob,
     Message,
     MessageLinkRef,
     PanTransferBatchItem,
@@ -526,6 +529,26 @@ def _purge_orphan_link_targets(session: Session, target_ids: Iterable[int]) -> N
         )
         if target_id is not None
     )
+    protected_target_ids.update(
+        int(target_id)
+        for (target_id,) in (
+            session.query(LearningResourceLink.source_link_target_id)
+            .filter(LearningResourceLink.source_link_target_id.in_(normalized_target_ids))
+            .distinct()
+            .all()
+        )
+        if target_id is not None
+    )
+    protected_target_ids.update(
+        int(target_id)
+        for (target_id,) in (
+            session.query(LearningResourceTransferJob.source_link_target_id)
+            .filter(LearningResourceTransferJob.source_link_target_id.in_(normalized_target_ids))
+            .distinct()
+            .all()
+        )
+        if target_id is not None
+    )
 
     orphan_target_ids = [
         target_id
@@ -593,6 +616,32 @@ def delete_message_resource_data(session: Session, message_ids: Iterable[int]) -
     if not normalized_message_ids:
         return False
 
+    detached_source_count = 0
+    detached_source_count += (
+        session.query(LearningResourceItem)
+        .filter(LearningResourceItem.first_source_message_id.in_(normalized_message_ids))
+        .update(
+            {LearningResourceItem.first_source_message_id: None},
+            synchronize_session=False,
+        )
+    )
+    detached_source_count += (
+        session.query(LearningResourceItem)
+        .filter(LearningResourceItem.latest_source_message_id.in_(normalized_message_ids))
+        .update(
+            {LearningResourceItem.latest_source_message_id: None},
+            synchronize_session=False,
+        )
+    )
+    detached_source_count += (
+        session.query(LearningResourceTransferJob)
+        .filter(LearningResourceTransferJob.source_message_id.in_(normalized_message_ids))
+        .update(
+            {LearningResourceTransferJob.source_message_id: None},
+            synchronize_session=False,
+        )
+    )
+
     refs = (
         session.query(MessageLinkRef)
         .filter(MessageLinkRef.message_id.in_(normalized_message_ids))
@@ -616,7 +665,7 @@ def delete_message_resource_data(session: Session, message_ids: Iterable[int]) -
         _refresh_link_target_daily_stats(session, target_ids)
         _purge_orphan_link_targets(session, target_ids)
 
-    return bool(refs or target_ids)
+    return bool(refs or target_ids or detached_source_count)
 
 
 def ensure_message_link_refs_for_message_ids(
