@@ -225,8 +225,20 @@ class ForegroundLinkHealthService:
             enable_inflight=True,
         )
 
+    def prepare_inputs(self, messages: Iterable[Message]) -> tuple[List[ForegroundLinkInput], bool]:
+        return _extract_message_inputs(messages, self.max_links)
+
     async def check_messages(self, messages: Iterable[Message]) -> ForegroundSearchCheck:
-        inputs, truncated = _extract_message_inputs(messages, self.max_links)
+        inputs, truncated = self.prepare_inputs(messages)
+        return await self.check_inputs(inputs, truncated=truncated)
+
+    async def check_inputs(
+        self,
+        inputs: Iterable[ForegroundLinkInput],
+        *,
+        truncated: bool = False,
+    ) -> ForegroundSearchCheck:
+        inputs = list(inputs)
         if not inputs:
             return ForegroundSearchCheck({}, [], 0, truncated)
 

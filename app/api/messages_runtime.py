@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import asyncio
+import threading
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Literal, Optional
 
@@ -21,6 +22,7 @@ from app.services.resource_ops import (
 )
 from app.services.foreground_link_health_service import (
     FOREGROUND_LINK_HEALTH,
+    ForegroundLinkInput,
 )
 from app.services.security_service import SEARCH_CLEARANCE_HEADER, ensure_search_challenge_clearance
 from app.services.system_config_service import is_public_dashboard_enabled
@@ -33,7 +35,42 @@ _UNSET = object()
 PUBLIC_DASHBOARD_ALLOWED_TIME_RANGES = frozenset({"最近1小时", "最近24小时", "最近7天"})
 PUBLIC_DASHBOARD_MAX_AGE_DAYS = 7
 _FOREGROUND_CHECK_CONCURRENCY = 2
-_FOREGROUND_CHECK_SEMAPHORE = asyncio.Semaphore(_FOREGROUND_CHECK_CONCURRENCY)
+_FOREGROUND_CHECK_ADMISSION_LOCK = threading.Lock()
+_FOREGROUND_CHECK_ACTIVE = 0
+_FOREGROUND_CHECK_KEYS: set[tuple[tuple[int, str], ...]] = set()
+
+
+def _foreground_check_key(inputs: List[ForegroundLinkInput]) -> tuple[tuple[int, str], ...]:
+    return tuple(sorted(
+        (int(item.message_id), str(item.normalized_url))
+        for item in inputs
+        if int(item.message_id) > 0 and str(item.normalized_url).strip()
+    ))
+
+
+def _reserve_foreground_check(
+    inputs: List[ForegroundLinkInput],
+) -> Optional[tuple[tuple[int, str], ...]]:
+    global _FOREGROUND_CHECK_ACTIVE
+
+    key = _foreground_check_key(inputs)
+    if not key:
+        return None
+
+    with _FOREGROUND_CHECK_ADMISSION_LOCK:
+        if _FOREGROUND_CHECK_ACTIVE >= _FOREGROUND_CHECK_CONCURRENCY or key in _FOREGROUND_CHECK_KEYS:
+            return None
+        _FOREGROUND_CHECK_ACTIVE += 1
+        _FOREGROUND_CHECK_KEYS.add(key)
+    return key
+
+
+def _release_foreground_check(key: tuple[tuple[int, str], ...]) -> None:
+    global _FOREGROUND_CHECK_ACTIVE
+
+    with _FOREGROUND_CHECK_ADMISSION_LOCK:
+        _FOREGROUND_CHECK_KEYS.discard(key)
+        _FOREGROUND_CHECK_ACTIVE = max(0, _FOREGROUND_CHECK_ACTIVE - 1)
 
 
 def _record_foreground_link_health_observations(observations: List[Dict[str, Any]]) -> None:
@@ -41,21 +78,26 @@ def _record_foreground_link_health_observations(observations: List[Dict[str, Any
         FOREGROUND_LINK_HEALTH.record_observations(observation_db, observations)
 
 
-async def _run_foreground_link_health_check(messages: List[Any]) -> None:
-    async with _FOREGROUND_CHECK_SEMAPHORE:
-        try:
-            foreground_check = await FOREGROUND_LINK_HEALTH.check_messages(messages)
-            if not foreground_check.network_observations:
-                return
+async def _run_foreground_link_health_check(
+    inputs: List[ForegroundLinkInput],
+    truncated: bool,
+    job_key: tuple[tuple[int, str], ...],
+) -> None:
+    try:
+        foreground_check = await FOREGROUND_LINK_HEALTH.check_inputs(inputs, truncated=truncated)
+        if not foreground_check.network_observations:
+            return
 
-            await asyncio.to_thread(
-                _record_foreground_link_health_observations,
-                foreground_check.network_observations,
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception("background foreground link health check failed")
+        await asyncio.to_thread(
+            _record_foreground_link_health_observations,
+            foreground_check.network_observations,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("background foreground link health check failed")
+    finally:
+        _release_foreground_check(job_key)
 
 
 def _is_public_guest(current_user: Optional[Dict[str, Any]]) -> bool:
@@ -185,7 +227,15 @@ def get_messages(
         )
 
         if search_query and search_query.strip():
-            background_tasks.add_task(_run_foreground_link_health_check, list(messages))
+            foreground_inputs, truncated = FOREGROUND_LINK_HEALTH.prepare_inputs(messages)
+            job_key = _reserve_foreground_check(foreground_inputs)
+            if job_key is not None:
+                background_tasks.add_task(
+                    _run_foreground_link_health_check,
+                    foreground_inputs,
+                    truncated,
+                    job_key,
+                )
             db.close()
 
         visible_messages = []
